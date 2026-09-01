@@ -11,9 +11,6 @@ dist/
 .DS_Store
 screenshots/
 .grok/
-grok.anvil-patch
-patches/grok.anvil-patch
-.anvil-companion-token
 *.local
 .cache/
 *.zip
