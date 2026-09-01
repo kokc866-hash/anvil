@@ -1,0 +1,61 @@
+export { BRAIN_MODELS, HELPER_GROUPS, DEFAULT_BRAIN_MODEL, WEBLLM_SUGGESTIONS, brainModelOf, resolveBrainId, migrateBrainModel } from "./models";
+export { useBrain, brainReady, activeModelId, type BrainJobs, type BrainAutonomy, type BrainStatus, type BrainLog } from "./store";
+export {
+  loadBrain,
+  unloadBrain,
+  clearBrainCache,
+  checkBrainUpdate,
+  gpuInfo,
+  modelCached,
+  listRuntimeModels,
+  prefetchBrain,
+  brainGenerate,
+  brainSystem,
+  interruptBrain,
+} from "./engine";
+export {
+  heuristicIntent,
+  resolveIntent,
+  applyIntent,
+  brainDistill,
+  brainCompleteCode,
+  brainPalette,
+  brainCompact,
+  brainAsk,
+  brainUsage,
+  type BrainIntent,
+} from "./tasks";
+export {
+  scrubSecrets,
+  brainCommitMessage,
+  brainExplainError,
+  brainDiffSummary,
+  brainSearchNeedle,
+  brainAttach,
+  brainChatTitle,
+  brainDocstring,
+  brainBreakpoint,
+  brainNextAction,
+  brainSuggestPrompts,
+  heuristicPrompts,
+  brainFollowups,
+  brainReview,
+  brainRename,
+  brainRunPick,
+  brainFixLine,
+  brainTabHint,
+  getTabHint,
+  subscribeTabHints,
+  tabHintSnap,
+  brainSecretWarn,
+  brainMentionRank,
+  brainStopNote,
+  brainPlanText,
+  brainComment,
+  brainI18nKey,
+  brainLogTrim,
+  routeKind,
+} from "./apps";
+export { startBrainAuto, AUTONOMY_HINT } from "./auto";
+export { setHelperHold, helperHeld, clearBrainQueue } from "./queue";
+export { pushLane, lanePrompt, laneKindLabel, type LaneNote, type LaneKind } from "./lane";

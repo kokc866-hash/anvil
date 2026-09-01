@@ -1,0 +1,192 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { BRAIN_MODELS, clearBrainCache, modelCached, prefetchBrain } from "@/lib/brain";
+import { downloadHelperLocal, helperLocalReady, nativeHelper } from "@/lib/helper-local";
+import { fmtBytes, storageQuota, useModelLib, type CacheBackendPref } from "@/lib/model-lib";
+import { confirmApp } from "@/lib/confirm";
+
+function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      className={`relative h-6 w-10 rounded-full border ${on ? "border-accent bg-accent" : "border-border"}`}
+      onClick={() => onChange(!on)}
+    >
+      <span className={`ui-switch-knob absolute top-0.5 left-0.5 size-4 rounded-full bg-fg ${on ? "translate-x-4 bg-accent-fg" : ""}`} />
+    </button>
+  );
+}
+
+function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2">
+      <div className="min-w-0">
+        <p className="text-sm text-fg">{label}</p>
+        {hint ? <p className="text-[11px] text-subtle">{hint}</p> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function ModelLibSection() {
+  const cacheBackend = useModelLib((s) => s.cacheBackend);
+  const keepHelperCache = useModelLib((s) => s.keepHelperCache);
+  const prefetchOnStart = useModelLib((s) => s.prefetchOnStart);
+  const pinHelper = useModelLib((s) => s.pinHelper);
+  const lastQuota = useModelLib((s) => s.lastQuota);
+  const desk = Boolean(nativeHelper());
+  const [local, setLocal] = useState<Record<string, { ready: boolean; bytes: number }>>({});
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [pct, setPct] = useState(0);
+  const [dir, setDir] = useState("");
+
+  async function refresh() {
+    await storageQuota();
+    const n = nativeHelper();
+    if (n) {
+      setDir(await n.helperDir());
+      const rows = await n.helperList();
+      setLocal(Object.fromEntries(rows.map((r) => [r.id, { ready: r.ready, bytes: r.bytes }])));
+    } else {
+      const rows = await Promise.all(BRAIN_MODELS.map(async (m) => [m.id, await modelCached(m.id)] as const));
+      setLocal(Object.fromEntries(rows.map(([id, ok]) => [id, { ready: ok, bytes: 0 }])));
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const usedPct = lastQuota.quota ? Math.min(100, Math.round((lastQuota.used / lastQuota.quota) * 100)) : 0;
+
+  return (
+    <section className="py-3">
+      <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Helfer lokal</h3>
+      <p className="mb-3 text-xs text-muted">
+        Agent-Modelle bleiben beim gewählten Anbieter. Hier nur der Helfer: einmal aus dem Netz auf die Festplatte, danach startet er ohne HuggingFace.
+        {desk ? " Dateien liegen im Anvil-Ordner." : " Im Browser: OPFS-Cache (start.bat ist besser)."}
+      </p>
+      {dir ? <p className="mb-2 font-mono text-[10px] text-subtle break-all">{dir}</p> : null}
+
+      <Row label="Beim Start vorladen" hint="Angepinnte Modelle still auf die Festplatte laden, wenn sie fehlen.">
+        <Toggle on={prefetchOnStart} onChange={useModelLib.getState().setPrefetchOnStart} />
+      </Row>
+      <Row label="Lokal behalten" hint="Alte Helfer-Gewichte bleiben beim Modellwechsel. Weg und Cache löschen fragen nach.">
+        <Toggle on={keepHelperCache} onChange={useModelLib.getState().setKeepHelperCache} />
+      </Row>
+      {!desk ? (
+        <Row label="Cache" hint="Nur Browser. Anvil-Fenster schreibt echte Dateien.">
+          <select
+            value={cacheBackend}
+            className="h-8 rounded-md border border-border bg-bg px-2 text-sm text-fg"
+            onChange={(e) => useModelLib.getState().setCacheBackend(e.target.value as CacheBackendPref)}
+          >
+            <option value="auto">Auto (OPFS)</option>
+            <option value="opfs">OPFS</option>
+            <option value="indexeddb">IndexedDB</option>
+          </select>
+        </Row>
+      ) : null}
+
+      {!desk ? (
+        <div className="my-2">
+          <div className="mb-1 flex justify-between text-[11px] text-subtle">
+            <span>Browser-Speicher</span>
+            <span>
+              {fmtBytes(lastQuota.used)} / {fmtBytes(lastQuota.quota)} ({usedPct}%)
+            </span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-hover">
+            <div className="h-full bg-accent" style={{ width: `${usedPct}%` }} />
+          </div>
+        </div>
+      ) : null}
+
+      <ul className="mt-3 divide-y divide-border rounded-md border border-border">
+        {BRAIN_MODELS.map((m) => {
+          const st = local[m.id] || local[m.alt];
+          const ready = Boolean(st?.ready);
+          const pin = pinHelper.includes(m.id);
+          return (
+            <li key={m.id} className="flex items-center gap-2 px-2 py-1.5">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs text-fg">
+                  {m.label} · {m.size}
+                  {ready ? " · auf der Festplatte" : " · fehlt"}
+                  {pin ? " · pin" : ""}
+                </p>
+                <p className="truncate text-[10px] text-subtle">
+                  {st?.bytes ? fmtBytes(st.bytes) : m.id}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={`text-[10px] ${pin ? "text-fg" : "text-muted"}`}
+                onClick={() => useModelLib.getState().togglePinHelper(m.id)}
+              >
+                {pin ? "Pin an" : "Pin"}
+              </button>
+              <Button
+                className="h-7 px-2 text-[11px]"
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  setBusy(m.id);
+                  const run = desk
+                    ? downloadHelperLocal(m.id, (p) => {
+                        setPct(p.total ? p.done / p.total : 0);
+                        setNote(`${p.rel} (${p.done}/${p.total})`);
+                      })
+                    : prefetchBrain(m.id, (p) => {
+                        setPct(p.progress ?? 0);
+                        setNote(p.text);
+                      });
+                  setNote(ready ? "Prüfe…" : "Einmal laden, danach lokal.");
+                  void run
+                    .then(() => refresh())
+                    .catch((err) => setNote(err instanceof Error ? err.message : "Download fehlgeschlagen"))
+                    .finally(() => setBusy(""));
+                }}
+              >
+                {ready ? "Aktualisieren" : "Auf Festplatte"}
+              </Button>
+              <Button
+                variant="quiet"
+                className="h-7 px-2 text-[11px]"
+                disabled={!ready || Boolean(busy)}
+                onClick={() => {
+                  const go = () => {
+                    const n = nativeHelper();
+                    if (n) void n.helperDelete(m.id).then(() => refresh());
+                    else void clearBrainCache(m.id, { force: true }).then(() => refresh());
+                  };
+                  if (useModelLib.getState().keepHelperCache) {
+                    void confirmApp(`${m.label} wirklich entfernen?`, { danger: true, ok: "Weg" }).then((ok) => { if (ok) go(); });
+                    return;
+                  }
+                  go();
+                }}
+              >
+                Weg
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+      {busy ? (
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-hover">
+          <div className="h-full bg-accent" style={{ width: `${Math.round(pct * 100)}%` }} />
+        </div>
+      ) : null}
+      {note ? <p className="mt-2 text-[11px] text-muted">{note}</p> : null}
+      {!desk ? (
+        <p className="mt-2 text-[11px] text-subtle">
+          Ohne Anvil-Fenster kein Ordner auf der Festplatte — nur Browser-Cache. start.bat nutzen.
+        </p>
+      ) : null}
+    </section>
+  );
+}

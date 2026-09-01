@@ -1,0 +1,9 @@
+Anvil testen
+============
+1. Node.js LTS von https://nodejs.org
+2. install.bat  (einmal)
+3. start.bat    (Fenster)
+4. stop.bat     (alles zu)
+
+Neu: rote Unterschlangen vom TypeScript-Parser (ohne Companion).
+Ausgabe → Terminal. Erweiterungen → Markt (Open VSX, nur Snippets/Sprachen).
