@@ -3,7 +3,29 @@ import { companionPing, termKill, termRead, termStart, termWrite } from "@/lib/c
 import { holdCompanion, releaseCompanion } from "@/lib/companion-life";
 import { evalSnippet } from "@/lib/run-client";
 import { useIde } from "@/store/ide";
-import "@xterm/xterm/css/xterm.css";
+
+type TermLike = {
+  write: (s: string) => void;
+  dispose: () => void;
+  loadAddon: (a: { fit: () => void }) => void;
+  open: (el: HTMLElement) => void;
+  onData: (cb: (d: string) => void) => void;
+};
+
+function named<T>(mod: Record<string, unknown>, key: string): T {
+  const inner = mod.default && typeof mod.default === "object" ? (mod.default as Record<string, unknown>) : null;
+  const hit = mod[key] ?? inner?.[key] ?? mod.default;
+  if (typeof hit !== "function") throw new Error(`${key} fehlt in Modul`);
+  return hit as T;
+}
+
+async function loadXterm() {
+  const [raw, fitRaw] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+  await import("@xterm/xterm/css/xterm.css");
+  const Terminal = named<new (opts: object) => TermLike>(raw as unknown as Record<string, unknown>, "Terminal");
+  const FitAddon = named<new () => { fit: () => void }>(fitRaw as unknown as Record<string, unknown>, "FitAddon");
+  return { Terminal, FitAddon };
+}
 
 export function TermPane() {
   const host = useRef<HTMLDivElement>(null);
@@ -12,8 +34,8 @@ export function TermPane() {
 
   useEffect(() => {
     let disposed = false;
-    let term: import("@xterm/xterm").Terminal | null = null;
-    let fit: import("@xterm/addon-fit").FitAddon | null = null;
+    let term: TermLike | null = null;
+    let fit: { fit: () => void } | null = null;
     let id = "";
     let poll = 0;
     let localLine = "";
@@ -23,8 +45,7 @@ export function TermPane() {
     async function boot() {
       const el = host.current;
       if (!el) return;
-      const [{ Terminal }, fitMod] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
-      const FitAddon = fitMod.FitAddon;
+      const { Terminal, FitAddon } = await loadXterm();
       if (disposed || !el.isConnected) return;
       const t = new Terminal({
         cursorBlink: true,
@@ -94,9 +115,13 @@ export function TermPane() {
     void boot();
     const onResize = () => fit?.fit();
     window.addEventListener("resize", onResize);
+    const hostEl = host.current;
+    const obs = hostEl && typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => fit?.fit()) : null;
+    if (hostEl && obs) obs.observe(hostEl);
     return () => {
       disposed = true;
       window.removeEventListener("resize", onResize);
+      obs?.disconnect();
       window.clearTimeout(poll);
       if (id) void termKill(id, base);
       if (held) void releaseCompanion();

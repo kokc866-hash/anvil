@@ -12,10 +12,10 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-export const CONTEXT_MAX = 262_144;
+export const CONTEXT_MAX = 2_097_152;
 export const CONTEXT_MIN = 2048;
-/** Chip-Werte. 128k/256k sind 128000/256000 — wie Katalog, nicht 128×1024. */
-export const CONTEXT_SIZES = [4096, 8192, 16384, 32768, 65536, 128_000, 256_000] as const;
+/** Chip-Werte. 128k/256k/1M wie Katalog, nicht 128×1024. */
+export const CONTEXT_SIZES = [4096, 8192, 16384, 32768, 65536, 128_000, 256_000, 1_048_576] as const;
 
 const CONTEXT_LABEL: Record<number, string> = {
   4096: "4k",
@@ -27,6 +27,10 @@ const CONTEXT_LABEL: Record<number, string> = {
   131_072: "128k",
   256_000: "256k",
   262_144: "256k",
+  272_000: "272k",
+  1_000_000: "1M",
+  1_048_576: "1M",
+  2_097_152: "2M",
 };
 
 export function matchingContextChip(n: number): number | null {

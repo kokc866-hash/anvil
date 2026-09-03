@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
   pathsPick: (kind) => ipcRenderer.invoke("paths-pick", kind),
   pathsWrite: (name, text) => ipcRenderer.invoke("paths-write", name, text),
   pathsRead: (name) => ipcRenderer.invoke("paths-read", name),
+  workspacePick: () => ipcRenderer.invoke("workspace-pick"),
   subLoad: (kind) => ipcRenderer.invoke("sub-load", kind),
   subLogin: (kind) => ipcRenderer.invoke("sub-login", kind),
   subScan: () => ipcRenderer.invoke("sub-scan"),

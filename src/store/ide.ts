@@ -4,7 +4,7 @@ import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
 import { langFromPath } from "@/lib/languages";
 import { providerOf, resolveCodexModel, type LlmProvider } from "@/lib/providers";
-import { ancestorDirs, cleanPath, dupPath, isInside, joinPath, parentDir } from "@/lib/fs";
+import { ancestorDirs, autoCollapsePaths, cleanPath, dupPath, isInside, joinPath, parentDir } from "@/lib/fs";
 import { DEFAULT_INPUT_MAP, normalizeInputMap, type InputMap } from "@/lib/input-map";
 import { KEY_DEFAULTS, normalizeKeyMap, type Chord, type KeyId } from "@/lib/keymap";
 import type { CompactMode } from "@/lib/compact";
@@ -22,8 +22,11 @@ import { rejectHunk as rejectHunkLines } from "@/lib/diff";
 import { parseRunTrace } from "@/lib/parse-run";
 import type { AfterWrite } from "@/lib/harness";
 import { abortReason } from "@/lib/abort";
-import { dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
+import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
+import { EMPTY_JOURNAL, normalizeJournal, persistChat, type SessionJournal } from "@/lib/session";
+import { AGENT_MIN, AGENT_MAX, SIDE_MIN, SIDE_MAX, TRAIL_MIN, TRAIL_MAX } from "@/lib/layout";
+import { fitCloudAbo } from "@/lib/llm-fit";
 
 const THINK_CAP = 64_000;
 
@@ -53,13 +56,23 @@ export function flushLiveChat() {
 function mergeLsp(local: LspHit[], ...rest: LspHit[][]): LspHit[] {
   const seen = new Set<string>();
   const out: LspHit[] = [];
-  for (const h of [...local.filter((x) => !LSP_BUCKET.has(x.source)), ...rest.flat()]) {
+  for (const h of [...dropCoveredHeuristics(local.filter((x) => !LSP_BUCKET.has(x.source))), ...rest.flat()]) {
     const k = `${h.path}:${h.line}:${h.message}`;
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(h);
   }
   return out;
+}
+
+function pushDisk(kind: "write" | "remove" | "mkdir", path: string, content = "") {
+  void import("@/lib/disk-sync")
+    .then((d) => {
+      if (kind === "write") return d.syncWrite(path, content);
+      if (kind === "mkdir") return d.syncMkdir(path);
+      return d.syncRemove(path);
+    })
+    .catch(() => undefined);
 }
 import { shrinkFiles } from "@/lib/persist-storage";
 import type { FileChange } from "@/lib/diff";
@@ -308,6 +321,7 @@ type IdeState = {
   llmSlots: Record<string, LlmSlot>;
   llmProfiles: LlmProfile[];
   sessionTokens: { prompt: number; completion: number };
+  sessionJournal: SessionJournal;
   sidebar: SidebarId;
   palette: PaletteMode;
   pendingDiffs: FileDiff[];
@@ -370,6 +384,7 @@ type IdeState = {
   dirs: string[];
   collapsed: string[];
   diskName: string;
+  workspaceCwd: string;
   setupDone: boolean;
   backupName: string;
   storageMode: StorageMode;
@@ -437,6 +452,7 @@ type IdeState = {
   addAgentStep: (step: Omit<AgentStep, "id">) => void;
   appendThinking: (s: string) => void;
   addSessionTokens: (prompt: number, completion: number) => void;
+  setSessionJournal: (j: SessionJournal) => void;
   setSidebar: (v: SidebarId) => void;
   setPalette: (v: PaletteMode) => void;
   setCursor: (line: number, col: number) => void;
@@ -536,6 +552,7 @@ type IdeState = {
   appendAssistant: (s: string) => void;
   finalizeAssistant: (reply: string, tools?: string[]) => void;
   setDiskName: (v: string) => void;
+  setWorkspaceCwd: (v: string) => void;
   setSetupDone: (v: boolean) => void;
   setBackupName: (v: string) => void;
   setStorageMode: (v: StorageMode) => void;
@@ -663,6 +680,7 @@ export const useIde = create<IdeState>()(
       llmSlots: {},
       llmProfiles: [],
       sessionTokens: { prompt: 0, completion: 0 },
+      sessionJournal: { ...EMPTY_JOURNAL },
       sidebar: "files",
       palette: null,
       pendingDiffs: [],
@@ -725,6 +743,7 @@ export const useIde = create<IdeState>()(
       dirs: [],
       collapsed: [],
       diskName: "",
+      workspaceCwd: "",
       setupDone: false,
       backupName: "",
       storageMode: "browser",
@@ -792,22 +811,35 @@ export const useIde = create<IdeState>()(
           const savedIsDefault = !url || url === d.baseUrl || /127\.0\.0\.1/.test(url);
           if (savedIsDefault) url = curUrl;
         }
+        const model = d.id === "codex" ? resolveCodexModel(saved?.model || d.model) : saved?.model || d.model;
+        const fit = fitCloudAbo(d.id, model);
         set({
           llmSlots: slots,
           llmProvider: d.id,
           llmAuthMode: d.id === "codex" ? "abo" : d.kind === "local" ? "key" : cur.llmAuthMode,
           llmBaseUrl: url || d.baseUrl,
-          llmModel: d.id === "codex" ? resolveCodexModel(saved?.model || d.model) : saved?.model || d.model,
-          llmContext: saved?.context ?? cur.llmContext,
-          llmThinking: saved?.thinking ?? cur.llmThinking,
-          llmCompact: saved?.compact ?? cur.llmCompact,
-          llmTemperature: saved?.temperature ?? cur.llmTemperature,
-          llmMaxOut: saved?.maxOut ?? cur.llmMaxOut,
+          llmModel: model,
           llmApiKey: key,
+          llmCompact: saved?.compact ?? cur.llmCompact,
+          ...(fit
+            ? fit
+            : {
+                llmContext: saved?.context ?? cur.llmContext,
+                llmThinking: saved?.thinking ?? cur.llmThinking,
+                llmTemperature: saved?.temperature ?? cur.llmTemperature,
+                llmMaxOut: saved?.maxOut ?? cur.llmMaxOut,
+                llmContextAuto: d.kind === "local" ? cur.llmContextAuto : true,
+              }),
         });
-        if (get().llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
+        if (fit || get().llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
       },
-      setLlmAuthMode: (llmAuthMode) => set({ llmAuthMode: llmAuthMode === "abo" ? "abo" : "key" }),
+      setLlmAuthMode: (llmAuthMode) => {
+        const mode = llmAuthMode === "abo" ? "abo" : "key";
+        const cur = get();
+        const fit = mode === "abo" ? fitCloudAbo(cur.llmProvider, cur.llmModel) : null;
+        set(fit ? { llmAuthMode: mode, ...fit } : { llmAuthMode: mode });
+        if (fit) void import("@/lib/model-context").then((m) => m.applyCloudContext());
+      },
       setLlmBaseUrl: (llmBaseUrl) => {
         const cur = get();
         set({ llmBaseUrl, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), baseUrl: llmBaseUrl } } });
@@ -815,8 +847,13 @@ export const useIde = create<IdeState>()(
       setLlmModel: (llmModel) => {
         const cur = get();
         const next = cur.llmProvider === "codex" ? resolveCodexModel(llmModel) : llmModel;
-        set({ llmModel: next, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), model: next } } });
-        if (cur.llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
+        const fit = fitCloudAbo(cur.llmProvider, next);
+        set({
+          llmModel: next,
+          llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), model: next } },
+          ...(fit ?? {}),
+        });
+        if (fit || cur.llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
       },
       setLlmApiKey: (llmApiKey) => {
         saveKeyForProvider(get().llmProvider, llmApiKey);
@@ -895,8 +932,8 @@ export const useIde = create<IdeState>()(
       setAgentRules: (agentRules) => set({ agentRules }),
       setAttached: (attached) => set({ attached }),
       setAgentDraft: (agentDraft) => set({ agentDraft }),
-      setSidebarWidth: (n) => set({ sidebarWidth: Math.min(420, Math.max(160, n)) }),
-      setAgentWidth: (n) => set({ agentWidth: Math.min(640, Math.max(280, n)) }),
+      setSidebarWidth: (n) => set({ sidebarWidth: Math.min(SIDE_MAX, Math.max(SIDE_MIN, n)) }),
+      setAgentWidth: (n) => set({ agentWidth: Math.min(AGENT_MAX, Math.max(AGENT_MIN, n)) }),
       setOutputHeight: (n) => set({ outputHeight: Math.min(520, Math.max(120, n)) }),
       setOutputWidth: (n) => set({ outputWidth: Math.min(640, Math.max(240, n)) }),
       setOutputDock: (outputDock) =>
@@ -906,7 +943,7 @@ export const useIde = create<IdeState>()(
           panels: { ...get().panels, output: true },
         }),
       setOutputPopout: (outputPopout) => set({ outputPopout }),
-      setTrailWidth: (n) => set({ trailWidth: Math.min(560, Math.max(220, n)) }),
+      setTrailWidth: (n) => set({ trailWidth: Math.min(TRAIL_MAX, Math.max(TRAIL_MIN, n)) }),
       setTrailThinkH: (n) => set({ trailThinkH: Math.min(720, Math.max(72, Math.round(n))) }),
       setTrailInChat: (trailInChat) => set({ trailInChat }),
       setAutoHw: (autoHw) => set({ autoHw }),
@@ -1264,8 +1301,10 @@ export const useIde = create<IdeState>()(
           openPaths: openPaths.map((p) => (p === from ? name : p)),
           activePath: activePath === from ? name : activePath,
         });
+        pushDisk("write", name, nextFiles[name] ?? "");
+        pushDisk("remove", from);
       },
-      clearChat: () => set({ chat: [], sessionTokens: { prompt: 0, completion: 0 } }),
+      clearChat: () => set({ chat: [], sessionTokens: { prompt: 0, completion: 0 }, sessionJournal: { ...EMPTY_JOURNAL } }),
       removeChat: (id) => set({ chat: get().chat.filter((m) => m.id !== id) }),
       proposeFiles: (next) => {
         const { files, openPaths, activePath } = get();
@@ -1396,6 +1435,7 @@ export const useIde = create<IdeState>()(
           }, 1400);
         }
         queueMicrotask(() => emitPlugin("change", name));
+        pushDisk("write", name, content);
       },
       deleteFile: (path) => {
         const { files, openPaths, activePath, dirty } = get();
@@ -1410,6 +1450,7 @@ export const useIde = create<IdeState>()(
           openPaths: nextOpen,
           activePath: activePath === path ? (nextOpen[nextOpen.length - 1] ?? null) : activePath,
         });
+        pushDisk("remove", path);
       },
       createFolder: (path) => {
         const name = cleanPath(path);
@@ -1417,7 +1458,7 @@ export const useIde = create<IdeState>()(
         const { files, dirs } = get();
         if (name in files) return;
         set({ dirs: [...new Set([...withParents(dirs, name), name])] });
-        void import("@/lib/disk").then((d) => d.mkdirDisk(name)).catch(() => undefined);
+        pushDisk("mkdir", name);
       },
       deleteDir: (path) => {
         const dir = cleanPath(path);
@@ -1440,6 +1481,7 @@ export const useIde = create<IdeState>()(
           dirs: dirs.filter((d) => !isInside(d, dir)),
           collapsed: get().collapsed.filter((d) => !isInside(d, dir)),
         });
+        pushDisk("remove", dir);
       },
       movePath: (from, dest) => {
         const src = cleanPath(from);
@@ -1480,6 +1522,10 @@ export const useIde = create<IdeState>()(
           files: nextFiles,
           dirs: [...new Set([...(target ? [target] : []), ...nextDirs.filter(Boolean)])],
         });
+        pushDisk("remove", src);
+        for (const [p, c] of Object.entries(nextFiles)) {
+          if (!(p in files)) pushDisk("write", p, c);
+        }
       },
       duplicateFile: (path) => {
         const { files } = get();
@@ -1492,16 +1538,20 @@ export const useIde = create<IdeState>()(
         set({ collapsed: cur.includes(path) ? cur.filter((p) => p !== path) : [...cur, path] });
       },
       applyFiles: (next, extraDirs) => {
-        const { openPaths, activePath } = get();
+        const { openPaths, activePath, collapsed } = get();
         const keepOpen = openPaths.filter((p) => p in next);
         const keepActive = activePath && activePath in next ? activePath : keepOpen[0] ?? null;
         const fromFiles = Object.keys(next).flatMap((p) => ancestorDirs(p));
+        const paths = Object.keys(next);
+        const nextCollapsed =
+          extraDirs != null ? autoCollapsePaths(paths, keepActive) : collapsed.length ? collapsed : autoCollapsePaths(paths, keepActive);
         set({
           files: next,
           dirs: [...new Set([...(extraDirs ?? []), ...fromFiles])].filter(Boolean),
           openPaths: keepOpen.length ? keepOpen : keepActive ? [keepActive] : [],
           activePath: keepActive,
           dirty: {},
+          collapsed: nextCollapsed,
         });
       },
       addChat: (msg) => {
@@ -1509,9 +1559,24 @@ export const useIde = create<IdeState>()(
         if (msg.role === "user") noteLearn("ask", msg.content);
       },
       startAssistant: (opts) => {
-        const chat = get().chat;
+        const chat = [...get().chat];
         const last = chat[chat.length - 1];
-        if (last?.role === "assistant" && last.content === "") return;
+        if (last?.role === "assistant") {
+          const blank =
+            !(last.content || "").trim() &&
+            !(last.thinking || "").trim() &&
+            !(last.steps?.length) &&
+            !(last.plan?.length);
+          if (blank) {
+            chat[chat.length - 1] = {
+              ...last,
+              at: Date.now(),
+              voice: opts?.voice ?? last.voice ?? "agent",
+            };
+            set({ chat });
+            return;
+          }
+        }
         set({ chat: [...chat, { id: nid(), role: "assistant", voice: opts?.voice ?? "agent", content: "", at: Date.now() }] });
       },
       appendAssistant: (s) => {
@@ -1551,6 +1616,7 @@ export const useIde = create<IdeState>()(
           },
         });
       },
+      setSessionJournal: (sessionJournal) => set({ sessionJournal: normalizeJournal(sessionJournal) }),
       finalizeAssistant: (reply, tools) => {
         flushLiveChat();
         const chat = [...get().chat];
@@ -1583,6 +1649,7 @@ export const useIde = create<IdeState>()(
         set({ chat: [...chat, { id: nid(), role: "assistant", content: reply, tools }] });
       },
       setDiskName: (diskName) => set({ diskName }),
+      setWorkspaceCwd: (workspaceCwd) => set({ workspaceCwd }),
       setSetupDone: (setupDone) => set({ setupDone }),
       setBackupName: (backupName) => set({ backupName }),
       setStorageMode: (storageMode) => set({ storageMode }),
@@ -1699,6 +1766,8 @@ export const useIde = create<IdeState>()(
           testsRunning: false,
           dirs: [],
           collapsed: [],
+          sessionJournal: { ...EMPTY_JOURNAL },
+          sessionTokens: { prompt: 0, completion: 0 },
         }),
       resetSettings: () =>
         set({
@@ -1818,26 +1887,17 @@ export const useIde = create<IdeState>()(
           testsRunning: false,
           agentInbox: null,
           agentQueue: [],
+          sessionJournal: normalizeJournal(p.sessionJournal),
+          workspaceCwd: typeof p.workspaceCwd === "string" ? p.workspaceCwd : "",
         };
       },
       partialize: (s) => ({
         files: s.files,
         openPaths: s.openPaths,
         activePath: s.activePath,
-        chat: s.chat.slice(-28).map((m) => ({
+        chat: persistChat(s.chat).map((m) => ({
           ...m,
-          content: m.content.slice(0, 12000),
-          thinking: m.thinking?.slice(0, 1200),
-          steps: m.steps?.slice(-16).map(({ image: _i, ...r }) => r),
-          images: m.role === "user" ? m.images?.slice(0, 2) : undefined,
-          lastRun: m.lastRun
-            ? {
-                ...m.lastRun,
-                stdout: m.lastRun.stdout.slice(0, 400),
-                stderr: m.lastRun.stderr.slice(0, 400),
-                running: false,
-              }
-            : undefined,
+          steps: m.steps?.map(({ image: _i, ...r }) => r),
         })),
         commits: s.commits.slice(-12).map((c, i, arr) => ({
           ...c,
@@ -1892,6 +1952,13 @@ export const useIde = create<IdeState>()(
         llmSlots: s.llmSlots,
         llmProfiles: s.llmProfiles,
         sessionTokens: s.sessionTokens,
+        sessionJournal: s.sessionJournal,
+        undo: Object.fromEntries(
+          Object.entries(s.undo)
+            .filter(([p]) => s.openPaths.includes(p) || Boolean(s.dirty[p]))
+            .slice(0, 10)
+            .map(([p, st]) => [p, st.slice(-4)]),
+        ),
         sidebar: s.sidebar,
         agentMode: s.agentMode,
         agentRules: s.agentRules,
@@ -1912,6 +1979,7 @@ export const useIde = create<IdeState>()(
         dirs: s.dirs,
         collapsed: s.collapsed,
         diskName: s.diskName,
+        workspaceCwd: s.workspaceCwd,
         setupDone: s.setupDone,
         backupName: s.backupName,
         storageMode: s.storageMode,

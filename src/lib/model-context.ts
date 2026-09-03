@@ -1,3 +1,5 @@
+import { CONTEXT_MAX, CONTEXT_MIN, formatContext } from "./tokens.ts";
+
 export type CtxSource = "katalog" | "api" | "web" | "helfer";
 
 export type CtxHit = { n: number; source: CtxSource };
@@ -10,6 +12,10 @@ const TABLE: [string, number][] = [
   ["gpt-4-turbo", 128_000],
   ["gpt-4o-mini", 128_000],
   ["gpt-4o", 128_000],
+  ["gpt-5.6-luna", 1_048_576],
+  ["gpt-5.6-terra", 1_048_576],
+  ["gpt-5.6-sol", 1_048_576],
+  ["gpt-5.6", 1_048_576],
   ["gpt-5.4", 256_000],
   ["gpt-5.2", 256_000],
   ["gpt-5", 256_000],
@@ -109,9 +115,6 @@ function num(v: unknown): number {
   return Number.isFinite(n) && n >= 2048 ? n : 0;
 }
 
-const CONTEXT_MAX = 262_144;
-const CONTEXT_MIN = 2048;
-
 const LOCAL = new Set([
   "ollama",
   "lmstudio",
@@ -136,10 +139,9 @@ export function anvilContext(n: number): number {
 }
 
 export function ctxLabel(hit: CtxHit): string {
-  const k = hit.n >= 1024 ? `${Math.round(hit.n / 1024)}k` : String(hit.n);
   const src = hit.source === "katalog" ? "Katalog" : hit.source === "api" ? "API" : hit.source === "web" ? "Web" : "Helfer";
-  const cap = hit.n > CONTEXT_MAX ? ` · Anvil max ${CONTEXT_MAX / 1024}k` : "";
-  return `${k} (${src})${cap}`;
+  const cap = hit.n > CONTEXT_MAX ? ` · Anvil max ${formatContext(CONTEXT_MAX)}` : "";
+  return `${formatContext(hit.n)} (${src})${cap}`;
 }
 
 let remote: Promise<void> | null = null;
@@ -212,12 +214,11 @@ export async function resolveModelContext(model: string, provider: string): Prom
 export async function applyCloudContext(): Promise<string | null> {
   const { useIde } = await import("@/store/ide");
   const st = useIde.getState();
-  if (!st.llmContextAuto) return null;
   if (!wantsAutoContext(st.llmProvider)) return null;
+  if (!st.llmContextAuto) st.setLlmContextAuto(true);
   const hit = await resolveModelContext(st.llmModel, st.llmProvider);
   if (!hit) return null;
   const n = anvilContext(hit.n);
-  if (n === st.llmContext) return ctxLabel(hit);
-  st.setLlmContext(n);
+  if (n !== st.llmContext) st.setLlmContext(n);
   return ctxLabel(hit);
 }

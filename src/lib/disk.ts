@@ -1,5 +1,8 @@
-const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", ".vercel", "__pycache__"]);
-const MAX = 750_000;
+import { isSourcePath, skipDirName } from "./ws-skip";
+
+const MAX = 1_500_000;
+const MAX_FILES = 4000;
+const MAX_TOTAL = 96_000_000;
 const DB = "anvil-disk";
 const STORE = "handles";
 
@@ -118,16 +121,19 @@ export async function loadSlot(slot: DiskSlot): Promise<Record<string, string>> 
   return files;
 }
 
-export async function loadSlotAll(slot: DiskSlot): Promise<{ files: Record<string, string>; dirs: string[] }> {
+export type DiskPack = { files: Record<string, string>; dirs: string[]; skipped: number };
+
+export async function loadSlotAll(slot: DiskSlot): Promise<DiskPack> {
   const handle = slots[slot];
   if (!handle) throw new Error("Kein Ordner gewählt.");
   if (!(await ensurePerm(handle, "read"))) throw new Error("Keine Leserechte. Ordner erneut wählen.");
   const dirs: string[] = [];
-  const files = await readFolder(handle, "", dirs);
-  return { files, dirs };
+  const acc = { n: 0, bytes: 0, skipped: 0 };
+  const files = await readFolder(handle, "", dirs, acc);
+  return { files, dirs, skipped: acc.skipped };
 }
 
-export async function pickFolder(): Promise<{ files: Record<string, string>; dirs: string[] }> {
+export async function pickFolder(): Promise<DiskPack> {
   await pickLocation("workspace");
   return loadSlotAll("workspace");
 }
@@ -209,26 +215,46 @@ export async function removeDiskPath(path: string): Promise<void> {
   }
 }
 
-async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = []): Promise<Record<string, string>> {
+type ReadAcc = { n: number; bytes: number; skipped: number };
+
+const TEXT_OK =
+  /\.(py|js|ts|tsx|jsx|mjs|cjs|json|md|html|css|go|rs|java|c|cc|cpp|h|hpp|cs|php|rb|txt|toml|yml|yaml|xml|svg|sh|vue|svelte|sql)$/i;
+
+async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc: ReadAcc): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   if (prefix) dirs.push(prefix);
   for await (const [child, handle] of dir.entries() as AsyncIterable<[string, FileSystemHandle]>) {
     if (child.startsWith(".") && child !== ".gitignore" && child !== ".env.example" && child !== ".anvil") continue;
-    if (SKIP.has(child)) continue;
+    if (skipDirName(child)) continue;
     if (handle.kind === "directory") {
-      Object.assign(out, await readFolder(handle as DirHandle, prefix ? `${prefix}/${child}` : child, dirs));
+      Object.assign(out, await readFolder(handle as DirHandle, prefix ? `${prefix}/${child}` : child, dirs, acc));
     } else {
       const file = await (handle as FileSystemFileHandle).getFile();
-      if (file.size > MAX) continue;
+      const path = prefix ? `${prefix}/${child}` : child;
+      const source = isSourcePath(path);
+      if (file.size > MAX || file.size === 0) {
+        acc.skipped += 1;
+        continue;
+      }
+      if (acc.n >= MAX_FILES || acc.bytes + file.size > MAX_TOTAL) {
+        acc.skipped += 1;
+        continue;
+      }
+      if (!source && acc.n > MAX_FILES * 0.7) {
+        acc.skipped += 1;
+        continue;
+      }
       if (
         file.type &&
         !file.type.startsWith("text") &&
-        !/\.(py|js|ts|tsx|jsx|json|md|html|css|go|rs|java|c|cpp|h|cs|php|rb|txt|toml|yml|yaml|xml|svg|sh)$/i.test(child)
+        !TEXT_OK.test(child)
       ) {
+        acc.skipped += 1;
         continue;
       }
-      const path = prefix ? `${prefix}/${child}` : child;
       out[path] = await file.text();
+      acc.n += 1;
+      acc.bytes += file.size;
     }
   }
   return out;

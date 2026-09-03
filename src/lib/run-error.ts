@@ -30,9 +30,14 @@ export function scrubRunError(text: string): string {
 export function runFailHint(stderr: string, files: string[]): string {
   const clean = scrubRunError(stderr);
   const miss = missingFromError(stderr) || missingFromError(clean);
-  if (!miss) return `Run failed:\n${clean}\nFix it, then run_file.`;
-  const base = miss.split("/").pop() ?? miss;
-  const similar = files.filter((p) => p === miss || p.endsWith("/" + base) || p.split("/").pop() === base).slice(0, 6);
-  const extra = similar.length ? ` Similar: ${similar.join(", ")}.` : " Not in the workspace.";
-  return `Run: "${miss}" is missing.${extra}\nwrite_file for it or drop it from the bundler/ORDER, then run_file.`;
+  if (miss) {
+    const base = miss.split("/").pop() ?? miss;
+    const similar = files.filter((p) => p === miss || p.endsWith("/" + base) || p.split("/").pop() === base).slice(0, 6);
+    const extra = similar.length ? ` Similar: ${similar.join(", ")}.` : " Not in the workspace.";
+    return `Run: "${miss}" is missing.${extra}\nwrite_file for it or drop it from the bundler/ORDER, then run_file.`;
+  }
+  if (/error:|undefined:|undefined reference|cannot find|Compiler fehlt|nicht in Anvil|Compile/i.test(stderr + clean)) {
+    return `Compile/Run failed:\n${clean}\nRead the log, patch the source, then run_file.`;
+  }
+  return `Run failed:\n${clean}\nFix it, then run_file.`;
 }

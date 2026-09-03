@@ -2,6 +2,8 @@ import { langFromPath } from "./languages";
 import { getPyodide, stripTs } from "./run-client";
 import { startJsDebugIframe, type JsDebugSession } from "./debug-sandbox";
 import { canDebug, collectRemoteTrace, stackOf, type TraceEvent } from "./debug-remote";
+import { companionDebug } from "./companion";
+import { holdCompanion, releaseCompanion } from "./companion-life";
 import { emitPlugin } from "./plugins/events";
 import { useIde, type DebugFrame } from "@/store/ide";
 
@@ -551,6 +553,83 @@ await ns["__anvil_main"]()
   return { stdout, stderr };
 }
 
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function runNativePyDebug(path: string, cwd: string): Promise<{ stdout: string; stderr: string } | null> {
+  await holdCompanion();
+  const start = await companionDebug("start", {
+    cwd,
+    path,
+    pauseOnEntry: entryPause,
+    breakpoints: bps(),
+  });
+  if (!start.ok || !start.id) {
+    if (!useIde.getState().companionKeep) await releaseCompanion();
+    return null;
+  }
+  const id = start.id;
+  let stdout = "";
+  let stderr = "";
+  try {
+    for (;;) {
+      if (mode === "stop") {
+        await companionDebug("stop", { id });
+        return { stdout, stderr };
+      }
+      const ev = await companionDebug("poll", { id });
+      if (!ev.ok) return { stdout, stderr: ev.error || "Debug tot" };
+      stdout = ev.stdout || stdout;
+      stderr = ev.stderr || stderr;
+      if (ev.done) return { stdout, stderr };
+      if (ev.pause) {
+        applyPause({
+          path: ev.pause.path || path,
+          line: ev.pause.line,
+          reason: ev.pause.reason || "break",
+          stack: ev.pause.stack?.length ? ev.pause.stack : [{ path: ev.pause.path || path, line: ev.pause.line, fn: "<module>" }],
+          locals: ev.pause.locals || {},
+        });
+        await refreshWatches(ev.pause.locals || {});
+        let cmd: DebugCmd = "continue";
+        for (;;) {
+          cmd = await waitCmd();
+          if (cmd !== "eval") break;
+          const expr = evalExpr;
+          evalExpr = "";
+          await companionDebug("cmd", { id, cmd: "eval", expr });
+          let text = "";
+          for (let i = 0; i < 25; i++) {
+            await sleep(40);
+            const got = await companionDebug("poll", { id });
+            stdout = got.stdout || stdout;
+            stderr = got.stderr || stderr;
+            if (got.eval) {
+              text = got.eval;
+              break;
+            }
+            if (got.done) break;
+          }
+          useIde.getState().setDebugEval(text);
+          evalResultWait?.(text);
+          evalResultWait = null;
+        }
+        if (cmd === "stop") {
+          await companionDebug("stop", { id });
+          return { stdout, stderr };
+        }
+        await companionDebug("cmd", { id, cmd, breakpoints: bps() });
+      } else {
+        await sleep(50);
+      }
+    }
+  } finally {
+    await companionDebug("stop", { id });
+    if (!useIde.getState().companionKeep) await releaseCompanion();
+  }
+}
+
 export async function startDebug(path: string, files: Record<string, string>, opts?: { pauseOnEntry?: boolean }) {
   if (started) debugStop();
   mode = opts?.pauseOnEntry === false ? "run" : "step";
@@ -566,6 +645,7 @@ export async function startDebug(path: string, files: Record<string, string>, op
     locals: {},
   });
   useIde.getState().revealOutput();
+  window.dispatchEvent(new Event("anvil-debug-tab"));
   useIde.getState().setRunning(true);
   window.dispatchEvent(new CustomEvent("anvil-learn", { detail: { k: "debug", d: path } }));
   const lang = langFromPath(path);
@@ -574,8 +654,15 @@ export async function startDebug(path: string, files: Record<string, string>, op
   replay = null;
   try {
     let out = { stdout: "", stderr: "" };
-    if (lang === "python") out = await runPyDebug(files, path);
-    else if (lang === "javascript" || lang === "typescript") {
+    if (lang === "python") {
+      const cwd = useIde.getState().workspaceCwd;
+      if (cwd) {
+        const native = await runNativePyDebug(path, cwd);
+        out = native ?? (await runPyDebug(files, path));
+      } else {
+        out = await runPyDebug(files, path);
+      }
+    } else if (lang === "javascript" || lang === "typescript") {
       const src = lang === "typescript" ? stripTs(files[path] ?? "") : (files[path] ?? "");
       out = await runJsDebug(src, path);
     } else if (canDebug(path)) {

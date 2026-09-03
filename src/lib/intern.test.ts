@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fingerprint, suggestHeal } from "./intern-core.ts";
+import { fingerprint, internNoise, suggestHeal } from "./intern-core.ts";
 
 describe("intern", () => {
   it("fingerprints numbers and urls", () => {
@@ -26,5 +26,10 @@ describe("intern", () => {
     const s = suggestHeal(fingerprint("persist", "QuotaExceededError idb"), "persist");
     assert.equal(s.heal, "soft-restart");
     assert.equal(s.auto, false);
+  });
+  it("ignores abort timeout noise", () => {
+    assert.equal(internNoise("timeout"), true);
+    assert.equal(internNoise("js timeout"), true);
+    assert.equal(internNoise("AbortError"), true);
   });
 });

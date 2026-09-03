@@ -75,11 +75,13 @@ export const useModelLib = create<ModelLibState>()(
       }),
       merge: (persisted, current) => {
         const p = (persisted || {}) as Partial<ModelLibState>;
-        const pin = (p.pinHelper ?? current.pinHelper ?? []).filter((id) => !/[-.]4B-q4f/i.test(id));
+        const pin = Array.isArray(p.pinHelper)
+          ? p.pinHelper.filter((id) => !/[-.]4B-q4f/i.test(id))
+          : current.pinHelper;
         return {
           ...current,
           ...p,
-          pinHelper: pin.length ? pin : [...HELPER_SMALL],
+          pinHelper: Array.isArray(p.pinHelper) ? pin : current.pinHelper,
         };
       },
     },

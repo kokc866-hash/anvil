@@ -33,5 +33,5 @@ export function suggestHeal(fp: string, kind: InternKind): { heal: HealId; auto:
 }
 
 export function internNoise(msg: string): boolean {
-  return /resizeobserver|script error\.|chrome-extension:|moz-extension:|anvil-intern|ohne fortschritt|wartet auf das modell|superseded/i.test(msg);
+  return /resizeobserver|script error\.|chrome-extension:|moz-extension:|anvil-intern|ohne fortschritt|wartet auf das modell|superseded|\bjs timeout\b|^(js )?timeout$|AbortError|The operation was aborted|signal is aborted/i.test(msg);
 }

@@ -21,6 +21,10 @@ export type CompanionInfo = {
   installer?: string | null;
   toolchains?: ToolchainInfo[];
   toolHome?: string;
+  lspHome?: string;
+  packages?: { home: string; toolchains: string; lsp: string };
+  git?: boolean;
+  workspace?: string;
   error?: string;
   needToken?: boolean;
 };
@@ -108,7 +112,7 @@ export async function companionPing(base = DEFAULT_COMPANION): Promise<Companion
     const j = (await r.json()) as CompanionInfo;
     if (r.status === 401) return { ok: false, needToken: true, error: j.error || "Token fehlt" };
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-    return { ok: true, version: j.version, bins: j.bins, lsp: j.lsp, installer: j.installer ?? null, toolchains: j.toolchains, toolHome: j.toolHome };
+    return { ok: true, version: j.version, bins: j.bins, lsp: j.lsp, installer: j.installer ?? null, toolchains: j.toolchains, toolHome: j.toolHome, git: Boolean(j.git), workspace: j.workspace };
   } catch {
     return { ok: false, error: "Companion aus. Auf dem Rechner: node companion/server.mjs" };
   }
@@ -139,6 +143,32 @@ export type ToolPull = {
   pct: number;
   busy: boolean;
 };
+
+export type PackageHome = { home: string; toolchains: string; lsp: string };
+
+export async function companionHome(base = DEFAULT_COMPANION): Promise<PackageHome | null> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/home`, { headers: headers(), signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return null;
+    const j = (await r.json().catch(() => ({}))) as Partial<PackageHome>;
+    if (!j.home) return null;
+    return { home: String(j.home), toolchains: String(j.toolchains || ""), lsp: String(j.lsp || "") };
+  } catch {
+    return null;
+  }
+}
+
+export async function companionSetHome(dir: string, base = DEFAULT_COMPANION): Promise<PackageHome> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/home`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ path: dir }),
+    signal: AbortSignal.timeout(8000),
+  });
+  const j = (await r.json().catch(() => ({}))) as Partial<PackageHome> & { error?: string; ok?: boolean };
+  if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+  return { home: String(j.home || dir), toolchains: String(j.toolchains || ""), lsp: String(j.lsp || "") };
+}
 
 export async function companionToolchain(
   id: string,
@@ -324,5 +354,151 @@ export async function termKill(id: string, base = DEFAULT_COMPANION): Promise<vo
     });
   } catch {
     /* */
+  }
+}
+
+export type GitFile = { path: string; kind: string; staged?: boolean; unstaged?: boolean; untracked?: boolean };
+export type GitLog = { hash: string; at: number; message: string };
+export type GitStatus = {
+  ok: boolean;
+  error?: string;
+  cwd?: string;
+  repo?: boolean;
+  branch?: string;
+  files?: GitFile[];
+  log?: GitLog[];
+  branches?: string[];
+  stdout?: string;
+  text?: string;
+};
+
+export async function companionGit(
+  action: string,
+  body: Record<string, unknown> = {},
+  base = DEFAULT_COMPANION,
+): Promise<GitStatus> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/git`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ action, ...body }),
+      signal: AbortSignal.timeout(action === "push" || action === "pull" || action === "clone" ? 180000 : 20000),
+    });
+    return (await r.json()) as GitStatus;
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Git nicht erreichbar" };
+  }
+}
+
+export async function companionWorkspace(cwd: string, base = DEFAULT_COMPANION): Promise<{ ok: boolean; cwd?: string; error?: string }> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/workspace`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ cwd }),
+      signal: AbortSignal.timeout(8000),
+    });
+    return (await r.json()) as { ok: boolean; cwd?: string; error?: string };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Companion aus" };
+  }
+}
+
+export async function companionTree(
+  cwd?: string,
+  base = DEFAULT_COMPANION,
+): Promise<{ ok: boolean; files?: Record<string, string>; dirs?: string[]; skipped?: number; n?: number; error?: string }> {
+  try {
+    const q = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/tree${q}`, {
+      headers: headers(),
+      signal: AbortSignal.timeout(30000),
+    });
+    return (await r.json()) as { ok: boolean; files?: Record<string, string>; dirs?: string[]; skipped?: number; n?: number; error?: string };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Baum fehlgeschlagen" };
+  }
+}
+
+export async function companionWriteFile(path: string, content: string, cwd?: string, base = DEFAULT_COMPANION): Promise<boolean> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/file`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ path, content, cwd }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = (await r.json()) as { ok?: boolean };
+    return Boolean(j.ok);
+  } catch {
+    return false;
+  }
+}
+
+export async function companionDeleteFile(path: string, cwd?: string, base = DEFAULT_COMPANION): Promise<boolean> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/file/delete`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ path, cwd }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = (await r.json()) as { ok?: boolean };
+    return Boolean(j.ok);
+  } catch {
+    return false;
+  }
+}
+
+export async function companionMkdir(path: string, cwd?: string, base = DEFAULT_COMPANION): Promise<boolean> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/mkdir`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ path, cwd }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = (await r.json()) as { ok?: boolean };
+    return Boolean(j.ok);
+  } catch {
+    return false;
+  }
+}
+
+export type DebugPause = {
+  path: string;
+  line: number;
+  reason: string;
+  locals: Record<string, string>;
+  stack: Array<{ path: string; line: number; fn: string }>;
+};
+
+export type DebugSnap = {
+  ok: boolean;
+  id?: string;
+  error?: string;
+  done?: boolean;
+  code?: number;
+  stdout?: string;
+  stderr?: string;
+  eval?: string;
+  pause?: DebugPause | null;
+};
+
+export async function companionDebug(
+  action: "start" | "cmd" | "poll" | "stop",
+  body: Record<string, unknown> = {},
+  base = DEFAULT_COMPANION,
+): Promise<DebugSnap> {
+  try {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/debug`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ action, ...body }),
+      signal: AbortSignal.timeout(action === "start" ? 15000 : 8000),
+    });
+    return (await r.json()) as DebugSnap;
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Debug nicht erreichbar" };
   }
 }

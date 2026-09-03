@@ -1,4 +1,4 @@
-# Anvil 1.1.0 — Workflows
+# Anvil 1.2.0 — Workflows
 
 Schritt für Schritt. Fenster erklärt: `02-handbuch.md`. Stand: 29.08.2026.
 
@@ -166,7 +166,22 @@ Wenn der Download stört: Einstellungen → Modelle, Pin, vorladen, Cache behalt
 
 ---
 
-## K. Alltagsgriff
+## L. Lange Sitzung, mittleres Projekt
+
+Anvil merkt sich über Compacting hinweg: Ziel, angefasste Dateien, Korrekturen. Gedächtnis → **Sitzung**.
+
+Mittleres Projekt (einige Dutzend bis ein paar hundert Dateien):
+
+1. Ordner auf der Platte öffnen (Einstellungen → Speicher).
+2. Agent sieht eine Ordnerkarte, nicht jede Datei. `list_files`, `grep`, dann `read_file`.
+3. Offene und angehängte Dateien liegen im Fokus. Ganze Dateien nicht in den Chat kippen — `@datei` reicht.
+4. Chat nicht leeren, nur weil er lang ist. Compacting kürzt den Prompt, die Sitzung bleibt.
+
+Wenn der Agent den Faden verliert: Gedächtnis → Sitzung prüfen, oder eine kurze Lage: `Wir sind bei index.html, dunkles Theme, ohne Tailwind. Mach als Nächstes …`
+
+---
+
+## M. Alltagsgriff
 
 | Ich will | Griff |
 |---|---|
@@ -183,7 +198,7 @@ Wenn der Download stört: Einstellungen → Modelle, Pin, vorladen, Cache behalt
 
 ---
 
-## L. Feierabend
+## N. Feierabend
 
 **stop.bat** — Electron und der Dev-Server auf 8080 weg.  
 Einstellungen und Workspace bleiben (Browser-Speicher bzw. Ordner). Nächster Start: nur start.bat.

@@ -1,5 +1,6 @@
 import { formatCode } from "./format";
 import { hasLocation, saveSlot } from "./disk";
+import { companionWriteFile } from "./companion";
 import { emitPlugin } from "./plugins/events";
 import { useIde } from "@/store/ide";
 
@@ -18,6 +19,12 @@ export async function saveNow() {
     files = { ...st.files, [path]: next };
   }
   emitPlugin("save", path ?? "");
+  const cwd = st.workspaceCwd;
+  if (cwd) {
+    const dirty = Object.keys(st.dirty).filter((p) => p in files);
+    const paths = dirty.length ? dirty : path ? [path] : [];
+    await Promise.all(paths.map((p) => companionWriteFile(p, files[p] ?? "", cwd)));
+  }
   if (hasLocation("workspace") || st.autoSaveDisk || st.storageMode === "disk") {
     try {
       await saveSlot("workspace", files, st.dirs);

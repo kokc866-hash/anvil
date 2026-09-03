@@ -38,7 +38,7 @@ export type GraphTool = {
 
 /** Beobachtungs-Tools für Graph-Kanten — nicht nur see/play/engine. */
 export const GRAPH_TOOLS: GraphTool[] = [
-  { id: "run_file", label: "Run", edge: "run", glob: "*.{py,js,ts}", group: "Run", hint: "Datei ausführen" },
+  { id: "run_file", label: "Run", edge: "run", glob: "*.{py,js,ts,go,rs,c,cpp,java,cs,php,rb}", group: "Run", hint: "Datei ausführen" },
   { id: "shell", label: "Shell / Tests", edge: "test", glob: "tests/**", group: "Run", hint: "npm test, pytest, …" },
   { id: "see_run", label: "Frame", edge: "preview", glob: "*.html", group: "Sehen", hint: "HTML-Snapshot" },
   { id: "play", label: "Tasten + Frame", edge: "play", glob: "*.html", group: "Sehen", hint: "Eingabe, dann Bild" },

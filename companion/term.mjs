@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
+import { toolEnv } from "./toolchain.mjs";
 
 /** @type {Map<string, { child: import('node:child_process').ChildProcess, buf: string }>} */
 const sessions = new Map();
@@ -18,7 +19,7 @@ export function termStart(cwd) {
   const child = spawn(sh.file, sh.args, {
     cwd: cwd || process.cwd(),
     shell: false,
-    env: { ...process.env, TERM: "xterm-256color" },
+    env: { ...toolEnv(), TERM: "xterm-256color" },
     windowsHide: true,
   });
   const rec = { child, buf: "" };

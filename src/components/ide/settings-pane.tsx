@@ -512,8 +512,8 @@ function AgentSection({ q }: { q: string }) {
           label="Context-Länge"
           hint={
             llmContextAuto
-              ? "Auto: Katalog, dann API, dann Web. Helfer nur wenn die Zahl fehlt. Anvil max 256k."
-              : "Fenster für das Modell. 128k = 128000 Tokens. Ollama: num_ctx."
+              ? "Cloud/Abo: beim Wechsel Auto aus Katalog. Lokal: num_ctx."
+              : "Fenster für das Modell. Cloud/Abo besser Auto. Ollama: num_ctx."
           }
         >
           <div className="flex flex-col items-end gap-1">
@@ -561,7 +561,7 @@ function AgentSection({ q }: { q: string }) {
                   setLlmContext(Number(e.target.value));
                 }}
                 className="h-8 w-28 rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none focus:ring-2 focus:ring-ring"
-                title="Tokens, max 256000"
+                title="Tokens, max 2M"
               />
             ) : null}
           </div>
@@ -638,7 +638,7 @@ function AgentSection({ q }: { q: string }) {
       <Vis q={q} label="Context compacting kompakt Verlauf">
         <Row
           label="Compacting"
-          hint="Alter Chat wird gekürzt, wenn das Fenster voll ist. Auto ab etwa 70 %, aggressiv früher."
+          hint="Alter Chat wird gekürzt, wenn das Fenster voll ist. Auto ab etwa 70 %. Ziel, Dateien und Korrekturen bleiben in der Sitzung."
         >
           <Seg<CompactMode>
             value={llmCompact}
@@ -1288,9 +1288,9 @@ function LearnSection({ q }: { q: string }) {
             value={String(p.factLimit)}
             onChange={(v) => setPref("factLimit", Number(v))}
             options={[
-              { id: "4", label: "4" },
               { id: "8", label: "8" },
               { id: "12", label: "12" },
+              { id: "16", label: "16" },
             ]}
           />
         </Row>
@@ -1396,23 +1396,34 @@ function StorageSection({ q }: { q: string }) {
   const setNotice = useIde((s) => s.setNotice);
   const ok = diskSupported();
   const native = nativeHelper();
-  const [paths, setPaths] = useState<{ data: string; helper: string; logs: string } | null>(null);
+  const [paths, setPaths] = useState<{ data: string; helper: string; logs: string; packages?: string } | null>(null);
 
   useEffect(() => {
     void native?.pathsGet?.().then(setPaths);
   }, [native]);
 
-  async function pickNative(kind: "data" | "helper" | "logs") {
+  async function pickNative(kind: "data" | "helper" | "logs" | "packages") {
     if (!native?.pathsPick) return;
     try {
       const next = await native.pathsPick(kind);
       setPaths(next);
+      if (kind === "packages" && next.packages) {
+        try {
+          const { companionSetHome, DEFAULT_COMPANION } = await import("@/lib/companion");
+          const url = useIde.getState().companionUrl || DEFAULT_COMPANION;
+          await companionSetHome(next.packages, url);
+        } catch {
+          /* Companion aus — Pfad gilt beim nächsten Start */
+        }
+      }
       setNotice(
         kind === "helper"
           ? `Helfer-Modelle: ${next.helper}`
           : kind === "logs"
             ? `Logs: ${next.logs}`
-            : `App-Daten: ${next.data}`,
+            : kind === "packages"
+              ? `Pakete: ${next.packages}`
+              : `App-Daten: ${next.data}`,
       );
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Ordner nicht gewählt");
@@ -1551,12 +1562,13 @@ function StorageSection({ q }: { q: string }) {
         <Vis q={q} label="Helfer Modelle App-Daten Logs Pfad Festplatte">
           <p className="pt-4 text-xs font-medium text-fg">App auf diesem Rechner</p>
           <p className="mb-2 text-xs text-muted">
-            Jeder Bereich hat einen eigenen Ordner. API-Keys bleiben im App-Speicher, nicht in diesen Ordnern.
+            Jeder Bereich hat einen eigenen Ordner. Compiler und Sprachserver: Pakete. API-Keys bleiben im App-Speicher.
           </p>
           {(
             [
               ["data", "Einstellungen / Sicherung", paths?.data],
               ["helper", "Helfer-Modelle", paths?.helper],
+              ["packages", "Pakete (Compiler, LSP)", paths?.packages],
               ["logs", "Logs", paths?.logs],
             ] as const
           ).map(([kind, label, path]) => (

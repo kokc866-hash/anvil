@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Brain, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { profile, useLearn, workspaceId } from "@/lib/learn";
+import { formatJournal, isJournalEmpty, EMPTY_JOURNAL } from "@/lib/session";
 import { debugSkill } from "@/lib/skill-debug";
 import { cn } from "@/lib/cn";
 import { useIde } from "@/store/ide";
@@ -22,10 +23,12 @@ export function MemoryPane() {
   const setSidebar = useIde((s) => s.setSidebar);
   const p = profile();
   const ws = workspaceId();
-  const [tab, setTab] = useState<"person" | "project" | "skills" | "neg" | "log">("person");
+  const [tab, setTab] = useState<"person" | "project" | "session" | "skills" | "neg" | "log">("person");
   const [draft, setDraft] = useState("");
   const person = facts.filter((f) => f.scope !== "project" && f.kind !== "project");
   const proj = facts.filter((f) => (f.scope === "project" || f.kind === "project") && (!f.ws || f.ws === ws));
+  const journal = useIde((s) => s.sessionJournal);
+  const setSessionJournal = useIde((s) => s.setSessionJournal);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
@@ -53,6 +56,7 @@ export function MemoryPane() {
           [
             ["person", "Person"],
             ["project", "Projekt"],
+            ["session", "Sitzung"],
             ["skills", "Skills"],
             ["neg", "Nicht"],
             ["log", "Log"],
@@ -83,6 +87,18 @@ export function MemoryPane() {
                 </p>
               </div>
             ))
+          : tab === "session"
+            ? isJournalEmpty(journal)
+              ? <p className="text-muted">Die Sitzung füllt sich, sobald der Agent arbeitet. Überlebt Compacting und Neustart — auch bei mittleren Projekten.</p>
+              : (
+                <div className="rounded-md border border-border px-2 py-1.5">
+                  <p className="mb-1 text-[10px] text-subtle">{journal.turns} Runden · {journal.files.length} Dateien</p>
+                  <pre className="whitespace-pre-wrap font-mono text-[11px] text-fg">{formatJournal(journal)}</pre>
+                  <button type="button" className="mt-2 text-[10px] text-subtle hover:text-fg" onClick={() => setSessionJournal({ ...EMPTY_JOURNAL })}>
+                    Sitzung leeren
+                  </button>
+                </div>
+              )
           : tab === "skills"
             ? skills.map((s) => {
                 const dbg = debugSkill(s);
@@ -131,6 +147,7 @@ export function MemoryPane() {
         {tab === "project" && proj.length === 0 ? <p className="text-muted">Noch keine Projekt-Fakten für {ws}.</p> : null}
         {tab === "neg" && negs.length === 0 ? <p className="text-muted">Keine abgelehnten Muster.</p> : null}
       </div>
+      {tab !== "session" && tab !== "log" && tab !== "neg" ? (
       <form
         className="flex gap-1 border-t border-border p-2"
         onSubmit={(e) => {
@@ -153,7 +170,15 @@ export function MemoryPane() {
           +
         </Button>
       </form>
-      <button type="button" className="px-3 pb-2 text-[10px] text-subtle hover:text-fg" onClick={() => clear()}>
+      ) : null}
+      <button
+        type="button"
+        className="px-3 pb-2 text-[10px] text-subtle hover:text-fg"
+        onClick={() => {
+          clear();
+          setSessionJournal({ ...EMPTY_JOURNAL });
+        }}
+      >
         Alles vergessen
       </button>
     </div>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { dropStaleRun, localLintHits } from "./problems.ts";
+import { dropCoveredHeuristics, dropStaleRun, localLintHits, noteCompileChecked } from "./problems.ts";
 import type { LspHit } from "./lsp.ts";
 
 function h(path: string, message: string, source: string): LspHit {
@@ -28,5 +28,12 @@ describe("problems", () => {
     const run = [h("a.py", "invalid syntax", "run")];
     const next = dropStaleRun(run, [h("a.py", "indent", "py")]);
     assert.equal(next.length, 1);
+  });
+  it("drops brace heuristics after compiler saw the file", () => {
+    noteCompileChecked(["src/ok.ts"]);
+    const local = [h("src/ok.ts", "{ nicht geschlossen", "syntax"), h("src/ok.ts", "Import x unbenutzt", "index")];
+    const next = dropCoveredHeuristics(local);
+    assert.equal(next.some((x) => x.source === "syntax"), false);
+    assert.equal(next.some((x) => x.source === "index"), true);
   });
 });

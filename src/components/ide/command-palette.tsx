@@ -3,7 +3,7 @@ import { listCommands, pluginSnapshot, subscribePlugins } from "@/lib/plugins";
 import { brainPalette, brainReady, loadBrain, useBrain } from "@/lib/brain";
 import { zipFiles } from "@/lib/archive";
 import { formatCode } from "@/lib/format";
-import { findDefinition, wordAt } from "@/lib/lsp";
+import { defsAt, wordAt } from "@/lib/lsp";
 import { getIndex, rebuildIndex, searchIndex } from "@/lib/ws-index";
 import { gotoFile } from "@/lib/goto";
 import { useIde } from "@/store/ide";
@@ -115,9 +115,10 @@ export function CommandPalette() {
           for (let i = 0; i < s.cursor.line - 1 && i < lines.length; i++) off += lines[i].length + 1;
           off += Math.max(0, s.cursor.col - 1);
           const w = wordAt(src, off);
-          const defs = findDefinition(s.files, w, p);
-          if (!defs.length) s.setNotice(t("noDef"));
-          else s.setPeek({ word: w, defs });
+          void defsAt(s.files, p, off, s.openPaths).then((defs) => {
+            if (!defs.length) s.setNotice(t("noDef"));
+            else s.setPeek({ word: w, defs });
+          });
         } },
         { id: "intern", label: t("cmdIntern"), run: () => void import("@/lib/intern").then((m) => m.useIntern.getState().setPane(true)) },
         { id: "intern-soft", label: t("cmdSoft"), run: () => void import("@/lib/intern").then((m) => m.useIntern.getState().restart("soft")) },

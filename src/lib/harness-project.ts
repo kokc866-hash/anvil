@@ -114,6 +114,11 @@ export function guessProjectHarness(files: Record<string, string>): { harness: P
   if (js) add({ when: "JS/TS", edge: "run", tool: "run_file", glob: "*.{js,ts,tsx,mjs}" });
   if (go) add({ when: "Go", edge: "run", tool: "run_file", glob: "*.go" });
   if (rust) add({ when: "Rust", edge: "run", tool: "run_file", glob: "*.rs" });
+  if (has(/\.(c|cc|cpp|h|hpp)$/i)) add({ when: "C/C++", edge: "run", tool: "run_file", glob: "*.{c,cc,cpp,h}" });
+  if (has(/\.java$/i)) add({ when: "Java", edge: "run", tool: "run_file", glob: "*.java" });
+  if (has(/\.cs$/i) && !engine) add({ when: ".NET", edge: "run", tool: "run_file", glob: "*.cs" });
+  if (has(/\.php$/i)) add({ when: "PHP", edge: "run", tool: "run_file", glob: "*.php" });
+  if (has(/\.rb$/i)) add({ when: "Ruby", edge: "run", tool: "run_file", glob: "*.rb" });
   if (tests) add({ when: "Tests", edge: "test", tool: "shell", glob: "tests/**" });
   if (js || html) add({ when: "Format", edge: "format", tool: "format_file", glob: "*.{js,ts,tsx,json,html,css}" });
   else if (py) add({ when: "Format", edge: "format", tool: "format_file", glob: "*.py" });

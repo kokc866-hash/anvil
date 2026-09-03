@@ -1,10 +1,12 @@
-/** Portable compilers into ~/.anvil/toolchains — not the Anvil install, not Wandbox. */
+/** Portable compilers into <anvil-home>/toolchains — not the Anvil install, not Wandbox. */
 import { spawn, execFileSync } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { toolHome } from "./paths.mjs";
 
-export const TOOL_HOME = process.env.ANVIL_TOOLCHAIN_HOME || path.join(os.homedir(), ".anvil", "toolchains");
+export { toolHome };
+export const TOOL_HOME = toolHome();
 
 const WIN = process.platform === "win32";
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
@@ -16,8 +18,8 @@ export const TOOLS = {
   cargo: { label: "Rust", bins: ["cargo", "rustc"], about: "~250 MB", kind: "rust" },
   javac: { label: "OpenJDK 21", bins: ["javac", "java"], about: "~180 MB", kind: "jdk" },
   java: { label: "OpenJDK 21", bins: ["java", "javac"], about: "~180 MB", kind: "jdk" },
-  cc: { label: "Zig (C/C++)", bins: ["zig"], about: "~50 MB", kind: "zig" },
-  cxx: { label: "Zig (C/C++)", bins: ["zig"], about: "~50 MB", kind: "zig" },
+  cc: { label: "Zig (C/C++)", bins: ["zig"], about: "~70 MB", kind: "zig" },
+  cxx: { label: "Zig (C/C++)", bins: ["zig"], about: "~70 MB", kind: "zig" },
   php: { label: "PHP", bins: ["php"], about: "~35 MB", kind: "php" },
   ruby: { label: "Ruby", bins: ["ruby"], about: "~30 MB", kind: "ruby" },
   python: { label: "Python", bins: ["python", "python3"], about: "~15 MB", kind: "python" },
@@ -50,7 +52,7 @@ function walkFind(root, names, depth = 0) {
 }
 
 function dirOf(kind) {
-  return path.join(TOOL_HOME, kind);
+  return path.join(toolHome(), kind);
 }
 
 export function toolchainBin(bin) {
@@ -61,7 +63,7 @@ export function toolchainBin(bin) {
 }
 
 export function listToolchains() {
-  mkdirSync(TOOL_HOME, { recursive: true });
+  mkdirSync(toolHome(), { recursive: true });
   const seen = new Set();
   return Object.entries(TOOLS)
     .filter(([, s]) => {
@@ -127,6 +129,44 @@ export function resolveBin(bin) {
   return toolchainBin(bin);
 }
 
+/** Env for every spawn: Anvil compilers on PATH + CARGO_HOME / JAVA_HOME / GOROOT. */
+export function toolEnv(base = process.env) {
+  const dirs = [];
+  const extra = {};
+  const add = (bin) => {
+    const p = resolveBin(bin);
+    if (p) dirs.push(path.dirname(p));
+    return p;
+  };
+  const go = add("go");
+  if (go) {
+    const root = path.resolve(path.dirname(go), "..");
+    if (existsSync(path.join(root, "src")) || existsSync(path.join(root, "lib"))) extra.GOROOT = root;
+  }
+  add("cargo");
+  add("rustc");
+  const cargoHome = path.join(toolHome(), "rust", "cargo");
+  const rustupHome = path.join(toolHome(), "rust", "rustup");
+  if (existsSync(cargoHome)) extra.CARGO_HOME = cargoHome;
+  if (existsSync(rustupHome)) extra.RUSTUP_HOME = rustupHome;
+  const java = add("java");
+  add("javac");
+  if (java) extra.JAVA_HOME = path.resolve(path.dirname(java), "..");
+  add("cc");
+  add("php");
+  add("ruby");
+  add("dotnet");
+  add("python");
+  const uniq = [...new Set(dirs.filter(Boolean))];
+  extra.PATH = uniq.length ? `${uniq.join(path.delimiter)}${path.delimiter}${base.PATH || ""}` : base.PATH;
+  return { ...base, ...extra };
+}
+
+export function findInKind(kind, names) {
+  const want = WIN ? names.flatMap((n) => [n + ".exe", n]) : names;
+  return walkFind(dirOf(kind), want);
+}
+
 let busy = null;
 const pull = { kind: "", phase: "", got: 0, total: 0, abort: false };
 
@@ -151,7 +191,7 @@ async function download(url, dest) {
   pull.got = 0;
   pull.total = 0;
   mkdirSync(path.dirname(dest), { recursive: true });
-  const r = await fetch(url, { redirect: "follow" });
+  const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(8 * 60 * 1000) });
   if (!r.ok || !r.body) throw new Error(`Download ${r.status}: ${url}`);
   pull.total = Number(r.headers.get("content-length") || 0);
   const file = createWriteStream(dest);
@@ -176,17 +216,28 @@ async function download(url, dest) {
   }
 }
 
+async function downloadWithFallback(url, fallback, dest) {
+  try {
+    await download(url, dest);
+  } catch (err) {
+    if (!fallback || fallback === url) throw err;
+    pull.phase = "download";
+    await download(fallback, dest);
+  }
+}
+
 function unzip(zip, dest) {
   mkdirSync(dest, { recursive: true });
+  const ms = 5 * 60 * 1000;
   if (WIN) {
     execFileSync(
       "powershell.exe",
       ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${zip.replace(/'/g, "''")}' -DestinationPath '${dest.replace(/'/g, "''")}' -Force`],
-      { timeout: 120000, windowsHide: true },
+      { timeout: ms, windowsHide: true },
     );
     return;
   }
-  execFileSync("unzip", ["-qo", zip, "-d", dest], { timeout: 120000 });
+  execFileSync("unzip", ["-qo", zip, "-d", dest], { timeout: ms });
 }
 
 function spawnWait(file, args, opts = {}) {
@@ -234,13 +285,56 @@ async function latestNode() {
   return `https://nodejs.org/dist/${v}/node-${v}-${plat}-${ARCH === "arm64" ? "arm64" : "x64"}.tar.gz`;
 }
 
+function zigPlat() {
+  if (WIN) return ARCH === "arm64" ? "aarch64-windows" : "x86_64-windows";
+  if (process.platform === "darwin") return ARCH === "arm64" ? "aarch64-macos" : "x86_64-macos";
+  return ARCH === "arm64" ? "aarch64-linux" : "x86_64-linux";
+}
+
+/** 0.14.1+ : zig-x86_64-windows-VER.zip  ·  älter: zig-windows-x86_64-VER.zip */
+export function zigArchiveName(ver, plat = zigPlat()) {
+  const parts = plat.split("-");
+  const arch = parts[0];
+  const os = parts.slice(1).join("-");
+  const [maj, min, pat] = String(ver)
+    .split(".")
+    .map((n) => Number(n) || 0);
+  const modern = maj > 0 || min > 14 || (min === 14 && pat >= 1);
+  const stem = modern ? `zig-${plat}-${ver}` : `zig-${os}-${arch}-${ver}`;
+  return os.includes("windows") ? `${stem}.zip` : `${stem}.tar.xz`;
+}
+
+export function zigGithubUrl(ver, plat = zigPlat()) {
+  return `https://github.com/ziglang/zig/releases/download/${ver}/${zigArchiveName(ver, plat)}`;
+}
+
+function semverDesc(a, b) {
+  const pa = String(a).split(".").map((n) => Number(n) || 0);
+  const pb = String(b).split(".").map((n) => Number(n) || 0);
+  return pb[0] - pa[0] || pb[1] - pa[1] || (pb[2] || 0) - (pa[2] || 0);
+}
+
+async function fetchJson(url, ms = 15000) {
+  const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(ms) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${url}`);
+  return r.json();
+}
+
 async function latestZig() {
-  const j = await (await fetch("https://ziglang.org/download/index.json")).json();
-  const ver = Object.keys(j).find((k) => k !== "master" && j[k]["x86_64-windows"]);
-  const key = WIN ? (ARCH === "arm64" ? "aarch64-windows" : "x86_64-windows") : process.platform === "darwin" ? (ARCH === "arm64" ? "aarch64-macos" : "x86_64-macos") : ARCH === "arm64" ? "aarch64-linux" : "x86_64-linux";
-  const pack = j[ver][key];
-  if (!pack?.tarball) throw new Error("Kein Zig-Paket");
-  return pack.tarball;
+  const plat = zigPlat();
+  const fallbackVer = "0.14.1";
+  try {
+    const j = await fetchJson("https://ziglang.org/download/index.json", 12000);
+    const vers = Object.keys(j).filter((k) => k !== "master" && /^\d+\.\d+/.test(k) && j[k]?.[plat]?.tarball);
+    vers.sort(semverDesc);
+    const ver = vers[0];
+    if (ver) {
+      return { url: String(j[ver][plat].tarball), fallback: zigGithubUrl(ver, plat), ver };
+    }
+  } catch {
+    /* GitHub */
+  }
+  return { url: zigGithubUrl(fallbackVer, plat), fallback: "", ver: fallbackVer };
 }
 
 function phpUrl() {
@@ -282,7 +376,7 @@ export async function pullToolchain(id) {
   const dest = dirOf(spec.kind);
   const tmp = path.join(os.tmpdir(), "anvil-tc-" + spec.kind);
   try {
-    mkdirSync(TOOL_HOME, { recursive: true });
+    mkdirSync(toolHome(), { recursive: true });
     mkdirSync(tmp, { recursive: true });
     if (spec.kind === "rust") {
       const init = path.join(tmp, WIN ? "rustup-init.exe" : "rustup-init.sh");
@@ -314,29 +408,35 @@ export async function pullToolchain(id) {
       mkdirSync(dest, { recursive: true });
       await spawnWait(exe, ["/verysilent", `/dir=${dest}`, "/tasks="]);
     } else {
-      const url =
-        spec.kind === "go"
-          ? await latestGo()
-          : spec.kind === "node"
-            ? await latestNode()
-            : spec.kind === "zig"
-              ? await latestZig()
-              : spec.kind === "php"
-                ? phpUrl()
-                : spec.kind === "python"
-                  ? pythonUrl()
-                  : spec.kind === "jdk"
-                    ? jdkUrl()
-                    : "";
+      let url = "";
+      let fallback = "";
+      if (spec.kind === "go") url = await latestGo();
+      else if (spec.kind === "node") url = await latestNode();
+      else if (spec.kind === "zig") {
+        const z = await latestZig();
+        url = z.url;
+        fallback = z.fallback;
+      } else if (spec.kind === "php") url = phpUrl();
+      else if (spec.kind === "python") url = pythonUrl();
+      else if (spec.kind === "jdk") url = jdkUrl();
       if (!url) throw new Error("Keine URL");
-      const zip = path.join(tmp, "pack" + (url.endsWith(".exe") ? ".exe" : ".zip"));
-      await download(url, zip);
+      const ext = url.endsWith(".tar.xz") || url.endsWith(".txz")
+        ? ".tar.xz"
+        : url.endsWith(".tar.gz") || url.endsWith(".tgz")
+          ? ".tar.gz"
+          : url.endsWith(".exe")
+            ? ".exe"
+            : ".zip";
+      const zip = path.join(tmp, "pack" + ext);
+      await downloadWithFallback(url, fallback, zip);
       throwIfAbort();
       pull.phase = "unpack";
       rmSync(dest, { recursive: true, force: true });
       mkdirSync(dest, { recursive: true });
-      if (url.endsWith(".tar.gz") || url.endsWith(".tgz")) {
-        execFileSync("tar", ["-xzf", zip, "-C", dest], { timeout: 120000 });
+      if (ext === ".tar.xz") {
+        execFileSync("tar", ["-xJf", zip, "-C", dest], { timeout: 5 * 60 * 1000 });
+      } else if (ext === ".tar.gz") {
+        execFileSync("tar", ["-xzf", zip, "-C", dest], { timeout: 5 * 60 * 1000 });
       } else unzip(zip, dest);
       if (spec.kind === "node") {
         const node = walkFind(dest, WIN ? ["node.exe"] : ["node"]);

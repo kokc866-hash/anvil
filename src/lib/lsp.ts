@@ -1,4 +1,5 @@
-import { getIndex, lookupSymbol, rebuildIndex, resolveImport } from "./ws-index";
+import { getIndex, lookupSymbol, rebuildIndex, resolveImport } from "./ws-index.ts";
+import { skipPath } from "./ws-skip.ts";
 
 export type LspSeverity = "error" | "warning" | "info";
 
@@ -13,19 +14,23 @@ export type LspHit = {
 
 export type LspDef = { path: string; line: number; text: string };
 
-const SKIP = /^(node_modules|dist|build|\.git)\//;
+const OPEN_MAX = 1_000_000;
+const CLOSED_MAX = 400_000;
 
 export function lintWorkspace(files: Record<string, string>, open: string[] = []): LspHit[] {
   const out: LspHit[] = [];
   const seen = new Set<string>();
-  const order = [...open.filter((p) => p in files), ...Object.keys(files)];
+  const openSet = new Set(open.filter((p) => p in files));
+  const order = [...open.filter((p) => p in files), ...Object.keys(files).filter((p) => !openSet.has(p))];
   for (const path of order) {
     if (seen.has(path)) continue;
     seen.add(path);
-    if (SKIP.test(path)) continue;
+    if (skipPath(path)) continue;
     const src = files[path];
-    if (!src || src.length > 200_000) continue;
-    if (seen.size > 48 && !open.includes(path)) break;
+    if (!src) continue;
+    const cap = openSet.has(path) ? OPEN_MAX : CLOSED_MAX;
+    if (src.length >= cap) continue;
+    if (!openSet.has(path) && seen.size > 120) break;
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
     if (ext === "json") out.push(...lintJson(path, src));
     else if (ext === "py") out.push(...lintPython(path, src));
@@ -257,14 +262,65 @@ export function wordAt(src: string, offset: number): string {
   return src.slice(a, b);
 }
 
+export async function defsAt(
+  files: Record<string, string>,
+  path: string,
+  offset: number,
+  open: string[] = [],
+): Promise<LspDef[]> {
+  try {
+    const { tsDefinition } = await import("./lsp-compile.ts");
+    const ts = await tsDefinition(files, path, offset, open);
+    if (ts.length) return ts.map((d) => ({ path: d.path, line: d.line, text: d.text }));
+  } catch {
+    /* */
+  }
+  return findDefinition(files, wordAt(files[path] ?? "", offset), path);
+}
+
 export function hoverFor(files: Record<string, string>, path: string, src: string, offset: number): string | null {
   const w = wordAt(src, offset);
   if (!w) return null;
   const defs = findDefinition(files, w, path);
-  if (!defs.length) return w.length > 1 ? `Symbol \`${w}\`` : null;
+  if (!defs.length) return w.length > 1 ? `\`${w}\` · Näherung` : null;
   const d = defs[0];
   const more = defs.length > 1 ? ` · ${defs.length} Treffer` : "";
-  return `**${w}** — ${d.path}:${d.line}${more}\n\n\`${d.text}\``;
+  return `**${w}** · Näherung — ${d.path}:${d.line}${more}\n\n\`${d.text}\``;
+}
+
+export function renameSymbol(
+  files: Record<string, string>,
+  path: string,
+  offset: number,
+  nextName: string,
+): { files: Record<string, string>; n: number } | { error: string } {
+  const from = wordAt(files[path] ?? "", offset);
+  const to = nextName.trim();
+  if (!from) return { error: "Kein Symbol" };
+  if (!/^[A-Za-z_]\w*$/.test(to)) return { error: "Ungültiger Name" };
+  if (from === to) return { files: {}, n: 0 };
+  rebuildIndex(files);
+  const defs = findDefinition(files, from, path);
+  const paths = new Set<string>([path]);
+  for (const d of defs) paths.add(d.path);
+  for (const row of getIndex()) {
+    if (row.imports.some((i) => i.names.includes(from))) paths.add(row.path);
+    if (row.symbols.some((s) => s.name === from)) paths.add(row.path);
+  }
+  const re = new RegExp(`\\b${from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
+  const out: Record<string, string> = {};
+  let n = 0;
+  for (const p of paths) {
+    if (skipPath(p)) continue;
+    const src = files[p];
+    if (src == null) continue;
+    const next = src.replace(re, to);
+    if (next === src) continue;
+    n += src.match(re)?.length ?? 0;
+    out[p] = next;
+  }
+  if (!n) return { error: "Nichts zu ersetzen" };
+  return { files: out, n };
 }
 
 export function problemsPrompt(

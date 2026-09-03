@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { packToolContent, readWindow, READ_CHAR_CAP } from "./agent-read.ts";
+import { packToolContent, readKey, readWindow, READ_CHAR_CAP } from "./agent-read.ts";
 
 test("small file reads in full", () => {
   const src = "a\nb\nc";
@@ -46,4 +46,22 @@ test("small pack has no truncate note", () => {
   });
   assert.doesNotMatch(packed, /abgeschnitten/);
   assert.ok(packed.length < READ_CHAR_CAP);
+});
+
+test("read windows of the same file are different keys", () => {
+  assert.notEqual(readKey("big.ts", 1), readKey("big.ts", 2501));
+  assert.equal(readKey("big.ts", 1), readKey("big.ts"));
+});
+
+test("run_file pack is the Compile/Run log", () => {
+  const packed = packToolContent("run_file", {
+    ok: false,
+    stdout: "— Compile —\nc++ main.cpp -o out",
+    stderr: "main.cpp:1: error: x",
+    hint: "Error. Patch and run_file again.",
+  });
+  assert.match(packed, /RUN FAIL/);
+  assert.match(packed, /Compile/);
+  assert.match(packed, /main\.cpp:1/);
+  assert.doesNotMatch(packed, /^\{/);
 });

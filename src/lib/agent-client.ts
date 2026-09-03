@@ -41,6 +41,7 @@ import {
   learnFromError,
   sendTools,
 } from "./model-caps";
+import type { SessionJournal } from "./session";
 export type { LlmProvider };
 export { PROVIDER_DEFAULTS, providerOf };
 
@@ -226,6 +227,8 @@ export async function chatWithProvider(opts: {
   afterWrite?: "run" | "engine" | "preview" | "none";
   maxRounds?: number;
   graphSees?: number;
+  journal?: SessionJournal;
+  prefer?: string[];
 }): Promise<AgentResult> {
   const spec = providerOf(opts.provider);
   const surface = await surfaceNote();
@@ -255,6 +258,8 @@ export async function chatWithProvider(opts: {
         mcpCatalog,
         surfaceId: surface.id,
         surfaceMode: surface.mode,
+        journal: opts.journal,
+        prefer: opts.prefer,
       },
       complete,
       { ...clientTools(opts), onHarness: opts.onHarness },
@@ -290,6 +295,8 @@ export async function chatWithProvider(opts: {
         mcpCatalog,
         surfaceId: surface.id,
         surfaceMode: surface.mode,
+        journal: opts.journal,
+        prefer: opts.prefer,
       },
       complete,
       { ...clientTools(opts), onHarness: opts.onHarness },
@@ -369,12 +376,12 @@ function clientTools(opts: {
     learn: (action: string, args: Record<string, unknown>) => agentLearn(action, args),
     summarize: async (blob: string) => {
       const { brainCompact, brainReady } = await import("./brain");
-      const cut = blob.slice(0, 4000);
+      const cut = blob.slice(0, 8000);
       if (!brainReady()) return cut;
       try {
         return await Promise.race([
           brainCompact(blob),
-          new Promise<string>((res) => setTimeout(() => res(cut), 1600)),
+          new Promise<string>((res) => setTimeout(() => res(cut), 2500)),
         ]);
       } catch {
         return cut;
@@ -435,7 +442,7 @@ function clientTools(opts: {
       }
       const cmd = String(args?.cmd || hit?.cmds[String(args?.action || "check")] || hit?.cmds.play || hit?.cmds.check || "");
       if (!cmd) return { ok: false, error: "Keine Engine oder kein Befehl. Godot-/Unity-Ordner öffnen." };
-      const job = await companionRun({ cmd, timeoutMs: Number(args?.timeoutMs) || 90000 }, url);
+      const job = await companionRun({ cmd, cwd: st.workspaceCwd || undefined, timeoutMs: Number(args?.timeoutMs) || 90000 }, url);
       return { ...job, engine: hit?.label };
     },
     runFile: async (path: string, files: Record<string, string>) => {
@@ -457,6 +464,8 @@ function clientTools(opts: {
         const { openRunWindow } = await import("./run-window");
         openRunWindow({ agent: true });
         st.setPreviewOpen(false);
+      } else if (st.openOutputOnRun) {
+        st.revealOutput();
       }
       const { html: _html, ...out } = r;
       return out;

@@ -1,6 +1,10 @@
 export const READ_CHAR_CAP = 200_000;
 export const READ_LINE_CAP = 2500;
 
+export function readKey(path: string, startLine = 1): string {
+  return `${path}:${Math.max(1, Math.floor(Number(startLine) || 1))}`;
+}
+
 export function readWindow(src: string, startLine = 1, endLine = 0): {
   body: string;
   from: number;
@@ -59,6 +63,18 @@ export function packToolContent(name: string, result: unknown): string {
     }
   }
   const raw = JSON.stringify(result ?? {});
+  if (name === "run_file" && result && typeof result === "object") {
+    const r = result as { ok?: boolean; stdout?: string; stderr?: string; hint?: string; error?: string };
+    const bits = [
+      r.ok === false || r.error ? "RUN FAIL" : "RUN OK",
+      r.stdout?.trim(),
+      r.stderr?.trim() ? `stderr:\n${r.stderr}` : "",
+      r.error ? String(r.error) : "",
+      r.hint,
+    ].filter(Boolean);
+    const text = bits.join("\n\n");
+    if (text.length > 8) return text.slice(0, 16000);
+  }
   if (raw.length <= 80_000) return raw;
   return `${raw.slice(0, 80_000)}\n… [tool output truncated]`;
 }

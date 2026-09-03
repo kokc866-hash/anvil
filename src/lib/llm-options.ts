@@ -156,6 +156,69 @@ export function usesResponsesApi(rt: LlmRuntime, tools: boolean): boolean {
   return /gpt-5|o1|o3|o4|codex/i.test(rt.model);
 }
 
+const CODEX_KEYS = new Set([
+  "model",
+  "input",
+  "instructions",
+  "tools",
+  "tool_choice",
+  "parallel_tool_calls",
+  "reasoning",
+  "store",
+  "stream",
+]);
+
+function wireKey(s: string): string {
+  return s.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+/** Codex-Abo lehnt include/max_output_tokens ab. API-Responses: store false + encrypted reasoning. */
+export function applyResponsesStore(body: Record<string, unknown>, kind = ""): Record<string, unknown> {
+  body.store = false;
+  if (kind === "codex") {
+    body.stream = true;
+    body.parallel_tool_calls = false;
+    delete body.include;
+    for (const k of Object.keys(body)) {
+      if (!CODEX_KEYS.has(k)) delete body[k];
+    }
+  } else {
+    body.include = ["reasoning.encrypted_content"];
+  }
+  return body;
+}
+
+/** FastAPI / OpenAI 400: unsupported field raus, must-be true|false setzen. */
+export function patchResponses400(body: Record<string, unknown>, raw: string): boolean {
+  let hit = false;
+  const names = new Set<string>();
+  const add = (s: string | undefined) => {
+    if (!s) return;
+    names.add(wireKey(s));
+  };
+  add(raw.match(/Unsupported parameter:\s*['"]?([A-Za-z0-9_]+)/i)?.[1]);
+  add(raw.match(/Unknown parameter:\s*['"]?([A-Za-z0-9_]+)/i)?.[1]);
+  add(raw.match(/does not support parameter\s+['"]?([A-Za-z0-9_]+)/i)?.[1]);
+  add(raw.match(/['"]([A-Za-z0-9_]+)['"]\s+is not supported/i)?.[1]);
+  add(raw.match(/"param"\s*:\s*"([A-Za-z0-9_]+)"/i)?.[1]);
+  for (const key of names) {
+    if (key in body) {
+      delete body[key];
+      hit = true;
+    }
+  }
+  const must = raw.match(/\b([A-Za-z0-9_]+)\s+must be set to\s+(true|false)/i);
+  if (must) {
+    const key = wireKey(must[1]);
+    const val = must[2].toLowerCase() === "true";
+    if (body[key] !== val) {
+      body[key] = val;
+      hit = true;
+    }
+  }
+  return hit;
+}
+
 export function toolCode(
   name: string,
   args: Record<string, unknown>,

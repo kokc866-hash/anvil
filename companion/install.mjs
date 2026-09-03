@@ -17,6 +17,7 @@ export const INSTALL = {
   python: { id: "Python.Python.3.12", label: "Python" },
   tsc: { id: "OpenJS.NodeJS.LTS", label: "Node.js" },
   dotnet: { id: "Microsoft.DotNet.SDK.8", label: ".NET SDK" },
+  git: { id: "Git.Git", label: "Git" },
 };
 
 function which(bin) {
@@ -50,6 +51,7 @@ export function refreshPath() {
     path.join(process.env.ProgramFiles || "C:\\Program Files", "dotnet"),
     path.join(process.env.ProgramFiles || "C:\\Program Files", "PHP"),
     path.join(process.env.ProgramFiles || "C:\\Program Files", "LLVM", "bin"),
+    path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "cmd"),
     path.join(process.env.ProgramFiles || "C:\\Program Files", "Eclipse Adoptium", "jdk-21.0.5.11-hotspot", "bin"),
     path.join(process.env.ProgramFiles || "C:\\Program Files", "Microsoft", "jdk-21", "bin"),
   ].filter((d) => d && existsSync(d));
@@ -107,6 +109,7 @@ function plan(bin) {
       ruby: "ruby",
       java: "openjdk21",
       javac: "openjdk21",
+      git: "git",
     }[bin];
     if (!scoopPkg) throw new Error(`Scoop kennt ${bin} hier nicht`);
     return { file: scoop, args: ["install", scoopPkg], label: spec.label, via: "scoop" };

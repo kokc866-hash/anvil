@@ -83,8 +83,8 @@ export function explainLlmError(err: unknown): string {
   const json = raw.match(/\{[\s\S]*\}/);
   if (json) {
     try {
-      const j = JSON.parse(json[0]) as { error?: { message?: string } | string; message?: string };
-      const m = typeof j.error === "object" ? j.error?.message : j.error || j.message;
+      const j = JSON.parse(json[0]) as { error?: { message?: string } | string; message?: string; detail?: string };
+      const m = typeof j.error === "object" ? j.error?.message : j.error || j.message || j.detail;
       if (m) msg = String(m);
     } catch {
       const quoted = raw.match(/"message"\s*:\s*"((?:\\.|[^"\\])*)"/);

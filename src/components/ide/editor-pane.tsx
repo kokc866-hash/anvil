@@ -5,6 +5,7 @@ import { DiffView } from "./diff-view";
 import { PreviewPane } from "./preview-pane";
 import { Button } from "@/components/ui/button";
 import { completeText, stripFence } from "@/lib/complete";
+import { agentGen, beginAgent } from "@/lib/abort";
 import { brainGenerate, brainReady, brainSystem, brainTabHint, getTabHint, subscribeTabHints, tabHintSnap, useBrain } from "@/lib/brain";
 import { canRun, langFromPath } from "@/lib/languages";
 import { looksGraphical } from "@/lib/game-host";
@@ -20,10 +21,11 @@ import { gotoFile } from "@/lib/goto";
 import { useIde } from "@/store/ide";
 import { getDrag, hasOsFiles, importDropped, setDrag } from "@/lib/dnd";
 import { dockRunWindow, openRunWindow } from "@/lib/run-window";
-import { CtxMenu } from "./ctx-menu";
+import { CtxMenu, FlyAt } from "./ctx-menu";
 import { StarterPick } from "./starter-pick";
 import { useT } from "@/lib/i18n";
 import { useKbd } from "@/lib/use-kbd";
+import { EDITOR_COMPACT } from "@/lib/layout";
 
 export function EditorPane() {
   const t = useT();
@@ -60,12 +62,13 @@ export function EditorPane() {
   const [showDiff, setShowDiff] = useState(true);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const [tabOver, setTabOver] = useState<string | null>(null);
-  const [tabOpen, setTabOpen] = useState<string | null>(null);
+  const [tabFly, setTabFly] = useState<{ id: string; el: HTMLElement } | null>(null);
   const [tabFit, setTabFit] = useState(24);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [compact, setCompact] = useState(false);
   const tabStrip = useRef<HTMLDivElement>(null);
-  const tabListBox = useRef<HTMLDivElement>(null);
-  const moreBox = useRef<HTMLDivElement>(null);
+  const moreBtn = useRef<HTMLButtonElement>(null);
+  const paneRef = useRef<HTMLDivElement>(null);
   const [edOver, setEdOver] = useState(false);
   const [reveal, setReveal] = useState<Record<string, boolean>>({});
   const [diffSum, setDiffSum] = useState("");
@@ -109,18 +112,30 @@ export function EditorPane() {
   }, [activePath]);
 
   useEffect(() => {
-    if (!tabOpen && !moreOpen) return;
-    function close(e: PointerEvent) {
-      const t = e.target;
-      if (!(t instanceof Node)) return;
-      if (tabOpen && tabListBox.current?.contains(t)) return;
-      if (moreOpen && moreBox.current?.contains(t)) return;
-      setTabOpen(null);
+    const el = paneRef.current;
+    if (!el) {
+      setCompact(false);
+      return;
+    }
+    const read = () => setCompact(el.clientWidth < EDITOR_COMPACT);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [activePath]);
+
+  useEffect(() => {
+    if (!tabFly && !moreOpen) return;
+    function close() {
+      setTabFly(null);
       setMoreOpen(false);
     }
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [tabOpen, moreOpen]);
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") close();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tabFly, moreOpen]);
 
   useEffect(() => {
     function onGoto() {
@@ -378,7 +393,7 @@ export function EditorPane() {
   const crumbs = activePath.split("/");
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
+    <div ref={paneRef} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg">
       {pending.length > 0 ? (
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2 text-xs">
           <span className="truncate text-fg" title={diffSum}>
@@ -413,7 +428,7 @@ export function EditorPane() {
           ) : null}
         </div>
       ) : null}
-      <div className="flex h-10 shrink-0 items-center border-b border-border bg-surface">
+      <div className="flex h-10 min-w-0 shrink-0 items-center overflow-hidden border-b border-border bg-surface">
         <div
           ref={tabStrip}
           className="bar-scroll flex h-10 min-w-0 flex-1 items-center"
@@ -509,105 +524,47 @@ export function EditorPane() {
             +
           </button>
         </div>
-        {openPaths.length > 1 || packedTabs.length ? (
-          <div ref={tabListBox} className="relative z-40 flex shrink-0 items-center self-stretch">
+        {openPaths.length > 1 || (!compact && packedTabs.length) ? (
+          <div className="flex shrink-0 items-center self-stretch">
             {openPaths.length > 1 ? (
               <div className="relative h-10">
                 <button
                   type="button"
                   className={cn(
                     "flex h-10 shrink-0 items-center gap-1 border-l border-border px-2.5 font-mono text-[11px] tabular-nums hover:bg-hover hover:text-fg",
-                    tabOpen === "all" ? "bg-bg text-fg" : "text-muted",
+                    tabFly?.id === "all" ? "bg-bg text-fg" : "text-muted",
                   )}
                   title="Offene Dateien"
-                  aria-expanded={tabOpen === "all"}
-                  onClick={() => setTabOpen((v) => (v === "all" ? null : "all"))}
+                  aria-expanded={tabFly?.id === "all"}
+                  onClick={(e) =>
+                    setTabFly((v) => (v?.id === "all" ? null : { id: "all", el: e.currentTarget }))
+                  }
                 >
                   {openPaths.length}
-                  <ChevronDown className={cn("size-3 shrink-0", tabOpen === "all" && "rotate-180")} />
+                  <ChevronDown className={cn("size-3 shrink-0", tabFly?.id === "all" && "rotate-180")} />
                 </button>
-                {tabOpen === "all" ? (
-                  <ul className="absolute top-10 right-0 z-50 max-h-72 min-w-56 overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg">
-                    {openPaths.map((p) => (
-                      <li key={p}>
-                        <button
-                          type="button"
-                          className={cn(
-                            "flex h-8 w-full items-center justify-between gap-2 px-3 text-left text-xs hover:bg-hover",
-                            p === activePath ? "text-fg" : "text-muted",
-                          )}
-                          onClick={() => {
-                            openFile(p);
-                            setTabOpen(null);
-                          }}
-                        >
-                          <span className="min-w-0 truncate">{p}</span>
-                          {dirty[p] ? <span className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
-                          <span
-                            role="button"
-                            className="shrink-0 text-subtle hover:text-fg"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              closeFile(p);
-                            }}
-                          >
-                            ×
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
               </div>
             ) : null}
-            {packedTabs.map((g) => (
+            {compact
+              ? null
+              : packedTabs.map((g) => (
               <div key={g.k} className="relative h-10">
                 <button
                   type="button"
                   className={cn(
                     "flex h-10 shrink-0 items-center gap-1 border-l border-border px-2 font-mono text-[11px] hover:bg-hover hover:text-fg",
-                    tabOpen === g.k ? "bg-bg text-fg" : "text-muted",
+                    tabFly?.id === g.k ? "bg-bg text-fg" : "text-muted",
                   )}
                   title={`${g.paths.length} ${g.k}`}
-                  aria-expanded={tabOpen === g.k}
-                  onClick={() => setTabOpen((v) => (v === g.k ? null : g.k))}
+                  aria-expanded={tabFly?.id === g.k}
+                  onClick={(e) =>
+                    setTabFly((v) => (v?.id === g.k ? null : { id: g.k, el: e.currentTarget }))
+                  }
                 >
                   {g.k}
                   <span className="tabular-nums">{g.paths.length}</span>
-                  <ChevronDown className={cn("size-3 shrink-0", tabOpen === g.k && "rotate-180")} />
+                  <ChevronDown className={cn("size-3 shrink-0", tabFly?.id === g.k && "rotate-180")} />
                 </button>
-                {tabOpen === g.k ? (
-                  <ul className="absolute top-10 right-0 z-50 max-h-72 min-w-56 overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg">
-                    {g.paths.map((p) => (
-                      <li key={p}>
-                        <button
-                          type="button"
-                          className={cn(
-                            "flex h-8 w-full items-center justify-between gap-2 px-3 text-left text-xs hover:bg-hover",
-                            p === activePath ? "text-fg" : "text-muted",
-                          )}
-                          onClick={() => {
-                            openFile(p);
-                            setTabOpen(null);
-                          }}
-                        >
-                          <span className="min-w-0 truncate">{p.split("/").pop()}</span>
-                          {dirty[p] ? <span className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
-                          <span
-                            role="button"
-                            className="shrink-0 text-subtle hover:text-fg"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              closeFile(p);
-                            }}
-                          >
-                            ×
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
               </div>
             ))}
           </div>
@@ -625,9 +582,9 @@ export function EditorPane() {
           >
             <Eye className="size-3.5" />
           </Button>
-          <Button variant="primary" className="h-8 px-2" disabled={!runnable || running} onClick={() => void run()} title={t("execute")} kbd={kRun}>
+          <Button variant="primary" className={cn("h-8 px-2", compact && "w-8 p-0")} disabled={!runnable || running} onClick={() => void run()} title={t("execute")} kbd={kRun}>
             <Play className="size-3.5" />
-            {running && !debug.active ? t("busy") : t("run")}
+            {compact ? null : running && !debug.active ? t("busy") : t("run")}
           </Button>
           <Button
             className="h-8 w-8 p-0"
@@ -667,47 +624,18 @@ export function EditorPane() {
               </Button>
             </>
           ) : null}
-          <div ref={moreBox} className="relative">
+          <div className="relative">
             <Button
               className="h-8 w-8 p-0"
               title="Mehr"
               aria-expanded={moreOpen}
-              onClick={() => setMoreOpen((v) => !v)}
+              onClick={(e) => {
+                moreBtn.current = e.currentTarget;
+                setMoreOpen((v) => !v);
+              }}
             >
               <MoreHorizontal className="size-3.5" />
             </Button>
-            {moreOpen ? (
-              <ul className="absolute top-9 right-0 z-50 min-w-44 rounded-md border border-border bg-surface py-1 shadow-lg">
-                <li>
-                  <button
-                    type="button"
-                    className="flex h-8 w-full items-center gap-2 px-3 text-left text-xs hover:bg-hover"
-                    onClick={() => {
-                      const v = activeSrc;
-                      setInline({ start: 0, end: v.length, text: v, prompt: "", busy: false });
-                      setMoreOpen(false);
-                    }}
-                  >
-                    <Sparkles className="size-3.5" />
-                    {t("inlineEdit")}
-                    {kInline ? <span className="ml-auto font-mono text-[10px] text-subtle">{kInline}</span> : null}
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    className={cn("flex h-8 w-full items-center gap-2 px-3 text-left text-xs hover:bg-hover", liveRun && "text-fg")}
-                    onClick={() => {
-                      setLiveRun(!liveRun);
-                      setMoreOpen(false);
-                    }}
-                  >
-                    {t("liveRun")}
-                    <span className="ml-auto text-[10px] text-subtle">{liveRun ? "an" : "aus"}</span>
-                  </button>
-                </li>
-              </ul>
-            ) : null}
           </div>
         </div>
       </div>
@@ -978,6 +906,72 @@ export function EditorPane() {
           ]}
         />
       ) : null}
+      {tabFly ? (
+        <FlyAt anchor={tabFly.el} within={paneRef.current} onClose={() => setTabFly(null)}>
+          {(tabFly.id === "all" ? openPaths : packedTabs.find((g) => g.k === tabFly.id)?.paths ?? []).map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="menuitem"
+              className={cn(
+                "flex h-8 w-full items-center justify-between gap-2 px-3 text-left text-xs hover:bg-hover",
+                p === activePath ? "text-fg" : "text-muted",
+              )}
+              onClick={() => {
+                openFile(p);
+                setTabFly(null);
+              }}
+            >
+              <span className="min-w-0 truncate">{tabFly.id === "all" ? p : p.split("/").pop()}</span>
+              {dirty[p] ? <span className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
+              <span
+                role="button"
+                className="shrink-0 text-subtle hover:text-fg"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeFile(p);
+                }}
+              >
+                ×
+              </span>
+            </button>
+          ))}
+        </FlyAt>
+      ) : null}
+      {moreOpen && moreBtn.current ? (
+        <FlyAt
+          anchor={moreBtn.current}
+          within={paneRef.current}
+          onClose={() => setMoreOpen(false)}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="flex h-8 w-full items-center gap-2 px-3 text-left text-xs hover:bg-hover"
+            onClick={() => {
+              const v = activeSrc;
+              setInline({ start: 0, end: v.length, text: v, prompt: "", busy: false });
+              setMoreOpen(false);
+            }}
+          >
+            <Sparkles className="size-3.5" />
+            {t("inlineEdit")}
+            {kInline ? <span className="ml-auto font-mono text-[10px] text-subtle">{kInline}</span> : null}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={cn("flex h-8 w-full items-center gap-2 px-3 text-left text-xs hover:bg-hover", liveRun && "text-fg")}
+            onClick={() => {
+              setLiveRun(!liveRun);
+              setMoreOpen(false);
+            }}
+          >
+            {t("liveRun")}
+            <span className="ml-auto text-[10px] text-subtle">{liveRun ? "an" : "aus"}</span>
+          </button>
+        </FlyAt>
+      ) : null}
     </div>
   );
 }
@@ -1062,7 +1056,12 @@ function ResultStrip({ path }: { path: string }) {
 
   async function explain() {
     const s = useIde.getState();
+    if (s.agentBusy) {
+      s.pushAgent(`Erkläre die letzte Ausführung von ${path} anhand der echten Ausgabe.`);
+      return;
+    }
     s.setPanels({ ...s.panels, agent: true });
+    const my = beginAgent();
     s.addChat({
       role: "user",
       content: `Erkläre die letzte Ausführung von ${path} anhand der echten Ausgabe.`,
@@ -1077,11 +1076,13 @@ function ResultStrip({ path }: { path: string }) {
         model: s.llmModel,
         apiKey: s.llmApiKey,
       });
+      if (my !== agentGen()) return;
       s.finalizeAssistant(reply);
     } catch (err) {
+      if (my !== agentGen()) return;
       s.finalizeAssistant(err instanceof Error ? err.message : "Erklärung fehlgeschlagen");
     } finally {
-      s.setAgentBusy(false);
+      if (my === agentGen()) s.setAgentBusy(false);
     }
   }
 

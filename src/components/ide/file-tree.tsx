@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { CtxMenu, type CtxItem } from "@/components/ide/ctx-menu";
 import { cn } from "@/lib/cn";
 import { diskFolderName, diskSupported, pickFolder, saveFolder } from "@/lib/disk";
+import { canOpenOsWorkspace, openOsWorkspace } from "@/lib/workspace-open";
 import { zipFiles } from "@/lib/archive";
 import { langFromPath, templateFor } from "@/lib/languages";
 import { canMove, getDrag, hasOsFiles, importDropped, setDrag, uniqueDest } from "@/lib/dnd";
@@ -75,7 +76,10 @@ export function FileTree() {
   const applyFiles = useIde((s) => s.applyFiles);
   const setDiskName = useIde((s) => s.setDiskName);
   const diskName = useIde((s) => s.diskName);
-  const slim = useIde((s) => s.sidebarWidth < 280);
+  const box = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [win, setWin] = useState({ top: 0, h: 480 });
+  const [slim, setSlim] = useState(false);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState<"file" | "dir" | null>(null);
   const [newName, setNewName] = useState("");
@@ -89,6 +93,16 @@ export function FileTree() {
   const expandTimer = useRef<number>(0);
   const nameRef = useRef<HTMLInputElement>(null);
   const [fileExt, setFileExt] = useState("py");
+
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const read = () => setSlim(el.clientWidth < 280);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   function cancelCreate() {
     setCreating(null);
@@ -109,12 +123,6 @@ export function FileTree() {
       el.setSelectionRange(0, stem.length);
     });
   }
-
-  useEffect(() => {
-    if (!flashPath) return;
-    const el = document.querySelector(`[data-path="${CSS.escape(flashPath)}"]`);
-    el?.scrollIntoView({ block: "nearest" });
-  }, [flashPath]);
 
   useEffect(() => {
     if (creating) nameRef.current?.focus();
@@ -141,6 +149,29 @@ export function FileTree() {
     }
     return s;
   }, [fileKeys, dirs]);
+
+  useEffect(() => {
+    if (!flashPath) return;
+    const idx = items.findIndex((i) => i.path === flashPath);
+    const el = listRef.current;
+    if (idx >= 0 && el) {
+      const top = idx * 32;
+      if (top < el.scrollTop || top > el.scrollTop + el.clientHeight - 32) el.scrollTop = Math.max(0, top - 64);
+      return;
+    }
+    const hit = document.querySelector(`[data-path="${CSS.escape(flashPath)}"]`);
+    hit?.scrollIntoView({ block: "nearest" });
+  }, [flashPath, items]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const read = () => setWin((w) => (w.h === el.clientHeight ? w : { ...w, h: el.clientHeight }));
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fileKeys]);
 
   function targetDir(): string {
     if (!selected) return "";
@@ -175,15 +206,28 @@ export function FileTree() {
       beginCreate(kind);
     }
     function onOpen() {
-      void pickFolder()
-        .then((pack) => {
-          applyFiles(pack.files, pack.dirs);
-          setDiskName(diskFolderName());
-          const first = Object.keys(pack.files).sort()[0];
-          if (first) openFile(first);
-          setNotice(`${Object.keys(pack.files).length} Dateien geladen`);
-        })
-        .catch((err) => setNotice(err instanceof Error ? err.message : "Ordner nicht geöffnet"));
+      void (async () => {
+        if (canOpenOsWorkspace()) {
+          const r = await openOsWorkspace();
+          if (!r.ok) {
+            if (r.error && r.error !== "Kein Ordner") setNotice(r.error);
+            return;
+          }
+          if (r.skipped) setNotice(`${r.n} Dateien, ${r.skipped} übersprungen`);
+          else setNotice(`${r.n ?? 0} Dateien geladen`);
+          return;
+        }
+        if (!diskSupported()) {
+          setNotice("Ordner öffnen braucht Chrome/Edge oder das Anvil-Fenster.");
+          return;
+        }
+        const pack = await pickFolder();
+        applyFiles(pack.files, pack.dirs);
+        setDiskName(diskFolderName());
+        const first = Object.keys(pack.files).sort()[0];
+        if (first) openFile(first);
+        setNotice(`${Object.keys(pack.files).length} Dateien geladen`);
+      })().catch((err) => setNotice(err instanceof Error ? err.message : "Ordner nicht geöffnet"));
     }
     function onSave() {
       const st = useIde.getState();
@@ -277,7 +321,7 @@ export function FileTree() {
     : [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div ref={box} className="flex h-full min-h-0 flex-col bg-surface">
       <div className="flex h-9 shrink-0 items-center gap-0.5 overflow-hidden border-b border-border px-1">
         <span className={cn("min-w-0 flex-1 truncate px-2 text-xs font-medium text-muted", slim && "hidden")}>
           {diskName || t("files")}
@@ -301,15 +345,9 @@ export function FileTree() {
           <Button
             variant="quiet"
             className="h-7 px-2 text-[11px]"
-            onClick={() => {
-              if (!diskSupported()) {
-                setNotice("Ordner öffnen braucht Chrome/Edge oder das Anvil-Fenster.");
-                return;
-              }
-              window.dispatchEvent(new Event("anvil-open-disk"));
-            }}
+            onClick={() => window.dispatchEvent(new Event("anvil-open-disk"))}
           >
-            <FolderOpen className="size-3.5" /> Öffnen
+            <FolderOpen className="size-3.5" /> {canOpenOsWorkspace() ? "Desktop-Ordner" : t("open")}
           </Button>
           <Button variant="quiet" className="h-7 px-2 text-[11px]" onClick={() => window.dispatchEvent(new Event("anvil-save-disk"))}>
             <Save className="size-3.5" /> Speichern
@@ -393,8 +431,13 @@ export function FileTree() {
         </form>
       ) : null}
       <div
+        ref={listRef}
         tabIndex={0}
         className={cn("min-h-0 flex-1 overflow-auto py-1 outline-none", dragOver === "" ? "bg-hover/40" : "")}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          setWin((w) => (Math.abs(w.top - el.scrollTop) < 8 && w.h === el.clientHeight ? w : { top: el.scrollTop, h: el.clientHeight }));
+        }}
         onDragOver={(e) => {
           e.preventDefault();
           e.dataTransfer.dropEffect = hasOsFiles(e.dataTransfer) ? "copy" : "move";
@@ -441,14 +484,27 @@ export function FileTree() {
             </button>
           </div>
         ) : (
-          items.map((item, i) => {
+          (() => {
+            const ROW = 32;
+            const virtual = items.length > 80;
+            const overscan = 14;
+            const start = virtual ? Math.max(0, Math.floor(win.top / ROW) - overscan) : 0;
+            const end = virtual ? Math.min(items.length, Math.ceil((win.top + win.h) / ROW) + overscan) : items.length;
+            const slice = items.slice(start, end);
+            return (
+              <div style={virtual ? { height: items.length * ROW, position: "relative" } : undefined}>
+                {slice.map((item, i) => {
+            const abs = start + i;
             const name = baseName(item.path);
             const isOpen = !collapsed.includes(item.path);
             const emptyDir = item.type === "dir" && !hasKids.has(item.path);
             const pinned = isPinnedPath(item.path);
-            const pinEnd = pinned && !isPinnedPath(items[i + 1]?.path ?? "");
+            const pinEnd = pinned && !isPinnedPath(items[abs + 1]?.path ?? "");
             return (
-              <div key={`${item.type}-${item.path}`}>
+              <div
+                key={`${item.type}-${item.path}`}
+                style={virtual ? { position: "absolute", top: abs * ROW, left: 0, right: 0, height: ROW } : undefined}
+              >
                 <div
                   data-path={item.path}
                   className={cn(
@@ -456,6 +512,7 @@ export function FileTree() {
                     selected === item.path || activePath === item.path ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg",
                     dragOver === item.path ? "ring-1 ring-inset ring-accent/40" : "",
                     flashPath === item.path ? "ui-flash" : "",
+                    pinEnd ? "border-b border-border" : "",
                   )}
                   style={{ paddingLeft: 8 + item.depth * (slim ? 8 : 12) }}
                   draggable
@@ -503,7 +560,7 @@ export function FileTree() {
                       }}
                     >
                       {isOpen ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-                      <Folder className="size-3.5 shrink-0" />
+                      {isOpen ? <FolderOpen className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
                       <span className="truncate">{name}</span>
                       {pinned && item.depth === 0 ? <Pin className="size-3 shrink-0 text-subtle" aria-hidden /> : null}
                       {emptyDir && !slim ? <span className="text-[10px] text-subtle">leer</span> : null}
@@ -543,7 +600,7 @@ export function FileTree() {
                       {dirty[item.path] ? <span className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
                     </button>
                   )}
-                  {slim ? null : item.type === "file" ? (
+                  {item.type === "file" ? (
                     <button
                       type="button"
                       className="invisible size-7 rounded-sm text-subtle hover:text-danger group-hover:visible"
@@ -565,10 +622,12 @@ export function FileTree() {
                     </button>
                   )}
                 </div>
-                {pinEnd ? <div className="mx-2 my-1 border-t border-border" /> : null}
               </div>
             );
-          })
+                })}
+              </div>
+            );
+          })()
         )}
       </div>
       <div className="border-t border-border px-2 py-1.5 text-[11px] text-subtle">

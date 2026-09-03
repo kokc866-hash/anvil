@@ -1,6 +1,6 @@
 import { useRef } from "react";
 
-export function VSplit({ onDrag }: { onDrag: (dx: number) => void }) {
+export function VSplit({ onDrag, onBegin }: { onDrag: (dx: number) => void; onBegin?: () => void }) {
   const last = useRef(0);
   return (
     <div
@@ -9,6 +9,7 @@ export function VSplit({ onDrag }: { onDrag: (dx: number) => void }) {
       className="group relative z-10 w-2 shrink-0 cursor-col-resize outline-none"
       onMouseDown={(e) => {
         e.preventDefault();
+        onBegin?.();
         last.current = e.clientX;
         function move(ev: MouseEvent) {
           onDrag(ev.clientX - last.current);

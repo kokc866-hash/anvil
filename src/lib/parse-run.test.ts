@@ -26,5 +26,8 @@ describe("parse-run", () => {
     assert.equal(rs[0]?.line, 3);
     const go = parseRunTrace("main.go:8:2: undefined: clip", "main.go", { "main.go": "" });
     assert.equal(go[0]?.line, 8);
+    const cpp = parseRunTrace("main.cpp:4:5: error: 'x' was not declared", "main.cpp", { "main.cpp": "" });
+    assert.equal(cpp[0]?.path, "main.cpp");
+    assert.equal(cpp[0]?.line, 4);
   });
 });

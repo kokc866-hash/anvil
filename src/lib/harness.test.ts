@@ -37,6 +37,14 @@ describe("harness loop", () => {
     const w = afterTool(h, "run_file", { path: "index.html", ok: true, html: "<canvas>" }, g);
     assert.ok(w.inject || w.state);
   });
+  it("one see after html even if graphLoop off", () => {
+    const g = { afterWrite: "run" as const, runLoop: true, graphLoop: false, loopTries: 3 };
+    let h = startHarness(g);
+    assert.equal(h.budget.sees, 1);
+    h = afterTool(h, "write_file", { path: "index.html" }, g).state;
+    const w = afterTool(h, "run_file", { path: "index.html", ok: true, html: "<canvas>" }, g);
+    assert.match(w.inject, /see_run|play|Vorschau|look/i);
+  });
 });
 
 describe("project harness", () => {

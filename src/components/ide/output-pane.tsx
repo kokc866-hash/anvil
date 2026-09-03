@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { PanelBottom, PanelRight, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyBtn } from "@/components/ui/copy-btn";
@@ -14,7 +14,6 @@ import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { DebugPane } from "./debug-pane";
 import { LogText } from "./log-text";
-import { TermPane } from "./term-pane";
 import { HelperPrompts } from "./helper-prompts";
 
 export function OutputPane({ popout = false }: { popout?: boolean }) {
@@ -33,13 +32,34 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
   const lspProblems = useIde((s) => s.lspProblems);
   const testResults = useIde((s) => s.testResults);
   const [tab, setTab] = useState<"out" | "prob" | "dbg" | "test" | "term">("out");
+  const [Term, setTerm] = useState<ComponentType | null>(null);
   useEffect(() => {
     function onProb() {
       setTab("prob");
     }
+    function onDbg() {
+      setTab("dbg");
+    }
     window.addEventListener("anvil-problems", onProb);
-    return () => window.removeEventListener("anvil-problems", onProb);
+    window.addEventListener("anvil-debug-tab", onDbg);
+    return () => {
+      window.removeEventListener("anvil-problems", onProb);
+      window.removeEventListener("anvil-debug-tab", onDbg);
+    };
   }, []);
+  useEffect(() => {
+    if (tab !== "term") return;
+    let live = true;
+    void import("./term-pane").then((m) => {
+      if (live) setTerm(() => m.TermPane);
+    });
+    return () => {
+      live = false;
+    };
+  }, [tab]);
+  useEffect(() => {
+    if (debug.active || debug.paused) setTab("dbg");
+  }, [debug.active, debug.paused]);
   const [repl, setRepl] = useState("");
   const [explain, setExplain] = useState("");
   const [trim, setTrim] = useState("");
@@ -239,9 +259,7 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
         </Button>
       </div>
       {tab === "term" ? (
-        <div className="min-h-0 flex-1">
-          <TermPane />
-        </div>
+        <div className="min-h-0 flex-1">{Term ? <Term /> : null}</div>
       ) : (
       <>
       <div ref={scroller} className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5">
@@ -314,7 +332,7 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
                   useIde.getState().pushAgent(problemsPrompt([p], files));
                 }}
               >
-                {p.path}:{p.line} {p.text}
+                {p.path}:{p.line} · {p.source && !["syntax", "python", "index", "json", "js", "c"].includes(p.source) ? p.source : t("lintHeur")} · {p.text}
               </button>
             ))}
             </>

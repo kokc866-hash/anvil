@@ -35,9 +35,9 @@ export function shrinkTools<T extends ToolLike>(current: T[] | null | undefined)
   return next.length ? next : current;
 }
 
+import { patchResponses400 } from "./llm-options.ts";
+
 export function stripPayload(payload: Record<string, unknown>, body = "") {
-  for (const k of STRIP_ON_400) delete payload[k];
-  if (/tool_choice/i.test(body)) delete payload.tool_choice;
   if (/max_completion_tokens/i.test(body) && payload.max_tokens != null) {
     payload.max_completion_tokens = payload.max_tokens;
     delete payload.max_tokens;
@@ -45,6 +45,9 @@ export function stripPayload(payload: Record<string, unknown>, body = "") {
     payload.max_tokens = payload.max_completion_tokens;
     delete payload.max_completion_tokens;
   }
+  patchResponses400(payload, body);
+  for (const k of STRIP_ON_400) delete payload[k];
+  if (/tool_choice/i.test(body)) delete payload.tool_choice;
 }
 
 export function stillHasTools(useTools: boolean, tools: unknown): boolean {

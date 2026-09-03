@@ -1,3 +1,5 @@
+import { skipPath } from "./ws-skip.ts";
+
 export type SearchOpts = {
   regex?: boolean;
   case?: boolean;
@@ -13,16 +15,14 @@ export type SearchHit = {
   match: string;
 };
 
-const SKIP = /^(node_modules|dist|build|\.git|artifacts)\//;
 const SECRET = /(^|\/)(\.env($|\.)|\.env\.[^/]+|id_rsa|\.pem$|credentials|secrets?\.|vault)/i;
 
 export function skipSearchPath(path: string): boolean {
   const base = path.split("/").pop() ?? "";
   return (
-    SKIP.test(path) ||
+    skipPath(path) ||
     SECRET.test(path) ||
-    /(api[_-]?key|token|password)/i.test(base) ||
-    /\.(png|jpe?g|gif|webp|ico|woff2?|zip)$/i.test(path)
+    /(api[_-]?key|token|password)/i.test(base)
   );
 }
 

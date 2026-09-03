@@ -8,7 +8,8 @@ test("128k chip is 128000, old 131072 snaps", () => {
   assert.equal(matchingContextChip(262_144), 256_000);
   assert.equal(formatContext(131_072), "128k");
   assert.equal(formatContext(128_000), "128k");
-  assert.equal(formatContext(32768), "32k");
+  assert.equal(matchingContextChip(1_048_576), 1_048_576);
+  assert.equal(formatContext(1_048_576), "1M");
 });
 
 test("formatTokens stays decimal for usage counts", () => {

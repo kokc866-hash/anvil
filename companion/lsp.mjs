@@ -1,11 +1,13 @@
-/** Free language servers, pulled into ~/.anvil/lsp (npm/go). No paid LSPs. */
+/** Free language servers, pulled into <anvil-home>/lsp (npm/go). No paid LSPs. */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveBin, toolEnv, findInKind } from "./toolchain.mjs";
+import { lspHome } from "./paths.mjs";
 
-export const LSP_HOME = process.env.ANVIL_LSP_HOME || path.join(os.homedir(), ".anvil", "lsp");
+export { lspHome };
 
 export const LSP_CATALOG = [
   {
@@ -37,6 +39,7 @@ export const LSP_CATALOG = [
     kind: "lsp",
     ext: /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i,
     language: (p) => (/\.tsx$/i.test(p) ? "typescriptreact" : /\.jsx$/i.test(p) ? "javascriptreact" : /\.ts/i.test(p) ? "typescript" : "javascript"),
+    entry: ["lib/cli.mjs", "lib/cli.js"],
   },
   {
     id: "html",
@@ -49,6 +52,7 @@ export const LSP_CATALOG = [
     kind: "lsp",
     ext: /\.html?$/i,
     language: () => "html",
+    entry: ["lib/html-language-server/node/htmlServerMain.js", "lib/htmlServerMain.js", "dist/node/htmlServerMain.js"],
   },
   {
     id: "css",
@@ -62,6 +66,7 @@ export const LSP_CATALOG = [
     ext: /\.css$/i,
     language: () => "css",
     via: "html",
+    entry: ["lib/css-language-server/node/cssServerMain.js", "lib/cssServerMain.js"],
   },
   {
     id: "jsonls",
@@ -75,6 +80,7 @@ export const LSP_CATALOG = [
     ext: /\.json$/i,
     language: () => "json",
     via: "html",
+    entry: ["lib/json-language-server/node/jsonServerMain.js", "lib/jsonServerMain.js"],
   },
   {
     id: "yaml",
@@ -87,6 +93,7 @@ export const LSP_CATALOG = [
     kind: "lsp",
     ext: /\.ya?ml$/i,
     language: () => "yaml",
+    entry: ["out/server/src/server.js", "out/server/server.js", "bin/yaml-language-server.js", "bin/yaml-language-server"],
   },
   {
     id: "gopls",
@@ -99,6 +106,36 @@ export const LSP_CATALOG = [
     kind: "lsp",
     ext: /\.go$/i,
     language: () => "go",
+  },
+  {
+    id: "rust",
+    label: "rust-analyzer",
+    langs: "Rust",
+    license: "MIT / Apache-2.0",
+    bin: "rust-analyzer",
+    args: [],
+    kind: "lsp",
+    ext: /\.rs$/i,
+    language: () => "rust",
+  },
+  {
+    id: "clangd",
+    label: "clangd",
+    langs: "C / C++",
+    license: "Apache-2.0",
+    bin: "clangd",
+    args: [],
+    kind: "lsp",
+    ext: /\.(c|cc|cpp|cxx|h|hpp)$/i,
+    language: (p) => (/\.(c|h)$/i.test(p) && !/\.(cc|cpp|cxx|hpp)$/i.test(p) ? "c" : "cpp"),
+  },
+  {
+    id: "java",
+    label: "Java (javac)",
+    langs: "Java",
+    license: "GPL-2.0",
+    bin: "javac",
+    kind: "cli",
   },
 ];
 
@@ -115,14 +152,118 @@ function pathWhich(bin) {
 }
 
 export function lspBin(name) {
-  const local = path.join(LSP_HOME, "node_modules", ".bin", name);
-  const gobin = path.join(LSP_HOME, "bin", name);
+  const local = path.join(lspHome(), "node_modules", ".bin", name);
+  const gobin = path.join(lspHome(), "bin", name);
+  const cargo = path.join(os.homedir(), ".cargo", "bin", name);
+  const llvm = path.join(process.env.ProgramFiles || "C:\\Program Files", "LLVM", "bin", name);
   const ext = process.platform === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
   for (const e of ext) {
     if (existsSync(local + e)) return local + e;
     if (existsSync(gobin + e)) return gobin + e;
+    if (existsSync(cargo + e)) return cargo + e;
+    if (existsSync(llvm + e)) return llvm + e;
+  }
+  if (name === "rust-analyzer") {
+    const ra = findInKind("rust", ["rust-analyzer"]);
+    if (ra) return ra;
+  }
+  if (name === "clangd" || name === "javac" || name === "java") {
+    const fromTool = resolveBin(name === "clangd" ? "cc" : name === "javac" ? "javac" : "java");
+    if (fromTool && name === "clangd") {
+      if (/zig/i.test(fromTool)) {
+        /* Zig has no clangd */
+      } else {
+        const dir = path.dirname(fromTool);
+        for (const e of ext) {
+          const p = path.join(dir, "clangd" + e);
+          if (existsSync(p)) return p;
+        }
+      }
+    }
+    if (fromTool && (name === "javac" || name === "java")) return fromTool;
   }
   return pathWhich(name);
+}
+
+function findGo() {
+  return pathWhich("go") || pathWhich("go.exe") || resolveBin("go");
+}
+
+function runnableFile(p) {
+  if (!p) return null;
+  if (existsSync(p) && /\.(js|mjs|cjs)$/i.test(p)) return p;
+  for (const ext of [".js", ".mjs", ".cjs"]) {
+    if (existsSync(p + ext)) return p + ext;
+  }
+  if (existsSync(p)) return p;
+  return null;
+}
+
+function pkgBinFile(home, pkg, binName) {
+  const dir = path.join(home, "node_modules", pkg);
+  const pj = path.join(dir, "package.json");
+  if (!existsSync(pj)) return null;
+  try {
+    const j = JSON.parse(readFileSync(pj, "utf8"));
+    const b = j.bin;
+    const rel = typeof b === "string" ? b : b && typeof b === "object" ? b[binName] || Object.values(b)[0] : null;
+    if (!rel || typeof rel !== "string") return null;
+    return runnableFile(path.join(dir, rel));
+  } catch {
+    return null;
+  }
+}
+
+/** Real JS entry for an npm LSP — skip Windows .cmd shims (they break stdio). */
+export function jsEntry(spec, home = lspHome()) {
+  if (!spec?.npm?.length) return null;
+  const pkg = spec.npm[0];
+  const fromPkg = pkgBinFile(home, pkg, spec.bin);
+  if (fromPkg && /\.(js|mjs|cjs)$/i.test(fromPkg)) return fromPkg;
+  const dir = path.join(home, "node_modules", pkg);
+  for (const rel of spec.entry || []) {
+    const hit = runnableFile(path.join(dir, rel));
+    if (hit) return hit;
+  }
+  return fromPkg;
+}
+
+function nodeScript(p) {
+  if (!p) return false;
+  if (/\.(js|mjs|cjs)$/i.test(p)) return true;
+  try {
+    const head = readFileSync(p, "utf8").slice(0, 160);
+    return /^#!.*\bnode\b/i.test(head);
+  } catch {
+    return false;
+  }
+}
+
+function spawnLsp(spec, extraArgs, opts = {}) {
+  const args = extraArgs ?? spec.args ?? ["--stdio"];
+  const entry = spec.npm ? jsEntry(spec) : spec.via ? jsEntry({ ...spec, npm: LSP_CATALOG.find((p) => p.id === spec.via)?.npm || spec.npm }) : null;
+  if (entry && nodeScript(entry)) {
+    return spawn(process.execPath, [entry, ...args], {
+      cwd: opts.cwd,
+      env: opts.env || toolEnv(),
+      windowsHide: true,
+      shell: false,
+      stdio: opts.stdio || "pipe",
+    });
+  }
+  const bin = lspBin(spec.bin);
+  if (!bin) return null;
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(bin) && spec.npm) {
+    return null;
+  }
+  const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin);
+  return spawn(useShell ? process.env.ComSpec || "cmd.exe" : bin, useShell ? ["/c", bin, ...args] : args, {
+    cwd: opts.cwd,
+    env: opts.env || toolEnv(),
+    windowsHide: true,
+    shell: false,
+    stdio: opts.stdio || "pipe",
+  });
 }
 
 export function listLsp() {
@@ -141,8 +282,8 @@ export function listLsp() {
       label: p.label,
       langs: p.langs,
       license: p.license,
-      ready: Boolean(bin),
-      path: bin,
+      ready: Boolean(bin) || Boolean(p.npm && jsEntry(p)),
+      path: bin || (p.npm ? jsEntry(p) : null),
       extra: extra.length,
       via: p.npm ? "npm" : p.go ? "go" : "",
     };
@@ -151,7 +292,7 @@ export function listLsp() {
 
 function run(file, args, opts = {}) {
   return new Promise((resolve) => {
-    const env = { ...process.env, ...(opts.env || {}) };
+    const env = { ...toolEnv(), ...(opts.env || {}) };
     const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(file);
     const child = spawn(useShell ? process.env.ComSpec || "cmd.exe" : file, useShell ? ["/c", file, ...args] : args, {
       cwd: opts.cwd || process.cwd(),
@@ -190,11 +331,11 @@ export async function pullLsp(id) {
     if (!parent) return { ok: false, error: "Unbekanntes Paket", servers: listLsp() };
     return pullLsp(parent.id);
   }
-  mkdirSync(path.join(LSP_HOME, "bin"), { recursive: true });
+  mkdirSync(path.join(lspHome(), "bin"), { recursive: true });
   if (target.npm) {
     const npm = pathWhich("npm") || pathWhich("npm.cmd");
     if (!npm) return { ok: false, error: "npm fehlt (Node.js).", servers: listLsp() };
-    const r = await run(npm, ["install", "--prefix", LSP_HOME, "--omit=dev", "--no-fund", "--no-audit", ...target.npm], {
+    const r = await run(npm, ["install", "--prefix", lspHome(), "--omit=dev", "--no-fund", "--no-audit", ...target.npm], {
       timeoutMs: 180000,
     });
     if (!r.ok && !lspBin(target.bin)) {
@@ -202,15 +343,40 @@ export async function pullLsp(id) {
     }
   }
   if (target.go) {
-    const go = pathWhich("go") || pathWhich("go.exe");
-    if (!go) return { ok: false, error: "Go SDK fehlt für gopls.", servers: listLsp() };
+    const go = findGo();
+    if (!go) {
+      return {
+        ok: false,
+        error: "Go SDK fehlt für gopls. Zuerst Go holen (Companion, Compiler), dann gopls nochmal Holen.",
+        servers: listLsp(),
+      };
+    }
     const r = await run(go, ["install", target.go], {
       timeoutMs: 180000,
-      env: { ...process.env, GOBIN: path.join(LSP_HOME, "bin") },
+      env: {
+        ...toolEnv(),
+        GOBIN: path.join(lspHome(), "bin"),
+      },
     });
     if (!r.ok && !lspBin(target.bin)) {
       return { ok: false, error: (r.stderr || r.stdout || "go install fehlgeschlagen").slice(0, 400), servers: listLsp() };
     }
+  }
+  if (target.id === "rust") {
+    const rustup = pathWhich("rustup") || pathWhich("rustup.exe") || findInKind("rust", ["rustup"]);
+    if (!rustup) return { ok: false, error: "rustup fehlt. Zuerst Rust holen (Companion, Compiler).", servers: listLsp() };
+    const r = await run(rustup, ["component", "add", "rust-analyzer"], { timeoutMs: 180000, env: toolEnv() });
+    if (!r.ok && !lspBin(target.bin)) {
+      return { ok: false, error: (r.stderr || r.stdout || "rust-analyzer fehlgeschlagen").slice(0, 400), servers: listLsp() };
+    }
+  }
+  if (target.id === "clangd") {
+    const hit = lspBin("clangd");
+    if (!hit) return { ok: false, error: "clangd fehlt. LLVM holen (Companion, Compiler).", servers: listLsp() };
+  }
+  if (target.id === "java") {
+    const javac = lspBin("javac") || resolveBin("javac");
+    if (!javac) return { ok: false, error: "javac fehlt. OpenJDK holen (Companion, Compiler).", servers: listLsp() };
   }
   return { ok: Boolean(lspBin(target.bin)), servers: listLsp(), id: target.id };
 }
@@ -221,19 +387,14 @@ function langOf(p, spec) {
 }
 
 export function diagnoseWithLsp(spec, root, files, timeoutMs = 8000) {
-  const bin = lspBin(spec.bin);
-  if (!bin || spec.kind !== "lsp") return Promise.resolve([]);
+  if (spec.kind !== "lsp") return Promise.resolve([]);
+  if (!lspBin(spec.bin) && !jsEntry(spec)) return Promise.resolve([]);
   const want = files.filter((f) => spec.ext?.test(f.path));
   if (!want.length) return Promise.resolve([]);
   return new Promise((resolve) => {
     const args = spec.args || ["--stdio"];
-    const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin);
-    const child = spawn(useShell ? process.env.ComSpec || "cmd.exe" : bin, useShell ? ["/c", bin, ...args] : args, {
-      cwd: root,
-      windowsHide: true,
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawnLsp(spec, args, { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
+    if (!child) return resolve([]);
     let buf = Buffer.alloc(0);
     const hits = [];
     let n = 0;
@@ -292,7 +453,7 @@ export function diagnoseWithLsp(spec, root, files, timeoutMs = 8000) {
     request("initialize", {
       processId: process.pid,
       rootUri: pathToFileURL(root).href,
-      capabilities: { textDocument: { publishDiagnostics: {} } },
+      capabilities: { workspace: { workspaceFolders: true }, textDocument: { publishDiagnostics: {}, hover: {}, completion: {} } },
     });
     setTimeout(() => {
       send({ jsonrpc: "2.0", method: "initialized", params: {} });
@@ -335,7 +496,7 @@ export async function extraLspDiagnostics(root, files, timeoutMs = 8000, enabled
     if (spec.kind !== "lsp") continue;
     const id = spec.via || spec.id;
     if (allow && !allow.has(spec.id) && !allow.has(id)) continue;
-    if (!lspBin(spec.bin)) continue;
+    if (!lspBin(spec.bin) && !jsEntry(spec)) continue;
     const hits = await diagnoseWithLsp(spec, root, files, timeoutMs);
     out.push(...hits);
   }
@@ -346,13 +507,17 @@ export async function checkLsp(id) {
   const spec = LSP_CATALOG.find((p) => p.id === id);
   if (!spec) return { ok: false, id, error: "Unbekanntes Paket." };
   const target = spec.via ? LSP_CATALOG.find((p) => p.id === spec.via) || spec : spec;
+  if (spec.go && !findGo()) {
+    return { ok: false, id, error: "Go SDK fehlt.", hint: "Zuerst Go holen (Companion, Compiler), dann gopls Holen." };
+  }
   const bin = lspBin(spec.bin) || lspBin(target.bin);
-  if (!bin) {
+  const entry = spec.npm ? jsEntry(spec) : spec.via && target.npm ? jsEntry({ ...target, bin: spec.bin, entry: spec.entry }) : null;
+  if (!bin && !entry) {
     return {
       ok: false,
       id,
       error: "Nicht geholt.",
-      hint: target.go ? "Go SDK installieren, dann Holen." : "npm muss im PATH sein, dann Holen.",
+      hint: target.go ? "Zuerst Go holen (Companion, Compiler), dann gopls Holen." : "npm muss im PATH sein, dann Holen.",
     };
   }
   const args = spec.kind === "cli" ? ["--version"] : spec.args || ["--stdio"];
@@ -363,22 +528,31 @@ export async function checkLsp(id) {
     return { ok: false, id, error: (r.stderr || "Start fehlgeschlagen").slice(0, 280), path: bin };
   }
   return new Promise((resolve) => {
-    const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin);
-    const child = spawn(useShell ? process.env.ComSpec || "cmd.exe" : bin, useShell ? ["/c", bin, ...args] : args, {
-      windowsHide: true,
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawnLsp(spec, args, { stdio: ["pipe", "pipe", "pipe"] });
+    if (!child) {
+      resolve({ ok: false, id, error: "Start fehlgeschlagen.", path: bin || "" });
+      return;
+    }
     let stderr = "";
     let ok = false;
     child.stderr?.on("data", (d) => {
       stderr = (stderr + d.toString()).slice(-2000);
     });
+    const root = pathToFileURL(process.cwd()).href;
     const msg = JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: { processId: process.pid, rootUri: null, capabilities: {} },
+      params: {
+        processId: process.pid,
+        clientInfo: { name: "Anvil", version: "1.2.0" },
+        rootUri: root,
+        workspaceFolders: [{ uri: root, name: "anvil" }],
+        capabilities: {
+          workspace: { workspaceFolders: true, configuration: true },
+          textDocument: { publishDiagnostics: {}, synchronization: {} },
+        },
+      },
     });
     const b = Buffer.from(msg, "utf8");
     try {
@@ -391,23 +565,23 @@ export async function checkLsp(id) {
       child.kill("SIGTERM");
       resolve(
         ok
-          ? { ok: true, id, version: spec.bin, path: bin }
-          : { ok: false, id, error: (stderr || "Keine Antwort (stdio)").slice(0, 280), path: bin },
+          ? { ok: true, id, version: spec.bin, path: entry || bin }
+          : { ok: false, id, error: (stderr || "Keine Antwort (stdio)").slice(0, 280), path: entry || bin },
       );
-    }, 4000);
+    }, 8000);
     child.stdout?.on("data", () => {
       ok = true;
     });
     child.on("error", (err) => {
       clearTimeout(t);
-      resolve({ ok: false, id, error: String(err.message).slice(0, 280), path: bin });
+      resolve({ ok: false, id, error: String(err.message).slice(0, 280), path: entry || bin });
     });
     child.on("close", () => {
       clearTimeout(t);
       resolve(
         ok
-          ? { ok: true, id, version: spec.bin, path: bin }
-          : { ok: false, id, error: (stderr || "Prozess beendet").slice(0, 280), path: bin },
+          ? { ok: true, id, version: spec.bin, path: entry || bin }
+          : { ok: false, id, error: (stderr || "Prozess beendet").slice(0, 280), path: entry || bin },
       );
     });
   });

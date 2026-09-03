@@ -98,6 +98,7 @@ function compareTree(a: FsNode, b: FsNode): number {
 }
 
 export function visibleTree(items: FsNode[], collapsed: string[], query: string): FsNode[] {
+
   const hide = new Set(collapsed);
   const q = query.trim().toLowerCase();
   return items.filter((item) => {
@@ -115,3 +116,21 @@ export function visibleTree(items: FsNode[], collapsed: string[], query: string)
     return false;
   });
 }
+
+/** Collapse nested folders in medium trees, keep the active file's path open. */
+export function autoCollapsePaths(files: string[], active: string | null, minFiles = 80): string[] {
+  if (files.length < minFiles) return [];
+  const keep = new Set<string>();
+  if (active) {
+    keep.add(active);
+    for (const d of ancestorDirs(active)) keep.add(d);
+  }
+  const dirs = new Set<string>();
+  for (const p of files) {
+    for (const d of ancestorDirs(p)) {
+      if (!keep.has(d)) dirs.add(d);
+    }
+  }
+  return [...dirs];
+}
+

@@ -1,9 +1,10 @@
 import { app, dialog } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { handleOnce } from "./ipc.mjs";
 
-export const PATH_KINDS = ["data", "helper", "logs"];
+export const PATH_KINDS = ["data", "helper", "logs", "packages"];
 
 function pointer() {
   return join(app.getPath("userData"), "anvil-paths.json");
@@ -15,6 +16,7 @@ function defaults() {
     data: user,
     helper: join(user, "helper-models"),
     logs: user,
+    packages: join(homedir(), ".anvil"),
   };
 }
 
@@ -26,6 +28,7 @@ export function loadPaths() {
       data: String(j.data || def.data),
       helper: String(j.helper || def.helper),
       logs: String(j.logs || def.logs),
+      packages: String(j.packages || def.packages),
     };
   } catch {
     return def;
@@ -37,6 +40,8 @@ export function savePaths(next) {
   mkdirSync(cur.data, { recursive: true });
   mkdirSync(cur.helper, { recursive: true });
   mkdirSync(cur.logs, { recursive: true });
+  mkdirSync(join(cur.packages, "toolchains"), { recursive: true });
+  mkdirSync(join(cur.packages, "lsp"), { recursive: true });
   writeFileSync(pointer(), JSON.stringify(cur, null, 2), "utf8");
   return cur;
 }
@@ -55,7 +60,12 @@ export function bindPathsIpc() {
   handleOnce("paths-get", () => loadPaths());
   handleOnce("paths-pick", async (_e, kind) => {
     const k = PATH_KINDS.includes(kind) ? kind : "data";
-    const titles = { data: "Anvil-Daten", helper: "Helfer-Modelle", logs: "Logs" };
+    const titles = {
+      data: "Anvil-Daten",
+      helper: "Helfer-Modelle",
+      logs: "Logs",
+      packages: "Pakete (Compiler, Sprachserver)",
+    };
     const r = await dialog.showOpenDialog({
       title: titles[k] || "Ordner",
       properties: ["openDirectory", "createDirectory"],
@@ -80,5 +90,13 @@ export function bindPathsIpc() {
     const p = join(loadPaths().data, file);
     if (!existsSync(p)) return null;
     return readFileSync(p, "utf8");
+  });
+  handleOnce("workspace-pick", async () => {
+    const r = await dialog.showOpenDialog({
+      title: "Workspace",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return r.filePaths[0];
   });
 }

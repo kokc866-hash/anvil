@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compactMessages, fitMessages, isContextError, prepChatPayload, estimatePrompt } from "./compact.ts";
+import { compactMessages, fitMessages, isContextError, prepChatPayload, estimatePrompt, COMPACT_MARK } from "./compact.ts";
 
 test("compact leaves a short list alone", () => {
   const msgs = [
@@ -98,4 +98,23 @@ test("prepChatPayload keeps system when tools schema is huge", () => {
   assert.match(msgs[0].content, /SYSTEMSTART/);
   assert.ok(msgs[0].content.length > 800, `system ${msgs[0].content.length}`);
   assert.match(String(msgs.at(-1)?.content), /Stelle fertig/);
+});
+
+test("compact digest keeps files and prior compact", () => {
+  const oldUsers = Array.from({ length: 16 }, (_, i) => ({
+    role: "user",
+    content: i === 0 ? "Bau src/app.ts ohne Tailwind." : `u${i} ${"y".repeat(3000)}`,
+  }));
+  const msgs = [
+    { role: "system", content: "sys ".repeat(200) },
+    { role: "user", content: `${COMPACT_MARK}, 4 Nachrichten):\nZiel: Counter\nDateien: src/store.ts` },
+    ...oldUsers,
+    { role: "assistant", content: "ok" },
+  ];
+  const r = compactMessages(msgs, 8192, "auto");
+  assert.equal(r.compacted, true);
+  const blob = r.messages.find((m) => String(m.content ?? "").startsWith(COMPACT_MARK));
+  assert.ok(blob);
+  const text = String(blob?.content);
+  assert.match(text, /src\/app\.ts|src\/store\.ts|Tailwind|Counter/);
 });

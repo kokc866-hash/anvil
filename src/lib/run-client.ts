@@ -2,6 +2,7 @@ import { runJsSandboxed } from "./run-sandbox";
 import { runRemote } from "./run-server";
 import { looksGraphical, wrapJsGame, withEngine } from "./game-host";
 import { langFromPath, langMeta, type LangId } from "./languages";
+import { compileFiles } from "./compile-files";
 import type { RunResult } from "@/store/ide";
 import { useIde } from "@/store/ide";
 import { throwIfAborted } from "./abort";
@@ -310,9 +311,7 @@ export async function runFile(
     return done({ ok: !stderr, stdout, stderr });
   }
   if (langMeta(lang)?.run === "remote") {
-    const remoteFiles = Object.entries(files)
-      .filter(([p]) => langFromPath(p) === lang || p === path)
-      .map(([p, content]) => ({ path: p, content }));
+    const remoteFiles = compileFiles(lang, path, files);
     const { withCompanion } = await import("./companion-life");
     return withCompanion(async () => {
       try {
@@ -382,7 +381,7 @@ export async function evalSnippet(
           const job = await companionCompile({
             lang,
             entry,
-            files: [{ path: entry, content: wrapRepl(lang, code) }],
+            files: compileFiles(lang, entry, { ...files, [entry]: wrapRepl(lang, code) }),
           });
           if (!/nicht im PATH|nicht lokal|nicht in Anvil/i.test(job.stderr)) {
             return done({ ok: job.ok, stdout: job.stdout, stderr: job.stderr });

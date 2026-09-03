@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { formatCode } from "@/lib/format";
 import type { LangId } from "@/lib/languages";
-import { defineAnvilThemes, editorChrome, loadMonaco, monacoLang, wireCompletions, wireNav, type MonacoEditor, type MonacoNS } from "@/lib/monaco";
-import { findDefinition, wordAt } from "@/lib/lsp";
+import { defineAnvilThemes, editorChrome, loadMonaco, monacoLang, pruneModels, wireCompletions, wireNav, type MonacoEditor, type MonacoNS } from "@/lib/monaco";
+import { defsAt, wordAt } from "@/lib/lsp";
 import { gotoFile } from "@/lib/goto";
 import { emitPlugin } from "@/lib/plugins/events";
 import { debugContinue, debugStep, debugStop, startDebug } from "@/lib/debug-engine";
 import { prefixAt, suggest, type Suggestion } from "@/lib/suggest";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import { useIde } from "@/store/ide";
 
 export type TextSel = { start: number; end: number; text: string };
@@ -180,14 +181,17 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const modelNow = ed.getModel();
             if (!pos || !modelNow) return;
             const src = ed.getValue();
-            const w = wordAt(src, modelNow.getOffsetAt(pos));
-            const defs = findDefinition(useIde.getState().files, w, path);
-            const d = defs[0];
-            if (!d) {
-              useIde.getState().setNotice("Keine Definition");
-              return;
-            }
-            gotoFile(d.path, d.line);
+            const offset = modelNow.getOffsetAt(pos);
+            const st = useIde.getState();
+            const files = { ...st.files, [path]: src };
+            void defsAt(files, path, offset, st.openPaths).then((defs) => {
+              const d = defs[0];
+              if (!d) {
+                useIde.getState().setNotice("Keine Definition");
+                return;
+              }
+              gotoFile(d.path, d.line);
+            });
           },
         });
         ed.addAction({
@@ -198,13 +202,18 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const pos = ed.getPosition();
             const modelNow = ed.getModel();
             if (!pos || !modelNow) return;
-            const w = wordAt(ed.getValue(), modelNow.getOffsetAt(pos));
-            const defs = findDefinition(useIde.getState().files, w, path);
-            if (!defs.length) {
-              useIde.getState().setNotice("Keine Definition");
-              return;
-            }
-            useIde.getState().setPeek({ word: w, defs });
+            const src = ed.getValue();
+            const offset = modelNow.getOffsetAt(pos);
+            const st = useIde.getState();
+            const files = { ...st.files, [path]: src };
+            const w = wordAt(src, offset);
+            void defsAt(files, path, offset, st.openPaths).then((defs) => {
+              if (!defs.length) {
+                useIde.getState().setNotice("Keine Definition");
+                return;
+              }
+              useIde.getState().setPeek({ word: w, defs });
+            });
           },
         });
         ed.addAction({
@@ -300,9 +309,13 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           if (!(e.event?.ctrlKey || e.event?.metaKey) || !e.target.position) return;
           const modelNow = ed.getModel();
           if (!modelNow) return;
-          const w = wordAt(ed.getValue(), modelNow.getOffsetAt(e.target.position));
-          const d = findDefinition(useIde.getState().files, w, path)[0];
-          if (d) gotoFile(d.path, d.line);
+          const src = ed.getValue();
+          const offset = modelNow.getOffsetAt(e.target.position);
+          const st = useIde.getState();
+          void defsAt({ ...st.files, [path]: src }, path, offset, st.openPaths).then((defs) => {
+            const d = defs[0];
+            if (d) gotoFile(d.path, d.line);
+          });
         });
         ed.addAction({
           id: "anvil.files",
@@ -476,10 +489,23 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       for (const s of subs) s.dispose();
       edRef.current?.dispose();
       edRef.current = null;
+      const monaco = monacoRef.current;
+      if (monaco) pruneModels(monaco, useIde.getState().openPaths);
     };
     // mount once per path so models stay intact
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
+
+  useEffect(() => {
+    let prev = useIde.getState().openPaths.join("\n");
+    return useIde.subscribe((s) => {
+      const next = s.openPaths.join("\n");
+      if (next === prev) return;
+      prev = next;
+      const monaco = monacoRef.current;
+      if (monaco) pruneModels(monaco, s.openPaths);
+    });
+  }, []);
 
   useEffect(() => {
     const map: Record<string, string> = {
@@ -544,17 +570,17 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           startLineNumber: p.line,
           startColumn: p.col || 1,
           endLineNumber: p.line,
-          endColumn: 200,
+          endColumn: Math.max((p.col || 1) + 1, 200),
           message: p.message,
           severity: p.severity === "warning" ? (sev?.Warning ?? 4) : p.severity === "info" ? (sev?.Info ?? 2) : (sev?.Error ?? 8),
-          source: p.source,
+          source: ["syntax", "python", "index", "json", "js", "c"].includes(p.source) ? t("lintHeur") : p.source,
         })),
     );
   }, [lspProblems, path]);
 
   useEffect(() => {
     edRef.current?.updateOptions(editorChrome(useIde.getState()));
-  }, [fontSize, tabSize, insertSpaces, wordWrap, lineNumbers, editorMinimap, editorSticky, editorGuides, editorWheelZoom]);
+  }, [fontSize, tabSize, insertSpaces, wordWrap, lineNumbers, editorMinimap, editorSticky, editorGuides, editorWheelZoom, suggestOn]);
 
   useEffect(() => {
     const monaco = monacoRef.current;

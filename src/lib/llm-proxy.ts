@@ -2,7 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
 import { AGENT_TOOLS, CORE_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
 import { isContextError, prepChatPayload } from "./compact";
-import { applyLlmOptions, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { applyLlmOptions, applyResponsesStore, patchResponses400, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { parseResponses, parseResponsesSse } from "./responses-parse";
 import { shrinkTools, stripPayload } from "./tool-fallback";
 import { applyCapToPayload, classifyLlmError, sendTools, type ModelCap } from "./model-caps";
 import { isPrivateHost } from "./net-guard";
@@ -297,46 +298,6 @@ function toResponsesInput(messages: Record<string, unknown>[]): { instructions: 
   return { instructions: inst.filter(Boolean).join("\n\n"), input };
 }
 
-function parseResponses(json: {
-  output_text?: string;
-  output?: {
-    type?: string;
-    content?: { type?: string; text?: string }[];
-    summary?: { text?: string }[];
-    call_id?: string;
-    id?: string;
-    name?: string;
-    arguments?: string | Record<string, unknown>;
-  }[];
-  usage?: { input_tokens?: number; output_tokens?: number };
-}): LlmChoice {
-  let content = typeof json.output_text === "string" ? json.output_text : "";
-  let reasoning = "";
-  const tool_calls: ToolCall[] = [];
-  for (const item of json.output ?? []) {
-    const type = String(item.type ?? "");
-    if (type === "message") {
-      for (const p of item.content ?? []) content += p.text ?? "";
-    } else if (type === "output_text") {
-      content += (item as { text?: string }).text ?? "";
-    } else if (type === "reasoning") {
-      reasoning += (item.summary ?? []).map((s) => s.text ?? "").join("\n");
-    } else if (type === "function_call" || type === "tool_call" || type === "custom_tool_call") {
-      const args = item.arguments;
-      tool_calls.push(
-        asToolCall(String(item.call_id ?? item.id ?? "call"), String(item.name ?? ""), typeof args === "string" ? args : JSON.stringify(args ?? {})),
-      );
-    }
-  }
-  return {
-    role: "assistant",
-    content: content || null,
-    reasoning: reasoning || undefined,
-    tool_calls: tool_calls.length ? tool_calls : undefined,
-    usage: json.usage ? { prompt: json.usage.input_tokens ?? 0, completion: json.usage.output_tokens ?? 0 } : undefined,
-  };
-}
-
 async function postResponses(
   endpoint: string,
   headers: Record<string, string>,
@@ -346,12 +307,15 @@ async function postResponses(
 ): Promise<LlmChoice> {
   const { instructions, input } = toResponsesInput((payload.messages as Record<string, unknown>[]) ?? []);
   const effort = payload.reasoning_effort;
-  const body: Record<string, unknown> = {
-    model: payload.model,
-    input,
-    instructions: instructions || undefined,
-    max_output_tokens: payload.max_completion_tokens ?? payload.max_tokens,
-  };
+  const body: Record<string, unknown> = applyResponsesStore(
+    {
+      model: payload.model,
+      input,
+      instructions: instructions || undefined,
+      max_output_tokens: payload.max_completion_tokens ?? payload.max_tokens,
+    },
+    kind,
+  );
   if (effort) body.reasoning = { effort };
   if (useTools) {
     body.tools = AGENT_TOOLS.map((t) => ({
@@ -362,16 +326,20 @@ async function postResponses(
     }));
     body.tool_choice = "auto";
   }
-  const hdr = withUa(headers);
   const send = (b: Record<string, unknown>) =>
     fetch(endpoint, {
       method: "POST",
-      headers: hdr,
+      headers: withUa({ ...headers, ...(b.stream ? { Accept: "text/event-stream" } : {}) }),
       body: JSON.stringify(b),
       signal: AbortSignal.timeout(180000),
     });
   let res = await send(body);
   let raw = await res.text();
+  for (let i = 0; i < 4 && !res.ok && res.status === 400; i++) {
+    if (!patchResponses400(body, raw)) break;
+    res = await send(body);
+    raw = await res.text();
+  }
   if (!res.ok && res.status === 400 && body.reasoning && /reasoning/i.test(raw)) {
     delete body.reasoning;
     if (effort) body.reasoning_effort = effort;
@@ -393,7 +361,7 @@ async function postResponses(
   }
   if (!res.ok) httpFail(res.status, raw, kind || (/chatgpt\.com/.test(endpoint) ? "codex" : ""));
   try {
-    return parseResponses(JSON.parse(raw) as Parameters<typeof parseResponses>[0]);
+    return parseResponsesSse(raw);
   } catch {
     throw new Error(raw.slice(0, 280) || "Leere Responses-Antwort.");
   }
@@ -622,6 +590,14 @@ async function anthropicChat(
       body.tools = mapTools(CORE_TOOLS);
       res = await send(hdr);
       if (!res.ok) err = await res.text();
+    }
+    if (!res.ok && res.status === 400 && body.thinking) {
+      const think = body.thinking as { type?: string; budget_tokens?: number };
+      if (think.budget_tokens != null) {
+        body.thinking = { type: "adaptive" };
+        res = await send(hdr);
+        if (!res.ok) err = await res.text();
+      }
     }
     if (!res.ok && res.status === 400 && body.thinking) {
       delete body.thinking;

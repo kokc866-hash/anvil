@@ -63,7 +63,7 @@ export function startHarness(opts: HarnessOpts): HarnessState {
       rounds: opts.maxRounds ?? 24,
       tools: opts.maxTools ?? 64,
       runs: opts.runLoop ? tries : 1,
-      sees: opts.graphLoop ? clamp(opts.graphSees ?? 4, 0, 8) : 0,
+      sees: opts.graphLoop ? clamp(opts.graphSees ?? 4, 0, 8) : 1,
       patches: opts.runLoop ? tries : 0,
     },
     used: { ...EMPTY },
@@ -139,7 +139,7 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
     };
   }
 
-  if (opts.graphLoop && last.ok && last.graphical && last.kind !== "see" && last.kind !== "play" && seesLeft > 0) {
+  if (last.ok && last.graphical && last.kind !== "see" && last.kind !== "play" && seesLeft > 0) {
     const next = { ...state, phase: "see" as const, reason: "look at preview" };
     return {
       state: next,

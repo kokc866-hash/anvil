@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { listToolchains, pullToolchain, removeToolchain, abortPull, toolchainProgress, TOOLS } from "./toolchain.mjs";
+import { listToolchains, pullToolchain, removeToolchain, abortPull, toolchainProgress, TOOLS, zigArchiveName, zigGithubUrl, toolEnv } from "./toolchain.mjs";
 
 describe("toolchain", () => {
   it("catalog has go rust jdk zig php", () => {
@@ -30,5 +30,15 @@ describe("toolchain", () => {
     assert.equal(typeof p.pct, "number");
     const a = abortPull();
     assert.equal(a.ok, false);
+  });
+  it("zig archive names", () => {
+    assert.equal(zigArchiveName("0.14.1", "x86_64-windows"), "zig-x86_64-windows-0.14.1.zip");
+    assert.equal(zigArchiveName("0.13.0", "x86_64-windows"), "zig-windows-x86_64-0.13.0.zip");
+    assert.equal(zigArchiveName("0.15.2", "x86_64-linux"), "zig-x86_64-linux-0.15.2.tar.xz");
+    assert.match(zigGithubUrl("0.14.1", "x86_64-windows"), /github.com\/ziglang\/zig\/releases/);
+  });
+  it("toolEnv keeps PATH", () => {
+    const e = toolEnv({ PATH: "/usr/bin", HOME: "/tmp" });
+    assert.ok(typeof e.PATH === "string" && e.PATH.includes("/usr/bin"));
   });
 });

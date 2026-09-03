@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityBar } from "./activity-bar";
 import { FileTree } from "./file-tree";
 import { EditorPane } from "./editor-pane";
@@ -40,12 +40,13 @@ import { ConfirmHost } from "./confirm-host";
 import { StarterPick } from "./starter-pick";
 import { FirstRun } from "./first-run";
 import { startIntern, useIntern } from "@/lib/intern";
+import { ACTIVITY_W, EDITOR_MIN, SIDE_MIN, SPLIT_W, applyPaneDrag, fitIdeLayout, fitStackTrail, overlayPanes } from "@/lib/layout";
 
 function applyTheme(theme: "dark" | "light") {
   const root = document.documentElement;
   root.dataset.theme = theme;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", theme === "light" ? "#f3f2ee" : "#0a0a0b");
+  if (meta) meta.setAttribute("content", theme === "light" ? "#b4b0a6" : "#0a0a0b");
 }
 
 export function Workspace() {
@@ -80,7 +81,8 @@ export function Workspace() {
   const showStatusBar = useIde((s) => s.showStatusBar);
   const autoSaveDisk = useIde((s) => s.autoSaveDisk);
   const boot = useIntern((s) => s.boot);
-  const [narrow, setNarrow] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [inner, setInner] = useState(1280);
   const [starterOpen, setStarterOpen] = useState(false);
 
   useEffect(() => {
@@ -140,9 +142,6 @@ export function Workspace() {
           }
         }
       });
-      if (window.matchMedia("(max-width: 720px)").matches) {
-        useIde.getState().setSidebar(null);
-      }
       const native = (window as unknown as { anvilNative?: { companionToken?: () => Promise<string> } }).anvilNative;
       void native?.companionToken?.().then((tok) => {
         if (tok) void import("@/lib/companion").then((c) => c.setCompanionToken(tok));
@@ -151,6 +150,23 @@ export function Workspace() {
         const st = useIde.getState();
         st.setDiskName(names.workspace);
         st.setBackupName(names.backup);
+        const cwd = st.workspaceCwd?.trim();
+        if (cwd) {
+          try {
+            const { holdCompanion, releaseCompanion } = await import("@/lib/companion-life");
+            const { companionTree } = await import("@/lib/companion");
+            await holdCompanion();
+            const tree = await companionTree(cwd);
+            if (tree.ok && tree.files) {
+              st.applyFiles(tree.files, tree.dirs);
+              if (tree.skipped) st.setNotice(`${tree.n} Dateien, ${tree.skipped} übersprungen (Platten-Stand)`);
+            }
+            if (!st.companionKeep) await releaseCompanion();
+          } catch {
+            /* companion down — keep persisted cache */
+          }
+          return;
+        }
         if (st.loadOnStart && names.workspace) {
           try {
             const pack = await loadSlotAll("workspace");
@@ -161,6 +177,7 @@ export function Workspace() {
         }
       });
       stopSync = startIdeSync();
+      void import("@/lib/model-context").then((m) => m.applyCloudContext());
     });
     return () => stopSync?.();
   }, []);
@@ -207,12 +224,11 @@ export function Workspace() {
   useEffect(() => {
     const applyFiles = (files: Record<string, string>) => {
       (window as unknown as { __anvilFiles?: Record<string, string> }).__anvilFiles = files;
+      (window as unknown as { __anvilIde?: typeof useIde }).__anvilIde = useIde;
     };
     applyFiles(useIde.getState().files);
     let lint = 0;
-    const unsub = useIde.subscribe((s, prev) => {
-      if (s.files === prev.files) return;
-      applyFiles(s.files);
+    const kick = () => {
       window.clearTimeout(lint);
       lint = window.setTimeout(() => {
         void import("@/lib/lsp").then((l) => {
@@ -220,11 +236,20 @@ export function Workspace() {
           void import("@/lib/ws-index").then((w) => w.rebuildIndex(st.files));
           st.setLspProblems(l.lintWorkspace(st.files, st.openPaths));
           void import("@/lib/lsp-compile").then((c) =>
-            c.lintDeep(st.files).then((hits) => useIde.getState().setCompileProblems(hits)),
+            c.lintDeep(st.files, st.openPaths).then((deep) => {
+              void import("@/lib/problems").then((p) => p.noteCompileChecked(deep.checked));
+              useIde.getState().setCompileProblems(deep.hits);
+            }),
           );
           void import("@/lib/companion-lint").then((c) => c.scheduleCompanionLint());
         });
       }, 400);
+    };
+    kick();
+    const unsub = useIde.subscribe((s, prev) => {
+      if (s.files === prev.files && s.openPaths === prev.openPaths) return;
+      applyFiles(s.files);
+      kick();
     });
     return () => {
       unsub();
@@ -254,15 +279,13 @@ export function Workspace() {
   }, [autoSaveDisk]);
 
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 720px)");
-    const sync = () => {
-      const n = mq.matches;
-      setNarrow(n);
-      if (n) useIde.getState().setSidebar(null);
-    };
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
+    const el = shellRef.current;
+    if (!el) return;
+    const read = () => setInner(el.clientWidth);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
@@ -569,17 +592,91 @@ export function Workspace() {
   }, [setPalette, setSettingsOpen, setRunning, pushOutput]);
 
   const showSide = Boolean(sidebar);
-  const overlaySide = narrow && showSide && splitMode !== "side";
   const showOutput = panels.output && !outputPopout;
-  const outputSide = showOutput && outputDock === "side" && !(narrow && splitMode !== "side");
-  const outputBottom = showOutput && (outputDock === "bottom" || (narrow && splitMode !== "side"));
-  const agentOverlay = panels.agent && splitMode === "auto" && narrow;
-  const agentBeside = panels.agent && !agentOverlay && splitMode !== "stack";
-  const agentBelow = panels.agent && splitMode === "stack";
   const trailOpen = panels.trail;
+  const agentOn = panels.agent;
+
+  const fitArgs = {
+    inner,
+    splitMode,
+    sideOn: showSide,
+    trailOn: trailOpen,
+    agentOn,
+    sideW: sidebarWidth,
+    trailW: trailWidth,
+    agentW: agentWidth,
+  };
+  let fit = fitIdeLayout(fitArgs);
+  let outputSide = false;
+  if (showOutput && outputDock === "side" && splitMode !== "stack") {
+    const outW = Math.min(640, Math.max(240, outputWidth)) + SPLIT_W;
+    const withOut = fitIdeLayout({ ...fitArgs, inner: inner - outW });
+    if (!withOut.overlayTrail && !withOut.overlayAgent) {
+      fit = withOut;
+      outputSide = true;
+    }
+  }
+  const outputBottom = showOutput && !outputSide;
+  const overlaySide = fit.overlaySide && showSide;
+  const overlayTrailRow = fit.overlayTrail && trailOpen && splitMode !== "stack";
+  const overlayAgent = fit.overlayAgent && agentOn && splitMode !== "stack";
+  const agentBeside = agentOn && !overlayAgent && splitMode !== "stack";
+  const agentBelow = agentOn && splitMode === "stack";
+  const sideW = overlaySide ? 0 : fit.sideW;
+  const trailW = overlayTrailRow ? 0 : fit.trailW;
+  const agentW = overlayAgent ? 0 : fit.agentW;
+  const trailBeside = trailOpen && !overlayTrailRow && splitMode !== "stack";
+  const belowW = inner - ACTIVITY_W - (overlaySide ? 0 : sideW);
+  const stackTrail = splitMode === "stack" ? fitStackTrail(belowW, trailOpen, trailWidth) : { trailW: 0, overlayTrail: false };
+  const trailBelow = trailOpen && splitMode === "stack" && !stackTrail.overlayTrail;
+  const overlayTrail = overlayTrailRow || (trailOpen && splitMode === "stack" && stackTrail.overlayTrail);
+  const ov = overlayPanes({
+    inner,
+    overlayTrail,
+    overlayAgent,
+    trailW: trailWidth,
+    agentW: agentWidth,
+    besideAgentW: agentBeside ? agentW : 0,
+  });
+  const overlayRightW = ov.trailOnTop
+    ? Math.max(ov.trailW, ov.agentW)
+    : (overlayTrail ? ov.trailW : 0) + (overlayAgent ? ov.agentW : 0);
+  const rightChrome =
+    (outputSide ? outputWidth + SPLIT_W : 0) +
+    (trailBeside ? trailW + SPLIT_W : 0) +
+    (agentBeside ? agentW + SPLIT_W : 0) +
+    overlayRightW;
+  const overlaySideW = Math.min(Math.max(sidebarWidth, SIDE_MIN), 420, Math.max(SIDE_MIN, inner - ACTIVITY_W - 48));
+  const edge = showStatusBar ? "bottom-6" : "bottom-0";
+  const dragInner = outputSide ? inner - outputWidth - SPLIT_W : inner;
+  const syncShown = () => {
+    if (!overlaySide && sideW > 0) setSidebarWidth(sideW);
+    if (trailBeside && trailW > 0) setTrailWidth(trailW);
+    if (agentBeside && agentW > 0) setAgentWidth(agentW);
+  };
+  const commitDrag = (pane: "side" | "trail" | "agent", grow: number) => {
+    const s = useIde.getState();
+    const cur = pane === "side" ? s.sidebarWidth : pane === "trail" ? s.trailWidth : s.agentWidth;
+    const w = applyPaneDrag({
+      inner: dragInner,
+      splitMode: s.splitMode,
+      sideOn: showSide,
+      trailOn: trailOpen,
+      agentOn,
+      sideW: s.sidebarWidth,
+      trailW: s.trailWidth,
+      agentW: s.agentWidth,
+      pane,
+      next: cur + grow,
+    });
+    s.setSidebarWidth(w.sideW);
+    s.setTrailWidth(w.trailW);
+    s.setAgentWidth(w.agentW);
+  };
 
   return (
     <div
+      ref={shellRef}
       className="relative flex h-dvh flex-col bg-bg text-fg"
       style={{ ["--editor-size" as string]: `${fontSize}px` }}
       onDragOver={(e) => {
@@ -596,32 +693,44 @@ export function Workspace() {
       <FirstRun />
       <div key={boot} className="flex min-h-0 flex-1">
         <ActivityBar />
-        {showSide && !overlaySide ? (
+        {showSide && !overlaySide && sideW > 0 ? (
           <>
-            <aside key={sidebar} className="ui-rail shrink-0 border-r border-border" style={{ width: sidebarWidth }}>
+            <aside key={sidebar} className="ui-rail shrink-0 overflow-hidden border-r border-border" style={{ width: sideW }}>
               {sideBody(sidebar)}
             </aside>
-            <VSplit onDrag={(dx) => setSidebarWidth(useIde.getState().sidebarWidth + dx)} />
+            <VSplit onBegin={syncShown} onDrag={(dx) => commitDrag("side", dx)} />
           </>
         ) : null}
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1">
-              <div className="min-h-0 min-w-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1">
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
                 {harnessBoardOpen ? <HarnessBoard /> : <EditorPane />}
               </div>
               {outputSide ? (
                 <>
-                  <VSplit onDrag={(dx) => setOutputWidth(useIde.getState().outputWidth + dx)} />
+                  <VSplit
+                    onDrag={(dx) => {
+                      const cur = useIde.getState().outputWidth;
+                      const taken =
+                        ACTIVITY_W +
+                        EDITOR_MIN +
+                        (overlaySide ? 0 : sideW + SPLIT_W) +
+                        (trailBeside ? trailW + SPLIT_W : 0) +
+                        (agentBeside ? agentW + SPLIT_W : 0) +
+                        SPLIT_W;
+                      setOutputWidth(Math.min(Math.max(240, inner - taken), cur + dx));
+                    }}
+                  />
                   <aside className="ui-pane min-h-0 shrink-0 border-l border-border" style={{ width: outputWidth }}>
                     <OutputPane />
                   </aside>
                 </>
               ) : null}
-              {trailOpen && splitMode !== "stack" ? (
+              {trailBeside && trailW > 0 ? (
                 <>
-                  <VSplit onDrag={(dx) => setTrailWidth(useIde.getState().trailWidth - dx)} />
-                  <aside className="ui-pane min-h-0 shrink-0 border-l border-border" style={{ width: trailWidth }}>
+                  <VSplit onBegin={syncShown} onDrag={(dx) => commitDrag("trail", -dx)} />
+                  <aside className="ui-pane relative z-0 isolate min-h-0 shrink-0 overflow-hidden border-l border-border" style={{ width: trailW }}>
                     <TrailPane />
                   </aside>
                 </>
@@ -637,8 +746,8 @@ export function Workspace() {
                   <div className="min-h-0 min-w-0 flex-1">
                     <ChatPane />
                   </div>
-                  {trailOpen ? (
-                    <aside className="ui-pane min-h-0 shrink-0 border-l border-border" style={{ width: trailWidth }}>
+                  {trailBelow && stackTrail.trailW > 0 ? (
+                    <aside className="ui-pane relative z-0 isolate min-h-0 shrink-0 overflow-hidden border-l border-border" style={{ width: stackTrail.trailW }}>
                       <TrailPane />
                     </aside>
                   ) : null}
@@ -654,10 +763,10 @@ export function Workspace() {
               </>
             ) : null}
           </div>
-          {agentBeside ? (
+          {agentBeside && agentW > 0 ? (
             <>
-              <VSplit onDrag={(dx) => setAgentWidth(useIde.getState().agentWidth - dx)} />
-              <aside className="ui-pane min-h-0 shrink-0" style={{ width: agentWidth }}>
+              <VSplit onBegin={syncShown} onDrag={(dx) => commitDrag("agent", -dx)} />
+              <aside className="ui-pane min-h-0 shrink-0 overflow-hidden" style={{ width: agentW }}>
                 <ChatPane />
               </aside>
             </>
@@ -669,20 +778,33 @@ export function Workspace() {
         <>
           <button
             type="button"
-            className="ui-overlay absolute inset-0 left-11 z-20 bg-bg/50"
+            className="ui-overlay absolute inset-y-0 z-20 bg-bg/50"
+            style={{ left: ACTIVITY_W, right: rightChrome }}
             aria-label="Sidebar schließen"
             onClick={() => useIde.getState().setSidebar(null)}
           />
-          <aside className="ui-rail absolute inset-y-0 left-11 z-30 w-56 border-r border-border bg-surface">
+          <aside
+            className="ui-rail absolute inset-y-0 z-30 overflow-hidden border-r border-border bg-surface"
+            style={{ left: ACTIVITY_W, width: overlaySideW }}
+          >
             {sideBody(sidebar)}
           </aside>
         </>
       ) : null}
-      {agentOverlay ? (
+      {overlayAgent && ov.agentW > 0 ? (
         <aside
-          className={`ui-pane absolute top-0 right-0 z-20 w-[min(100%,22rem)] border-l border-border bg-surface ${showStatusBar ? "bottom-6" : "bottom-0"}`}
+          className={`ui-pane absolute top-0 z-20 overflow-hidden border-l border-border bg-surface ${edge}`}
+          style={{ right: ov.agentRight, width: ov.agentW }}
         >
           <ChatPane />
+        </aside>
+      ) : null}
+      {overlayTrail && ov.trailW > 0 ? (
+        <aside
+          className={`ui-pane isolate absolute top-0 overflow-hidden border-l border-border bg-surface ${ov.trailOnTop ? "z-30" : "z-20"} ${edge}`}
+          style={{ right: ov.trailRight, width: ov.trailW }}
+        >
+          <TrailPane />
         </aside>
       ) : null}
       {settingsOpen ? (

@@ -4,7 +4,7 @@ import { useIde } from "@/store/ide";
 export function LogText({ text, tone = "fg" }: { text: string; tone?: "fg" | "danger" }) {
   const files = useIde((s) => s.files);
   const blob = text.slice(0, 24_000);
-  const re = /([\w./-]+\.(?:py|js|ts|tsx|jsx|mjs|cjs|go|rs)):(\d+)/g;
+  const re = /([\w./-]+\.(?:py|js|ts|tsx|jsx|mjs|cjs|go|rs|c|cc|cpp|h|hpp|java|cs|php|rb)):(\d+)/g;
   const parts: { t: string; path?: string; line?: number }[] = [];
   let last = 0;
   let m: RegExpExecArray | null;

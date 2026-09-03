@@ -10,6 +10,9 @@ const WANT: Record<string, RegExp> = {
   html: /\.(html?|css|json)$/i,
   yaml: /\.ya?ml$/i,
   gopls: /\.go$/i,
+  rust: /\.rs$/i,
+  clangd: /\.(c|cc|cpp|cxx|h|hpp|hh)$/i,
+  java: /\.java$/i,
 };
 let timer = 0;
 let lastPing = 0;
@@ -42,9 +45,11 @@ export async function refreshCompanionLint(): Promise<void> {
     return;
   }
   const max = st.lspMaxFiles || 24;
+  const open = new Set(st.openPaths);
   const files = Object.entries(st.files)
-    .filter(([p, c]) => wantFile(p) && !isSecretPath(p) && c.length < 200_000)
-    .slice(0, max)
+    .filter(([p, c]) => wantFile(p) && !isSecretPath(p) && c.length < (open.has(p) ? 1_000_000 : 200_000))
+    .sort(([a], [b]) => Number(open.has(b)) - Number(open.has(a)))
+    .slice(0, Math.max(max, [...open].filter((p) => wantFile(p)).length))
     .map(([path, content]) => ({ path, content }));
   if (!files.length) {
     st.setCompanionProblems([]);

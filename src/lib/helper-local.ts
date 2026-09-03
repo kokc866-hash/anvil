@@ -16,10 +16,11 @@ type Native = {
   focusChild?: (path: string) => Promise<boolean>;
   closeChild?: (path: string) => Promise<boolean>;
   childAlive?: (path: string) => Promise<boolean>;
-  pathsGet?: () => Promise<{ data: string; helper: string; logs: string }>;
-  pathsPick?: (kind: "data" | "helper" | "logs") => Promise<{ data: string; helper: string; logs: string }>;
+  pathsGet?: () => Promise<{ data: string; helper: string; logs: string; packages?: string }>;
+  pathsPick?: (kind: "data" | "helper" | "logs" | "packages") => Promise<{ data: string; helper: string; logs: string; packages?: string }>;
   pathsWrite?: (name: string, text: string) => Promise<string>;
   pathsRead?: (name: string) => Promise<string | null>;
+  workspacePick?: () => Promise<string | null>;
   clipboardRead?: () => Promise<{ text: string; image: string }>;
   companionEnsure?: () => Promise<{ ok: boolean; token?: string; owned?: boolean }>;
   companionRelease?: (keep?: boolean) => Promise<{ ok: boolean; running?: boolean }>;
@@ -28,6 +29,7 @@ type Native = {
 };
 
 export function nativeHelper(): Native | null {
+  if (typeof window === "undefined") return null;
   const n = (window as unknown as { anvilNative?: Native }).anvilNative;
   if (n?.helperPort) {
     void n.helperPort().then((p) => {

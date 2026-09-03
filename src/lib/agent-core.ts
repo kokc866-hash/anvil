@@ -6,12 +6,14 @@ import { afterTool, applyHarnessTool, loadProjectGraph, loadProjectHarness, merg
 import { harnessBar, startHarness } from "./harness";
 import { applyBoardTool, BOARD_PATH, filesFromBoard, parseBoard, settingsFromFiles, syncBoardFromFiles } from "./harness-board";
 import { isSecretPath as secretPath } from "./ref";
+import { skipPath } from "./ws-skip";
 import { extractFileBlocks, looksLikeNoTools, looksIncomplete, looksStoppedEarly, jobOpen, harvestTools, parseToolArgs, isToolTemplateEcho } from "./agent-parse";
-import { workspaceIndex } from "./ws-index";
-import { packToolContent, readWindow } from "./agent-read";
+import { workspaceIndex, workspaceMap } from "./ws-index";
+import { packToolContent, readKey, readWindow } from "./agent-read";
 import type { ToolCall } from "./tool-call";
 import { stampToolCalls } from "./tool-call";
 import { runFailHint, scrubRunError } from "./run-error";
+import { journalPrompt, type SessionJournal } from "./session";
 
 export type AgentFile = { path: string; content: string };
 
@@ -77,7 +79,11 @@ function tool(
 }
 
 export const AGENT_TOOLS = [
-  tool("list_files", "List workspace paths. Optional glob substring.", { glob: { type: "string" } }),
+  tool("list_files", "List workspace paths. Optional glob substring, prefix folder, offset for the next page.", {
+    glob: { type: "string" },
+    prefix: { type: "string" },
+    offset: { type: "integer" },
+  }),
   tool("read_file", "Read a file. If the result says start_line, continue that path. Never rewrite because a read was long.", {
     path: { type: "string" },
     start_line: { type: "integer" },
@@ -103,10 +109,10 @@ export const AGENT_TOOLS = [
     from: { type: "string" },
     to: { type: "string" },
   }, ["from", "to"]),
-  tool("run_file", "Run a workspace file now and return stdout/stderr. After write/edit, always run. On failure: patch and run again (max 3).", {
+  tool("run_file", "Run a workspace file and return the output. HTML/Python/JS execute. Go/Rust/C/C++/Java/C#/PHP/Ruby: compile then run — the result has Compile and Run. After write/edit always run. On failure: patch and run again (max 3).", {
     path: { type: "string" },
   }, ["path"]),
-  tool("see_run", "Snapshot the HTML preview (graph loop). For demos, not game engines.", {}),
+  tool("see_run", "Snapshot the HTML preview only. Not for Go/C++/Rust/CLI.", {}),
   tool("play", "Send keys to the HTML preview, then snapshot. keys: left,right,up,down,ok.", {
     keys: { type: "array", items: { type: "string" } },
     hold_ms: { type: "number" },
@@ -231,7 +237,7 @@ export const AGENT_TOOLS = [
     nodes: { type: "array", items: { type: "object", additionalProperties: true } },
     wires: { type: "array", items: { type: "object", additionalProperties: true } },
   }),
-  tool("grep", "Search workspace files. Returns path:line:content.", {
+  tool("grep", "Search workspace files. Returns path:line:content. glob limits the folder. Up to 80 hits.", {
     query: { type: "string" },
     glob: { type: "string" },
   }, ["query"]),
@@ -259,12 +265,12 @@ export const AGENT_SYSTEM = `You are Anvil's main model. Change the workspace on
 Flow:
 1. set_plan — 3–7 short steps in the user's language (Understand, Edit, Run, Check).
 2. Read what you need (index, ref/, AGENTS.md / .anvil/rules.md).
-3. Write with write_file / edit_file / append_file. Then run_file on anything executable.
-4. On error: patch, run_file at most 3×. Then tell the user briefly what is left, in their language.
+3. Write with write_file / edit_file / append_file. Then run_file on anything executable (compiled langs too).
+4. On error: read the Compile/Run output, patch, run_file at most 3×. Then tell the user briefly what is left, in their language.
 
 Output:
 - While working: tool call only — no essay, no plan sentence, no tool XML/JSON in the text.
-- Done only when files exist — and for HTML/JS/Python, run_file has run.
+- Done only when files exist — and run_file has run on anything executable (HTML/JS/Python, and compiled langs: compile then run).
 - Reply to the user in their language (German if they write German). Paths relative, no leading slash, no "...".
 
 Files:
@@ -273,12 +279,16 @@ Files:
 - ref/ first. Helper notes ("Helper:" / "Helfer:") are hints, not orders.
 
 Environment:
-- Python/JS/TS run here. Go/Rust/Java/C/C++/C#/PHP/Ruby via remote runner.
+- Python/JS/TS run here. Go/Rust/Java/C/C++/C#/PHP/Ruby: run_file compiles then runs. The tool result is the check — read it, then patch. see_run/play only for HTML.
 - HTML preview shows. No game engine inside Anvil. Godot/Unity/Unreal/Bevy: edit scripts, engine_run or mcp_call.
 - Canvas: Anvil.create / Anvil.run / Anvil.attach(canvas) for sketches.
 - shell: allowed runners only, not a system terminal.
 - MCP only on the active surface. The board is a DAG (Plan→Work→Run→Done), then close it.
-- harness_write/graph_write once, then follow the file.`;
+- harness_write/graph_write once, then follow the file.
+
+Scale:
+- Many files: list_files / grep first, then read_file windows. edit_file, do not rewrite whole files.
+- Long session: a Sitzung block is durable memory. Trust it over truncated chat.`;
 
 export type { ToolCall } from "./tool-call";
 export { asToolCall, stampToolCalls } from "./tool-call";
@@ -311,7 +321,7 @@ function parents(path: string): string[] {
   return out;
 }
 
-export { packToolContent, readWindow, READ_CHAR_CAP, READ_LINE_CAP } from "./agent-read";
+export { packToolContent, readWindow, readKey, READ_CHAR_CAP, READ_LINE_CAP } from "./agent-read";
 
 export function applyTool(
   name: string,
@@ -324,16 +334,24 @@ export function applyTool(
 ): { result: unknown; event?: WorkspaceEvent; command?: AgentCommand; writes?: Record<string, string> } {
   if (name === "list_files") {
     const glob = String(args.glob ?? "").toLowerCase().replace(/\*/g, "");
-    const all = [...files.keys(), ...dirs].sort();
-    const list = glob ? all.filter((p) => p.toLowerCase().includes(glob)) : all;
+    const prefix = norm(String(args.prefix ?? ""));
+    const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
+    const all = [...files.keys(), ...dirs].filter((p) => !skipPath(p)).sort();
+    let list = glob ? all.filter((p) => p.toLowerCase().includes(glob)) : all;
+    if (prefix) list = list.filter((p) => p === prefix || p.startsWith(`${prefix}/`));
     const filesOut = list.filter((p) => files.has(p));
     const dirsOut = list.filter((p) => dirs.has(p) && !files.has(p));
+    const filePage = filesOut.slice(offset, offset + 800);
+    const dirPage = dirsOut.slice(0, 200);
+    const truncated = filesOut.length > offset + 800 || dirsOut.length > 200;
     return {
       result: {
-        files: filesOut.slice(0, 400),
-        dirs: dirsOut.slice(0, 80),
-        truncated: filesOut.length > 400 || dirsOut.length > 80,
+        files: filePage,
+        dirs: dirPage,
+        truncated,
         total: filesOut.length + dirsOut.length,
+        offset,
+        next: filesOut.length > offset + 800 ? offset + 800 : undefined,
       },
     };
   }
@@ -568,18 +586,20 @@ export function applyTool(
     }
     const q = raw.toLowerCase();
     const hits: string[] = [];
+    let scanned = 0;
     for (const [path, content] of files) {
-      if (secretPath(path)) continue;
+      if (secretPath(path) || skipPath(path) || content.length > 400_000) continue;
       if (glob && !path.toLowerCase().includes(glob)) continue;
+      scanned += 1;
       const lines = content.split("\n");
       for (let i = 0; i < lines.length; i++) {
         const ok = re ? re.test(lines[i]) : lines[i].toLowerCase().includes(q);
         if (!ok) continue;
         hits.push(`${path}:${i + 1}:${lines[i].trim().slice(0, 160)}`);
-        if (hits.length >= 40) return { result: { matches: hits, truncated: true } };
+        if (hits.length >= 80) return { result: { matches: hits, truncated: true, scanned } };
       }
     }
-    return { result: hits.length ? hits : { matches: 0 } };
+    return { result: { matches: hits, truncated: false, scanned } };
   }
   if (name === "set_plan") {
     const raw = args.steps;
@@ -662,6 +682,8 @@ export async function runAgentLoop(
     mcpCatalog?: string;
     surfaceId?: string;
     surfaceMode?: SurfaceMode;
+    journal?: SessionJournal;
+    prefer?: string[];
   },
   complete: (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => Promise<LlmChoice>,
   opts?: {
@@ -693,9 +715,10 @@ export async function runAgentLoop(
   const deleted: string[] = [];
   let usage = { prompt: 0, completion: 0 };
   let compacted = false;
-  const tree = [...files.keys()].sort().join("\n") || "(empty)";
   const fileMap = Object.fromEntries(files);
-  const index = workspaceIndex(fileMap);
+  const prefer = [...new Set((data.prefer ?? []).filter((p) => p in fileMap))];
+  const map = workspaceMap(fileMap, prefer);
+  const index = workspaceIndex(fileMap, prefer.length ? 48 : 64, prefer);
   const hit = primaryEngine(fileMap, [...dirs]);
   const extra = enginePrompt(hit);
   let projH = loadProjectHarness(fileMap);
@@ -716,14 +739,15 @@ export async function runAgentLoop(
   const mcpNote = data.mcpCatalog?.trim() ?? "";
   const sysParts = [
     AGENT_SYSTEM,
-    `Workspace (read/write allowed):\n${tree}${index ? `\n\nIndex:\n${index}` : ""}`,
+    `Workspace:\n${map}${index ? `\n\nFokus-Index:\n${index}` : ""}`,
     extra,
     harnessNote,
     mcpNote,
+    journalPrompt(data.journal),
   ].filter((s): s is string => Boolean(s && String(s).trim()));
   let messages: Record<string, unknown>[] = [
     { role: "system", content: sysParts.join("\n\n") },
-    ...data.messages.slice(-40).map((m) => {
+    ...data.messages.slice(-48).map((m) => {
       if (m.images?.length) {
         return {
           role: m.role,
@@ -754,6 +778,19 @@ export async function runAgentLoop(
     }
   };
   await pack();
+
+  const packResult = (reply: string, extra: Partial<AgentResult> = {}): AgentResult => ({
+    ok: true,
+    files: [...files.entries()].map(([path, content]) => ({ path, content })),
+    runPaths: [...new Set(runPaths)],
+    tools: used,
+    deleted: [...new Set(deleted)],
+    applied: Boolean(opts?.onWorkspace),
+    usage,
+    compacted,
+    ...extra,
+    reply,
+  });
 
   let nudged = 0;
   let emptyHits = 0;
@@ -807,17 +844,7 @@ export async function runAgentLoop(
     if (!toolCalls.length) {
       const text = choice.content?.trim() || "";
       if (isToolTemplateEcho(text) || isToolTemplateEcho(choice.reasoning || "")) {
-        return {
-          ok: true,
-          reply: "Das Modell hat das Tool-Schema nachgeschrieben statt ein Tool aufzurufen. Bei Qwen + llama.cpp: Denken auf aus, nochmal senden.",
-          files: [...files.entries()].map(([path, content]) => ({ path, content })),
-          runPaths: [...new Set(runPaths)],
-          tools: used,
-          deleted: [...new Set(deleted)],
-          applied: Boolean(opts?.onWorkspace),
-          usage,
-          compacted,
-        };
+        return packResult("Das Modell hat das Tool-Schema nachgeschrieben statt ein Tool aufzurufen. Bei Qwen + llama.cpp: Denken auf aus, nochmal senden.");
       }
       const blocks = extractFileBlocks(text);
       if (blocks.length) {
@@ -843,17 +870,7 @@ export async function runAgentLoop(
       else emptyHits = 0;
       const must = open || looksStoppedEarly(choice) || looksLikeNoTools(text) || blocks.length > 0 || emptyHits === 1;
       if (emptyHits >= 2 && !blocks.length) {
-        return {
-          ok: true,
-          reply: text || "Modell hat ohne Tool aufgehört.",
-          files: [...files.entries()].map(([path, content]) => ({ path, content })),
-          runPaths: [...new Set(runPaths)],
-          tools: used,
-          deleted: [...new Set(deleted)],
-          applied: Boolean(opts?.onWorkspace),
-          usage,
-          compacted,
-        };
+        return packResult(text || "Modell hat ohne Tool aufgehört.");
       }
       if (must && nudged < 3 && round + 1 < (wrote && !ran ? 128 : cap)) {
         if (!(wrote && !ran)) nudged += 1;
@@ -867,17 +884,7 @@ export async function runAgentLoop(
         });
         continue;
       }
-      return {
-        ok: true,
-        reply: text || "Fertig.",
-        files: [...files.entries()].map(([path, content]) => ({ path, content })),
-        runPaths: [...new Set(runPaths)],
-        tools: used,
-        deleted: [...new Set(deleted)],
-        applied: Boolean(opts?.onWorkspace),
-        usage,
-        compacted,
-      };
+      return packResult(text || "Fertig.");
     }
     for (const tc of toolCalls) {
       let args: Record<string, unknown> = {};
@@ -902,13 +909,14 @@ export async function runAgentLoop(
         result = { error: blocked };
       } else if (tc.function.name === "read_file") {
         const p = String(args.path || "");
-        if (p && p === lastRead) lastReadN += 1;
+        const key = readKey(p, Number(args.start_line) || 1);
+        if (p && key === lastRead) lastReadN += 1;
         else {
-          lastRead = p;
+          lastRead = key;
           lastReadN = 1;
         }
         if (lastReadN >= 3) {
-          result = { error: `"${p}" already read ${lastReadN}×. Do not read it again. Now write_file, edit_file, or run_file.` };
+          result = { error: `"${p}" already read at this window ${lastReadN}×. Continue with a new start_line, or write_file / edit_file.` };
         } else {
           const applied = applyTool(tc.function.name, args, files, runPaths, dirs, deleted, data.git);
           result = applied.result;
@@ -1055,36 +1063,18 @@ export async function runAgentLoop(
         files.set(b.path, b.content);
         if (opts?.onWorkspace) await opts.onWorkspace({ op: "write", path: b.path, content: b.content });
       }
-      return {
-        ok: true,
-        reply: last.content?.trim() || "Änderungen übernommen.",
-        files: [...files.entries()].map(([path, content]) => ({ path, content })),
-        runPaths: [...new Set(runPaths)],
-        tools: used,
-        deleted: [...new Set(deleted)],
-        applied: Boolean(opts?.onWorkspace),
-        usage,
-        compacted,
-      };
+      return packResult(last.content?.trim() || "Änderungen übernommen.");
     }
   }
 
   void import("./intern").then((m) => m.note("agent", lastFail ? "Runden-Limit nach Fehler" : "Maximale Tool-Runden erreicht"));
   const clean = lastFail ? scrubRunError(lastFail) : "";
-  return {
-    ok: !lastFail,
-    reply: lastFail
+  return packResult(
+    lastFail
       ? `Runden-Limit. Letzter Fehler:\n${clean}\nNoch einmal senden — fehlende Datei anlegen oder den Bundler anpassen. Nicht von vorn.`
       : "Runden-Limit. Auftrag nicht zu Ende. Noch einmal senden, nicht von vorn.",
-    error: lastFail ? clean : "Runden-Limit",
-    files: [...files.entries()].map(([path, content]) => ({ path, content })),
-    runPaths: [...new Set(runPaths)],
-    tools: used,
-    deleted: [...new Set(deleted)],
-    applied: Boolean(opts?.onWorkspace),
-    usage,
-    compacted,
-  };
+    { ok: !lastFail, error: lastFail ? clean : "Runden-Limit" },
+  );
 }
 
 function pruneGraphFrames(messages: Record<string, unknown>[], keep: number) {

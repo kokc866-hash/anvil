@@ -1,4 +1,4 @@
-const TOOLS = /read_file|write_file|append_file|edit_file|run_file|grep|shell|list_files|git_|engine_|mcp_|skill_|format_file|open_preview|see_run/;
+const TOOLS = /read_file|write_file|append_file|edit_file|run_file|grep|shell|list_files|git_|engine_|mcp_|skill_|format_file|open_preview|see_run|play|debug_|harness|set_plan|board_/;
 
 export type SkillDraft = { name: string; when: string; body: string; fails?: number };
 

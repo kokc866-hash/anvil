@@ -1,5 +1,8 @@
 import { prefixAt, suggest } from "./suggest";
-import { findDefinition, hoverFor, wordAt } from "./lsp";
+import { defsAt, hoverFor, renameSymbol } from "./lsp";
+import { modelsToDrop } from "./monaco-models.ts";
+
+export { modelsToDrop };
 
 const VS = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs";
 
@@ -55,7 +58,7 @@ export type MonacoNS = {
     defineTheme: (name: string, theme: Record<string, unknown>) => void;
     setTheme: (name: string) => void;
     setModelMarkers?: (model: unknown, owner: string, markers: object[]) => void;
-    getModels?: () => unknown[];
+    getModels?: () => Array<{ uri?: { path?: string }; dispose?: () => void }>;
   };
   languages?: {
     registerCompletionItemProvider: (
@@ -73,7 +76,7 @@ export type MonacoNS = {
         provideHover: (
           model: { getValue: () => string; getOffsetAt: (p: { lineNumber: number; column: number }) => number; uri: { path: string } },
           position: { lineNumber: number; column: number },
-        ) => { contents: { value: string }[] } | null;
+        ) => { contents: { value: string }[] } | null | Promise<{ contents: { value: string }[] } | null>;
       },
     ) => { dispose: () => void };
     registerDefinitionProvider: (
@@ -82,7 +85,24 @@ export type MonacoNS = {
         provideDefinition: (
           model: { getValue: () => string; getOffsetAt: (p: { lineNumber: number; column: number }) => number; uri: { path: string } },
           position: { lineNumber: number; column: number },
-        ) => { uri: unknown; range: object } | null;
+        ) => { uri: unknown; range: object } | { uri: unknown; range: object }[] | null | Promise<{ uri: unknown; range: object } | { uri: unknown; range: object }[] | null>;
+      },
+    ) => { dispose: () => void };
+    registerRenameProvider?: (
+      lang: string,
+      provider: {
+        provideRenameEdits: (
+          model: {
+            getValue: () => string;
+            getOffsetAt: (p: { lineNumber: number; column: number }) => number;
+            uri: { path: string };
+          },
+          position: { lineNumber: number; column: number },
+          newName: string,
+        ) =>
+          | { edits: Array<{ resource: unknown; textEdit: { range: object; text: string } }> }
+          | Promise<{ edits: Array<{ resource: unknown; textEdit: { range: object; text: string } }> } | null>
+          | null;
       },
     ) => { dispose: () => void };
     registerCodeActionProvider?: (
@@ -194,16 +214,49 @@ export function defineAnvilThemes(monaco: MonacoNS, theme: "dark" | "light") {
   monaco.editor.defineTheme("anvil-light", {
     base: "vs",
     inherit: true,
-    rules: [{ token: "comment", foreground: "8a8a92", fontStyle: "italic" }],
+    rules: [
+      { token: "comment", foreground: "5a5a5e", fontStyle: "italic" },
+      { token: "string", foreground: "2a4e32" },
+      { token: "keyword", foreground: "22242a", fontStyle: "bold" },
+      { token: "number", foreground: "3a5166" },
+    ],
     colors: {
-      "editor.background": "#f3f2ee",
-      "editor.foreground": "#1c1c1f",
-      "editorLineNumber.foreground": "#8a8a92",
-      "editor.lineHighlightBackground": "#eceae4",
-      "editor.selectionBackground": "#d4d2ca",
+      "editor.background": "#b4b0a6",
+      "editor.foreground": "#161616",
+      "editorLineNumber.foreground": "#5a5a5e",
+      "editor.lineHighlightBackground": "#c2beb4",
+      "editorCursor.foreground": "#161616",
+      "editor.selectionBackground": "#8f8b82",
+      "editorGutter.background": "#b4b0a6",
+      "editorIndentGuide.background": "#a8a49a",
+      "editorIndentGuide.activeBackground": "#8f8b82",
+      "editorWidget.background": "#c2beb4",
+      "editorWidget.border": "#8f8b82",
+      "editorSuggestWidget.background": "#c2beb4",
+      "editorSuggestWidget.border": "#8f8b82",
+      "input.background": "#c2beb4",
+      "minimap.background": "#b4b0a6",
+      "scrollbarSlider.background": "#8f8b8288",
     },
   });
   monaco.editor.setTheme(theme === "light" ? "anvil-light" : "anvil-dark");
+}
+
+export function pruneModels(monaco: MonacoNS, keep: string[]) {
+  const models = monaco.editor.getModels?.() ?? [];
+  const drop = new Set(modelsToDrop(
+    models.map((m) => String(m.uri?.path || "")),
+    keep,
+  ));
+  for (const m of models) {
+    const path = String(m.uri?.path || "").replace(/^\/+/, "").replace(/\\/g, "/");
+    if (!drop.has(path)) continue;
+    try {
+      m.dispose?.();
+    } catch {
+      /* model in use */
+    }
+  }
 }
 
 let completionsWired = false;
@@ -257,35 +310,79 @@ export function wireNav(monaco: MonacoNS) {
   const langs = ["python", "javascript", "typescript", "go", "rust", "java", "c", "cpp", "csharp", "php", "ruby", "json", "plaintext"];
   const filesOf = () => {
     try {
-      const { useIde } = requireStore();
-      return useIde.getState().files as Record<string, string>;
+      return requireStore().useIde.getState().files as Record<string, string>;
     } catch {
-      return {};
+      return (window as unknown as { __anvilFiles?: Record<string, string> }).__anvilFiles ?? {};
     }
   };
+  const openOf = () => {
+    try {
+      return requireStore().useIde.getState().openPaths as string[];
+    } catch {
+      return [];
+    }
+  };
+  const pathOf = (model: { uri: { path: string } }) => String(model.uri.path || "").replace(/^\//, "");
   for (const lang of langs) {
     monaco.languages.registerHoverProvider(lang, {
       provideHover(model, position) {
-        const path = String(model.uri.path || "").replace(/^\//, "");
-        const md = hoverFor(filesOf(), path, model.getValue(), model.getOffsetAt(position));
-        return md ? { contents: [{ value: md }] } : null;
+        const path = pathOf(model);
+        const offset = model.getOffsetAt(position);
+        const files = { ...filesOf(), [path]: model.getValue() };
+        return import("./lsp-compile").then((c) =>
+          c.ensureTs(files, openOf()).then(() => {
+            const md = c.tsQuickInfoSync(path, offset) ?? hoverFor(files, path, model.getValue(), offset);
+            return md ? { contents: [{ value: md }] } : null;
+          }),
+        );
       },
     });
     monaco.languages.registerDefinitionProvider(lang, {
       provideDefinition(model, position) {
-        const src = model.getValue();
-        const w = wordAt(src, model.getOffsetAt(position));
-        const defs = findDefinition(filesOf(), w, String(model.uri.path || "").replace(/^\//, ""));
-        if (!defs.length) return null;
-        const d = defs[0];
-        return {
+        const path = pathOf(model);
+        const offset = model.getOffsetAt(position);
+        const files = { ...filesOf(), [path]: model.getValue() };
+        const toLoc = (d: { path: string; line: number; col?: number }) => ({
           uri: monaco.Uri.parse(`file:///${d.path}`),
           range: {
             startLineNumber: d.line,
-            startColumn: 1,
+            startColumn: d.col || 1,
             endLineNumber: d.line,
-            endColumn: 120,
+            endColumn: (d.col || 1) + 80,
           },
+        });
+        return defsAt(files, path, offset, openOf()).then((defs) => (defs.length ? defs.map(toLoc) : null));
+      },
+    });
+    monaco.languages.registerRenameProvider?.(lang, {
+      provideRenameEdits(model, position, newName) {
+        const path = pathOf(model);
+        const files = { ...filesOf(), [path]: model.getValue() };
+        const r = renameSymbol(files, path, model.getOffsetAt(position), newName);
+        if ("error" in r) return null;
+        try {
+          const ide = requireStore().useIde.getState() as { setContent: (p: string, c: string) => void };
+          for (const [p, text] of Object.entries(r.files)) ide.setContent(p, text);
+        } catch {
+          /* */
+        }
+        return {
+          edits: Object.entries(r.files).map(([p, text]) => {
+            const old = files[p] ?? "";
+            const lines = old.split("\n");
+            return {
+              resource: monaco.Uri.parse(`file:///${p}`),
+              textEdit: {
+                range: {
+                  startLineNumber: 1,
+                  startColumn: 1,
+                  endLineNumber: Math.max(1, lines.length),
+                  endColumn: (lines[lines.length - 1]?.length ?? 0) + 1,
+                },
+                text,
+              },
+            };
+          }),
         };
       },
     });
@@ -293,8 +390,36 @@ export function wireNav(monaco: MonacoNS) {
   wireFix(monaco);
 }
 
-function requireStore(): { useIde: { getState: () => { files: Record<string, string> } } } {
-  return { useIde: { getState: () => ({ files: (window as unknown as { __anvilFiles?: Record<string, string> }).__anvilFiles ?? {} }) } };
+function requireStore(): {
+  useIde: {
+    getState: () => {
+      files: Record<string, string>;
+      openPaths: string[];
+      setContent: (path: string, content: string) => void;
+    };
+  };
+} {
+  try {
+    const mod = requireStoreMod();
+    if (mod) return mod;
+  } catch {
+    /* */
+  }
+  return {
+    useIde: {
+      getState: () => ({
+        files: (window as unknown as { __anvilFiles?: Record<string, string> }).__anvilFiles ?? {},
+        openPaths: [],
+        setContent: () => {},
+      }),
+    },
+  };
+}
+
+function requireStoreMod(): ReturnType<typeof requireStore> | null {
+  const w = window as unknown as { __anvilIde?: ReturnType<typeof requireStore>["useIde"] };
+  if (w.__anvilIde) return { useIde: w.__anvilIde };
+  return null;
 }
 
 let fixWired = false;
@@ -337,6 +462,7 @@ export function editorChrome(s: {
   editorSticky?: boolean;
   editorGuides?: boolean;
   editorWheelZoom?: boolean;
+  suggestOn?: boolean;
 }): Record<string, unknown> {
   const guides = s.editorGuides !== false;
   return {
@@ -379,8 +505,8 @@ export function editorChrome(s: {
     glyphMargin: true,
     lightbulb: { enabled: true },
     contextmenu: true,
-    quickSuggestions: { other: true, comments: false, strings: false },
-    suggestOnTriggerCharacters: true,
+    quickSuggestions: { other: s.suggestOn !== false, comments: false, strings: false },
+    suggestOnTriggerCharacters: s.suggestOn !== false,
     tabCompletion: "on",
     wordBasedSuggestions: "currentDocument",
     snippetSuggestions: "inline",

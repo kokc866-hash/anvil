@@ -64,13 +64,29 @@ async function rpc(s: McpServer, method: string, params?: unknown, onChunk?: (t:
   }
   const bearer = loadSecrets().keys[`mcp:${s.id}`]?.trim() || loadSecrets().keys[`mcp:${s.name}`]?.trim();
   if (bearer) headers.authorization = `Bearer ${bearer}`;
-  const body: Rpc = { jsonrpc: "2.0", id: Date.now() % 1_000_000, method, params };
-  const res = await fetch(parsed.toString(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(Math.max(20_000, s.timeoutMs || 120_000)),
-  });
+  const isNote = method.startsWith("notifications/");
+  const body = isNote
+    ? { jsonrpc: "2.0" as const, method, params }
+    : ({ jsonrpc: "2.0", id: Date.now() % 1_000_000, method, params } satisfies Rpc);
+  let res: Response;
+  try {
+    res = await fetch(parsed.toString(), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(Math.max(20_000, s.timeoutMs || 120_000)),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/Failed to fetch|NetworkError|Load failed|ECONNREFUSED/i.test(msg)) {
+      throw new Error(
+        local
+          ? "Companion-MCP nicht erreichbar. Helfer starten, in Einstellungen koppeln, dann erneut pingen."
+          : "MCP nicht erreichbar (Netz/CORS).",
+      );
+    }
+    throw e;
+  }
   const nextSid = res.headers.get("mcp-session-id");
   if (nextSid) sessions.set(key, nextSid);
   const ct = res.headers.get("content-type") || "";
@@ -78,6 +94,7 @@ async function rpc(s: McpServer, method: string, params?: unknown, onChunk?: (t:
     return readMcpSse(res, onChunk);
   }
   const text = await res.text();
+  if (isNote) return {};
   if (!res.ok) throw new Error(`MCP ${res.status}: ${text.slice(0, 200)}`);
   const json = parseMcpBody(text);
   if (json.error) throw new Error(json.error.message || "MCP error");
@@ -96,6 +113,11 @@ export async function mcpList(servers: McpServer[]): Promise<McpTool[]> {
       })) as { capabilities?: Record<string, unknown> };
       const capKeys = Object.keys(init?.capabilities ?? {});
       caps.set(s.id, capKeys);
+      try {
+        await rpc(s, "notifications/initialized", {});
+      } catch {
+        /* notification, some servers have no reply */
+      }
       const r = (await rpc(s, "tools/list", {})) as { tools?: { name: string; description?: string }[] };
       for (const t of r.tools ?? []) {
         out.push({ server: s.name || s.id, name: t.name, description: t.description ?? "" });

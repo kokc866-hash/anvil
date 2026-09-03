@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { extraLspDiagnostics, lspBin } from "./lsp.mjs";
+import { toolEnv, resolveBin } from "./toolchain.mjs";
 
 export function which(bin) {
   const local = lspBin(bin);
@@ -21,7 +22,7 @@ export function which(bin) {
 
 export function lintBins() {
   return {
-    python: which("python3") || which("python") || which("py"),
+    python: which("python3") || which("python") || which("py") || resolveBin("python"),
     tsc: lspBin("tsc") || which("tsc"),
     pyright: lspBin("pyright") || which("pyright"),
     gopls: lspBin("gopls"),
@@ -42,7 +43,7 @@ function findTsc(cwd) {
 function spawnArgs(file, args, cwd, timeoutMs) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const child = spawn(file, args, { cwd, shell: false, env: process.env, windowsHide: true });
+    const child = spawn(file, args, { cwd, shell: false, env: toolEnv(), windowsHide: true });
     let stdout = "";
     let stderr = "";
     const cap = (s, add) => (s + add).slice(-80_000);

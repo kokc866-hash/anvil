@@ -31,11 +31,15 @@ function mark(next: PlanStep[], pred: (s: PlanStep) => boolean, status: PlanStep
 }
 
 function apply(name: string, next: PlanStep[], status: PlanStep["status"]) {
-  if (/write|edit|append|delete|rename|mkdir/.test(name)) mark(next, (s) => /änder|schreib|edit|datei|bau/i.test(s.text), status);
+  if (/write|edit|append|delete|rename|mkdir|format/.test(name))
+    mark(next, (s) => /änder|schreib|edit|datei|bau|überarbeit|layout|farb|ui|interakt|style|css|html/i.test(s.text), status);
   else if (/engine/.test(name)) mark(next, (s) => /engine/i.test(s.text), status);
-  else if (/see_run|test/.test(name)) mark(next, (s) => /prüf|test|see|bild/i.test(s.text), status);
-  else if (/run_file|shell|play/.test(name)) mark(next, (s) => /run|ausführ/i.test(s.text) && !/prüf/i.test(s.text), status);
-  else if (/read|list|grep/.test(name)) mark(next, (s) => /versteh|les|such/i.test(s.text), status);
+  else if (/see_run|open_preview|test/.test(name))
+    mark(next, (s) => /prüf|test|see|bild|vorschau|preview|fehler|run/i.test(s.text), status);
+  else if (/run_file|shell|play/.test(name))
+    mark(next, (s) => /run|ausführ|play/i.test(s.text) && !/^(prüf|test)\b/i.test(s.text), status);
+  else if (/read|list|grep/.test(name))
+    mark(next, (s) => /versteh|les|such|referenz|bestehend/i.test(s.text), status);
 }
 
 export function planStart(name: string, plan: PlanStep[] | undefined): PlanStep[] | null {
@@ -51,6 +55,19 @@ export function planFromTool(name: string, plan: PlanStep[] | undefined, failed 
   const next = plan.map((s) => ({ ...s }));
   apply(name, next, failed ? "err" : "ok");
   return next;
+}
+
+/** Runde vorbei: Rest-To-dos schließen. Bei Fehler nur den laufenden Schritt. */
+export function planFinish(plan: PlanStep[] | undefined, failed = false): PlanStep[] | null {
+  if (!plan?.length) return null;
+  let changed = false;
+  const next = plan.map((s) => {
+    if (s.status === "ok" || s.status === "err") return s;
+    changed = true;
+    if (failed) return s.status === "run" ? { ...s, status: "err" as const } : s;
+    return { ...s, status: "ok" as const };
+  });
+  return changed ? next : null;
 }
 
 function step(text: string): PlanStep {

@@ -12,7 +12,27 @@ import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
 import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
 // @ts-expect-error JS plugin alongside the TS vite config
 import { lanLlmPlugin } from "./scripts/lan-llm-plugin.mjs";
+// @ts-expect-error JS helper
+import { isAbortNoise } from "./scripts/llm-agent.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
+
+function hushAbortPlugin(): Plugin {
+  return {
+    name: "anvil:hush-abort",
+    apply: "serve",
+    configureServer() {
+      const g = globalThis as { __anvilHushAbort?: boolean };
+      if (g.__anvilHushAbort) return;
+      g.__anvilHushAbort = true;
+      const hush = (err: unknown) => {
+        if (isAbortNoise(err)) return;
+        console.error(err);
+      };
+      process.on("uncaughtException", hush);
+      process.on("unhandledRejection", hush);
+    },
+  };
+}
 
 /** The files `src/lib/db.ts` globs — same directory, same non-recursive scope. */
 function hasGlobbedMigrations(root: string): boolean {
@@ -159,7 +179,11 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  ssr: {
+    external: ["@xterm/xterm", "@xterm/addon-fit"],
+  },
   plugins: [
+    hushAbortPlugin(),
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
     authPopupPlugin(),

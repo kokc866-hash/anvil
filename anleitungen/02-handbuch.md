@@ -1,4 +1,4 @@
-# Anvil 1.1.0 — Handbuch
+# Anvil 1.2.0 — Handbuch
 
 Ausführlich, mit Vorschau der Fenster. Kurzfassung: `01-kurz.md`. Abläufe: `03-workflow.md`. Stand: 29.08.2026.
 

@@ -297,7 +297,7 @@ export async function loadGeminiSub() {
     return { ok: false, error: "oauth_creds.json unlesbar" };
   }
   if (!auth) return { ok: false, error: "Kein Token. gemini" };
-  if (auth.refresh && auth.expiresAt && Date.now() + 120_000 >= auth.expiresAt) {
+  if (auth.refresh && GEMINI_CLIENT && auth.expiresAt && Date.now() + 120_000 >= auth.expiresAt) {
     try {
       const j = await formToken(GEMINI_TOKEN, {
         grant_type: "refresh_token",

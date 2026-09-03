@@ -4,7 +4,7 @@ import { CopyMini } from "@/components/ui/copy-btn";
 import { Button } from "@/components/ui/button";
 import { chatWithProvider, providerOf } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
-import { mkdirDisk, removeDiskPath, writeDiskFile } from "@/lib/disk";
+import { syncMkdir, syncRemove, syncWrite } from "@/lib/disk-sync";
 import { toolCode, toolDetail } from "@/lib/llm-options";
 import { runFile } from "@/lib/run-client";
 import { estimateTokens, formatContext, formatTokens } from "@/lib/tokens";
@@ -15,13 +15,14 @@ import { snapshotDiff, lineDiff } from "@/lib/diff";
 import { testsPrompt } from "@/lib/test-parse";
 import { shouldTestAfterRound, testAfterRound } from "@/lib/test-loop";
 import { workspaceRules } from "@/lib/rules";
-import { guessPlan, planFromTool, planStart } from "@/lib/plan";
+import { guessPlan, planFinish, planFromTool, planStart } from "@/lib/plan";
 import { resetLoopFails } from "@/lib/run-loop";
 import { agentGen, beginAgent, explainAbort, explainLlmError, isAbortLike, stopAgent } from "@/lib/abort";
 import { appLog, logHost } from "@/lib/app-log";
 import { brainAsk, brainAttach, brainChatTitle, brainDistill, brainFollowups, brainMentionRank, brainModelOf, brainPlanText, brainReady, brainReview, brainSecretWarn, brainStopNote, lanePrompt, routeKind, scrubSecrets, useBrain } from "@/lib/brain";
 import { heuristicMention } from "@/lib/brain/extra-heur";
 import { learnPrompt, markSkills, reflectUtterance, skillOutcome, useLearn } from "@/lib/learn";
+import { extractJournal, mergeJournal, packChatHistory, pruneSession } from "@/lib/session";
 import type { WorkspaceEvent } from "@/lib/agent-core";
 import { cn } from "@/lib/cn";
 import { CodeBlock } from "@/lib/syntax";
@@ -128,18 +129,18 @@ export function ChatPane() {
       }
     }
     if (ev.op === "commit" || ev.op === "preview" || ev.op === "board") return;
-    if (!s.diskName && s.storageMode !== "disk") return;
+    if (!s.diskName && s.storageMode !== "disk" && !s.workspaceCwd) return;
     try {
-      if (ev.op === "write") await writeDiskFile(ev.path, ev.content);
-      else if (ev.op === "delete") await removeDiskPath(ev.path);
-      else if (ev.op === "mkdir") await mkdirDisk(ev.path);
+      if (ev.op === "write") await syncWrite(ev.path, ev.content);
+      else if (ev.op === "delete") await syncRemove(ev.path);
+      else if (ev.op === "mkdir") await syncMkdir(ev.path);
       else if (ev.op === "rename") {
-        await removeDiskPath(ev.from);
+        await syncRemove(ev.from);
         const files = useIde.getState().files;
-        if (files[ev.to] != null) await writeDiskFile(ev.to, files[ev.to]);
+        if (files[ev.to] != null) await syncWrite(ev.to, files[ev.to]);
         else {
           for (const [p, c] of Object.entries(files)) {
-            if (p === ev.to || p.startsWith(`${ev.to}/`)) await writeDiskFile(p, c);
+            if (p === ev.to || p.startsWith(`${ev.to}/`)) await syncWrite(p, c);
           }
         }
       }
@@ -234,7 +235,7 @@ export function ChatPane() {
     if (pending && !text) text = "Erkläre die Auswahl.";
     if (!text) return;
     let holdUi = false;
-    if (agentBusy && !opts?.queued) {
+    if (useIde.getState().agentBusy && !opts?.queued) {
       useIde.getState().pushAgent(text);
       setDraft("");
       setImages([]);
@@ -251,6 +252,7 @@ export function ChatPane() {
     else void brainSecretWarn(text).then((w) => { if (w) useIde.getState().setNotice(w); });
     const my = beginAgent();
     setAgentBusy(true);
+    await import("@/lib/model-context").then((m) => m.applyCloudContext()).catch(() => null);
     appLog(
       "agent",
       `start ${useIde.getState().llmProvider} ${useIde.getState().llmModel || "-"} host=${logHost(useIde.getState().llmBaseUrl)} ctx=${useIde.getState().llmContext} think=${useIde.getState().llmThinking}`,
@@ -262,6 +264,7 @@ export function ChatPane() {
     setImages([]);
     addChat({ role: "user", content: work, images: pics.length ? pics : undefined });
     startAssistant();
+    const asstId = useIde.getState().chat.at(-1)?.id;
     resetLiveWrite();
     if (!title) void brainChatTitle(work).then(setTitle);
     emitPlugin("agent", work);
@@ -277,6 +280,7 @@ export function ChatPane() {
       resetLoopFails();
       const s = useIde.getState();
       const extraFiles = [...new Set([...(s.attached ?? []), s.activePath].filter(Boolean))] as string[];
+      const prefer = [...new Set([...(s.attached ?? []), s.activePath, ...s.openPaths, ...s.recentPaths.slice(0, 8)].filter(Boolean))] as string[];
       if (useBrain.getState().jobs.attach && brainReady()) {
         void brainAttach(work, Object.keys(s.files)).then((more) => {
           if (more.length && my === agentGen()) s.setAttached([...new Set([...extraFiles, ...more])]);
@@ -289,7 +293,13 @@ export function ChatPane() {
       const pinBlock = (await import("@/lib/fix-agent")).pinContext(work);
       const context = extraFiles
         .filter((p) => s.files[p] && !isSecretPath(p))
-        .map((p) => `[${p}]\n\`\`\`\n${scrubSecrets(s.files[p].slice(0, 3500)).text}\n\`\`\``)
+        .slice(0, 8)
+        .map((p) => {
+          const src = s.files[p];
+          const lines = src.split("\n").length;
+          if (src.length > 8000) return `[${p}] ${lines} Zeilen — mit read_file lesen, nicht raten.`;
+          return `[${p}]\n\`\`\`\n${scrubSecrets(src.slice(0, 8000)).text}\n\`\`\``;
+        })
         .join("\n\n");
       const prefix = scrubSecrets(
         [
@@ -304,17 +314,10 @@ export function ChatPane() {
           .join("\n\n"),
       ).text;
       const user = prefix ? `${prefix}\n\nAuftrag:\n${work}` : work;
-      const history = [...s.chat]
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m, i, arr) =>
-          i === arr.length - 1 && m.role === "user"
-            ? {
-                role: m.role,
-                content: user,
-                images: [...pics, ...refs.images].slice(0, 4),
-              }
-            : { role: m.role, content: m.content, images: m.images },
-        );
+      const history = packChatHistory(
+        s.chat.map((m) => ({ role: m.role, content: m.content, images: m.images })),
+        { content: user, images: [...pics, ...refs.images].slice(0, 4) },
+      );
       if (isFixPrompt(work) && s.agentMode !== "agent") useIde.getState().setAgentMode("agent");
       const fileList = Object.entries(s.files)
         .filter(([path]) => !isSecretPath(path))
@@ -357,6 +360,11 @@ export function ChatPane() {
         finalizeAssistant(reply);
         addSessionTokens(promptTok, estimateTokens(reply));
         void brainDistill(work, reply);
+        {
+          const st = useIde.getState();
+          st.setSessionJournal(mergeJournal(st.sessionJournal, extractJournal(st.chat, st.sessionJournal)));
+        }
+        void pruneSession();
         return;
       }
 
@@ -390,6 +398,8 @@ export function ChatPane() {
         context: s.llmContext,
         thinking: s.llmThinking,
         compact: s.llmCompact,
+        journal: s.sessionJournal,
+        prefer,
         onHarness: (bar) => {
           if (my !== agentGen()) return;
           if (!useIde.getState().graphLoop && !useIde.getState().runLoop) return;
@@ -484,9 +494,23 @@ export function ChatPane() {
       }
       addSessionTokens(result.usage?.prompt || promptTok, result.usage?.completion || estimateTokens(result.reply));
       void brainDistill(work, result.reply);
-      if (result.compacted) {
-        addAgentStep({ name: "compact", detail: "Verlauf gekürzt (Context)", status: "ok" });
+      {
+        const st = useIde.getState();
+        const fromChat = extractJournal(st.chat, st.sessionJournal);
+        const fromFiles = result.files?.length
+          ? { ...fromChat, files: [...new Set([...fromChat.files, ...result.files.map((f) => f.path)])] }
+          : fromChat;
+        st.setSessionJournal(mergeJournal(st.sessionJournal, fromFiles));
       }
+      if (result.compacted) {
+        const n = useIde.getState().sessionJournal.files.length;
+        addAgentStep({
+          name: "compact",
+          detail: n ? `Sitzung gemerkt · ${n} Dateien` : "Verlauf gekürzt (Context)",
+          status: "ok",
+        });
+      }
+      void pruneSession();
       if (result.files?.length) {
         const cur = useIde.getState().files;
         const map: Record<string, string> = {};
@@ -545,7 +569,7 @@ export function ChatPane() {
     } catch (err) {
       if (my !== agentGen()) {
         const last = useIde.getState().chat.at(-1);
-        if (last?.role === "assistant" && !(last.content || "").trim()) {
+        if (last && last.id === asstId && last.role === "assistant" && !(last.content || "").trim()) {
           finalizeAssistant("Unterbrochen — nochmal senden setzt hier an.");
         }
         return;
@@ -565,6 +589,10 @@ export function ChatPane() {
       const live = my === agentGen();
       const busy = useIde.getState().agentBusy;
       if (live) {
+        const last = useIde.getState().chat.at(-1);
+        const failed = /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test((last?.content || "").trim());
+        const fin = planFinish(last?.plan, failed);
+        if (fin) useIde.getState().setChatPlan(fin);
         setAgentBusy(false);
         appLog("agent", "ende");
         useIde.getState().setRunning(false);
@@ -756,6 +784,16 @@ export function ChatPane() {
               const liveThink = agentBusy && m.role === "assistant" && i === chat.length - 1;
               const lastUser = m.role === "user" && chat.filter((x) => x.role === "user").at(-1)?.id === m.id;
               const lastAsst = m.role === "assistant" && i === chat.length - 1 && !agentBusy;
+              const hollow =
+                m.role === "assistant" &&
+                !liveThink &&
+                !(m.content || "").trim() &&
+                !(m.thinking || "").trim() &&
+                !(m.steps?.length) &&
+                !(m.plan?.length) &&
+                !m.lastRun &&
+                !m.lastTests;
+              if (hollow) return null;
               return (
               <div
                 key={m.id}

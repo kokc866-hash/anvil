@@ -208,8 +208,8 @@ export async function runLoopFile(path: string, files: Record<string, string>, o
   const budget = noteLoopFail(r.ok, Math.min(5, Math.max(1, opts?.tries ?? 3)));
   return {
     ok: r.ok,
-    stdout: (r.stdout || "").slice(0, 2500),
-    stderr: (r.stderr || shot.logs.filter((l) => l.startsWith("error")).join("\n")).slice(0, 2500),
+    stdout: (r.stdout || "").slice(0, 16000),
+    stderr: (r.stderr || shot.logs.filter((l) => l.startsWith("error")).join("\n")).slice(0, 16000),
     logs: shot.logs,
     duration: r.duration,
     graphical: Boolean(r.html),

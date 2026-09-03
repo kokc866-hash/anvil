@@ -8,7 +8,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 import { bindHelperIpc, startHelperHost } from "./helper-host.mjs";
 import { startLlmPipe } from "./llm-pipe.mjs";
-import { bindPathsIpc, logFile } from "./paths.mjs";
+import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
 import { bindSubIpc } from "./sub.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -164,6 +164,12 @@ function nodeEnv() {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_NO_ASAR;
+  try {
+    const p = loadPaths().packages;
+    if (p) env.ANVIL_HOME = p;
+  } catch {
+    /* */
+  }
   return env;
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyLlmOptions, needsCompletionTokens, usesResponsesApi } from "./llm-options.ts";
+import { applyLlmOptions, applyResponsesStore, needsCompletionTokens, patchResponses400, usesResponsesApi } from "./llm-options.ts";
 
 test("gpt-5 o3 o4 grok-4 use max_completion_tokens", () => {
   assert.equal(needsCompletionTokens("gpt-5.6-luna"), true);
@@ -79,6 +79,43 @@ test("responses api when gpt-5 tools and thinking on", () => {
   assert.equal(usesResponsesApi({ ...rt, thinking: "off" }, true), false);
   assert.equal(usesResponsesApi(rt, false), false);
   assert.equal(usesResponsesApi({ ...rt, provider: "codex" }, true), false);
+});
+
+test("responses store is always false", () => {
+  const body = applyResponsesStore(
+    { model: "gpt-5.6-luna", max_output_tokens: 8000, temperature: 0.3, user: "x" },
+    "codex",
+  );
+  assert.equal(body.store, false);
+  assert.equal(body.stream, true);
+  assert.equal(body.parallel_tool_calls, false);
+  assert.equal("max_output_tokens" in body, false);
+  assert.equal("temperature" in body, false);
+  assert.equal("user" in body, false);
+  assert.equal("include" in body, false);
+});
+
+test("openai api responses keeps max_output_tokens", () => {
+  const body = applyResponsesStore({ model: "gpt-5.6-sol", max_output_tokens: 8000 }, "openai");
+  assert.equal(body.store, false);
+  assert.equal(body.max_output_tokens, 8000);
+  assert.equal("stream" in body, false);
+  assert.deepEqual(body.include, ["reasoning.encrypted_content"]);
+});
+
+test("patchResponses400 strips unsupported and sets required flags", () => {
+  const body: Record<string, unknown> = { model: "x", max_output_tokens: 1, store: true, reasoning_effort: "high" };
+  assert.equal(patchResponses400(body, '{"detail":"Unsupported parameter: max_output_tokens"}'), true);
+  assert.equal("max_output_tokens" in body, false);
+  assert.equal(patchResponses400(body, '{"detail":"Store must be set to false"}'), true);
+  assert.equal(body.store, false);
+  assert.equal(patchResponses400(body, '{"detail":"Stream must be set to true"}'), true);
+  assert.equal(body.stream, true);
+  assert.equal(patchResponses400(body, "does not support parameter reasoningEffort"), true);
+  assert.equal("reasoning_effort" in body, false);
+  body.top_p = 0.9;
+  assert.equal(patchResponses400(body, `{"error":{"message":"Unsupported parameter: 'top_p' is not supported","param":"top_p"}}`), true);
+  assert.equal("top_p" in body, false);
 });
 
 test("ollama thinking: no 8k cap, think level, no max_tokens", () => {

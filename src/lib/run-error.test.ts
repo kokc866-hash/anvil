@@ -29,4 +29,9 @@ describe("run-error", () => {
     assert.match(h, /js\/util\.js/);
     assert.match(h, /write_file|ORDER|bundler/i);
   });
+  it("compiler fail asks for patch then run_file", () => {
+    const h = runFailHint("— Compile —\nmain.cpp:3: error: 'x' was not declared", ["main.cpp"]);
+    assert.match(h, /Compile\/Run failed/);
+    assert.match(h, /run_file/);
+  });
 });

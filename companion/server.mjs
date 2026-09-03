@@ -14,14 +14,28 @@ import path from "node:path";
 import { runLint, lintBins } from "./lint.mjs";
 import { listLsp, pullLsp, checkLsp } from "./lsp.mjs";
 import { installBin, installerKind, refreshPath } from "./install.mjs";
-import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, toolchainProgress, TOOL_HOME } from "./toolchain.mjs";
+import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, toolchainProgress, toolHome, toolEnv } from "./toolchain.mjs";
+import { ccArgs, javaMainClass, isCargo, isGoMod, isCsproj, firstCsproj } from "./compile-plan.mjs";
+import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
-import { llmUpstream, noTimeout, pipeQuiet } from "../scripts/llm-agent.mjs";
+import { llmUpstream, noTimeout, pipeQuiet, isAbortNoise } from "../scripts/llm-agent.mjs";
+import { gitDispatch, gitBin, listTree, writeRel, removeRel, mkdirRel, resolveCwd } from "./git.mjs";
+import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
+
+process.on("uncaughtException", (err) => {
+  if (isAbortNoise(err)) return;
+  console.error(err);
+});
+process.on("unhandledRejection", (err) => {
+  if (isAbortNoise(err)) return;
+  console.error(err);
+});
 
 const PORT = Number(process.env.ANVIL_COMPANION_PORT || 7845);
 const HOST = process.env.ANVIL_COMPANION_HOST || "127.0.0.1";
 const MAX_MS = Number(process.env.ANVIL_COMPANION_TIMEOUT || 120000);
 const ROOT = path.resolve(process.env.ANVIL_ENGINE_ROOT || process.cwd());
+let workspace = ROOT;
 const TOKEN_PATH = process.env.ANVIL_COMPANION_TOKEN_FILE || path.join(os.homedir(), ".anvil-companion-token");
 const ALLOW = new Set(["godot", "godot4", "unity", "Unity", "UnrealEditor", "cargo", "love"]);
 
@@ -84,10 +98,10 @@ function bins() {
 }
 
 function safeCwd(cwd) {
-  const dir = path.resolve(cwd || ROOT);
-  const root = ROOT.endsWith(path.sep) ? ROOT : ROOT + path.sep;
-  if (dir !== ROOT && !dir.startsWith(root)) throw new Error("cwd außerhalb des Engine-Roots");
-  return dir;
+  const dir = path.resolve(cwd || workspace || ROOT);
+  const roots = [...new Set([path.resolve(ROOT), path.resolve(workspace || ROOT)])];
+  if (roots.some((a) => dir === a || dir.startsWith(a + path.sep))) return dir;
+  throw new Error("cwd außerhalb des Engine-Roots");
 }
 
 function parseCmd(cmd) {
@@ -97,7 +111,7 @@ function parseCmd(cmd) {
   const parts = raw.split(/\s+/);
   const base = path.basename(parts[0]);
   if (!ALLOW.has(base) && !ALLOW.has(parts[0])) throw new Error(`Binärdatei nicht erlaubt: ${base}`);
-  const file = which(base) || which(parts[0]);
+  const file = which(base) || which(parts[0]) || resolveBin(base);
   if (!file) throw new Error(`${base} nicht im PATH`);
   return { file, args: parts.slice(1) };
 }
@@ -120,7 +134,7 @@ function runCmd(cwd, cmd, timeoutMs) {
       return;
     }
     const start = Date.now();
-    const child = spawn(parsed.file, parsed.args, { cwd, shell: false, env: process.env });
+    const child = spawn(parsed.file, parsed.args, { cwd, shell: false, env: toolEnv() });
     let stdout = "";
     let stderr = "";
     const cap = (s, add) => (s + add).slice(-24000);
@@ -151,10 +165,10 @@ function safeRel(p) {
   return n;
 }
 
-function spawnOnce(file, args, cwd, timeoutMs) {
+function spawnOnce(file, args, cwd, timeoutMs, env) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const child = spawn(file, args, { cwd, shell: false, env: process.env, windowsHide: true });
+    const child = spawn(file, args, { cwd, shell: false, env: env || process.env, windowsHide: true });
     let stdout = "";
     let stderr = "";
     const cap = (s, add) => (s + add).slice(-24000);
@@ -182,12 +196,13 @@ function spawnOnce(file, args, cwd, timeoutMs) {
 async function compileLang(body) {
   const lang = String(body.lang || "");
   const entry = safeRel(body.entry || "");
-  const files = Array.isArray(body.files) ? body.files.slice(0, 40) : [];
+  const files = Array.isArray(body.files) ? body.files.slice(0, 80) : [];
   const timeoutMs = Math.min(MAX_MS, Number(body.timeoutMs) || 60000);
   const dir = path.join(os.tmpdir(), "anvil-run-" + randomBytes(6).toString("hex"));
   mkdirSync(dir, { recursive: true });
   const win = process.platform === "win32";
   const exe = (name) => (win ? path.join(dir, name + ".exe") : path.join(dir, name));
+  const env = toolEnv();
   try {
     for (const f of files) {
       const rel = safeRel(f.path);
@@ -196,17 +211,19 @@ async function compileLang(body) {
       writeFileSync(full, String(f.content ?? ""), "utf8");
     }
     const need = (bin) => {
-    const p = which(bin) || resolveBin(bin);
-    if (!p) throw new Error(`${bin} nicht in Anvil. Compiler holen (Einstellungen → Companion).`);
-    return p;
+      const p = resolveBin(bin) || which(bin);
+      if (!p) throw new Error(`${bin} nicht in Anvil. Compiler holen (Einstellungen → Companion).`);
+      return p;
     };
     const steps = [];
     if (lang === "go") {
-      if (!existsSync(path.join(dir, "go.mod"))) writeFileSync(path.join(dir, "go.mod"), "module anvil\n\ngo 1.22\n");
-      steps.push({ file: need("go"), args: ["run", entry] });
+      if (!isGoMod(files) && !existsSync(path.join(dir, "go.mod"))) writeFileSync(path.join(dir, "go.mod"), "module anvil\n\ngo 1.22\n");
+      if (/_test\.go$/i.test(entry)) steps.push({ file: need("go"), args: ["test", "./..."] });
+      else steps.push({ file: need("go"), args: ["run", entry] });
     } else if (lang === "rust") {
-      if (existsSync(path.join(dir, "Cargo.toml"))) {
-        steps.push({ file: need("cargo"), args: ["run", "--quiet"] });
+      if (isCargo(files) || existsSync(path.join(dir, "Cargo.toml"))) {
+        const testRs = /_test\.rs$/i.test(entry) || /(^|\/)tests\//i.test(entry);
+        steps.push({ file: need("cargo"), args: testRs ? ["test", "--quiet"] : ["run", "--quiet"] });
       } else {
         const out = exe("out");
         steps.push({ file: need("rustc"), args: [entry, "-o", out] });
@@ -215,44 +232,56 @@ async function compileLang(body) {
     } else if (lang === "java") {
       const srcs = files.map((f) => safeRel(f.path)).filter((p) => p.endsWith(".java"));
       steps.push({ file: need("javac"), args: srcs.length ? srcs : [entry] });
-      const cls = path.basename(entry, ".java");
+      const src = files.find((f) => safeRel(f.path) === entry);
+      const cls = javaMainClass(entry, src?.content ?? "");
       steps.push({ file: need("java"), args: ["-cp", ".", cls] });
-    } else if (lang === "c") {
-      const cc = resolveBin("cc") || which("cc") || which("gcc") || which("clang");
-      if (!cc) throw new Error("cc nicht in Anvil. Zig/C holen.");
+    } else if (lang === "c" || lang === "cpp") {
+      const bin = lang === "c" ? "cc" : "cxx";
+      const compiler =
+        resolveBin(bin) ||
+        (lang === "c" ? which("cc") || which("gcc") || which("clang") : which("c++") || which("g++") || which("clang++"));
+      if (!compiler) throw new Error(`${lang === "c" ? "cc" : "c++"} nicht in Anvil. Zig/C holen.`);
       const out = exe("out");
-      const args = /zig/i.test(path.basename(cc)) ? ["cc", entry, "-o", out] : [entry, "-o", out];
-      steps.push({ file: cc, args });
-      steps.push({ file: out, args: [] });
-    } else if (lang === "cpp") {
-      const cxx = resolveBin("cxx") || which("c++") || which("g++") || which("clang++");
-      if (!cxx) throw new Error("c++ nicht in Anvil. Zig/C++ holen.");
-      const out = exe("out");
-      const args = /zig/i.test(path.basename(cxx)) ? ["c++", entry, "-o", out] : [entry, "-o", out];
-      steps.push({ file: cxx, args });
+      steps.push({ file: compiler, args: ccArgs(compiler, lang, entry, files, out) });
       steps.push({ file: out, args: [] });
     } else if (lang === "php") {
       steps.push({ file: need("php"), args: [entry] });
     } else if (lang === "ruby") {
       steps.push({ file: need("ruby"), args: [entry] });
     } else if (lang === "csharp") {
-      const src = readFileSync(path.join(dir, entry), "utf8");
-      if (entry !== "Program.cs") writeFileSync(path.join(dir, "Program.cs"), src);
-      const csproj = `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`;
-      writeFileSync(path.join(dir, "app.csproj"), csproj);
-      steps.push({ file: need("dotnet"), args: ["run", "--nologo", "-v", "q"] });
+      if (!isCsproj(files)) {
+        const src = readFileSync(path.join(dir, entry), "utf8");
+        if (entry !== "Program.cs") writeFileSync(path.join(dir, "Program.cs"), src);
+        const csproj = `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`;
+        writeFileSync(path.join(dir, "app.csproj"), csproj);
+      }
+      const proj = firstCsproj(files);
+      const args = proj ? ["run", "--nologo", "-v", "q", "--project", proj] : ["run", "--nologo", "-v", "q"];
+      steps.push({ file: need("dotnet"), args });
     } else {
       throw new Error("Sprache nicht lokal: " + lang);
     }
     let last = { ok: false, code: 1, stdout: "", stderr: "", duration: 0 };
     let cmd = "";
-    for (const s of steps) {
+    const phases = [];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
       cmd = [s.file, ...s.args].join(" ");
-      last = await spawnOnce(s.file, s.args, dir, timeoutMs);
+      last = await spawnOnce(s.file, s.args, dir, timeoutMs, env);
       last.cmd = cmd;
-      if (!last.ok) return { ...last, cmd };
+      const phase = i < steps.length - 1 ? "compile" : "run";
+      phases.push({ phase, cmd, ok: last.ok, stdout: last.stdout || "", stderr: last.stderr || "" });
+      if (!last.ok) break;
     }
-    return { ...last, cmd };
+    const stdout = phases
+      .map((p) => {
+        const title = p.phase === "compile" ? "Compile" : "Run";
+        const body = [p.cmd, p.stdout].filter(Boolean).join("\n");
+        return `— ${title} —\n${body}`.trim();
+      })
+      .join("\n\n");
+    const fail = phases.find((p) => !p.ok);
+    return { ...last, cmd: phases.map((p) => p.cmd).join(" && "), stdout, stderr: fail ? fail.stderr : last.stderr, steps: phases };
   } catch (err) {
     return {
       ok: false,
@@ -348,7 +377,7 @@ const TOOLS = [
 ];
 
 async function callTool(name, args = {}) {
-  const cwd = String(args.cwd || ROOT);
+  const cwd = String(args.cwd || workspace);
   if (name === "engine_detect") return detectOnDisk(cwd);
   if (name === "engine_status") return { ok: true, bins: bins(), cwd };
   if (name === "engine_run") {
@@ -388,9 +417,16 @@ async function handleMcp(msg) {
 function cors(req, res) {
   const origin = req.headers.origin;
   if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
+  else res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, mcp-session-id, x-anvil-token");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "content-type, accept, authorization, mcp-session-id, mcp-protocol-version, last-event-id, x-anvil-token",
+  );
+  res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
 }
 
 function json(req, res, code, obj) {
@@ -493,13 +529,17 @@ const server = http.createServer(async (req, res) => {
     json(req, res, 200, {
       ok: true,
       version: "1.1.0",
-      modes: ["http", "mcp", "compile", "lsp", "install", "toolchain"],
+      modes: ["http", "mcp", "compile", "lsp", "install", "toolchain", "git", "debug"],
       bins: bins(),
       lsp: listLsp(),
       installer: installerKind(),
       toolchains: listToolchains(),
-      toolHome: TOOL_HOME,
+      toolHome: toolHome(),
+      lspHome: lspHome(),
+      packages: snapshot(),
       toolPull: toolchainProgress(),
+      git: Boolean(gitBin()),
+      workspace,
     });
     return;
   }
@@ -557,14 +597,116 @@ const server = http.createServer(async (req, res) => {
         json(req, res, 400, { ok: false, error: "cmd fehlt" });
         return;
       }
-      json(req, res, 200, await runCmd(String(body.cwd || ROOT), cmd, Number(body.timeoutMs) || MAX_MS));
+      json(req, res, 200, await runCmd(String(body.cwd || workspace), cmd, Number(body.timeoutMs) || MAX_MS));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e) });
     }
     return;
   }
+  if (req.method === "POST" && url.pathname === "/v1/workspace") {
+    if (!checkToken(req)) {
+      json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      workspace = resolveCwd(String(body.cwd || ""));
+      json(req, res, 200, { ok: true, cwd: workspace, git: Boolean(gitBin()) });
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/v1/tree") {
+    if (!checkToken(req)) {
+      json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
+      return;
+    }
+    try {
+      const cwd = url.searchParams.get("cwd") || workspace;
+      json(req, res, 200, listTree(cwd));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/file") {
+    if (!checkToken(req)) {
+      json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      const cwd = String(body.cwd || workspace);
+      json(req, res, 200, writeRel(cwd, String(body.path || ""), String(body.content ?? "")));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/file/delete") {
+    if (!checkToken(req)) {
+      json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, removeRel(String(body.cwd || workspace), String(body.path || "")));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/mkdir") {
+    if (!checkToken(req)) {
+      json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, mkdirRel(String(body.cwd || workspace), String(body.path || "")));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/git") {
+    if (!checkToken(req)) {
+      json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, await gitDispatch(String(body.action || "status"), { ...body, cwd: body.cwd || workspace }));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/debug") {
+    try {
+      const body = await readBody(req);
+      const action = String(body.action || "poll");
+      if (action === "start") {
+        json(req, res, 200, debugStart({ ...body, cwd: body.cwd || workspace }));
+        return;
+      }
+      if (action === "cmd") {
+        json(req, res, 200, debugCmd(String(body.id || ""), String(body.cmd || "continue"), body.expr != null ? String(body.expr) : "", body.breakpoints));
+        return;
+      }
+      if (action === "stop") {
+        json(req, res, 200, debugStop(String(body.id || "")));
+        return;
+      }
+      json(req, res, 200, debugPoll(String(body.id || "")));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
+    }
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/v1/toolchain") {
-    json(req, res, 200, { ok: true, pull: toolchainProgress(), toolHome: TOOL_HOME, toolchains: listToolchains() });
+    json(req, res, 200, { ok: true, pull: toolchainProgress(), toolHome: toolHome(), toolchains: listToolchains() });
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/toolchain") {
@@ -599,7 +741,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === "/v1/lsp") {
-    json(req, res, 200, { ok: true, servers: listLsp(), home: process.env.ANVIL_LSP_HOME || undefined });
+    json(req, res, 200, { ok: true, servers: listLsp(), home: lspHome() });
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/lsp/pull") {
@@ -617,6 +759,19 @@ const server = http.createServer(async (req, res) => {
       json(req, res, 200, await checkLsp(String(body.id || "")));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e) });
+    }
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/v1/home") {
+    json(req, res, 200, { ok: true, ...snapshot() });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/home") {
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, { ok: true, ...setAnvilHome(String(body.path || body.home || "")) });
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
     return;
   }
@@ -695,7 +850,10 @@ const server = http.createServer(async (req, res) => {
 
 noTimeout(server);
 server.listen(PORT, HOST, () => {
+  ensureHomes();
+  const snap = snapshot();
   console.log(`Anvil companion http://${HOST}:${PORT}`);
   console.log(`Token-Datei ${TOKEN_PATH}`);
+  console.log(`Pakete ${snap.home}`);
   console.log(`Koppeln: http://127.0.0.1:${PORT}/v1/pair`);
 });

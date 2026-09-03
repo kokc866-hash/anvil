@@ -3,7 +3,8 @@ import { persist } from "zustand/middleware";
 import { idePersistStorage } from "./persist-storage";
 import { langFromPath } from "./languages";
 import { useIde } from "@/store/ide";
-import { debugSkill, SKILL_CREATOR_BODY } from "./skill-debug";
+import { debugSkill } from "./skill-debug";
+import { SEED } from "./skill-seeds";
 
 export type LearnKind = "user" | "project" | "lesson";
 export type SkillKind = "guide" | "plugin";
@@ -62,51 +63,9 @@ export const LEARN_DEFAULTS: LearnPrefs = {
   distill: true,
   adaptIde: true,
   pluginSkills: true,
-  factLimit: 8,
-  skillLimit: 5,
+  factLimit: 12,
+  skillLimit: 10,
 };
-
-const SEED: LearnSkill[] = [
-  {
-    id: "skill-creator",
-    name: "skill-creator",
-    when: "Skill schreiben Skill fixen Skill debuggen skill-creator neuer Ablauf",
-    body: SKILL_CREATOR_BODY,
-    kind: "guide",
-    uses: 0,
-    at: 0,
-    score: 0.88,
-    wins: 0,
-    fails: 0,
-    scope: "user",
-  },
-  {
-    id: "engine",
-    name: "engine-projekt",
-    when: "Godot Unity Unreal Bevy Engine Companion MCP",
-    body: "1. engine_detect im Workspace.\n2. Scripts mit edit_file/read_file ändern.\n3. engine_run play oder mcp_call. Keine eigene Engine in Anvil — HTML-Vorschau nur Demo.",
-    kind: "guide",
-    uses: 0,
-    at: 0,
-    score: 0.72,
-    wins: 0,
-    fails: 0,
-    scope: "user",
-  },
-  {
-    id: "tests",
-    name: "tests-schreiben",
-    when: "Tests pytest npm test absichern unittest",
-    body: "1. tests/ anlegen (write_file).\n2. Python: pytest-Datei. JS: node:test / assert.\n3. shell pytest oder npm test, sonst run_file. Output lesen, bei Fehler edit_file.",
-    kind: "guide",
-    uses: 0,
-    at: 0,
-    score: 0.7,
-    wins: 0,
-    fails: 0,
-    scope: "user",
-  },
-];
 
 type LearnState = {
   on: boolean;
@@ -505,8 +464,8 @@ export function learnPrompt(lastAsk = ""): string {
   if (!st.on || !p.inject) return "";
   const prof = profile();
   const facts = [...visibleFacts()].sort((a, b) => b.conf * b.hits - a.conf * a.hits);
-  const cap = Math.min(12, Math.max(2, p.factLimit | 0));
-  const skillCap = Math.min(8, Math.max(1, p.skillLimit | 0));
+  const cap = Math.min(20, Math.max(2, p.factLimit | 0));
+  const skillCap = Math.min(10, Math.max(1, p.skillLimit | 0));
   const person = p.person ? facts.filter((f) => f.scope !== "project" && f.kind !== "project").slice(0, cap) : [];
   const proj = p.project ? facts.filter((f) => f.scope === "project" || f.kind === "project").slice(0, cap) : [];
   const negs = p.negatives ? st.negs.slice(0, 6) : [];

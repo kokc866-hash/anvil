@@ -1,20 +1,33 @@
 import type { PersistStorage, StorageValue } from "zustand/middleware";
+import { contentSig, formatBytes, rankPaths, skipPath } from "./ws-skip.ts";
 
-const TOTAL = 12_000_000;
-const EACH = 1_500_000;
-const LS_FILES = 2_000_000;
+export const PERSIST_TOTAL = 96_000_000;
+export const PERSIST_EACH = 3_000_000;
+const LS_FILES = 1_500_000;
 
-export function shrinkFiles(files: Record<string, string>, budget = TOTAL): Record<string, string> {
+export { formatBytes };
+
+export function shrinkFiles(files: Record<string, string>, budget = PERSIST_TOTAL, prefer: string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
   let used = 0;
-  for (const path of Object.keys(files).sort()) {
+  const order = rankPaths(
+    Object.keys(files).filter((p) => !skipPath(p) || prefer.includes(p)),
+    prefer,
+  );
+  for (const path of order) {
     const c = files[path];
-    if (c.length > EACH) continue;
+    if (c == null) continue;
+    if (c.length > PERSIST_EACH && !prefer.includes(path)) continue;
+    if (c.length > PERSIST_EACH * 2) continue;
     if (used + c.length > budget) continue;
     out[path] = c;
     used += c.length;
   }
   return out;
+}
+
+export function persistDropped(files: Record<string, string>, kept: Record<string, string>): number {
+  return Object.keys(files).filter((p) => !(p in kept)).length;
 }
 
 type Slice = { files?: Record<string, string>; [k: string]: unknown };
@@ -62,9 +75,11 @@ function db(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") return Promise.reject(new Error("no idb"));
   if (!dbp) {
     dbp = new Promise((resolve, reject) => {
-      const req = indexedDB.open("anvil-persist", 1);
+      const req = indexedDB.open("anvil-persist", 2);
       req.onupgradeneeded = () => {
-        if (!req.result.objectStoreNames.contains("kv")) req.result.createObjectStore("kv");
+        const d = req.result;
+        if (!d.objectStoreNames.contains("kv")) d.createObjectStore("kv");
+        if (!d.objectStoreNames.contains("file")) d.createObjectStore("file");
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -78,6 +93,10 @@ function idbGet(key: string): Promise<Record<string, string> | null> {
     .then(
       (d) =>
         new Promise<Record<string, string> | null>((resolve, reject) => {
+          if (!d.objectStoreNames.contains("kv")) {
+            resolve(null);
+            return;
+          }
           const q = d.transaction("kv").objectStore("kv").get(key);
           q.onsuccess = () => resolve((q.result as Record<string, string>) ?? null);
           q.onerror = () => reject(q.error);
@@ -86,12 +105,16 @@ function idbGet(key: string): Promise<Record<string, string> | null> {
     .catch(() => null);
 }
 
-function idbSet(key: string, value: Record<string, string>): Promise<void> {
+function idbDel(key: string): Promise<void> {
   return db()
     .then(
       (d) =>
         new Promise<void>((resolve, reject) => {
-          const q = d.transaction("kv", "readwrite").objectStore("kv").put(value, key);
+          if (!d.objectStoreNames.contains("kv")) {
+            resolve();
+            return;
+          }
+          const q = d.transaction("kv", "readwrite").objectStore("kv").delete(key);
           q.onsuccess = () => resolve();
           q.onerror = () => reject(q.error);
         }),
@@ -99,17 +122,64 @@ function idbSet(key: string, value: Record<string, string>): Promise<void> {
     .catch(() => undefined);
 }
 
-function idbDel(key: string): Promise<void> {
-  return db()
-    .then(
-      (d) =>
-        new Promise<void>((resolve, reject) => {
-          const q = d.transaction("kv", "readwrite").objectStore("kv").delete(key);
-          q.onsuccess = () => resolve();
-          q.onerror = () => reject(q.error);
-        }),
-    )
-    .catch(() => undefined);
+function fileKey(name: string, path: string): string {
+  return `${name}\t${path}`;
+}
+
+async function idbLoadFiles(name: string): Promise<Record<string, string> | null> {
+  try {
+    const d = await db();
+    if (!d.objectStoreNames.contains("file")) return null;
+    const prefix = `${name}\t`;
+    const out: Record<string, string> = {};
+    await new Promise<void>((resolve, reject) => {
+      const tx = d.transaction("file", "readonly");
+      const store = tx.objectStore("file");
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur) return;
+        const key = String(cur.key);
+        if (key.startsWith(prefix) && typeof cur.value === "string") {
+          out[key.slice(prefix.length)] = cur.value;
+        }
+        cur.continue();
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+async function idbSyncFiles(name: string, files: Record<string, string>, prev: Map<string, string>): Promise<Map<string, string>> {
+  const next = new Map<string, string>();
+  try {
+    const d = await db();
+    if (!d.objectStoreNames.contains("file")) return prev;
+    await new Promise<void>((resolve, reject) => {
+      const tx = d.transaction("file", "readwrite");
+      const store = tx.objectStore("file");
+      for (const [path, content] of Object.entries(files)) {
+        const sig = contentSig(content);
+        next.set(path, sig);
+        if (prev.get(path) === sig) continue;
+        store.put(content, fileKey(name, path));
+      }
+      for (const path of prev.keys()) {
+        if (!(path in files)) store.delete(fileKey(name, path));
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    void idbDel(`${name}:files`);
+    return next;
+  } catch {
+    void import("./intern").then((m) => m.note("persist", "IndexedDB voll oder gesperrt — Dateien nicht komplett gesichert."));
+    return prev;
+  }
 }
 
 const mem = new Map<string, string>();
@@ -146,12 +216,20 @@ function writeLs(name: string, raw: string) {
   }
 }
 
+function preferOf(state: Slice): string[] {
+  const open = Array.isArray(state.openPaths) ? (state.openPaths as string[]) : [];
+  const recent = Array.isArray(state.recentPaths) ? (state.recentPaths as string[]) : [];
+  const dirty = state.dirty && typeof state.dirty === "object" ? Object.keys(state.dirty as object) : [];
+  return [...open, ...dirty, ...recent];
+}
+
 export function idePersistStorage(): PersistStorage<unknown> | undefined {
   if (typeof window === "undefined") return undefined;
   const bag = new Map<string, StorageValue<unknown>>();
   const seen = new Set<string>();
   let timer = 0;
-  const fileSig = new Map<string, string>();
+  const written = new Map<string, Map<string, string>>();
+  let dropNoted = false;
 
   function flush() {
     const entries = [...bag.entries()].filter(([name]) => seen.has(name));
@@ -169,11 +247,24 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
         void import("./intern").then((m) => m.resolveKind("persist"));
       }
       if (files && Object.keys(files).length) {
-        const slim = shrinkFiles(files);
-        const sig = `${Object.keys(slim).length}:${Object.values(slim).reduce((n, c) => n + c.length, 0)}`;
-        if (fileSig.get(name) === sig) continue;
-        fileSig.set(name, sig);
-        void idbSet(`${name}:files`, slim);
+        const onDisk = typeof state.workspaceCwd === "string" && Boolean(state.workspaceCwd.trim());
+        const prefer = preferOf(state);
+        const slim = shrinkFiles(files, onDisk ? 12_000_000 : PERSIST_TOTAL, prefer);
+        const dropped = persistDropped(files, slim);
+        const lostOpen = prefer.filter((p) => p in files && !(p in slim));
+        if (lostOpen.length && !dropNoted) {
+          dropNoted = true;
+          void import("./intern").then((m) =>
+            m.note("persist", `${lostOpen.length} offene Dateien nicht gesichert. ${onDisk ? "Stand liegt im Ordner." : "Ordner auf der Platte nutzen."}`),
+          );
+        } else if (dropped && !onDisk && !dropNoted) {
+          dropNoted = true;
+          void import("./intern").then((m) =>
+            m.note("persist", `${dropped} Dateien nicht gesichert (${formatBytes(Object.values(files).reduce((n, c) => n + c.length, 0))}). Ordner auf der Platte nutzen.`),
+          );
+        }
+        const prev = written.get(name) ?? new Map();
+        void idbSyncFiles(name, slim, prev).then((next) => written.set(name, next));
         const blob = JSON.stringify(slim);
         if (blob.length < LS_FILES) writeLs(`${name}:files`, blob);
         else {
@@ -202,7 +293,8 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
       }
       try {
         const parsed = JSON.parse(raw) as StorageValue<Slice>;
-        let files = await idbGet(`${name}:files`);
+        let files = await idbLoadFiles(name);
+        if (!files) files = await idbGet(`${name}:files`);
         if (!files) {
           const ls = lsGet(`${name}:files`);
           if (ls) {
@@ -214,6 +306,11 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           }
         }
         if (!files && parsed.state?.files) files = parsed.state.files;
+        if (files) {
+          const sigs = new Map<string, string>();
+          for (const [p, c] of Object.entries(files)) sigs.set(p, contentSig(c));
+          written.set(name, sigs);
+        }
         const llm = name === "anvil-ide" ? readLlm() : null;
         parsed.state = { ...(llm ?? {}), ...(parsed.state ?? {}), files: files ?? parsed.state?.files ?? {} };
         seen.add(name);
@@ -233,6 +330,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
       bag.delete(name);
       mem.delete(name);
       mem.delete(`${name}:files`);
+      written.delete(name);
       try {
         localStorage.removeItem(name);
         localStorage.removeItem(`${name}:files`);
@@ -240,6 +338,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
         /* */
       }
       void idbDel(`${name}:files`);
+      void idbSyncFiles(name, {}, written.get(name) ?? new Map());
     },
   };
 }

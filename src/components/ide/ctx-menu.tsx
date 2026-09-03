@@ -74,6 +74,75 @@ export function CtxMenu({
   );
 }
 
+/** Dropdown under a trigger, clamped to `within` so it never paints over Spur/Agent. */
+export function FlyAt({
+  anchor,
+  within,
+  onClose,
+  children,
+  align = "end",
+}: {
+  anchor: HTMLElement;
+  within?: HTMLElement | null;
+  onClose: () => void;
+  children: ReactNode;
+  align?: "start" | "end";
+}) {
+  const [box, setBox] = useState({ top: 0, left: 0, width: 224, maxH: 288 });
+
+  useLayoutEffect(() => {
+    const ar = anchor.getBoundingClientRect();
+    const wr = within?.getBoundingClientRect();
+    const rightBound = wr ? wr.right - 4 : window.innerWidth - 8;
+    const leftBound = 8;
+    const topBound = wr ? wr.top + 4 : 8;
+    const botBound = wr ? wr.bottom - 4 : window.innerHeight - 8;
+    let width = Math.min(280, Math.max(160, rightBound - leftBound));
+    if (width > rightBound - leftBound) width = Math.max(96, rightBound - leftBound);
+    let left = align === "end" ? ar.right - width : ar.left;
+    if (left + width > rightBound) left = rightBound - width;
+    if (left < leftBound) left = leftBound;
+    if (left + width > rightBound) width = Math.max(96, rightBound - left);
+    const below = botBound - (ar.bottom + 2);
+    const above = ar.top - 2 - topBound;
+    if (below >= 120 || below >= above) {
+      setBox({ top: ar.bottom + 2, left, width, maxH: Math.max(96, Math.min(288, below)) });
+    } else {
+      const maxH = Math.max(96, Math.min(288, above));
+      setBox({ top: ar.top - 2 - maxH, left, width, maxH });
+    }
+  }, [anchor, within, align]);
+
+  useLayoutEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <>
+      <button
+        type="button"
+        className="fixed inset-0 z-[80] cursor-default bg-transparent"
+        aria-label="Menü schließen"
+        onClick={onClose}
+      />
+      <div
+        role="menu"
+        className="fixed z-[90] overflow-x-hidden overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg"
+        style={{ top: box.top, left: box.left, width: box.width, maxHeight: box.maxH }}
+      >
+        {children}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function Row({ it, onClose, flip }: { it: CtxItem; onClose: () => void; flip: boolean }) {
   const [open, setOpen] = useState(false);
   if (it.sep) return <div className="my-1 h-px bg-border" role="separator" />;

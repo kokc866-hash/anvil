@@ -13,10 +13,24 @@ export const LSP_BUCKET = new Set([
   "companion",
 ]);
 
+export const HEUR_SOURCE = new Set(["syntax", "python", "index", "json", "js", "c"]);
+
 const SYNTAX = /syntax|unexpected|unmatched|parse error|invalid syntax|expected|indent|unterminated|import statement outside a module|about:srcdoc/i;
+
+let compileChecked: string[] = [];
+
+export function noteCompileChecked(paths: string[]): void {
+  compileChecked = paths;
+}
 
 export function localLintHits(hits: LspHit[]): LspHit[] {
   return hits.filter((h) => !LSP_BUCKET.has(h.source));
+}
+
+export function dropCoveredHeuristics(local: LspHit[]): LspHit[] {
+  const has = new Set(compileChecked);
+  if (!has.size) return local;
+  return local.filter((h) => !HEUR_SOURCE.has(h.source) || h.source === "index" || !has.has(h.path));
 }
 
 /** Syntax-Run-Treffer fallen weg, sobald die Datei lokal sauber ist. Sandbox-Modul-Fehler nie anheften. */
@@ -35,11 +49,13 @@ export async function refreshProblems(): Promise<void> {
   const { rebuildIndex } = await import("./ws-index");
   const { lintWorkspace } = await import("./lsp");
   rebuildIndex(st.files);
-  st.setLspProblems(lintWorkspace(st.files, st.openPaths));
+  const local = lintWorkspace(st.files, st.openPaths);
+  st.setLspProblems(local);
   try {
     const { lintDeep } = await import("./lsp-compile");
-    const hits = await lintDeep(useIde.getState().files);
-    useIde.getState().setCompileProblems(hits);
+    const deep = await lintDeep(useIde.getState().files, useIde.getState().openPaths);
+    noteCompileChecked(deep.checked);
+    useIde.getState().setCompileProblems(deep.hits);
   } catch {
     /* */
   }

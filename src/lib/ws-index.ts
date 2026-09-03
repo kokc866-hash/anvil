@@ -1,4 +1,5 @@
-const SKIP = /^(node_modules|dist|build|\.git|artifacts)\//;
+import { contentSig, isSourcePath, rankPaths, skipPath } from "./ws-skip.ts";
+
 const SECRET = /(^|\/)(\.env($|\.)|\.env\.[^/]+|id_rsa|\.pem$|credentials|secrets?\.|vault)/i;
 const SECRET_NAME = /(api[_-]?key|token|password)/i;
 
@@ -122,39 +123,43 @@ export function parseFile(path: string, src: string): IdxFile {
   };
 }
 
-function stampOf(files: Record<string, string>): string {
-  let n = 0;
-  let len = 0;
-  for (const p of Object.keys(files)) {
-    n += 1;
-    len += files[p]?.length ?? 0;
-  }
-  return `${n}:${len}`;
-}
-
 type IdxRef = IdxSym & { path: string };
+type FileCache = { sig: string; row: IdxFile };
 
-let cache: { stamp: string; rows: IdxFile[]; byName: Map<string, IdxRef[]> } | null = null;
+let cache: { files: Map<string, FileCache>; rows: IdxFile[]; byName: Map<string, IdxRef[]> } | null = null;
 
-export function rebuildIndex(files: Record<string, string>): IdxFile[] {
-  const stamp = stampOf(files);
-  if (cache && cache.stamp === stamp) return cache.rows;
-  const rows: IdxFile[] = [];
+function rebuildByName(rows: IdxFile[]): Map<string, IdxRef[]> {
   const byName = new Map<string, IdxRef[]>();
-  for (const path of Object.keys(files).sort()) {
-    if (SKIP.test(path) || secret(path)) continue;
-    const src = files[path];
-    if (src == null) continue;
-    const row = parseFile(path, src);
-    rows.push(row);
+  for (const row of rows) {
     for (const s of row.symbols) {
       const list = byName.get(s.name) ?? [];
-      list.push({ ...s, path });
-      byName.set(s.name, list);
-      if (list.length > 24) byName.set(s.name, list.slice(0, 24));
+      list.push({ ...s, path: row.path });
+      byName.set(s.name, list.length > 24 ? list.slice(0, 24) : list);
     }
   }
-  cache = { stamp, rows, byName };
+  return byName;
+}
+
+export function rebuildIndex(files: Record<string, string>): IdxFile[] {
+  const prev = cache?.files ?? new Map<string, FileCache>();
+  const next = new Map<string, FileCache>();
+  const rows: IdxFile[] = [];
+  let dirty = !cache;
+  const paths = Object.keys(files).sort();
+  for (const path of paths) {
+    if (skipPath(path) || secret(path)) continue;
+    const src = files[path];
+    if (src == null) continue;
+    const sig = contentSig(src);
+    const hit = prev.get(path);
+    const row = hit && hit.sig === sig ? hit.row : parseFile(path, src);
+    if (!hit || hit.sig !== sig) dirty = true;
+    next.set(path, { sig, row });
+    rows.push(row);
+    if (rows.length >= 2500) break;
+  }
+  if (cache && !dirty && cache.files.size === next.size) return cache.rows;
+  cache = { files: next, rows, byName: rebuildByName(rows) };
   return rows;
 }
 
@@ -238,14 +243,110 @@ export function summarizeFile(path: string, src: string): string {
   return bits.join(" · ").slice(0, 140) || "—";
 }
 
-export function workspaceIndex(files: Record<string, string>, limit = 80): string {
+export function workspaceIndex(files: Record<string, string>, limit = 120, prefer: string[] = []): string {
   const rows = rebuildIndex(files);
-  return rows
+  const byPath = new Map(rows.map((r) => [r.path, r]));
+  const order = rankPaths(
+    rows.map((r) => r.path),
+    prefer,
+  );
+  return order
     .slice(0, limit)
-    .map((r) => {
+    .map((p) => {
+      const r = byPath.get(p);
+      if (!r) return p;
       const ns = r.symbols.slice(0, 6).map((s) => s.name).join(", ");
       const bits = [r.hint, ns, `${r.lines} Z.`].filter(Boolean);
       return `${r.path} — ${bits.join(" · ")}`;
     })
     .join("\n");
 }
+
+export function workspaceTree(files: Record<string, string>, prefer: string[] = [], limit = 180): string {
+  const paths = Object.keys(files).filter((p) => !skipPath(p)).sort();
+  if (!paths.length) return "(empty)";
+  if (paths.length <= limit) return paths.join("\n");
+  const preferSet = new Set(prefer.filter((p) => p in files && !skipPath(p)));
+  const rest = paths.filter((p) => !preferSet.has(p));
+  const shown = [...preferSet, ...rest.filter(isSourcePath), ...rest].filter((p, i, a) => a.indexOf(p) === i).slice(0, limit);
+  const hidden = paths.length - shown.length;
+  const folders = new Map<string, number>();
+  const shownSet = new Set(shown);
+  for (const p of paths) {
+    if (shownSet.has(p)) continue;
+    const top = p.split("/")[0] ?? p;
+    folders.set(top, (folders.get(top) ?? 0) + 1);
+  }
+  const extra = [...folders.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 16)
+    .map(([k, n]) => `${k}/  (${n})`)
+    .join("\n");
+  return `${shown.join("\n")}\n… ${hidden} weitere — list_files / grep${extra ? `\n${extra}` : ""}`;
+}
+
+const ENTRY = [
+  "package.json",
+  "README.md",
+  "AGENTS.md",
+  "pyproject.toml",
+  "Cargo.toml",
+  "go.mod",
+  "index.html",
+  "src/main.ts",
+  "src/index.ts",
+  "src/app.ts",
+  "main.py",
+  "app.py",
+  "tsconfig.json",
+  "Makefile",
+];
+
+/** Folder-first map for medium projects. Cheaper than dumping every path. */
+export function workspaceMap(files: Record<string, string>, prefer: string[] = []): string {
+  const paths = Object.keys(files).filter((p) => !skipPath(p) && !secret(p)).sort();
+  if (!paths.length) return "(empty)";
+  const folders = new Map<string, string[]>();
+  let loc = 0;
+  for (const p of paths) {
+    loc += (files[p] ?? "").split("\n").length;
+    const top = p.includes("/") ? `${p.split("/")[0]}/` : ".";
+    const list = folders.get(top) ?? [];
+    list.push(p);
+    folders.set(top, list);
+  }
+  const folderLines = [...folders.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .slice(0, 28)
+    .map(([k, kids]) => {
+      const samples = rankPaths(kids, prefer)
+        .slice(0, 3)
+        .map((p) => (k === "." ? p : p.slice(k.length)));
+      return `${k.padEnd(18)} ${String(kids.length).padStart(3)}  ${samples.join(", ")}`;
+    });
+  const entries = ENTRY.filter((p) => p in files && !skipPath(p));
+  const focus = uniq(prefer.filter((p) => p in files && !skipPath(p))).slice(0, 12);
+  const focusLines = focus.map((p) => `  ${p} — ${summarizeFile(p, files[p] ?? "")}`);
+  const n = paths.length;
+  return [
+    `${n} Dateien · ${folders.size} Ordner · ${loc} Zeilen`,
+    entries.length ? `Einstieg: ${entries.join(", ")}` : "",
+    folderLines.join("\n"),
+    focusLines.length ? `Fokus:\n${focusLines.join("\n")}` : "",
+    n > 60 ? "Mittleres/großes Projekt: list_files, grep, read_file in Fenstern. edit_file statt ganzer Datei." : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function uniq(xs: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of xs) {
+    if (seen.has(x)) continue;
+    seen.add(x);
+    out.push(x);
+  }
+  return out;
+}
+

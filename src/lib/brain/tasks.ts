@@ -24,7 +24,7 @@ const HELP: Record<string, string> = {
   git: "Activity-Leiste: Git. Commit lokal, Push braucht GitHub in den Einstellungen.",
   datei: "Ctrl+P öffnet Dateien. Explorer links, Rechtsklick für neu oder umbenennen.",
   speicher: "Einstellungen → Speicher. Browser oder Ordner auf der Platte.",
-  gedächtnis: "Activity → Gedächtnis. Person, Projekt, Skills. Lernt aus der Nutzung.",
+  gedächtnis: "Activity → Gedächtnis. Person, Projekt, Sitzung, Skills. Die Sitzung überlebt Compacting.",
   ausgabe: "Ctrl+J, Activity: Ausgabe. Auch als Fenster oder Seite.",
 };
 
@@ -290,15 +290,20 @@ export async function brainPalette(q: string, labels: string[]): Promise<string 
 }
 
 export async function brainCompact(blob: string): Promise<string> {
-  const cut = blob.slice(0, 4000);
+  const cut = blob.slice(0, 8000);
   if (!brainReady() || !useBrain.getState().jobs.compact) return cut;
   try {
     const raw = await brainGenerate({
       messages: [
-        { role: "system", content: brainSystem("Max 8 bullets. Facts from the text only.") },
+        {
+          role: "system",
+          content: brainSystem(
+            "Up to 12 bullets. Keep: goal, file paths, user constraints, leftover work. Source language. No preamble.",
+          ),
+        },
         { role: "user", content: cut },
       ],
-      maxTokens: Math.min(400, useBrain.getState().maxTokens),
+      maxTokens: Math.min(700, useBrain.getState().maxTokens),
       temperature: 0.1,
       stop: ["\n\n\n"],
       pri: 2,
@@ -307,7 +312,7 @@ export async function brainCompact(blob: string): Promise<string> {
     const clean = raw
       .split("\n")
       .filter((l) => l.trim() && !/^(zusammenfassung|hier|sicher)/i.test(l))
-      .slice(0, 10)
+      .slice(0, 14)
       .join("\n");
     return clean || cut;
   } catch {

@@ -1,8 +1,8 @@
 import { runFile } from "./run-client";
 import { runAllTests } from "./run-tests";
 
-const TEST_CMD = /^(npm test|npx vitest|pytest|go test|cargo test)$/i;
-const RUN_CMD = /^(python3?|py|node|bun|deno)\s+(\S+)/i;
+const TEST_CMD = /^(npm test|npx vitest|pytest|go test|cargo test|dotnet test)$/i;
+const RUN_CMD = /^(python3?|py|node|bun|deno|php|ruby|go\s+run)\s+(\S+)/i;
 
 export async function runAgentShell(
   command: string,
@@ -28,6 +28,6 @@ export async function runAgentShell(
     ok: false,
     stdout: "",
     stderr:
-      "Im Browser-Workspace nur: python <datei>, node <datei>, npm test, pytest, go test, cargo test. Kein freies System-Terminal.",
+      "Nur: python/node/php/ruby/go run <datei>, npm test, pytest, go test, cargo test, dotnet test. Kein freies System-Terminal.",
   };
 }

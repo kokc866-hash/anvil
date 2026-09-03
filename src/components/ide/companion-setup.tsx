@@ -7,6 +7,7 @@ import {
   companionLspCheck,
   companionToolchain,
   companionToolPull,
+  companionSetHome,
   pairCompanion,
   setCompanionToken,
   DEFAULT_COMPANION,
@@ -34,6 +35,8 @@ type Ping = {
   installer?: string | null;
   toolchains?: ToolchainInfo[];
   toolHome?: string;
+  lspHome?: string;
+  packages?: { home: string; toolchains: string; lsp: string };
 };
 
 export function CompanionSetup({ compact }: { compact?: boolean }) {
@@ -58,6 +61,7 @@ export function CompanionSetup({ compact }: { compact?: boolean }) {
   const [checkNote, setCheckNote] = useState<Record<string, string>>({});
   const [installing, setInstalling] = useState("");
   const [toolPull, setToolPull] = useState<ToolPull | null>(null);
+  const [pkgPath, setPkgPath] = useState("");
   const lspEnabled = useIde((s) => s.lspEnabled);
   const setLspEnabled = useIde((s) => s.setLspEnabled);
   const lspTimeout = useIde((s) => s.lspTimeout);
@@ -104,9 +108,14 @@ export function CompanionSetup({ compact }: { compact?: boolean }) {
       await holdCompanion();
       const p = await companionPing(url || DEFAULT_COMPANION);
       setPing(p);
+      if (p.packages?.home) setPkgPath(p.packages.home);
+      else if (p.toolHome) setPkgPath(p.toolHome.replace(/[/\\]toolchains[/\\]?$/, ""));
       const hit = useIde.getState().engineLink;
       setEngineLink(hit ? { ...hit, ok: p.ok } : p.ok ? { label: "Companion", ok: true } : null);
       if (notice && !compact) setNotice(p.ok ? t("compOk") : p.error || t("compOff"));
+      if (p.ok && !useIde.getState().mcpServers.some((s) => s.url.includes("7845"))) {
+        setMcp([...useIde.getState().mcpServers, { id: newMcpId(), name: "Companion", url: DEFAULT_ENGINE_MCP, enabled: true }]);
+      }
       if (!useIde.getState().companionKeep && !useIde.getState().runPopout) await releaseCompanion();
     } finally {
       setBusy(false);
@@ -288,6 +297,66 @@ export function CompanionSetup({ compact }: { compact?: boolean }) {
         </Button>
       </div>
 
+      <p className="mt-3 text-sm text-fg">{t("pkgHome")}</p>
+      <p className="mt-0.5 text-xs text-muted">{t("pkgHomeH")}</p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <input
+          value={pkgPath}
+          placeholder="~/.anvil"
+          className="h-8 min-w-[12rem] flex-1 rounded-md border border-border bg-bg px-2 font-mono text-[11px] text-fg"
+          onChange={(e) => setPkgPath(e.target.value)}
+        />
+        {nativeHelper()?.pathsPick ? (
+          <Button
+            variant="quiet"
+            className="h-8 px-2 text-[11px]"
+            onClick={() => {
+              void nativeHelper()
+                ?.pathsPick?.("packages")
+                .then((p) => {
+                  const dir = p.packages || "";
+                  if (!dir) return;
+                  setPkgPath(dir);
+                  return companionSetHome(dir, url || DEFAULT_COMPANION).then((s) => {
+                    setPkgPath(s.home);
+                    setNotice(t("pkgHomeOk", { path: s.home }));
+                    return check(false);
+                  });
+                })
+                .catch((err) => setNotice(err instanceof Error ? err.message : t("compOff")));
+            }}
+          >
+            {t("pickFolder")}
+          </Button>
+        ) : null}
+        <Button
+          className="h-8"
+          disabled={busy || !pkgPath.trim()}
+          onClick={() => {
+            setBusy(true);
+            void companionSetHome(pkgPath.trim(), url || DEFAULT_COMPANION)
+              .then((s) => {
+                setPkgPath(s.home);
+                setNotice(t("pkgHomeOk", { path: s.home }));
+                return check(false);
+              })
+              .catch((err) => setNotice(err instanceof Error ? err.message : t("compOff")))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {t("pkgHomeApply")}
+        </Button>
+      </div>
+      {ping?.packages ? (
+        <p className="mt-1 font-mono text-[10px] text-subtle">
+          {t("pkgToolchain")}: {ping.packages.toolchains}
+          <br />
+          {t("pkgLsp")}: {ping.packages.lsp}
+        </p>
+      ) : ping?.toolHome ? (
+        <p className="mt-1 font-mono text-[10px] text-subtle">{ping.toolHome}</p>
+      ) : null}
+
       <p className="mt-2 text-sm text-fg">{t("compBins")}</p>
       <p className="mt-0.5 text-xs text-muted">{t("compBinsH")}</p>
       <div className="mt-1.5 divide-y divide-border rounded-md border border-border">
@@ -307,7 +376,14 @@ export function CompanionSetup({ compact }: { compact?: boolean }) {
                   {via ? <span className={`ml-1.5 text-[10px] ${row.via === "path" ? "text-ok" : "text-accent"}`}>{via}</span> : null}
                 </p>
                 <p className="truncate font-mono text-[10px] text-subtle">
-                  {wait ? mb || t("compPulling", { name: row.label }) : row.ready ? row.path : row.about}
+                  {wait
+                    ? mb ||
+                      (toolPull?.phase && toolPull.phase !== "done"
+                        ? `${t("compPulling", { name: row.label })} ${toolPull.phase}`
+                        : t("compPulling", { name: row.label }))
+                    : row.ready
+                      ? row.path
+                      : row.about}
                 </p>
                 {wait && toolPull && toolPull.total > 0 ? (
                   <div className="mt-1 h-1 overflow-hidden rounded-full bg-border">

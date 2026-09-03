@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { guessPlan, planFromTool, planStart } from "./plan.ts";
+import { guessPlan, planFinish, planFromTool, planStart } from "./plan.ts";
 import type { PlanStep } from "@/store/ide";
 
 describe("plan", () => {
@@ -37,5 +37,28 @@ describe("plan", () => {
     plan = planFromTool("run_file", plan, true)!;
     assert.equal(plan[2]?.status, "err");
     assert.equal(plan[3]?.status, "todo");
+  });
+  it("überarbeiten matches write, round end closes leftover todos", () => {
+    let plan: PlanStep[] = [
+      { text: "Referenzen und bestehendes UI prüfen", status: "ok" },
+      { text: "Layout, Farben und Interaktionen überarbeiten", status: "todo" },
+      { text: "Dateien ausführen und Fehler prüfen", status: "todo" },
+    ];
+    plan = planFromTool("write_file", plan)!;
+    assert.equal(plan[1]?.status, "ok");
+    plan = planFinish(plan)!;
+    assert.equal(plan.every((s) => s.status === "ok"), true);
+  });
+  it("failed finish only errors the running step", () => {
+    const plan = planFinish(
+      [
+        { text: "A", status: "ok" },
+        { text: "B", status: "run" },
+        { text: "C", status: "todo" },
+      ],
+      true,
+    )!;
+    assert.equal(plan[1]?.status, "err");
+    assert.equal(plan[2]?.status, "todo");
   });
 });

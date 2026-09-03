@@ -1,10 +1,11 @@
 import { estimateTokens } from "./tokens.ts";
 import { foldChatMessages } from "./chat-roles.ts";
 import { stampToolCalls } from "./tool-call.ts";
+import { COMPACT_MARK, digestOldMessages } from "./session.ts";
 
 export type CompactMode = "off" | "auto" | "aggressive";
 
-export const COMPACT_MARK = "Older history (compact";
+export { COMPACT_MARK };
 
 function isSys(m: Record<string, unknown>): boolean {
   return m.role === "system" && !String(m.content ?? "").startsWith(COMPACT_MARK);
@@ -17,7 +18,7 @@ function isTool(m: Record<string, unknown>): boolean {
 function stubTool(m: Record<string, unknown>): Record<string, unknown> {
   const text = String(m.content ?? "");
   const path = text.split("\n")[0]?.slice(0, 80) || "tool";
-  return { ...m, content: `[entfernt] ${path}` };
+  return { ...m, content: `[entfernt] ${path} (${text.length} Zeichen)` };
 }
 
 function trimContent(m: Record<string, unknown>, maxChars: number): Record<string, unknown> {
@@ -34,6 +35,21 @@ function keepTail(rest: Record<string, unknown>[], n: number): Record<string, un
   return rest.slice(start);
 }
 
+function keepRecent(rest: Record<string, unknown>[], mode: CompactMode, budget: number): Record<string, unknown>[] {
+  const minKeep = mode === "aggressive" ? 6 : 10;
+  const maxKeep = mode === "aggressive" ? 16 : 28;
+  const tailBudget = Math.floor(budget * 0.55);
+  let n = 0;
+  let tok = 0;
+  for (let i = rest.length - 1; i >= 0 && n < maxKeep; i--) {
+    const t = estimateTokens(JSON.stringify(rest[i]));
+    if (n >= minKeep && tok + t > tailBudget) break;
+    tok += t;
+    n += 1;
+  }
+  return keepTail(rest, Math.max(minKeep, n));
+}
+
 export function compactMessages(
   messages: Record<string, unknown>[],
   context: number,
@@ -46,26 +62,17 @@ export function compactMessages(
 
   const sys = messages.filter(isSys);
   const rest = messages.filter((m) => !isSys(m));
-  const keep = mode === "aggressive" ? 6 : 10;
-  if (rest.length <= keep && used <= budget * 1.5) {
+  const recent = keepRecent(rest, mode, budget);
+  const old = rest.slice(0, rest.length - recent.length);
+
+  if (!old.length) {
     const stubbed = rest.map((m, i) => (isTool(m) && i < rest.length - 1 ? stubTool(m) : m));
     const next = [...sys, ...stubbed];
     if (estimateTokens(JSON.stringify(next)) <= budget) return { messages: next, compacted: true };
     return { messages, compacted: false };
   }
 
-  const old = rest.slice(0, rest.length - keepTail(rest, keep).length);
-  const recent = keepTail(rest, Math.min(keep, rest.length));
-  if (!old.length) return { messages, compacted: false };
-  const lines = old.map((m) => {
-    const role = String(m.role ?? "user");
-    const text = String(m.content ?? "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120);
-    return `${role}: ${text}`;
-  });
-  const blob = lines.join("\n").slice(0, mode === "aggressive" ? 2500 : 5000);
+  const blob = digestOldMessages(old, mode === "aggressive" ? 3500 : 8000);
   const compact = {
     role: "user",
     content: `${COMPACT_MARK}, ${old.length} Nachrichten):\n${blob}`,
@@ -82,7 +89,7 @@ export function compactMessages(
       }
       return { ...m, content: String(m.content ?? "").slice(0, 1600) };
     });
-    next = [...sys, { ...compact, content: String(compact.content).slice(0, 2000) }, ...mid, ...tail];
+    next = [...sys, { ...compact, content: String(compact.content).slice(0, 4000) }, ...mid, ...tail];
   }
   return { messages: next, compacted: true };
 }
@@ -201,3 +208,4 @@ export function prepChatPayload(payload: Record<string, unknown>, ctx: number): 
     opt.num_ctx = ctxN;
   }
 }
+
