@@ -30,4 +30,15 @@ describe("persist-storage", () => {
     const slim = shrinkFiles(files, 50, ["open.ts"]);
     assert.equal("open.ts" in slim, true);
   });
+  it("keeps ref images even when skipPath would drop pngs", () => {
+    const files = {
+      "ref/shot.png": "data:image/png;base64," + "a".repeat(80),
+      "logo.png": "x",
+      "a.ts": "x",
+    };
+    const slim = shrinkFiles(files);
+    assert.equal("ref/shot.png" in slim, true);
+    assert.equal("logo.png" in slim, false);
+    assert.equal(slim["a.ts"], "x");
+  });
 });

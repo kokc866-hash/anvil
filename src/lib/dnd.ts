@@ -1,4 +1,4 @@
-import { joinPath } from "./fs";
+import { cleanPath, joinPath } from "./fs";
 import { readDroppedFile } from "./ref";
 import { unzipFiles } from "./archive";
 import { useIde } from "@/store/ide";
@@ -70,8 +70,9 @@ export async function importDropped(list: File[], destDir = ""): Promise<number>
     if (file.name.endsWith(".zip")) {
       const pack = await unzipFiles(await file.arrayBuffer());
       for (const [path, content] of Object.entries(pack)) {
-        const name = path.split("/").pop() ?? path;
-        write(uniqueDest(useIde.getState().files, destDir, name), content);
+        const rel = cleanPath(destDir ? joinPath(destDir, path) : path);
+        if (!rel) continue;
+        write(rel, content);
         n += 1;
       }
       continue;

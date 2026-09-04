@@ -1,5 +1,6 @@
 import type { PersistStorage, StorageValue } from "zustand/middleware";
 import { contentSig, formatBytes, rankPaths, skipPath } from "./ws-skip.ts";
+import { isSecretPath, isRefPath } from "./ref.ts";
 
 export const PERSIST_TOTAL = 96_000_000;
 export const PERSIST_EACH = 3_000_000;
@@ -11,14 +12,14 @@ export function shrinkFiles(files: Record<string, string>, budget = PERSIST_TOTA
   const out: Record<string, string> = {};
   let used = 0;
   const order = rankPaths(
-    Object.keys(files).filter((p) => !skipPath(p) || prefer.includes(p)),
-    prefer,
+    Object.keys(files).filter((p) => (!skipPath(p) && !isSecretPath(p)) || prefer.includes(p) || isRefPath(p)),
+    [...prefer, ...Object.keys(files).filter(isRefPath)],
   );
   for (const path of order) {
     const c = files[path];
     if (c == null) continue;
-    if (c.length > PERSIST_EACH && !prefer.includes(path)) continue;
-    if (c.length > PERSIST_EACH * 2) continue;
+    const cap = isRefPath(path) || prefer.includes(path) ? 8_000_000 : PERSIST_EACH;
+    if (c.length > cap) continue;
     if (used + c.length > budget) continue;
     out[path] = c;
     used += c.length;

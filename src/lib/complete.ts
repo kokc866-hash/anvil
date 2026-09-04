@@ -7,10 +7,13 @@ export async function completeText(opts: {
   baseUrl: string;
   model: string;
   apiKey: string;
+  images?: string[];
 }): Promise<string> {
   const id = providerOf(opts.provider).id;
+  const pics = (opts.images ?? []).filter((u) => /^data:image\//i.test(u)).slice(0, 4);
   if (id === "grok") {
-    const r = await completePrompt({ data: { prompt: opts.prompt } });
+    const note = pics.length ? `\n\n(${pics.length} Bild(er) — Ask über Grok-complete ohne Vision; Agent-Modus sieht sie.)` : "";
+    const r = await completePrompt({ data: { prompt: opts.prompt + note } });
     if (!r.ok) throw new Error(r.error || "Keine Antwort");
     return r.text;
   }

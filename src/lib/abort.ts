@@ -116,7 +116,10 @@ export function stopAgent(reason = "Gestoppt"): void {
     const st = useIde.getState();
     st.setAgentBusy(false);
     st.failRunningSteps();
+    st.setTestsRunning(false);
     st.setNotice(reason);
+    if (st.agentJob) st.setAgentJob(null);
+    void import("./companion-life").then((m) => m.releaseCompanion()).catch(() => undefined);
   });
   void import("./run-window").then((m) => m.releaseAgentUi());
 }
@@ -124,6 +127,12 @@ export function stopAgent(reason = "Gestoppt"): void {
 export function hardStopMs(min = 0): number {
   if (!min || min <= 0) return 0;
   return Math.min(480, min) * 60_000;
+}
+
+/** Cloud/Proxy: Slider 0 = kein hartes Limit. Trotzdem nicht ewig warten. */
+export function cloudStopMs(min = 0): number {
+  const n = hardStopMs(min);
+  return n > 0 ? n : 180_000;
 }
 
 export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {

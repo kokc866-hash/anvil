@@ -59,16 +59,16 @@ Einstellungen → Editor → Sprache: Deutsch oder English. Sofort.
 ```
 ┌──┬────────────────────┬──────────┬─────────────────────┐
 │▓▓│  index.html ×      │ Spur     │  Agent              │
-│📁│┌──────────────────┐│ Plan     │  ┌───────────────┐  │
+│📁│┌──────────────────┐│ Runde ←→ │  ┌───────────────┐  │
 │📎││                  ││ Denken   │  │ Antwort       │  │
-│🔎││     Editor       ││ Diff     │  │               │  │
-│⎇ ││                  ││ Run      │  └───────────────┘  │
-│🧠│└──────────────────┘│          │  [@main.py]         │
-│🧪│                    ├──────────┤  ┌─────────┐  [➤]  │
-│▦ │  Konsole           │          │  │ Agent…  │       │
-│💬│  > print(1)        │          │  └─────────┘       │
-│🐾│                    │          │  Kontext 16/33k    │
-├──┴────────────────────┴──────────┴─────────────────────┤
+│🔎││     Editor       ││ Tools    │  │               │  │
+│⎇ ││                  ││ Diff/Run │  └───────────────┘  │
+│🧠│└──────────────────┘│ To-do    │  [@main.py]         │
+│🧪├────────────────────┴──────────┤  ┌─────────┐  [➤]  │
+│▦ │  Konsole                      │  │ Agent…  │       │
+│💬│  > print(1)                   │  └─────────┘       │
+│🐾│                               │  Kontext 16/33k    │
+├──┴───────────────────────────────┴─────────────────────┤
 │ llama3.1  ·  Helfer bereit  ·  Z. 12  ·  2 Leerzeichen│
 └───────────────────────────────────────────────────────┘
 ```
@@ -84,7 +84,8 @@ Einstellungen → Editor → Sprache: Deutsch oder English. Sofort.
 | Hirn | Gedächtnis / Skills |
 | Kolben | Tests: entdeckt, Run, rot/grün, Klick auf Datei:Zeile |
 | Knoten | Tafel (Harness / Graph) |
-| Puzzle | Erweiterungen |
+| Puzzle | Erweiterungen: Built-ins, `plugins/*.js`, Open-VSX/.vsix |
+| Stecker | MCP: fremde Fläche (Engine, Docs). Exclusive oder Brücke |
 | Fußspuren | Spur (Plan, Denken, Run, Diff) |
 | Blase | Agent ein/aus |
 | Terminal | Ausgabe |
@@ -92,7 +93,7 @@ Einstellungen → Editor → Sprache: Deutsch oder English. Sofort.
 
 ### Mitte
 
-Tabs, Editor. Spur rechts daneben, nur bis zur Konsole. HTML öffnet **nicht** hier, sondern ein eigenes Run-Fenster.
+Tabs, Editor. Spur rechts daneben, **nur bis zur Konsole** (nicht volle Höhe). Pfeile wechseln ältere Runden. HTML öffnet **nicht** hier, sondern ein eigenes Run-Fenster.
 
 ### Rechts — Agent
 
@@ -111,6 +112,30 @@ Einstellungen → Layout:
 - **Untereinander** — Agent unter dem Editor
 
 Presets: IDE · Code + Agent · Schreiben · Ausführen.
+
+**Hardware anpassen** misst RAM, Kerne und die GPU des Rechners (nicht nur WebGPU). Setzt Animation, Live-Run, Agent-Schleifen. Helfer-Modell nur, wenn WebGPU da ist.
+
+### Erweiterungen (Puzzle)
+
+Drei Quellen, ein Schalter:
+
+- **Built-ins** — Format, Snippets, Lint, Web, ZIP, Debug, Helfer. Aus = Befehl weg.
+- **Workspace** — `plugins/*.js` mit `activate(anvil)`. Ohne `// @trust` in den ersten 8 Zeilen nur lesen. Mit `@trust` voll (schreiben, Agent, Netz) und startet **aus**, bis du den Schalter anmachst.
+- **VS Code / Markt** — Open VSX oder `.vsix`. Anvil nimmt Snippets, Sprachen, Kommentare und Keywords aus `tmLanguage`. Kein vscode-Modul, kein Language-Server. Pack lassen sich aus und entfernen.
+
+Neues Plugin: unten **Neues Plugin** → `plugins/mein-plugin.js`. Befehle stehen in Ctrl+Shift+P.
+
+### MCP (Stecker)
+
+HTTP-Server in der Unplug-Leiste, nicht stdio.
+
+- **An/Aus** verbindet. **Hier arbeiten** macht den Server zur Fläche.
+- **Eine Fläche** — Agent nur `mcp_call` / `mcp_list` / Plan. Anvil-Dateien aus.
+- **Brücke** — MCP und Anvil-Dateien in einer Runde.
+- Kontextzeile (`scene=overworld`) landet in Tool-Args, wenn das Tool den Key kennt.
+- Open VSX ist Erweiterungen, nicht MCP. Companion unter `/mcp` liefert Engine-Detect/Run und den Workspace-Pfad.
+
+Neues `@trust`-Plugin und MCP-Bearer liegen lokal (Tresor).
 
 ---
 
@@ -138,24 +163,25 @@ Arbeitskopie: standardmäßig Browser-Speicher. Für echten Ordner: Einstellunge
 
 ## 5. Editor
 
-Vorschläge wie am Handy: graue Leiste über der Zeile, **Tab** übernimmt. Aus: Einstellungen → Editor → Schreibvorschläge.
+Vorschläge wie am Handy: graue Leiste über der Zeile, **Tab** übernimmt. Aus: Einstellungen → Editor → Schreibvorschläge. Monaco lädt lokal (`/monaco/vs`), CDN nur als Fallback.
 
 | Taste | |
 |---|---|
-| Ctrl+S | Speichern (optional formatieren) |
-| Ctrl+F / Ctrl+H | Suchen / Ersetzen |
+| Ctrl+S | Speichern (optional formatieren; bei Formatfehler trotzdem speichern) |
+| Ctrl+F / Ctrl+H | Suchen / Ersetzen **in der Datei** (Anvil-Leiste, nicht Monaco-Widget) |
 | Ctrl+G | Zeile |
-| F12 / Ctrl+Klick | Definition — auch über `import` in andere Dateien |
+| F12 / Ctrl+Klick | Definition — auch über `import` in andere Dateien. Klick in der Glyph-Leiste = Breakpoint |
 | Alt+F12 | Definition einsehen |
 | Strg+T | Symbol im ganzen Workspace |
 | Ctrl+K | Inline ändern (Auswahl beschreiben) |
 | Ctrl+L | Ask zur Auswahl — erklärt, schreibt nicht |
+| Ctrl+W | Tab schließen — fragt bei ungespeicherten Änderungen. „Andere schließen“ auch. |
 | F5 | Debug |
 | F10 | Schritt |
 | Shift+F5 | Debug aus |
 | Shift+Alt+F | Formatieren |
 
-Live-Run: Python/JS nach dem Tippen, Ergebnis unter dem Editor. HTML: Run-Fenster.
+Live-Run: Python/JS nach dem Tippen, Ergebnis unter dem Editor. Voriger Live-Run wird verworfen, Run-Knopf bleibt frei. HTML: Run-Fenster. Dateien per Drop (Editor oder Tab): Nachfrage. Große Dateien (>1,5 MB) nur als Textvorschau. Tab-Wechsel merkt Cursor und Scroll.
 
 ---
 
@@ -165,48 +191,43 @@ Live-Run: Python/JS nach dem Tippen, Ergebnis unter dem Editor. HTML: Run-Fenste
 ┌ Agent ─────────────────────────────┐
 │ Anvil handelt. Das Modell schreibt.│
 │                                    │
-│ ▾ Denken                    live   │
-│   (klappt zu, wenn fertig)         │
-│                                    │
-│ Plan                               │
-│  [x] Datei anlegen                 │
-│  [x] schreiben                     │
-│  [ ] Run                           │
-│                                    │
-│ Hier der Text.                     │
-│ ┌ diff main.py ─┐                  │
-│ │ + print("hi") │  Übernehmen      │
-│ └───────────────┘                  │
+│ Hier die Antwort.                  │
+│ Spur daneben: Denken, Tools, Diff. │
 │                                    │
 │ [@main.py]                         │
 │ ┌ Agent… @Datei @ref · Enter ┐ [➤]│
 │ └────────────────────────────┘     │
 │ [Kontext 16/33k ▓░░ 0%] [Sitzung 0]│
-│ [Denken auto] [Kompakt auto] [Run] │
+│ [Ask | Agent]                      │
 └────────────────────────────────────┘
 ```
 
 ### Modus
 
-- **Agent** — darf Dateien anlegen und ändern
-- **Ask** — nur erklären. Umschalten in der Chat-Leiste oder Standard unter Einstellungen → Agent
+- **Agent** — darf Dateien anlegen und ändern. Writes landen im Workspace. Aus: **Diffs automatisch** → Editor **Übernehmen / Verwerfen**. Spur **Zurück** stellt die ganze Runde wieder.
+- **Ask** — erklärt. Darf lesen/suchen, nicht schreiben. Umschalten in der Chat-Leiste oder Standard unter Einstellungen → Agent
 
 ### Erwähnungen
 
-Im Eingabefeld `@` tippen: Dateien und `ref/` erscheinen. Enter wählt.
+Im Eingabefeld `@` tippen: Dateien und `ref/` erscheinen. Enter wählt. Auswahl (Ctrl+L): im Ask-Modus erklären, im Agent-Modus mit Auftrag patchen.
 
 Bilder: Büroklammer oder Einfügen. Vision-fähiges Modell vorausgesetzt.
 
 ### Nach der Runde
 
-- Diffs: **Übernehmen** / **Verwerfen** / alle
-- **Zurück vor diese Runde** — Workspace auf den Snapshot
-- **Nochmals** — gleiche Aufgabe
-- Run-Schleife an: Anvil führt aus, sieht Fehler/Frames, der Agent patched
+- Spur: Diff gegen Checkpoint, **Zurück vor diese Runde**
+- Editor: wenn Auto-Diffs aus, **Übernehmen** / **Verwerfen**
+- Run-Schleife an: Anvil führt aus, sieht Fehler/Frames, der Agent patched. `run_file` startet immer (auch wenn die Schleife aus ist) — Compile+Run bei C/C++. Winkelklammern in Quelltext (`#include <iostream>`) nicht als `u003c` speichern.
+
+Ollama: `num_ctx` = Slider, `keep_alive` 30m. Kein separates Generate-Warmup (das blockiert den Chat). Bei VRAM/OOM halbiert Anvil `num_ctx` und sendet erneut.
+
+Cloud (OpenAI, xAI, …): Electron-Pipe holt den Strom direkt — Tokens live, nicht erst nach dem ganzen JSON. GPT-5/Codex: Responses-API mit `input` (nicht `messages`). 400 `param: input` darf das Feld nicht löschen. Ohne hartes Zeitlimit bricht Anvil nach 3 Min ab.
 
 Chip **aktiv**, solange die Runde läuft. Abbrechen: Quadrat neben dem Feld.
 
-Wenn das Modell abbricht (lokal): Einstellungen → Agent → **Versuche** (Standard 3).
+Wenn das Modell eine Entscheidung braucht, stellt es eine **Nachfrage** mit 2–5 Optionen in Chat und Spur. Der Job bleibt stehen, Companion bleibt. Option klicken oder Enter = weiter am gleichen Auftrag. Stop / **Job beenden** = Job tot.
+
+Wenn das Modell abbricht (lokal): Einstellungen → Agent → **Versuche** (Standard 3). Ohne Fortschritt: Hinweis nach 90 s. Harter Stop (Minuten) nur wenn gesetzt.
 
 ---
 
@@ -250,7 +271,7 @@ Einstellungen → **Helfer**
 
 **Testen** prüft, ob er antwortet. GPU High-Performance / Worker: nach dem nächsten Laden.
 
-Der Helfer schreibt **keine** Dateien und ruft **nicht** das Hauptmodell.
+Der Helfer schreibt **keine** Dateien, startet **kein** Run, setzt **keine** Breakpoints und ruft **nicht** das Hauptmodell. Autonomie = nur Hinweise in der Leiste. Jobs (Intent, Titel, Commit-Zeile, Hilfe) einzeln in den Einstellungen. Standard: die meisten Jobs aus.
 
 Modelle-Katalog: Einstellungen → Modelle. Pins vorladen, Cache OPFS/IndexedDB, „auf die Platte“ in der Desktop-App.
 
@@ -284,7 +305,7 @@ Cloud-Keys bleiben lokal (Tresor/Secrets). Ollama/LM Studio/LAN gehen direkt aus
 
 ## 10. Companion
 
-Kein Internet. Kleines Node-Programm **auf diesem PC**. Anvil (Electron) startet es bei **Run** und beendet es, wenn Run zu ist.
+Kein Internet. Kleines Node-Programm **auf diesem PC**. Electron startet es bei **Run** und beendet es, wenn Run zu ist (außer **Anlassen**). Standard-Port **7845**. Anderer Port: Umgebung `ANVIL_COMPANION_PORT` (Server **und** Electron). LAN nur mit `ANVIL_COMPANION_HOST=0.0.0.0` plus Token. Pair (`/v1/pair`) nur localhost.
 
 Einstellungen → **Companion**
 
@@ -316,11 +337,12 @@ Linke Leiste → Tafel.
 
 Kacheln sind Schritte. Leitungen: von einem **Ausgang** (rechts an der Kachel) zum **Eingang** (links). Ziehen, nicht die Kachelmitte.
 
-- **Run-Schleife** — nach dem Schreiben ausführen, bei Fehler erneut
-- **Graph** — Frames ansehen, Agent patched die Darstellung
+- **Run-Schleife** — Write → Run → bei Fehler Patch (Text/Compile). Ein Loop, ein Schreib-Thread.
+- **Graph** — nur Sichtprüfung: nach HTML-Run ein Frame. Kein zweites Auto-Run, kein Pflicht-Play.
+- Aus ist aus: Projektdatei und Tafel dürfen die Schalter nicht überschreiben.
 - Einstellungen → Agent: An, Nach Write, Versuche, Runden, Frames
 
-**Ins Projekt** schreibt `.anvil/harness.json`. Der Agent darf die Tafel lesen und bauen.
+**Ins Projekt** und Tafel **Speichern** schreiben `.anvil/harness.json`, `graph.json` und `board.json`. Der Agent darf die Tafel lesen und bauen; `board_write` lässt sie offen. `Cargo.toml` allein ist keine Engine (nur Godot/Unity/Bevy).
 
 Layout zurück setzt auf den **verdrahteten** Standard (Write → Run → Fail → Patch), nicht auf leere Fläche.
 
@@ -356,11 +378,12 @@ Der Agent liest immer, wenn vorhanden:
 | Einstellungen weg nach anderem Fenster | Immer über start.bat / Electron, nicht wild im Browser |
 | Ollama „lokale URL“ | URL mit `/v1`, CORS `OLLAMA_ORIGINS=*`, Verbindung prüfen |
 | Modell bricht ab | Versuche 3–5, keep-alive am Server, kleineres Modell |
-| Chat-Feld tot | Esc, Agent-Leiste zu/auf, Intern → Oberfläche neu. Nach 90 s ohne Fortschritt bricht Anvil den Agent selbst ab. |
+| Chat-Feld tot | Esc, Agent-Leiste zu/auf, Intern → Oberfläche neu. Nach 90 s ohne Fortschritt Hinweis. Harter Stop nur wenn unter Agent gesetzt. |
 | HTML links, Konsole rechts, nichts zu sehen | Run im Fenster an, Vorschau im Editor aus |
 | Graph-Phasen im Chat obwohl Graph aus | Graph-Schalter in Einstellungen **und** Tafel; Chat zeigt Phasen nur wenn an |
 | Helfer nicht in der Leiste | Helfer an + Laden, nicht nur Katalog gewählt |
 | Companion „Website“ | Ist lokal. 127.0.0.1 = dieser PC. Einstellungen → Companion |
+| Temp voll (`anvil-run-*`) | Companion neu starten. Räumt `%TEMP%\anvil-run-*` / `anvil-fmt-*` / `anvil-dbg-*` selbst. GUI-Runs spätestens nach einer Stunde. |
 | Go/Rust startet nicht | Run in Anvil. Companion startet mit. Compiler fehlt → Netz |
 
 ---

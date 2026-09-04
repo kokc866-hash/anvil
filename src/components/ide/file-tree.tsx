@@ -226,7 +226,8 @@ export function FileTree() {
         setDiskName(diskFolderName());
         const first = Object.keys(pack.files).sort()[0];
         if (first) openFile(first);
-        setNotice(`${Object.keys(pack.files).length} Dateien geladen`);
+        const n = Object.keys(pack.files).length;
+        setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
       })().catch((err) => setNotice(err instanceof Error ? err.message : "Ordner nicht geöffnet"));
     }
     function onSave() {
@@ -294,10 +295,15 @@ export function FileTree() {
           { label: "Pfad kopieren", onClick: () => { void navigator.clipboard.writeText(menu.path); setNotice("Pfad kopiert"); } },
           { label: "Nach ref/", onClick: () => {
             void import("@/lib/ref").then((r) => {
-              const dest = r.uniqueRefPath(useIde.getState().files, menu.path.split("/").pop() ?? menu.path);
-              const content = useIde.getState().files[menu.path];
-              if (content != null) writeFile(dest, content);
-              setNotice(`→ ${dest}`);
+              const st = useIde.getState();
+              const dest = r.copyIntoRef(st.files, menu.path);
+              if ("error" in dest) {
+                setNotice(dest.error);
+                return;
+              }
+              const content = st.files[menu.path];
+              if (content != null) writeFile(dest.path, content);
+              setNotice(`→ ${dest.path}`);
             });
           } },
           { sep: true, label: "" },

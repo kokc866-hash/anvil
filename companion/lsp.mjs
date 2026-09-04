@@ -1,10 +1,10 @@
 /** Free language servers, pulled into <anvil-home>/lsp (npm/go). No paid LSPs. */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveBin, toolEnv, findInKind } from "./toolchain.mjs";
+import { resolveBin, toolEnv, findInKind, findAnywhere } from "./toolchain.mjs";
 import { lspHome } from "./paths.mjs";
 
 export { lspHome };
@@ -166,6 +166,10 @@ export function lspBin(name) {
   if (name === "rust-analyzer") {
     const ra = findInKind("rust", ["rust-analyzer"]);
     if (ra) return ra;
+  }
+  if (name === "clangd") {
+    const anywhere = findAnywhere(["clangd"]);
+    if (anywhere) return anywhere;
   }
   if (name === "clangd" || name === "javac" || name === "java") {
     const fromTool = resolveBin(name === "clangd" ? "cc" : name === "javac" ? "javac" : "java");
@@ -371,14 +375,72 @@ export async function pullLsp(id) {
     }
   }
   if (target.id === "clangd") {
-    const hit = lspBin("clangd");
-    if (!hit) return { ok: false, error: "clangd fehlt. LLVM holen (Companion, Compiler).", servers: listLsp() };
+    if (lspBin("clangd")) return { ok: true, servers: listLsp(), id: "clangd" };
+    try {
+      const pulled = await pullClangd();
+      if (pulled.ok) return { ok: true, servers: listLsp(), id: "clangd" };
+      return { ok: false, error: pulled.error || "clangd fehlt.", servers: listLsp() };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "clangd Download fehlgeschlagen", servers: listLsp() };
+    }
   }
   if (target.id === "java") {
     const javac = lspBin("javac") || resolveBin("javac");
     if (!javac) return { ok: false, error: "javac fehlt. OpenJDK holen (Companion, Compiler).", servers: listLsp() };
   }
   return { ok: Boolean(lspBin(target.bin)), servers: listLsp(), id: target.id };
+}
+
+async function pullClangd() {
+  const destDir = path.join(lspHome(), "clangd");
+  mkdirSync(destDir, { recursive: true });
+  mkdirSync(path.join(lspHome(), "bin"), { recursive: true });
+  const api = await fetch("https://api.github.com/repos/clangd/clangd/releases/latest", {
+    signal: AbortSignal.timeout(15000),
+    headers: { "user-agent": "anvil-companion" },
+  });
+  if (!api.ok) return { ok: false, error: `clangd releases ${api.status}` };
+  const j = await api.json();
+  const plat = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "mac" : "linux";
+  const assets = Array.isArray(j.assets) ? j.assets : [];
+  const asset = assets.find((a) => String(a.name || "").toLowerCase().includes(plat) && /\.zip$/i.test(a.name));
+  if (!asset?.browser_download_url) return { ok: false, error: "clangd-Paket nicht gefunden." };
+  const zip = path.join(lspHome(), String(asset.name));
+  const r = await fetch(asset.browser_download_url, { redirect: "follow", signal: AbortSignal.timeout(8 * 60 * 1000) });
+  if (!r.ok) return { ok: false, error: `clangd download ${r.status}` };
+  writeFileSync(zip, Buffer.from(await r.arrayBuffer()));
+  const unpack = await run(process.platform === "win32" ? "tar.exe" : "tar", ["-xf", zip, "-C", destDir], { timeoutMs: 120000 });
+  if (!unpack.ok && !findNamed(destDir, "clangd")) {
+    return { ok: false, error: (unpack.stderr || "clangd entpacken fehlgeschlagen").slice(0, 400) };
+  }
+  const found = findNamed(destDir, "clangd");
+  if (!found) return { ok: false, error: "clangd nach Download nicht im Archiv." };
+  const ext = process.platform === "win32" ? ".exe" : "";
+  copyFileSync(found, path.join(lspHome(), "bin", "clangd" + ext));
+  return { ok: true };
+}
+
+function findNamed(root, name, depth = 0) {
+  if (!existsSync(root) || depth > 6) return null;
+  const want = process.platform === "win32" ? [name + ".exe", name] : [name];
+  let ents = [];
+  try {
+    ents = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of ents) {
+    const full = path.join(root, e.name);
+    if (e.isFile() && want.includes(e.name.toLowerCase() === e.name ? e.name : e.name) && want.some((w) => e.name.toLowerCase() === w.toLowerCase())) {
+      return full;
+    }
+    if (e.isFile() && want.some((w) => e.name.toLowerCase() === w.toLowerCase())) return full;
+    if (e.isDirectory() && !e.name.startsWith(".")) {
+      const hit = findNamed(full, name, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
 }
 
 function langOf(p, spec) {

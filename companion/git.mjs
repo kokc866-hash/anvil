@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { toolEnv } from "./toolchain.mjs";
+import { blockedCwd, whichExts } from "./guard.mjs";
 
 const SKIP = new Set([
   "node_modules",
@@ -22,12 +23,64 @@ const SKIP = new Set([
   "out",
   "bin",
   "obj",
+  ".pnpm-store",
+  "Pods",
   ".idea",
   ".gradle",
+  ".output",
+  ".nuxt",
+  ".svelte-kit",
+]);
+
+const KEEP_DOT = new Set([
+  ".gitignore",
+  ".gitattributes",
+  ".gitmodules",
+  ".env.example",
+  ".env.sample",
+  ".env.template",
+  ".anvil",
+  ".github",
+  ".vscode",
+  ".editorconfig",
+  ".nvmrc",
+  ".node-version",
+  ".prettierrc",
+  ".prettierrc.json",
+  ".prettierrc.yml",
+  ".prettierrc.yaml",
+  ".prettierignore",
+  ".eslintrc",
+  ".eslintrc.js",
+  ".eslintrc.cjs",
+  ".eslintrc.json",
+  ".eslintrc.yml",
+  ".eslintignore",
+  ".dockerignore",
+  ".npmrc",
+  ".yarnrc",
+  ".yarnrc.yml",
+  ".clang-format",
+  ".clang-tidy",
+  ".tool-versions",
+  ".python-version",
+  ".ruby-version",
+  ".mailmap",
 ]);
 
 const TEXT =
-  /\.(py|ts|tsx|mts|cts|js|jsx|mjs|cjs|go|rs|java|kt|c|cc|cpp|h|hpp|cs|php|rb|md|html|css|json|toml|yml|yaml|sql|sh|vue|svelte|txt|gd|csproj|gitignore|env\.example)$/i;
+  /\.(py|ts|tsx|mts|cts|js|jsx|mjs|cjs|go|rs|java|kt|c|cc|cpp|h|hpp|cs|php|rb|md|html|css|json|toml|yml|yaml|sql|sh|vue|svelte|txt|gd|csproj|xml|gitignore|env\.example)$/i;
+const BARE = /^(Makefile|makefile|GNUmakefile|Dockerfile|Gemfile|Procfile|LICENSE|COPYING|CMakeLists\.txt)$/;
+const IMG_MIME = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  ico: "image/x-icon",
+  bmp: "image/bmp",
+};
+
 
 export const TREE_FILES = 4000;
 export const TREE_EACH = 1_500_000;
@@ -35,13 +88,19 @@ export const TREE_TOTAL = 96_000_000;
 
 function which(bin) {
   const env = process.env.PATH || "";
-  const ext = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
-  for (const dir of env.split(path.delimiter)) {
-    for (const e of ext) {
-      const p = path.join(dir, bin + e);
-      if (existsSync(p)) return p;
+  const ext = whichExts();
+  const lookup = (name) => {
+    for (const dir of env.split(path.delimiter)) {
+      for (const e of ext) {
+        const p = path.join(dir, name + e);
+        if (existsSync(p)) return p;
+      }
     }
-  }
+    return null;
+  };
+  const hit = lookup(bin);
+  if (hit) return hit;
+  if (process.platform === "win32" && (bin === "python" || bin === "python3")) return lookup("py");
   return null;
 }
 
@@ -64,9 +123,7 @@ export function resolveCwd(raw) {
   const root = path.parse(cwd).root;
   if (!cwd || cwd === root) throw new Error("Ordner ungültig.");
   if (!existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error("Ordner fehlt.");
-  const n = cwd.replace(/\\/g, "/").toLowerCase();
-  if (/^\/(etc|usr|bin|sbin|boot|sys|proc|dev)(\/|$)/.test(n)) throw new Error("Systemordner gesperrt.");
-  if (/^[a-z]:\/windows(\/|$)/.test(n)) throw new Error("Systemordner gesperrt.");
+  if (blockedCwd(cwd)) throw new Error("Systemordner gesperrt.");
   return cwd;
 }
 
@@ -156,8 +213,7 @@ export async function gitCommit(cwd, message, all = true) {
   if (!message?.trim()) return { ok: false, error: "Nachricht fehlt." };
   const cfg = await git(root, ["config", "user.email"]);
   if (!cfg.ok || !(cfg.stdout || "").trim()) {
-    await git(root, ["config", "user.email", "anvil@local"]);
-    await git(root, ["config", "user.name", "Anvil"]);
+    return { ok: false, error: "git user.email fehlt. Einmal: git config --global user.email …" };
   }
   if (all) await git(root, ["add", "-A"]);
   const r = await git(root, ["commit", "-m", message.trim()]);
@@ -274,13 +330,15 @@ function walk(dir, prefix, acc) {
       acc.skipped += 1;
       continue;
     }
-    if (e.name.startsWith(".") && e.name !== ".gitignore" && e.name !== ".env.example" && e.name !== ".anvil") continue;
+    if (e.name.startsWith(".") && !KEEP_DOT.has(e.name) && !/^\.(eslint|prettier)/i.test(e.name)) continue;
     if (SKIP.has(e.name)) continue;
     const full = path.join(dir, e.name);
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    const relPosix = rel.replace(/\\/g, "/");
+    if (/(^|\/)\.anvil\/(work|out)(\/|$)/i.test(relPosix) || relPosix === ".anvil/work" || relPosix === ".anvil/out") continue;
     if (e.isDirectory()) {
-      acc.dirs.push(rel.replace(/\\/g, "/"));
-      walk(full, rel.replace(/\\/g, "/"), acc);
+      acc.dirs.push(relPosix);
+      walk(full, relPosix, acc);
       continue;
     }
     if (!e.isFile()) continue;
@@ -291,16 +349,40 @@ function walk(dir, prefix, acc) {
       acc.skipped += 1;
       continue;
     }
-    if (!st.size || st.size > TREE_EACH) {
+    if (st.size > TREE_EACH && !IMG_MIME[e.name.split(".").pop()?.toLowerCase() || ""]) {
       acc.skipped += 1;
       continue;
     }
-    if (!TEXT.test(e.name) && acc.n > TREE_FILES * 0.7) {
+    const ext = (e.name.split(".").pop() || "").toLowerCase();
+    const mime = IMG_MIME[ext];
+    if (mime) {
+      if (!relPosix.startsWith("ref/") || st.size > 4_000_000) {
+        acc.skipped += 1;
+        continue;
+      }
+      try {
+        const buf = readFileSync(full);
+        const head = buf.subarray(0, 16).toString("utf8");
+        acc.files[relPosix] = head.startsWith("data:image/")
+          ? buf.toString("utf8")
+          : `data:${mime};base64,${buf.toString("base64")}`;
+        acc.n += 1;
+        acc.bytes += st.size;
+      } catch {
+        acc.skipped += 1;
+      }
+      continue;
+    }
+    if (st.size > TREE_EACH) {
+      acc.skipped += 1;
+      continue;
+    }
+    if (!TEXT.test(e.name) && !BARE.test(e.name) && acc.n > TREE_FILES * 0.7) {
       acc.skipped += 1;
       continue;
     }
     try {
-      acc.files[rel.replace(/\\/g, "/")] = readFileSync(full, "utf8");
+      acc.files[relPosix] = readFileSync(full, "utf8");
       acc.n += 1;
       acc.bytes += st.size;
     } catch {
@@ -316,12 +398,25 @@ export function listTree(cwd) {
   return { ok: true, cwd: root, files: acc.files, dirs: acc.dirs, skipped: acc.skipped, n: acc.n };
 }
 
+export function insideRoot(root, full) {
+  const r = path.resolve(root);
+  const f = path.resolve(full);
+  if (process.platform === "win32") {
+    const rl = r.replace(/[/\\]+$/, "").toLowerCase();
+    const fl = f.toLowerCase();
+    return fl === rl || fl.startsWith(`${rl}\\`) || fl.startsWith(`${rl}/`);
+  }
+  const rs = r.endsWith(path.sep) ? r : r + path.sep;
+  return f === r || f.startsWith(rs);
+}
+
 export function writeRel(cwd, rel, content) {
   const root = resolveCwd(cwd);
   const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean || clean.includes("..")) throw new Error("Pfad ungültig.");
+  if (String(content || "").trim().startsWith("data:image/")) return { ok: true, path: clean, skipped: "image" };
   const full = path.join(root, ...clean.split("/"));
-  if (!full.startsWith(root)) throw new Error("Pfad ungültig.");
+  if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
   mkdirSync(path.dirname(full), { recursive: true });
   writeFileSync(full, content, "utf8");
   return { ok: true, path: clean };
@@ -332,7 +427,7 @@ export function mkdirRel(cwd, rel) {
   const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean || clean.includes("..")) throw new Error("Pfad ungültig.");
   const full = path.join(root, ...clean.split("/"));
-  if (!full.startsWith(root)) throw new Error("Pfad ungültig.");
+  if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
   mkdirSync(full, { recursive: true });
   return { ok: true, path: clean };
 }
@@ -342,7 +437,7 @@ export function removeRel(cwd, rel) {
   const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean || clean.includes("..")) throw new Error("Pfad ungültig.");
   const full = path.join(root, ...clean.split("/"));
-  if (!full.startsWith(root)) throw new Error("Pfad ungültig.");
+  if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
   if (existsSync(full)) rmSync(full, { recursive: true, force: true });
   return { ok: true, path: clean };
 }

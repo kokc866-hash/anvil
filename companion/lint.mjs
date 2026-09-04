@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { extraLspDiagnostics, lspBin } from "./lsp.mjs";
 import { toolEnv, resolveBin } from "./toolchain.mjs";
+import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
 
 export function which(bin) {
   const local = lspBin(bin);
@@ -221,11 +221,8 @@ export async function runLint({ files = [], timeoutMs = 40000, enabled = null, l
     const extra = await extraLspDiagnostics(dir, snapFiles, Math.max(4000, lspTimeoutMs || 8000), enabled);
     diagnostics.push(...extra.map((h) => ({ ...h, path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path })));
   } finally {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      /* */
-    }
+    if (!rmDir(dir)) rmSoon(dir);
+    sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
   }
 
   const seen = new Set();

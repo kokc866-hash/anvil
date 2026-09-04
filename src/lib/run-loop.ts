@@ -214,6 +214,7 @@ export async function runLoopFile(path: string, files: Record<string, string>, o
     duration: r.duration,
     graphical: Boolean(r.html),
     html: r.html,
+    stage: r.stage ?? (r.html ? { kind: "html" as const } : { kind: "log" as const }),
     image: shot.image ?? undefined,
     size: shot.w && shot.h ? `${shot.w}×${shot.h}` : undefined,
     tries_left: budget.left,

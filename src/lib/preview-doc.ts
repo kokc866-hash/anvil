@@ -58,14 +58,6 @@ ${code}
 </body></html>`;
 }
 
-function htmlFromStdout(text: string): string | null {
-  const t = text.trim();
-  if (!t) return null;
-  if (/^<!doctype html|^<html[\s>]|^<svg[\s>]/i.test(t)) return t;
-  const m = t.match(/<!doctype html[\s\S]+/i) || t.match(/<html[\s\S]+<\/html>/i);
-  return m ? m[0] : null;
-}
-
 function jsonTable(src: string): { text: string; rows?: string[][]; cols?: string[] } {
   try {
     const v = JSON.parse(src) as unknown;
@@ -163,6 +155,17 @@ export function previewFor(
     };
   }
 
+  if (last?.stage?.kind === "window" || last?.stage?.kind === "log") {
+    return {
+      kind: "console",
+      ok: last.ok,
+      stdout: last.stdout || (last.stage.kind === "window" ? "Bühne: Fenster läuft." : ""),
+      stderr: last.stderr,
+      duration: last.duration,
+      label: last.label,
+    };
+  }
+
   if (lang === "javascript" || lang === "typescript") {
     const page = Object.keys(files).find(
       (p) => /\.html?$/i.test(p) && files[p].includes(path.split("/").pop() ?? "\0"),
@@ -180,11 +183,6 @@ export function previewFor(
     return { kind: "iframe", srcDoc: html, live: !last?.html, label: langLabel(lang) };
   }
 
-  const fromOut = last?.stdout ? htmlFromStdout(last.stdout) : null;
-  if (fromOut) {
-    return { kind: "iframe", srcDoc: withEngine(fromOut, inputMap), live: false, label: langLabel(lang) };
-  }
-
   if (last) {
     return {
       kind: "console",
@@ -197,7 +195,7 @@ export function previewFor(
   }
 
   const hints: Partial<Record<LangId, string>> = {
-    python: "Run führt Python im Browser aus (Pyodide). Ausgabe erscheint hier.",
+    python: "Run: Python auf dem PC (Companion). Ohne Companion: Pyodide im Browser.",
     go: "Run: Go auf dem PC (Companion) oder Compiler im Netz.",
     rust: "Run: rustc/cargo lokal (Companion) oder Compiler im Netz.",
     java: "Run: javac lokal (Companion) oder Compiler im Netz.",

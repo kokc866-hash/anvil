@@ -22,5 +22,6 @@ describe("live-write", () => {
   });
   it("mcp mirror path", () => {
     assert.equal(mcpMirrorPath("Ziva", { path: "res://player.gd" }, "write_script"), "mcp/Ziva/player.gd");
+    assert.equal(mcpMirrorPath("Ziva", {}, "status"), "");
   });
 });

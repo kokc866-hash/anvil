@@ -1,11 +1,12 @@
 /** Native Python debug via sys.settrace. Token-gated by the server. */
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { resolveCwd } from "./git.mjs";
 import { resolveBin, toolEnv } from "./toolchain.mjs";
+import { rmDir, rmSoon } from "./tmp.mjs";
 
 const sessions = new Map();
 
@@ -260,7 +261,7 @@ function killSess(sess) {
     }
   }, 800);
   try {
-    rmSync(sess.dir, { recursive: true, force: true });
+    if (!rmDir(sess.dir)) rmSoon(sess.dir);
   } catch {
     /* */
   }
@@ -320,7 +321,7 @@ export function debugStart(body) {
     sess.code = code ?? 0;
     sess.pause = null;
     try {
-      rmSync(dir, { recursive: true, force: true });
+      if (!rmDir(dir)) rmSoon(dir);
     } catch {
       /* */
     }

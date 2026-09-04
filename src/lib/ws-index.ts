@@ -1,7 +1,5 @@
 import { contentSig, isSourcePath, rankPaths, skipPath } from "./ws-skip.ts";
-
-const SECRET = /(^|\/)(\.env($|\.)|\.env\.[^/]+|id_rsa|\.pem$|credentials|secrets?\.|vault)/i;
-const SECRET_NAME = /(api[_-]?key|token|password)/i;
+import { isSecretPath } from "./ref.ts";
 
 export type IdxKind = "fn" | "class" | "var" | "type";
 
@@ -21,7 +19,7 @@ export type IdxFile = {
 export type IdxHit = { kind: "file" | "symbol"; path: string; line: number; label: string };
 
 function secret(path: string): boolean {
-  return SECRET.test(path) || SECRET_NAME.test(path.split("/").pop() ?? "");
+  return isSecretPath(path);
 }
 
 function extOf(path: string): string {
@@ -150,6 +148,7 @@ export function rebuildIndex(files: Record<string, string>): IdxFile[] {
     if (skipPath(path) || secret(path)) continue;
     const src = files[path];
     if (src == null) continue;
+    if (/^data:image\//i.test(src) || /^\s*\[image /i.test(src)) continue;
     const sig = contentSig(src);
     const hit = prev.get(path);
     const row = hit && hit.sig === sig ? hit.row : parseFile(path, src);
@@ -263,7 +262,7 @@ export function workspaceIndex(files: Record<string, string>, limit = 120, prefe
 }
 
 export function workspaceTree(files: Record<string, string>, prefer: string[] = [], limit = 180): string {
-  const paths = Object.keys(files).filter((p) => !skipPath(p)).sort();
+  const paths = Object.keys(files).filter((p) => !skipPath(p) && !secret(p)).sort();
   if (!paths.length) return "(empty)";
   if (paths.length <= limit) return paths.join("\n");
   const preferSet = new Set(prefer.filter((p) => p in files && !skipPath(p)));

@@ -11,6 +11,9 @@ import {
   parseToolArgs,
   harvestTools,
   isToolTemplateEcho,
+  decodeWriteEscapes,
+  pickRunPath,
+  isNudgeEcho,
 } from "./agent-parse.ts";
 
 test("extracts fenced files with path in fence tag", () => {
@@ -63,6 +66,40 @@ test("stopped early after thinking without tools", () => {
   assert.equal(looksStoppedEarly({ content: "ok.", reasoning: "", finish_reason: "stop" }), false);
   assert.equal(looksIncomplete("Ich habe."), false);
   assert.equal(looksStoppedEarly({ content: "Fertig.", tool_calls: [{ id: "1" }] }), false);
+  assert.equal(
+    looksStoppedEarly({
+      content: "Läuft sauber — kein Patch nötig.",
+      reasoning: "long think ".repeat(40),
+      finish_reason: "stop",
+    }),
+    false,
+  );
+});
+
+test("rerun-if-error is not an open write job after a green run", () => {
+  assert.equal(wantsWorkspaceWrite("Führe main.cpp nochmal aus. Bei Fehler patchen."), false);
+  assert.equal(
+    jobOpen({
+      ask: "Führe main.cpp nochmal aus. Bei Fehler patchen.",
+      used: ["run_file", "read_file"],
+      text: "Läuft sauber — kein Patch nötig.",
+    }),
+    false,
+  );
+  assert.equal(
+    jobOpen({
+      ask: "Antwort auf: Code läuft fehlerfrei. Was soll ich schreiben/ändern?\nWahl: A) Nichts — nur Stil-Regel testen",
+      used: ["run_file", "ask_user"],
+      text: "",
+    }),
+    false,
+  );
+  assert.ok(
+    jobOpen({
+      ask: "Antwort auf: Code läuft fehlerfrei. Was soll ich schreiben/ändern?\nWahl: B) Kommentar in main.cpp ergänzen",
+      used: ["run_file", "ask_user"],
+    }),
+  );
 });
 
 test("write intent keeps the loop going", () => {
@@ -118,9 +155,55 @@ test("harvests json name/arguments", () => {
   assert.equal(hits[0]?.function.name, "read_file");
 });
 
+test("harvests mcp_list fallback", () => {
+  const json = harvestTools(`{"name":"mcp_list","arguments":{}}`);
+  assert.equal(json[0]?.function.name, "mcp_list");
+  const call = harvestTools(`Bitte tools listen:\nmcp_list()\n`);
+  assert.equal(call[0]?.function.name, "mcp_list");
+});
+
 test("template echo is not a tool and stops the loop", () => {
   const dump = `{"arguments": <args-json-object>}\n</tool_call>Kein Json\n{"arguments": <args-json-object>}`;
   assert.equal(isToolTemplateEcho(dump), true);
   assert.equal(harvestTools(`<tool_call>${dump}</tool_call>`).length, 0);
   assert.equal(looksLikeNoTools(dump), false);
+});
+
+test("decodes bare u003c includes from the model", () => {
+  const src = "#include u003ciostreamu003e\nint n = sizeof(int) u003e= 4;\nstd::cout u003cu003c n;\n";
+  const out = decodeWriteEscapes(src);
+  assert.match(out, /#include <iostream>/);
+  assert.match(out, /sizeof\(int\) >= 4/);
+  assert.match(out, /cout << n/);
+});
+
+test("keeps JS XSS unicode escapes", () => {
+  const js = 'JSON.stringify(x).replace(/</g, "\\\\u003c").replace(/>/g, "\\\\u003e")';
+  assert.equal(decodeWriteEscapes(js), js);
+});
+
+test("parseToolArgs decodes write content", () => {
+  const r = parseToolArgs('{"path":"main.cpp","content":"#include u003ciostreamu003e\\nint main(){}"}');
+  assert.equal(r.truncated, false);
+  assert.match(String(r.args.content), /#include <iostream>/);
+});
+
+test("nudge echo is not incomplete work", () => {
+  assert.equal(isNudgeEcho("Auftrag offen. Nächstes Tool, kein Plansatz."), true);
+  assert.equal(looksIncomplete("Auftrag offen. Nächstes Tool, kein Plansatz."), false);
+  assert.ok(jobOpen({ ask: "C++ compilieren", used: ["write_file"] }));
+  assert.equal(
+    jobOpen({
+      ask: "C++ compilieren",
+      used: ["write_file", "run_file"],
+      text: "Auftrag offen. Nächstes Tool, kein Plansatz.",
+    }),
+    false,
+  );
+});
+
+test("pickRunPath prefers main.cpp after a header write", () => {
+  assert.equal(pickRunPath(["util.hpp", "main.cpp"], "util.hpp"), "main.cpp");
+  assert.equal(pickRunPath(["src/app.py"], "src/app.py"), "src/app.py");
+  assert.equal(pickRunPath(["README.md"]), "");
 });

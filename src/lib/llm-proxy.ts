@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
 import { AGENT_TOOLS, CORE_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
 import { isContextError, prepChatPayload } from "./compact";
-import { applyLlmOptions, applyResponsesStore, patchResponses400, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { applyLlmOptions, patchResponses400, responsesBody, usesResponsesApi, type ThinkingMode } from "./llm-options";
 import { parseResponses, parseResponsesSse } from "./responses-parse";
 import { shrinkTools, stripPayload } from "./tool-fallback";
 import { applyCapToPayload, classifyLlmError, sendTools, type ModelCap } from "./model-caps";
@@ -253,51 +253,6 @@ async function postOpenAi(
   httpFail(res.status, body, kind || (/chatgpt\.com/.test(endpoint) ? "codex" : ""));
 }
 
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => {
-        if (typeof c === "string") return c;
-        if (c && typeof c === "object" && "text" in (c as object)) return String((c as { text?: string }).text ?? "");
-        return "";
-      })
-      .join("\n");
-  }
-  return content == null ? "" : String(content);
-}
-
-function toResponsesInput(messages: Record<string, unknown>[]): { instructions: string; input: unknown[] } {
-  const inst: string[] = [];
-  const input: unknown[] = [];
-  for (const m of messages) {
-    const role = String(m.role ?? "");
-    if (role === "system") {
-      inst.push(textOf(m.content));
-      continue;
-    }
-    if (role === "tool") {
-      input.push({ type: "function_call_output", call_id: String(m.tool_call_id ?? ""), output: textOf(m.content) });
-      continue;
-    }
-    if (role === "assistant" && Array.isArray(m.tool_calls)) {
-      for (const tc of m.tool_calls as ToolCall[]) {
-        input.push({
-          type: "function_call",
-          call_id: tc.id,
-          name: tc.function.name,
-          arguments: tc.function.arguments || "{}",
-        });
-      }
-      const t = textOf(m.content);
-      if (t) input.push({ role: "assistant", content: t });
-      continue;
-    }
-    input.push({ role, content: textOf(m.content) });
-  }
-  return { instructions: inst.filter(Boolean).join("\n\n"), input };
-}
-
 async function postResponses(
   endpoint: string,
   headers: Record<string, string>,
@@ -305,18 +260,7 @@ async function postResponses(
   useTools: boolean,
   kind = "",
 ): Promise<LlmChoice> {
-  const { instructions, input } = toResponsesInput((payload.messages as Record<string, unknown>[]) ?? []);
-  const effort = payload.reasoning_effort;
-  const body: Record<string, unknown> = applyResponsesStore(
-    {
-      model: payload.model,
-      input,
-      instructions: instructions || undefined,
-      max_output_tokens: payload.max_completion_tokens ?? payload.max_tokens,
-    },
-    kind,
-  );
-  if (effort) body.reasoning = { effort };
+  const body: Record<string, unknown> = responsesBody(payload, kind);
   if (useTools) {
     body.tools = AGENT_TOOLS.map((t) => ({
       type: "function",
@@ -342,7 +286,7 @@ async function postResponses(
   }
   if (!res.ok && res.status === 400 && body.reasoning && /reasoning/i.test(raw)) {
     delete body.reasoning;
-    if (effort) body.reasoning_effort = effort;
+    if (payload.reasoning_effort) body.reasoning_effort = payload.reasoning_effort;
     res = await send(body);
     raw = await res.text();
   }

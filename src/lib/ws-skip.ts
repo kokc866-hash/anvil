@@ -25,28 +25,99 @@ export const SKIP_DIRS = new Set([
   ".svelte-kit",
 ]);
 
+export const KEEP_DOT = new Set([
+  ".gitignore",
+  ".gitattributes",
+  ".gitmodules",
+  ".env.example",
+  ".env.sample",
+  ".env.template",
+  ".anvil",
+  ".github",
+  ".vscode",
+  ".editorconfig",
+  ".nvmrc",
+  ".node-version",
+  ".prettierrc",
+  ".prettierrc.json",
+  ".prettierrc.yml",
+  ".prettierrc.yaml",
+  ".prettierignore",
+  ".eslintrc",
+  ".eslintrc.js",
+  ".eslintrc.cjs",
+  ".eslintrc.json",
+  ".eslintrc.yml",
+  ".eslintignore",
+  ".dockerignore",
+  ".npmrc",
+  ".yarnrc",
+  ".yarnrc.yml",
+  ".clang-format",
+  ".clang-tidy",
+  ".tool-versions",
+  ".python-version",
+  ".ruby-version",
+  ".mailmap",
+]);
+
 const SKIP_LOCK = /(?:^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb)$/i;
 const SKIP_BIN =
   /\.(min\.(js|css)|map|wasm|pack|woff2?|ttf|eot|png|jpe?g|gif|webp|ico|mp4|mp3|zip|gz|br|7z|exe|dll|so|dylib|o|a|pyc|class|jar|lockb)$/i;
 const SOURCE =
-  /\.(py|ts|tsx|mts|cts|js|jsx|mjs|cjs|go|rs|java|kt|c|cc|cpp|h|hpp|cs|php|rb|md|html|css|json|toml|yml|yaml|sql|sh|vue|svelte|txt)$/i;
+  /\.(py|ts|tsx|mts|cts|js|jsx|mjs|cjs|go|rs|java|kt|c|cc|cpp|h|hpp|cs|php|rb|md|html|css|json|toml|yml|yaml|sql|sh|vue|svelte|txt|gd|csproj|xml)$/i;
+const BARE_KEEP =
+  /^(Makefile|makefile|GNUmakefile|Dockerfile|Gemfile|Procfile|LICENSE|COPYING|CMakeLists\.txt)$/;
 
 export function skipDirName(name: string): boolean {
   return SKIP_DIRS.has(name);
 }
 
+export function keepDotName(name: string): boolean {
+  return KEEP_DOT.has(name) || /^\.(eslint|prettier)/i.test(name);
+}
+
+export function keepBareFile(name: string): boolean {
+  return BARE_KEEP.test(name);
+}
+
 export function skipPath(path: string): boolean {
   const norm = path.replace(/\\/g, "/");
+  if (/(^|\/)\.anvil\/(work|out)(\/|$)/i.test(norm)) return true;
   const parts = norm.split("/");
   for (const p of parts) {
     if (SKIP_DIRS.has(p)) return true;
   }
   const base = parts[parts.length - 1] ?? "";
-  return SKIP_LOCK.test(base) || SKIP_BIN.test(base);
+  if (SKIP_LOCK.test(base)) return true;
+  if (SKIP_BIN.test(base)) return parts[0] !== "ref";
+  return false;
 }
 
 export function isSourcePath(path: string): boolean {
-  return SOURCE.test(path);
+  const base = path.replace(/\\/g, "/").split("/").pop() ?? "";
+  return SOURCE.test(path) || BARE_KEEP.test(base) || keepDotName(base);
+}
+
+/** Merge disk tree with RAM: unsaved edits and files the tree skipped (empty, dots, secrets). */
+export function overlayDiskTree(
+  disk: Record<string, string>,
+  ram: Record<string, string>,
+  dirty: Record<string, boolean> = {},
+): Record<string, string> {
+  const out = { ...disk };
+  for (const [p, c] of Object.entries(ram)) {
+    if (p in out && !dirty[p]) {
+      if (/^data:image\//i.test(c) && !/^data:image\//i.test(out[p] ?? "")) out[p] = c;
+      continue;
+    }
+    const base = p.replace(/\\/g, "/").split("/").pop() ?? p;
+    const root = p.replace(/\\/g, "/").split("/")[0] ?? p;
+    if (dirty[p] || (!(p in disk) && (c === "" || isSourcePath(p) || keepDotName(base) || keepDotName(root) || root === "ref" || /^data:image\//i.test(c)))) {
+      out[p] = c;
+    }
+  }
+  return out;
 }
 
 export function contentSig(s: string): string {

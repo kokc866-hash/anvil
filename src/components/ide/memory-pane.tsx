@@ -27,6 +27,7 @@ export function MemoryPane() {
   const [draft, setDraft] = useState("");
   const person = facts.filter((f) => f.scope !== "project" && f.kind !== "project");
   const proj = facts.filter((f) => (f.scope === "project" || f.kind === "project") && (!f.ws || f.ws === ws));
+  const shownSkills = skills.filter((s) => s.scope !== "project" || !s.ws || s.ws === ws);
   const journal = useIde((s) => s.sessionJournal);
   const setSessionJournal = useIde((s) => s.setSessionJournal);
 
@@ -100,7 +101,7 @@ export function MemoryPane() {
                 </div>
               )
           : tab === "skills"
-            ? skills.map((s) => {
+            ? shownSkills.map((s) => {
                 const dbg = debugSkill(s);
                 return (
                 <div key={s.id} className="mb-1.5 rounded-md border border-border px-2 py-1.5">
@@ -145,6 +146,7 @@ export function MemoryPane() {
                 ))}
         {tab === "person" && person.length === 0 ? <p className="text-muted">Noch keine Personen-Fakten.</p> : null}
         {tab === "project" && proj.length === 0 ? <p className="text-muted">Noch keine Projekt-Fakten für {ws}.</p> : null}
+        {tab === "skills" && shownSkills.length === 0 ? <p className="text-muted">Keine Skills für {ws}.</p> : null}
         {tab === "neg" && negs.length === 0 ? <p className="text-muted">Keine abgelehnten Muster.</p> : null}
       </div>
       {tab !== "session" && tab !== "log" && tab !== "neg" ? (

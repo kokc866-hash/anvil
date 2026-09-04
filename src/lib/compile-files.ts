@@ -1,3 +1,5 @@
+import { decodeWriteEscapes } from "./agent-parse.ts";
+
 const EXT_LANG: Record<string, string> = {
   go: "go",
   rs: "rust",
@@ -13,6 +15,12 @@ const EXT_LANG: Record<string, string> = {
   cs: "csharp",
   php: "php",
   rb: "ruby",
+  py: "python",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
 };
 
 function langOf(path: string): string {
@@ -43,6 +51,6 @@ export function compileFiles(
       if (lang === "c" || lang === "cpp") return l === "c" || l === "cpp";
       return l === lang;
     })
-    .slice(0, 80)
-    .map(([path, content]) => ({ path, content }));
+    .slice(0, 400)
+    .map(([path, content]) => ({ path, content: decodeWriteEscapes(content) }));
 }

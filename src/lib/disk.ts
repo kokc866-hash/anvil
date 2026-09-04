@@ -1,4 +1,6 @@
-import { isSourcePath, skipDirName } from "./ws-skip";
+import { isSourcePath, skipDirName, skipPath, keepDotName, keepBareFile } from "./ws-skip";
+import { bytesToDataUrl } from "./archive";
+import { isRefPath } from "./ref";
 
 const MAX = 1_500_000;
 const MAX_FILES = 4000;
@@ -149,6 +151,7 @@ export async function saveSlot(slot: DiskSlot, files: Record<string, string>, di
     }
   }
   for (const [path, content] of Object.entries(files)) {
+    if (/^data:image\//i.test(content.trim())) continue;
     const parts = path.split("/").filter(Boolean);
     const fileName = parts.pop();
     if (!fileName) continue;
@@ -188,6 +191,7 @@ async function dirFor(path: string, create: boolean): Promise<{ dir: DirHandle; 
 }
 
 export async function writeDiskFile(path: string, content: string): Promise<void> {
+  if (/^data:image\//i.test(content.trim())) return;
   const loc = await dirFor(path, true);
   if (!loc) return;
   const fh = await loc.dir.getFileHandle(loc.name, { create: true });
@@ -218,25 +222,52 @@ export async function removeDiskPath(path: string): Promise<void> {
 type ReadAcc = { n: number; bytes: number; skipped: number };
 
 const TEXT_OK =
-  /\.(py|js|ts|tsx|jsx|mjs|cjs|json|md|html|css|go|rs|java|c|cc|cpp|h|hpp|cs|php|rb|txt|toml|yml|yaml|xml|svg|sh|vue|svelte|sql)$/i;
+  /\.(py|js|ts|tsx|jsx|mjs|cjs|json|md|html|css|go|rs|java|c|cc|cpp|h|hpp|cs|php|rb|txt|toml|yml|yaml|xml|svg|sh|vue|svelte|sql|gd|csproj)$/i;
+
+const IMG_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  ico: "image/x-icon",
+  bmp: "image/bmp",
+};
 
 async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc: ReadAcc): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   if (prefix) dirs.push(prefix);
   for await (const [child, handle] of dir.entries() as AsyncIterable<[string, FileSystemHandle]>) {
-    if (child.startsWith(".") && child !== ".gitignore" && child !== ".env.example" && child !== ".anvil") continue;
+    if (child.startsWith(".") && !keepDotName(child)) continue;
     if (skipDirName(child)) continue;
+    const path = prefix ? `${prefix}/${child}` : child;
+    if (skipPath(path)) {
+      if (handle.kind === "directory") continue;
+      acc.skipped += 1;
+      continue;
+    }
     if (handle.kind === "directory") {
-      Object.assign(out, await readFolder(handle as DirHandle, prefix ? `${prefix}/${child}` : child, dirs, acc));
+      Object.assign(out, await readFolder(handle as DirHandle, path, dirs, acc));
     } else {
       const file = await (handle as FileSystemFileHandle).getFile();
-      const path = prefix ? `${prefix}/${child}` : child;
-      const source = isSourcePath(path);
-      if (file.size > MAX || file.size === 0) {
+      const source = isSourcePath(path) || keepBareFile(child);
+      const ext = (child.split(".").pop() ?? "").toLowerCase();
+      const imgMime = isRefPath(path) ? IMG_MIME[ext] : undefined;
+      if (acc.n >= MAX_FILES || acc.bytes + file.size > MAX_TOTAL) {
         acc.skipped += 1;
         continue;
       }
-      if (acc.n >= MAX_FILES || acc.bytes + file.size > MAX_TOTAL) {
+      if (imgMime) {
+        if (file.size > 4_000_000) {
+          acc.skipped += 1;
+          continue;
+        }
+        out[path] = bytesToDataUrl(new Uint8Array(await file.arrayBuffer()), imgMime);
+        acc.n += 1;
+        acc.bytes += file.size;
+        continue;
+      }
+      if (file.size > MAX) {
         acc.skipped += 1;
         continue;
       }
@@ -245,9 +276,11 @@ async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc:
         continue;
       }
       if (
+        file.size > 0 &&
         file.type &&
         !file.type.startsWith("text") &&
-        !TEXT_OK.test(child)
+        !TEXT_OK.test(child) &&
+        !keepBareFile(child)
       ) {
         acc.skipped += 1;
         continue;

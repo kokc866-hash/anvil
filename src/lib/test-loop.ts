@@ -1,14 +1,13 @@
 import { loadProjectHarness } from "./harness-project";
 import { testsPrompt, type TestHit } from "./test-parse";
 import { testFilesOf, runAllTests } from "./run-tests";
+import { isTestStepText } from "./test-parse";
 import type { FileChange } from "./diff";
 import type { AgentStep } from "@/store/ide";
 import { useIde } from "@/store/ide";
 
 export function alreadyRanTests(steps?: AgentStep[]): boolean {
-  return (steps ?? []).some((s) =>
-    /pytest|npm test|vitest|jest|go test|cargo test/i.test(`${s.name} ${s.detail}`),
-  );
+  return (steps ?? []).some((s) => isTestStepText(s.name, s.detail, s.status));
 }
 
 export function shouldTestAfterRound(changes: FileChange[], files: Record<string, string>, steps?: AgentStep[]): boolean {
@@ -27,7 +26,7 @@ export function shouldTestAfterRound(changes: FileChange[], files: Record<string
 export function summarizeHits(hits: TestHit[]): { ok: boolean; pass: number; fail: number } {
   const fail = hits.filter((h) => !h.ok && !h.skip).length;
   const pass = hits.filter((h) => h.ok && !h.skip).length;
-  return { ok: fail === 0 && pass + fail > 0, pass, fail };
+  return { ok: fail === 0 && pass > 0, pass, fail };
 }
 
 export async function testAfterRound(): Promise<void> {
@@ -36,7 +35,7 @@ export async function testAfterRound(): Promise<void> {
   try {
     const r = await runAllTests();
     const sum = summarizeHits(Object.values(useIde.getState().testResults));
-    useIde.getState().setChatLastTests({ ...sum, ok: r.ok && sum.fail === 0, running: false });
+    useIde.getState().setChatLastTests({ ...sum, ok: r.ok && sum.fail === 0 && sum.pass > 0, running: false });
     if (sum.fail) {
       useIde.getState().setNotice(`${sum.fail} Tests rot`);
     }

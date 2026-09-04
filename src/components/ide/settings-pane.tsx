@@ -40,6 +40,7 @@ import {
   loadProjectGraph,
   loadProjectHarness,
 } from "@/lib/harness-project";
+import { BOARD_PATH, filesFromBoard, rebuildBoardFromGraph } from "@/lib/harness-board";
 import type { AfterWrite } from "@/lib/harness";
 import { loadVault, saveVault, type VaultEntry } from "@/lib/vault";
 import { providerOf, type LlmProvider } from "@/lib/providers";
@@ -664,7 +665,7 @@ function AgentSection({ q }: { q: string }) {
         </Row>
       </Vis>
       <Vis q={q} label="Diffs automatisch übernehmen">
-        <Row label="Diffs automatisch" hint="Ohne Nachfrage in den Workspace übernehmen">
+        <Row label={t("autoDiffs")} hint={t("autoDiffsHint")}>
           <Toggle on={autoAcceptDiffs} onChange={setAutoAcceptDiffs} />
         </Row>
       </Vis>
@@ -701,6 +702,7 @@ function HarnessFields({ q }: { q: string }) {
   const runLoop = useIde((s) => s.runLoop);
   const testLoop = useIde((s) => s.testLoop);
   const graphLoop = useIde((s) => s.graphLoop);
+  const engineLoop = useIde((s) => s.engineLoop);
   const loopTries = useIde((s) => s.loopTries);
   const afterWrite = useIde((s) => s.harnessAfterWrite);
   const maxRounds = useIde((s) => s.harnessMaxRounds);
@@ -709,33 +711,51 @@ function HarnessFields({ q }: { q: string }) {
   const setRunLoop = useIde((s) => s.setRunLoop);
   const setTestLoop = useIde((s) => s.setTestLoop);
   const setGraphLoop = useIde((s) => s.setGraphLoop);
+  const setEngineLoop = useIde((s) => s.setEngineLoop);
   const setLoopTries = useIde((s) => s.setLoopTries);
   const setAfter = useIde((s) => s.setHarnessAfterWrite);
   const setRounds = useIde((s) => s.setHarnessMaxRounds);
   const setSees = useIde((s) => s.setGraphSees);
   const writeFile = useIde((s) => s.writeFile);
-  const setContent = useIde((s) => s.setContent);
   const setNotice = useIde((s) => s.setNotice);
   const proj = loadProjectHarness(files);
   const graph = loadProjectGraph(files);
 
   function saveProject() {
-    writeFile(
-      HARNESS_PATH,
-      dumpHarness({
-        name: proj?.name ?? "app",
-        when: proj?.when ?? "Nach Write",
-        runLoop,
-        graphLoop,
-        testLoop,
-        loopTries,
-        maxRounds,
-        afterWrite,
-        graphSees,
-      }),
-    );
+    const harness = {
+      name: proj?.name ?? "app",
+      when: proj?.when ?? "Nach Write",
+      runLoop,
+      graphLoop,
+      testLoop,
+      engineLoop,
+      loopTries,
+      maxRounds,
+      afterWrite,
+      graphSees,
+    };
     const edges = graph?.edges ?? guessProjectHarness(files).graph.edges;
-    setContent(GRAPH_PATH, dumpGraph({ name: graph?.name ?? "app", edges }));
+    const g = { name: graph?.name ?? "app", edges };
+    writeFile(HARNESS_PATH, dumpHarness(harness));
+    writeFile(GRAPH_PATH, dumpGraph(g));
+    const board = rebuildBoardFromGraph(edges ?? [], {
+      runLoop,
+      graphLoop,
+      testLoop,
+      engineLoop: Boolean(engineLoop) || afterWrite === "engine",
+      afterWrite: afterWrite ?? "run",
+      loopTries,
+      maxRounds: maxRounds ?? 12,
+    });
+    writeFile(BOARD_PATH, filesFromBoard(board, {
+      runLoop,
+      graphLoop,
+      testLoop,
+      engineLoop: Boolean(engineLoop) || afterWrite === "engine",
+      afterWrite: afterWrite ?? "run",
+      loopTries,
+      maxRounds: maxRounds ?? 12,
+    })[BOARD_PATH]);
     setNotice("Harness ins Projekt geschrieben");
   }
 
@@ -748,6 +768,8 @@ function HarnessFields({ q }: { q: string }) {
       if (proj.runLoop != null) setRunLoop(proj.runLoop);
       if (proj.graphLoop != null) setGraphLoop(proj.graphLoop);
       if (proj.testLoop != null) setTestLoop(proj.testLoop);
+      if (proj.engineLoop != null) setEngineLoop(Boolean(proj.engineLoop));
+      else if (proj.afterWrite === "engine") setEngineLoop(true);
       if (proj.loopTries != null) setLoopTries(proj.loopTries);
       if (proj.maxRounds != null) setRounds(proj.maxRounds);
       if (proj.afterWrite) setAfter(proj.afterWrite);
@@ -761,10 +783,21 @@ function HarnessFields({ q }: { q: string }) {
     setRunLoop(g.harness.runLoop ?? true);
     setGraphLoop(Boolean(g.harness.graphLoop));
     setTestLoop(Boolean(g.harness.testLoop));
+    setEngineLoop(Boolean(g.harness.engineLoop) || g.harness.afterWrite === "engine");
     setLoopTries(g.harness.loopTries ?? 3);
     setAfter(g.harness.afterWrite ?? "run");
+    const s = {
+      runLoop: g.harness.runLoop ?? true,
+      graphLoop: Boolean(g.harness.graphLoop),
+      testLoop: Boolean(g.harness.testLoop),
+      engineLoop: Boolean(g.harness.engineLoop) || g.harness.afterWrite === "engine",
+      afterWrite: g.harness.afterWrite ?? ("run" as const),
+      loopTries: g.harness.loopTries ?? 3,
+      maxRounds: g.harness.maxRounds ?? 12,
+    };
     writeFile(HARNESS_PATH, dumpHarness(g.harness));
-    setContent(GRAPH_PATH, dumpGraph(g.graph));
+    writeFile(GRAPH_PATH, dumpGraph(g.graph));
+    writeFile(BOARD_PATH, filesFromBoard(rebuildBoardFromGraph(g.graph.edges ?? [], s), s)[BOARD_PATH]);
     setNotice(`Geraten: ${g.harness.name ?? "app"}`);
   }
 
@@ -819,6 +852,9 @@ function HarnessFields({ q }: { q: string }) {
         <Head>Graph</Head>
         <Row label="An" hint="Nach Run: Graph-Kanten (Frame, Tests, Format, Engine, MCP, …) — Tafel hat die volle Tool-Liste.">
           <Toggle on={graphLoop} onChange={setGraphLoop} />
+        </Row>
+        <Row label="Engine" hint="Godot/Unity/Bevy: nach Write engine_run. Reines Cargo.toml zählt nicht.">
+          <Toggle on={engineLoop} onChange={setEngineLoop} />
         </Row>
         <Row label="Frames" hint="Wie oft see_run / play in einer Runde.">
           <Seg
@@ -1315,7 +1351,7 @@ function LearnSection({ q }: { q: string }) {
         </Row>
       </Vis>
       <Vis q={q} label="IDE anpassen Live-Run Auto-Diffs">
-        <Row label="IDE anpassen" hint="Zum Beispiel Auto-Diffs aus, wenn du oft verwirfst.">
+        <Row label="IDE anpassen" hint="Nur Hinweis, keine stillen Änderungen an Auto-Diffs / Live-Run.">
           <Toggle on={p.adaptIde} onChange={(v) => setPref("adaptIde", v)} />
         </Row>
       </Vis>
@@ -1466,7 +1502,8 @@ function StorageSection({ q }: { q: string }) {
         applyFiles(pack.files, pack.dirs);
         const first = Object.keys(pack.files).sort()[0];
         if (first) openFile(first);
-        setNotice(`${Object.keys(pack.files).length} Dateien aus ${name}`);
+        const n = Object.keys(pack.files).length;
+        setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen (${name})` : `${n} Dateien aus ${name}`);
       } else {
         setNotice(`Speicherort: ${name}`);
       }

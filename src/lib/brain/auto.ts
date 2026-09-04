@@ -1,4 +1,3 @@
-import { useLearn } from "@/lib/learn";
 import { useIde } from "@/store/ide";
 import { brainCommitMessage, brainExplainError, brainNextAction } from "./apps";
 import { brainUsage } from "./tasks";
@@ -41,7 +40,6 @@ async function tick() {
 
   const last = ide.output.at(-1);
   if (last && !last.ok && due(`err:${last.label}:${last.stderr.slice(0, 48)}`, 120_000)) {
-    useLearn.getState().addFact("lesson", `Fehler: ${last.label}`, 0.45);
     if (voice() && useBrain.getState().jobs.errors) {
       if (brainReady()) {
         const t = await brainExplainError(last.stderr || last.stdout, last.label);
@@ -49,11 +47,6 @@ async function tick() {
           say(t);
           const { pushLane } = await import("./lane");
           pushLane("error", t);
-        }
-        const hit = await import("./apps").then((m) => m.brainBreakpoint(last.stderr || last.stdout));
-        if (hit) {
-          const path = hit.path in ide.files ? hit.path : ide.activePath;
-          if (path) ide.toggleBreakpoint(path, hit.line, true);
         }
       } else say(`Fehler in ${last.label}`);
     }

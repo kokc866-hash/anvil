@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, statSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
@@ -164,6 +164,44 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+function monacoPlugin(): Plugin {
+  const vsSrc = join(process.cwd(), "node_modules/monaco-editor/min/vs");
+  return {
+    name: "anvil-monaco",
+    configureServer(s) {
+      if (!existsSync(join(vsSrc, "loader.js"))) return;
+      s.middlewares.use((req, res, next) => {
+        const raw = (req.url || "").split("?")[0];
+        if (!raw.startsWith("/monaco/vs/")) return next();
+        const rel = decodeURIComponent(raw.slice("/monaco/vs/".length));
+        if (!rel || rel.split("/").includes("..")) {
+          res.statusCode = 400;
+          res.end();
+          return;
+        }
+        const file = join(vsSrc, rel);
+        if (!existsSync(file) || statSync(file).isDirectory()) return next();
+        const mime = rel.endsWith(".js")
+          ? "text/javascript"
+          : rel.endsWith(".css")
+            ? "text/css"
+            : rel.endsWith(".ttf")
+              ? "font/ttf"
+              : "application/octet-stream";
+        res.setHeader("Content-Type", mime);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        createReadStream(file).pipe(res);
+      });
+    },
+    closeBundle() {
+      if (!existsSync(join(vsSrc, "loader.js"))) return;
+      const dest = join(process.cwd(), "dist", "monaco", "vs");
+      mkdirSync(dest, { recursive: true });
+      cpSync(vsSrc, dest, { recursive: true });
+    },
+  };
+}
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
@@ -192,6 +230,7 @@ export default defineConfig(({ command, isPreview }) => ({
     appEnvPlugin(),
     // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
     grokPwaPlugin(),
+    monacoPlugin(),
     tailwindcss(),
     tanstackStart(),
     ...(command === "build" || isPreview

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyLlmOptions, applyResponsesStore, needsCompletionTokens, patchResponses400, usesResponsesApi } from "./llm-options.ts";
+import { applyLlmOptions, applyResponsesStore, needsCompletionTokens, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
 
 test("gpt-5 o3 o4 grok-4 use max_completion_tokens", () => {
   assert.equal(needsCompletionTokens("gpt-5.6-luna"), true);
@@ -118,15 +118,77 @@ test("patchResponses400 strips unsupported and sets required flags", () => {
   assert.equal("top_p" in body, false);
 });
 
+test("patchResponses400 never deletes required input", () => {
+  const body: Record<string, unknown> = {
+    model: "gpt-5.6-luna",
+    input: [{ role: "user", content: "hi" }],
+  };
+  const raw = JSON.stringify({
+    error: {
+      message: "Missing required parameter: 'input'.",
+      type: "invalid_request_error",
+      param: "input",
+      code: "missing_required_parameter",
+    },
+  });
+  patchResponses400(body, raw);
+  assert.ok(Array.isArray(body.input) && (body.input as unknown[]).length > 0);
+  assert.equal(body.model, "gpt-5.6-luna");
+});
+
+test("toResponsesInput fills empty when only system", () => {
+  const { input, instructions } = toResponsesInput([{ role: "system", content: "sys" }]);
+  assert.equal(instructions, "sys");
+  assert.ok(input.length >= 1);
+});
+
+test("toResponsesInput drops orphan function_call_output", () => {
+  const { input } = toResponsesInput([
+    { role: "user", content: "go" },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "call_write_1", type: "function", function: { name: "write_file", arguments: "{}" } }],
+    },
+    { role: "tool", tool_call_id: "call_write_1", content: "ok" },
+    { role: "tool", tool_call_id: "auto_run_2", content: "compiler ok" },
+  ]);
+  const outs = input.filter((x) => x && typeof x === "object" && (x as { type?: string }).type === "function_call_output") as {
+    call_id: string;
+  }[];
+  assert.deepEqual(
+    outs.map((o) => o.call_id),
+    ["call_write_1"],
+  );
+  assert.ok(input.some((x) => x && typeof x === "object" && (x as { content?: string }).content === "compiler ok"));
+});
+
+test("responsesBody always sends input", () => {
+  const body = responsesBody({ model: "gpt-5.6-sol", messages: [{ role: "system", content: "s" }] }, "openai");
+  assert.ok(Array.isArray(body.input) && (body.input as unknown[]).length > 0);
+});
+
+test("provider wire: gpt-5 tools+think uses responses, grok/ollama/claude do not", () => {
+  const gpt = { provider: "openai", model: "gpt-5.6-luna", api: "openai" as const, context: 32768, thinking: "high" as const };
+  assert.equal(usesResponsesApi(gpt, true), true);
+  assert.equal(usesResponsesApi({ ...gpt, provider: "codex" }, true), false);
+  assert.equal(usesResponsesApi({ provider: "xai", model: "grok-4.5", api: "openai", context: 131072, thinking: "high" }, true), false);
+  assert.equal(usesResponsesApi({ provider: "ollama", model: "qwen3.8:27b", api: "openai", context: 32768, thinking: "low" }, true), false);
+  assert.equal(usesResponsesApi({ provider: "anthropic", model: "claude-sonnet-4-5", api: "anthropic", context: 200000, thinking: "high" }, true), false);
+  assert.equal(usesResponsesApi({ provider: "groq", model: "llama-3.3-70b-versatile", api: "openai", context: 32768, thinking: "off" }, true), false);
+});
+
 test("ollama thinking: no 8k cap, think level, no max_tokens", () => {
   const p = applyLlmOptions(
     { model: "qwen3.8:27b" },
     { provider: "ollama", model: "qwen3.8:27b", api: "openai", context: 131072, thinking: "high" },
   );
-  const opt = p.options as { num_predict: number; think: unknown };
+  const opt = p.options as { num_predict: number; think: unknown; num_ctx: number };
   assert.equal("max_tokens" in p, false);
   assert.equal(p.think, "high");
   assert.equal(opt.think, "high");
+  assert.equal(opt.num_ctx, 131072);
+  assert.equal("enable_thinking" in p, false);
   assert.ok(opt.num_predict > 8192);
   assert.ok(opt.num_predict <= 65536);
 });
@@ -138,7 +200,7 @@ test("ollama thinking off sends think false, leaves the user text alone", () => 
   );
   assert.equal(p.think, false);
   assert.equal((p.options as { think: boolean }).think, false);
-  assert.equal(p.enable_thinking, false);
+  assert.equal("enable_thinking" in p, false);
   assert.equal(String((p.messages as { content: string }[])[0].content), "hi");
 });
 
@@ -160,7 +222,18 @@ test("qwen thinking on does not rewrite the prompt", () => {
     { model: "qwen3", messages: [{ role: "user", content: "hi" }] },
     { provider: "ollama", model: "qwen3:8b", api: "openai", context: 32768, thinking: "high" },
   );
-  assert.equal(p.enable_thinking, true);
+  assert.equal("enable_thinking" in p, false);
   assert.equal(String((p.messages as { content: string }[])[0].content), "hi");
   assert.equal(p.think, "high");
+});
+
+test("ollama sends slider num_ctx, strips enable_thinking", () => {
+  const p = applyLlmOptions(
+    { model: "qwen3.8:27b" },
+    { provider: "ollama", model: "qwen3.8:27b", api: "openai", context: 256000, thinking: "low" },
+  );
+  assert.equal((p.options as { num_ctx: number }).num_ctx, 256000);
+  assert.equal("n_ctx" in p, false);
+  assert.equal("enable_thinking" in p, false);
+  assert.equal("chat_template_kwargs" in p, false);
 });

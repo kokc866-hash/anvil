@@ -59,6 +59,23 @@ export const GRAPH_TOOLS: GraphTool[] = [
 
 const TOOL_IDS = new Set(GRAPH_TOOLS.map((t) => t.id));
 
+const EDGE_RANK: Record<string, number> = {
+  engine: 0,
+  run: 1,
+  test: 2,
+  preview: 3,
+  play: 4,
+  debug: 5,
+  format: 8,
+  lint: 9,
+  mcp: 10,
+  skill: 11,
+  git: 12,
+};
+
+const WORK_EDGES = new Set<GraphEdge>(["engine", "run", "test"]);
+const SEE_EDGES = new Set<GraphEdge>(["preview", "play"]);
+
 export function graphToolOf(id: string): GraphTool | undefined {
   return GRAPH_TOOLS.find((t) => t.id === id);
 }
@@ -71,8 +88,8 @@ export function graphEdge(
 ): GraphPolicy {
   if (!obs) return { edge: "none", tool: null, why: "" };
 
-  if (projectEdges?.length && obs.path) {
-    const hit = projectEdges.find((e) => e.glob && matchGlob(obs.path!, e.glob));
+  if (opts.graphLoop && projectEdges?.length && obs.path) {
+    const hit = pickProjectEdge(obs.path, projectEdges, obs.kind);
     if (hit && hit.edge !== "none") {
       if (hit.edge === "engine" && !engineOk) return { edge: "none", tool: null, why: "companion off" };
       const tool = coerceTool(hit.tool, hit.edge);
@@ -80,7 +97,7 @@ export function graphEdge(
     }
   }
 
-  if (engineOk && (obs.kind === "write" || obs.kind === "edit") && looksEnginePath(obs.path)) {
+  if (opts.engineLoop && engineOk && (obs.kind === "write" || obs.kind === "edit") && looksEnginePath(obs.path)) {
     return { edge: "engine", tool: "engine_run", why: "engine script changed — companion check/play." };
   }
 
@@ -90,11 +107,25 @@ export function graphEdge(
     return { edge: "preview", tool: "see_run", why: "HTML preview — send a frame back to the model." };
   }
 
-  if (obs.kind === "see" && obs.ok) {
-    return { edge: "play", tool: "play", why: "Frame ready. Optional play, then patch or done." };
-  }
-
   return { edge: "none", tool: null, why: "" };
+}
+
+export function pickProjectEdge(path: string, edges: ProjectEdge[], kind?: Observation["kind"]): ProjectEdge | undefined {
+  const hits = edges.filter((e) => e.glob && e.edge !== "none" && matchGlob(path, e.glob));
+  if (!hits.length) return undefined;
+  let pool = hits;
+  if (kind === "write" || kind === "edit") {
+    const work = hits.filter((e) => WORK_EDGES.has(e.edge));
+    if (work.length) pool = work;
+  } else if (kind === "run" || kind === "engine" || kind === "test") {
+    const see = hits.filter((e) => SEE_EDGES.has(e.edge));
+    if (see.length) pool = see;
+  }
+  pool.sort(
+    (a, b) =>
+      (EDGE_RANK[a.edge] ?? 20) - (EDGE_RANK[b.edge] ?? 20) || globScore(b.glob ?? "") - globScore(a.glob ?? ""),
+  );
+  return pool[0];
 }
 
 function coerceTool(tool: string | undefined, edge: GraphEdge): string | null {
@@ -116,22 +147,50 @@ function coerceTool(tool: string | undefined, edge: GraphEdge): string | null {
   return def[edge] ?? null;
 }
 
+/** Specificity: longer literal, fewer stars. Catch-all `*` scores 0. */
+export function globScore(glob: string): number {
+  const g = glob.trim();
+  if (!g || g === "*" || g === "**" || g === "**/*") return 0;
+  const wild = (g.match(/\*/g) || []).length;
+  return Math.max(1, g.replace(/\*/g, "").length * 2 - wild * 4);
+}
+
+/**
+ * Minimatch-ish: `*` does not become `includes("")`.
+ * `*.py` → any path ending `.py`. `*.{js,ts}` braces. `tests/**` prefix.
+ */
 export function matchGlob(path: string, glob: string): boolean {
   const p = path.replace(/\\/g, "/").toLowerCase();
-  const g = glob.replace(/\\/g, "/").toLowerCase();
+  const g = glob.replace(/\\/g, "/").toLowerCase().trim();
+  if (!g) return false;
+  if (g === "*" || g === "**" || g === "**/*") return true;
   const brace = g.match(/^(.*)\*\.\{([^}]+)\}$/);
   if (brace) {
-    const prefix = brace[1].replace(/\*\*\//g, "");
-    return brace[2].split(",").some((e) => p.endsWith("." + e.trim()) && (!prefix || p.includes(prefix.replace(/\*$/, ""))));
+    const exts = brace[2].split(",").map((e) => e.trim().replace(/^\./, ""));
+    if (!exts.some((e) => p.endsWith("." + e))) return false;
+    const prefix = brace[1].replace(/\*\*\//g, "").replace(/\*$/, "").replace(/\/$/, "");
+    return !prefix || p.includes(prefix) || p.startsWith(prefix + "/") || p.startsWith(prefix);
   }
   if (g.startsWith("*.") && !g.includes("/")) return p.endsWith(g.slice(1));
   if (g.includes("**/")) {
+    const head = g.slice(0, g.indexOf("**/")).replace(/\/$/, "");
     const tail = g.slice(g.indexOf("**/") + 3);
+    if (head && !(p === head || p.startsWith(head + "/"))) return false;
+    if (!tail || tail === "*") return true;
     if (tail.startsWith("*.")) return p.endsWith(tail.slice(1));
-    return p.includes(tail.replace(/\*$/, ""));
+    return p.endsWith("/" + tail) || p === tail || p.endsWith(tail);
   }
-  if (g.endsWith("/**")) return p.includes(g.slice(0, -3));
-  return p.includes(g.replace(/\*/g, ""));
+  if (g.endsWith("/**")) {
+    const head = g.slice(0, -3);
+    return p === head || p.startsWith(head + "/");
+  }
+  if (!g.includes("*")) return p === g || p.endsWith("/" + g) || p.endsWith(g);
+  const re = "^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "§§").replace(/\*/g, "[^/]*").replace(/§§/g, ".*") + "$";
+  try {
+    return new RegExp(re).test(p);
+  } catch {
+    return false;
+  }
 }
 
 export function looksEnginePath(path?: string): boolean {

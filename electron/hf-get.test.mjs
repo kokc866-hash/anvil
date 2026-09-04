@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fetchJsonText, hfAllowed, jsonAlts } from "./hf-get.mjs";
+import { fetchJsonText, hfAllowed, jsonAlts, helperModelId, parseHelperPath, MAX_REDIRECTS } from "./hf-get.mjs";
 
 test("hfAllowed hosts", () => {
   assert.equal(hfAllowed("https://huggingface.co/mlc-ai/x"), true);
@@ -27,4 +27,11 @@ test("fetchJsonText follows HF 307", async () => {
   );
   const j = JSON.parse(text);
   assert.equal(j.model_type, "qwen3_5");
+});
+
+test("helper ids and token path", () => {
+  assert.equal(helperModelId("SmolLM2-360M-Instruct-q4f16_1-MLC"), "SmolLM2-360M-Instruct-q4f16_1-MLC");
+  assert.throws(() => helperModelId("..\\x"));
+  assert.equal(parseHelperPath("/t/tok/id/file.bin", "tok").ok, true);
+  assert.equal(MAX_REDIRECTS, 5);
 });

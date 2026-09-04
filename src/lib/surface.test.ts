@@ -28,9 +28,14 @@ describe("surface", () => {
     assert.equal(surfaceBlockWrite(ANVIL_SURFACE, "exclusive", "write_file"), null);
     assert.equal(surfaceBlockWrite("ziva", "exclusive", "mcp_call"), null);
   });
-  it("allows sidecar reads on mcp exclusive", () => {
-    assert.equal(toolsAllowed("ziva", "exclusive", "read_file"), true);
+  it("exclusive mcp blocks anvil file tools", () => {
+    assert.equal(toolsAllowed("ziva", "exclusive", "mcp_call"), true);
+    assert.equal(toolsAllowed("ziva", "exclusive", "mcp_list"), true);
+    assert.equal(toolsAllowed("ziva", "exclusive", "set_plan"), true);
+    assert.equal(toolsAllowed("ziva", "exclusive", "ask_user"), true);
+    assert.equal(toolsAllowed("ziva", "exclusive", "read_file"), false);
     assert.equal(toolsAllowed("ziva", "exclusive", "write_file"), false);
+    assert.equal(toolsAllowed("ziva", "bridge", "read_file"), true);
     assert.equal(toolsAllowed(ANVIL_SURFACE, "exclusive", "write_file"), true);
   });
   it("prompt names the active mcp surface", () => {

@@ -49,7 +49,7 @@ export const SEED: Seed[] = [
     "tests",
     "tests-schreiben",
     "Tests pytest npm test absichern unittest",
-    "1. tests/ anlegen (write_file).\n2. Python: pytest-Datei. JS: node:test / assert.\n3. shell pytest oder npm test, sonst run_file. Output lesen, bei Fehler edit_file.",
+    "1. tests/ anlegen (write_file).\n2. Python: def test_* . JS: test()/it() (kein Vitest-Import nötig).\n3. shell pytest oder npm test — Anvil führt die Testdateien aus (Flags wie -q / -k ok). Output lesen, bei Fehler edit_file.",
     0.7,
   ),
   seed(
@@ -125,8 +125,8 @@ export const SEED: Seed[] = [
   seed(
     "ref-halten",
     "ref-halten",
-    "Spec Referenz Design .anvil/ref Vorgabe",
-    "1. list_files auf .anvil/ref.\n2. read_file der passenden Ref.\n3. Dagegen edit_file. Nicht gegen die Spec bauen.\n4. Am Ende kurz: welche Ref galt.",
+    "Spec Referenz Design ref/ Vorgabe Screenshot",
+    "1. list_files auf ref/ (prefix ref).\n2. read_file der passenden Ref, nicht den Happen aus dem Index raten.\n3. Dagegen edit_file. Nicht gegen die Spec bauen. Kein Code nach ref/ schreiben.\n4. Am Ende kurz: welche Ref galt.",
     0.75,
   ),
   seed(

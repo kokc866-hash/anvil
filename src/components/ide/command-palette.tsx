@@ -75,6 +75,7 @@ export function CommandPalette() {
         { id: "ask-run", label: t("agentRun"), run: () => { void import("@/lib/fix-agent").then((m) => m.askRun()); } },
         { id: "ask-git", label: t("agentGit"), run: () => { void import("@/lib/fix-agent").then((m) => m.askGit()); } },
         { id: "agent", label: t("cmdAgent"), run: () => togglePanel("agent") },
+        { id: "trail", label: t("cmdTrail"), run: () => togglePanel("trail") },
         { id: "term", label: t("cmdTerm"), run: () => togglePanel("output") },
         { id: "term-side", label: t("cmdTermSide"), run: () => useIde.getState().setOutputDock("side") },
         { id: "term-bottom", label: t("cmdTermBottom"), run: () => useIde.getState().setOutputDock("bottom") },
@@ -126,7 +127,7 @@ export function CommandPalette() {
         { id: "board", label: t("cmdBoard"), run: () => useIde.getState().setHarnessBoardOpen(true) },
         { id: "ask", label: t("cmdAsk"), run: () => useIde.getState().setAgentMode("ask") },
         { id: "agentmode", label: t("cmdAgentMode"), run: () => useIde.getState().setAgentMode("agent") },
-        { id: "newchat", label: t("newChat"), run: () => useIde.getState().clearChat() },
+        { id: "newchat", label: t("newChat"), run: () => { void import("@/lib/abort").then((m) => m.stopAgent("Neuer Chat")); useIde.getState().clearChat(); } },
         { id: "helper-comment", label: t("cmdHelperComment"), run: () => window.dispatchEvent(new Event("anvil-helper-comment")) },
         { id: "helper-i18n", label: t("cmdHelperI18n"), run: () => {
           const s = useIde.getState();

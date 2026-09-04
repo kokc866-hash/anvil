@@ -113,14 +113,8 @@ export async function resolveIntent(text: string): Promise<BrainIntent> {
 
 export function applyIntent(it: BrainIntent): string {
   const ide = useIde.getState();
-  if (it.kind === "run") {
-    window.dispatchEvent(new Event("anvil-run"));
-    return "Ausführen.";
-  }
-  if (it.kind === "debug") {
-    window.dispatchEvent(new Event("anvil-debug"));
-    return "Debugger.";
-  }
+  if (it.kind === "run") return "Ausführen: Ctrl+Enter oder Run.";
+  if (it.kind === "debug") return "Debugger: F5.";
   if (it.kind === "search") {
     ide.setSidebar("search");
     if (it.query) ide.setSearchQuery(it.query);
@@ -146,14 +140,10 @@ export function applyIntent(it: BrainIntent): string {
     ide.revealOutput();
     return "Ausgabe.";
   }
-  if (it.kind === "save") {
-    window.dispatchEvent(new Event("anvil-save-disk"));
-    return "Speichern.";
-  }
+  if (it.kind === "save") return "Speichern: Ctrl+S.";
   if (it.kind === "newfile") {
     ide.setSidebar("files");
-    window.dispatchEvent(new CustomEvent("anvil-new-file", { detail: "file" }));
-    return "Neue Datei.";
+    return "Neue Datei: Explorer.";
   }
   if (it.kind === "help") return it.query || HELP.helfer;
   if (it.kind === "file" && it.path) {

@@ -11,6 +11,7 @@ import {
   journalPrompt,
   mergeJournal,
   packChatHistory,
+  parseSessionFile,
   persistChat,
   sessionFileText,
   trimList,
@@ -71,6 +72,21 @@ describe("journal", () => {
     assert.match(text, /Anvil Sitzung/);
     assert.match(text, /Spiel/);
     assert.match(text, /index.html/);
+    const back = parseSessionFile(text);
+    assert.equal(back.goal, "Spiel");
+    assert.ok(back.files.includes("index.html"));
+  });
+  it("empty session file stays empty", () => {
+    const back = parseSessionFile("# Anvil Sitzung\n\n(leer)\n\nNachrichten: 0\nStand: \n");
+    assert.equal(isJournalEmpty(back), true);
+  });
+  it("updates the goal when the task clearly changes", () => {
+    const j = extractJournal([
+      { role: "user", content: "Schreibe main.py Fakultät" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "Jetzt ein Rust-CLI in src/main.rs" },
+    ]);
+    assert.match(j.goal, /Rust-CLI|main.rs/);
   });
 });
 

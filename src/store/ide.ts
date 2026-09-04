@@ -4,7 +4,7 @@ import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
 import { langFromPath } from "@/lib/languages";
 import { providerOf, resolveCodexModel, type LlmProvider } from "@/lib/providers";
-import { ancestorDirs, autoCollapsePaths, cleanPath, dupPath, isInside, joinPath, parentDir } from "@/lib/fs";
+import { ancestorDirs, autoCollapsePaths, cleanPath, dropRecord, dupPath, isInside, joinPath, parentDir, remapList, remapPath, remapRecord } from "@/lib/fs";
 import { DEFAULT_INPUT_MAP, normalizeInputMap, type InputMap } from "@/lib/input-map";
 import { KEY_DEFAULTS, normalizeKeyMap, type Chord, type KeyId } from "@/lib/keymap";
 import type { CompactMode } from "@/lib/compact";
@@ -13,7 +13,7 @@ import type { McpServer } from "@/lib/mcp";
 import { ANVIL_SURFACE, type SurfaceMode } from "@/lib/surface";
 import type { LspHit } from "@/lib/lsp";
 import type { TestHit } from "@/lib/test-parse";
-import { isTestFile, parseTests } from "@/lib/test-parse";
+import { isTestFile, parseTests, dropTestPaths, remapTestMap } from "@/lib/test-parse";
 import { normalizeThinking } from "@/lib/llm-options";
 import { emitPlugin } from "@/lib/plugins/events";
 import { loadSecrets, saveSecrets, keyForProvider, saveKeyForProvider } from "@/lib/secrets";
@@ -25,6 +25,7 @@ import { abortReason } from "@/lib/abort";
 import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
 import { EMPTY_JOURNAL, normalizeJournal, persistChat, type SessionJournal } from "@/lib/session";
+import { normalizeJob, type AgentJob } from "@/lib/agent-ask";
 import { AGENT_MIN, AGENT_MAX, SIDE_MIN, SIDE_MAX, TRAIL_MIN, TRAIL_MAX } from "@/lib/layout";
 import { fitCloudAbo } from "@/lib/llm-fit";
 
@@ -128,6 +129,7 @@ export type SplitMode = "auto" | "side" | "stack";
 export type SidebarId = "files" | "search" | "git" | "ext" | "learn" | "tests" | "ref" | "mcp" | null;
 export type PaletteMode = "files" | "commands" | "symbols" | null;
 export type AgentMode = "ask" | "agent";
+export type { AgentJob };
 export type OutputDock = "bottom" | "side";
 export type StorageMode = "browser" | "disk";
 export type { InputMap };
@@ -224,6 +226,7 @@ export type RunResult = {
   duration: number;
   label: string;
   html?: string;
+  stage?: { kind: "html" | "window" | "log"; out?: string };
 };
 
 export type Panels = Record<PanelId, boolean>;
@@ -269,6 +272,7 @@ type IdeState = {
   testResults: Record<string, TestHit>;
   agentBusy: boolean;
   agentStartedAt: number;
+  agentJob: AgentJob | null;
   panels: Panels;
   settingsOpen: boolean;
   harnessBoardOpen: boolean;
@@ -294,6 +298,7 @@ type IdeState = {
   runLoop: boolean;
   testLoop: boolean;
   graphLoop: boolean;
+  engineLoop: boolean;
   loopTries: number;
   harnessAfterWrite: AfterWrite;
   harnessMaxRounds: number;
@@ -326,6 +331,7 @@ type IdeState = {
   palette: PaletteMode;
   pendingDiffs: FileDiff[];
   cursor: { line: number; col: number };
+  selection: { startLine: number; startCol: number; endLine: number; endCol: number };
   searchQuery: string;
   agentMode: AgentMode;
   agentRules: string;
@@ -420,6 +426,7 @@ type IdeState = {
   setRunLoop: (v: boolean) => void;
   setTestLoop: (v: boolean) => void;
   setGraphLoop: (v: boolean) => void;
+  setEngineLoop: (v: boolean) => void;
   setLoopTries: (n: number) => void;
   setHarnessAfterWrite: (v: AfterWrite) => void;
   setHarnessMaxRounds: (n: number) => void;
@@ -456,6 +463,7 @@ type IdeState = {
   setSidebar: (v: SidebarId) => void;
   setPalette: (v: PaletteMode) => void;
   setCursor: (line: number, col: number) => void;
+  setSelection: (startLine: number, startCol: number, endLine: number, endCol: number) => void;
   setSearchQuery: (v: string) => void;
   setAgentMode: (v: AgentMode) => void;
   setAgentRules: (v: string) => void;
@@ -476,6 +484,7 @@ type IdeState = {
   setPreviewOpen: (v: boolean) => void;
   togglePlugin: (id: string) => void;
   setPluginKnown: (ids: string[]) => void;
+  setPluginDisabled: (ids: string[]) => void;
   setPluginStatus: (v: string) => void;
   setPluginConfig: (v: Record<string, unknown>) => void;
   setPluginProblems: (v: { path: string; line: number; text: string; source: string }[]) => void;
@@ -504,7 +513,7 @@ type IdeState = {
   failRunningSteps: () => void;
   openRoundDiff: (path: string, checkpointId?: string) => void;
   pushCheckpoint: (label: string) => string;
-  patchFiles: (next: Record<string, string>) => number;
+  patchFiles: (next: Record<string, string>, opts?: { quiet?: boolean }) => number;
   restoreCheckpoint: (id: string) => boolean;
   setChatChanges: (changes: FileChange[]) => void;
   setPendingAsk: (v: { path: string; text: string } | null) => void;
@@ -515,8 +524,8 @@ type IdeState = {
   pushJump: () => void;
   goJump: (dir: -1 | 1) => void;
   reopenTab: () => void;
-  setChatPlan: (steps: PlanStep[]) => void;
-  updatePlanStep: (i: number, status: PlanStep["status"]) => void;
+  setChatPlan: (steps: PlanStep[], id?: string) => void;
+  updatePlanStep: (i: number, status: PlanStep["status"], id?: string) => void;
   pushAgent: (text: string, steal?: boolean) => void;
   clearAgentInbox: () => void;
   toggleBreakpoint: (path: string, line: number, on?: boolean) => void;
@@ -546,7 +555,7 @@ type IdeState = {
   movePath: (from: string, dest: string) => void;
   duplicateFile: (path: string) => void;
   toggleCollapsed: (path: string) => void;
-  applyFiles: (next: Record<string, string>, dirs?: string[]) => void;
+  applyFiles: (next: Record<string, string>, dirs?: string[], opts?: { keepDirty?: boolean }) => void;
   addChat: (msg: Omit<ChatMsg, "id">) => void;
   startAssistant: (opts?: { voice?: ChatVoice }) => void;
   appendAssistant: (s: string) => void;
@@ -565,6 +574,7 @@ type IdeState = {
   setKeyBind: (id: KeyId, chord: Chord) => void;
   resetKeyMap: () => void;
   setAgentBusy: (v: boolean) => void;
+  setAgentJob: (v: AgentJob | null) => void;
   setTestsRunning: (v: boolean) => void;
   mergeTestResults: (hits: TestHit[]) => void;
   pushOutput: (r: RunResult) => void;
@@ -628,6 +638,7 @@ export const useIde = create<IdeState>()(
       testResults: {},
       agentBusy: false,
       agentStartedAt: 0,
+      agentJob: null,
       panels: { files: true, code: true, agent: true, trail: true, output: false },
       settingsOpen: false,
       harnessBoardOpen: false,
@@ -653,6 +664,7 @@ export const useIde = create<IdeState>()(
       runLoop: true,
       testLoop: true,
       graphLoop: true,
+      engineLoop: false,
       loopTries: 3,
       harnessAfterWrite: "run",
       harnessMaxRounds: 24,
@@ -685,6 +697,7 @@ export const useIde = create<IdeState>()(
       palette: null,
       pendingDiffs: [],
       cursor: { line: 1, col: 1 },
+      selection: { startLine: 1, startCol: 1, endLine: 1, endCol: 1 },
       searchQuery: "",
       agentMode: "agent",
       agentRules: "",
@@ -784,6 +797,7 @@ export const useIde = create<IdeState>()(
       setRunLoop: (runLoop) => set({ runLoop }),
       setTestLoop: (testLoop) => set({ testLoop }),
       setGraphLoop: (graphLoop) => set({ graphLoop }),
+      setEngineLoop: (engineLoop) => set({ engineLoop }),
       setLoopTries: (n) => set({ loopTries: Math.min(5, Math.max(1, n | 0)) }),
       setHarnessAfterWrite: (harnessAfterWrite) => set({ harnessAfterWrite }),
       setHarnessMaxRounds: (n) => set({ harnessMaxRounds: Math.min(48, Math.max(8, n | 0) || 24) }),
@@ -927,6 +941,8 @@ export const useIde = create<IdeState>()(
       setSidebar: (sidebar) => set({ sidebar }),
       setPalette: (palette) => set({ palette }),
       setCursor: (line, col) => set({ cursor: { line, col } }),
+      setSelection: (startLine, startCol, endLine, endCol) =>
+        set({ selection: { startLine, startCol, endLine, endCol } }),
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       setAgentMode: (agentMode) => set({ agentMode }),
       setAgentRules: (agentRules) => set({ agentRules }),
@@ -958,6 +974,7 @@ export const useIde = create<IdeState>()(
         set({ pluginDisabled: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
       },
       setPluginKnown: (pluginKnown) => set({ pluginKnown }),
+      setPluginDisabled: (pluginDisabled) => set({ pluginDisabled }),
       setPluginStatus: (pluginStatus) => set({ pluginStatus }),
       setPluginConfig: (pluginConfig) => set({ pluginConfig }),
       setPluginProblems: (pluginProblems) => set({ pluginProblems }),
@@ -1015,7 +1032,8 @@ export const useIde = create<IdeState>()(
       setEngineLink: (engineLink) => set({ engineLink }),
       pushCheckpoint: (label) => {
         const id = nid();
-        const files = shrinkFiles(get().files, 2_000_000);
+        const st = get();
+        const files = shrinkFiles(st.files, 2_000_000, [...st.openPaths, ...Object.keys(st.dirty)]);
         const row: Checkpoint = {
           id,
           at: Date.now(),
@@ -1023,10 +1041,10 @@ export const useIde = create<IdeState>()(
           files,
           dirs: [...get().dirs],
         };
-        set({ checkpoints: [...get().checkpoints, row].slice(-10) });
+        set({ checkpoints: [...get().checkpoints, row].slice(-40) });
         return id;
       },
-      patchFiles: (next) => {
+      patchFiles: (next, opts) => {
         const { files } = get();
         const diffs: FileDiff[] = [];
         const merged = { ...files };
@@ -1037,14 +1055,15 @@ export const useIde = create<IdeState>()(
         }
         if (!diffs.length) return 0;
         const first = diffs[0].path;
-        const open = get().openPaths.includes(first) ? get().openPaths : [...get().openPaths, first];
+        const quiet = Boolean(opts?.quiet);
+        const open = get().openPaths.includes(first) ? get().openPaths : quiet ? get().openPaths : [...get().openPaths, first];
         set({
           files: merged,
           pendingDiffs: [...get().pendingDiffs.filter((d) => !diffs.some((x) => x.path === d.path)), ...diffs],
           dirty: { ...get().dirty, ...Object.fromEntries(diffs.map((d) => [d.path, true])) },
           openPaths: open,
-          activePath: first,
-          panels: { ...get().panels, code: true },
+          activePath: quiet ? get().activePath : first,
+          panels: quiet ? get().panels : { ...get().panels, code: true },
         });
         return diffs.length;
       },
@@ -1054,10 +1073,13 @@ export const useIde = create<IdeState>()(
         const keepOpen = get().openPaths.filter((p) => p in c.files);
         const cur = get().activePath;
         const active = cur && cur in c.files ? cur : keepOpen[0] ?? null;
+        const curFiles = get().files;
+        const dirty: Record<string, boolean> = { ...get().dirty };
+        for (const p of Object.keys(c.files)) dirty[p] = true;
         set({
-          files: { ...c.files },
-          dirs: [...c.dirs],
-          dirty: {},
+          files: { ...curFiles, ...c.files },
+          dirs: [...new Set([...get().dirs, ...c.dirs])],
+          dirty,
           pendingDiffs: [],
           openPaths: keepOpen.length ? keepOpen : active ? [active] : [],
           activePath: active,
@@ -1117,7 +1139,7 @@ export const useIde = create<IdeState>()(
           lastTests,
           harness: done ? last.harness : last.harness ? last.harness.replace(/^[A-Za-zäöüÄÖÜß]+/, "Stop") : "Stop",
         };
-        set({ chat, agentBusy: false, running: false, agentStartedAt: 0 });
+        set({ chat, agentBusy: false, running: false, testsRunning: false, agentStartedAt: 0 });
       },
       openRoundDiff: (path, checkpointId) => {
         get().openFile(path);
@@ -1195,19 +1217,23 @@ export const useIde = create<IdeState>()(
         set({ closedTabs: rest });
         get().openFile(path);
       },
-      setChatPlan: (plan) => {
+      setChatPlan: (plan, id) => {
         const chat = [...get().chat];
-        const last = chat[chat.length - 1];
+        let i = id ? chat.findIndex((m) => m.id === id) : -1;
+        if (i < 0) i = chat.length - 1;
+        const last = chat[i];
         if (last?.role !== "assistant") return;
-        chat[chat.length - 1] = { ...last, plan };
+        chat[i] = { ...last, plan };
         set({ chat });
       },
-      updatePlanStep: (i, status) => {
+      updatePlanStep: (i, status, id) => {
         const chat = [...get().chat];
-        const last = chat[chat.length - 1];
+        let n = id ? chat.findIndex((m) => m.id === id) : -1;
+        if (n < 0) n = chat.length - 1;
+        const last = chat[n];
         if (last?.role !== "assistant" || !last.plan) return;
-        const plan = last.plan.map((s, n) => (n === i ? { ...s, status } : s));
-        chat[chat.length - 1] = { ...last, plan };
+        const plan = last.plan.map((s, k) => (k === i ? { ...s, status } : s));
+        chat[n] = { ...last, plan };
         set({ chat });
       },
       pushAgent: (text, steal) => {
@@ -1276,69 +1302,60 @@ export const useIde = create<IdeState>()(
         noteLearn("undo", path);
       },
       renameFile: (from, to) => {
+        const src = cleanPath(from);
         const name = cleanPath(to);
-        if (!name || name === from) return;
+        if (!name || name === src) return;
         const { files, openPaths, activePath, dirty, pendingDiffs, undo, dirs } = get();
-        if (!(from in files) || name in files) return;
-        const nextFiles = { ...files, [name]: files[from] };
-        delete nextFiles[from];
+        if (!(src in files) || name in files) return;
+        const nextFiles = { ...files, [name]: files[src] };
+        delete nextFiles[src];
         const nextDirty = { ...dirty };
-        if (from in nextDirty) {
-          nextDirty[name] = nextDirty[from];
-          delete nextDirty[from];
+        if (src in nextDirty) {
+          nextDirty[name] = nextDirty[src];
+          delete nextDirty[src];
         }
         const nextUndo = { ...undo };
-        if (from in nextUndo) {
-          nextUndo[name] = nextUndo[from];
-          delete nextUndo[from];
+        if (src in nextUndo) {
+          nextUndo[name] = nextUndo[src];
+          delete nextUndo[src];
         }
         set({
           files: nextFiles,
           dirty: nextDirty,
           undo: nextUndo,
           dirs: withParents(dirs, name),
-          pendingDiffs: pendingDiffs.map((d) => (d.path === from ? { ...d, path: name } : d)),
-          openPaths: openPaths.map((p) => (p === from ? name : p)),
-          activePath: activePath === from ? name : activePath,
+          pendingDiffs: pendingDiffs.map((d) => (d.path === src ? { ...d, path: name } : d)),
+          openPaths: openPaths.map((p) => (p === src ? name : p)),
+          activePath: activePath === src ? name : activePath,
+          breakpoints: remapRecord(get().breakpoints, src, name),
+          attached: remapList(get().attached, src, name),
+          recentPaths: remapList(get().recentPaths, src, name),
+          closedTabs: remapList(get().closedTabs, src, name),
+          testResults: remapTestMap(get().testResults, src, name),
         });
         pushDisk("write", name, nextFiles[name] ?? "");
-        pushDisk("remove", from);
+        pushDisk("remove", src);
       },
-      clearChat: () => set({ chat: [], sessionTokens: { prompt: 0, completion: 0 }, sessionJournal: { ...EMPTY_JOURNAL } }),
+      clearChat: () => set({ chat: [], sessionTokens: { prompt: 0, completion: 0 }, agentJob: null }),
       removeChat: (id) => set({ chat: get().chat.filter((m) => m.id !== id) }),
       proposeFiles: (next) => {
-        const { files, openPaths, activePath } = get();
-        const merged = { ...files, ...next };
-        const diffs: FileDiff[] = [];
-        for (const [path, after] of Object.entries(next)) {
-          const before = files[path];
-          if (before === after) continue;
-          diffs.push({ path, before: before ?? "", after, source: "propose" });
-        }
-        const keepOpen = openPaths.filter((p) => p in merged);
-        const added = diffs.map((d) => d.path).filter((p) => !keepOpen.includes(p));
-        const keepActive = activePath && activePath in merged ? activePath : keepOpen[0] ?? added[0] ?? null;
-        set({
-          files: merged,
-          pendingDiffs: diffs,
-          openPaths: keepOpen.length || added.length ? [...keepOpen, ...added] : keepActive ? [keepActive] : [],
-          activePath: keepActive,
-          dirty: Object.fromEntries(diffs.map((d) => [d.path, true])),
-          panels: { ...get().panels, code: true },
-        });
+        get().patchFiles(next);
       },
       acceptDiff: (path) => {
         const pendingDiffs = get().pendingDiffs.filter((d) => d.path !== path);
         const dirty = { ...get().dirty };
         delete dirty[path];
         set({ pendingDiffs, dirty });
+        const content = get().files[path];
+        if (content != null) pushDisk("write", path, content);
         noteLearn("accept", path);
       },
       rejectDiff: (path) => {
         const diff = get().pendingDiffs.find((d) => d.path === path);
         if (!diff) return;
         const files = { ...get().files };
-        if (diff.before === "" && !(path in get().files && diff.after !== diff.before)) delete files[path];
+        const created = diff.before === "";
+        if (created) delete files[path];
         else files[path] = diff.before;
         const dirty = { ...get().dirty };
         delete dirty[path];
@@ -1347,6 +1364,8 @@ export const useIde = create<IdeState>()(
           pendingDiffs: get().pendingDiffs.filter((d) => d.path !== path),
           dirty,
         });
+        if (created) pushDisk("remove", path);
+        else pushDisk("write", path, diff.before);
         noteLearn("reject", `${path}::${(diff.after.split("\n").find((l) => l.trim().length > 6) ?? "").trim().slice(0, 100)}`);
       },
       rejectHunk: (path, hunk) => {
@@ -1366,17 +1385,27 @@ export const useIde = create<IdeState>()(
       },
       acceptAllDiffs: () => {
         noteLearn("accept", "all");
+        const pending = get().pendingDiffs;
         set({ pendingDiffs: [], dirty: {} });
+        for (const d of pending) {
+          const content = get().files[d.path];
+          if (content != null) pushDisk("write", d.path, content);
+        }
       },
       rejectAllDiffs: () => {
         const { pendingDiffs, files, dirty } = get();
         const next = { ...files };
         const nextDirty = { ...dirty };
         for (const d of pendingDiffs) {
-          next[d.path] = d.before;
+          if (d.before === "") delete next[d.path];
+          else next[d.path] = d.before;
           delete nextDirty[d.path];
         }
         set({ files: next, pendingDiffs: [], dirty: nextDirty });
+        for (const d of pendingDiffs) {
+          if (d.before === "") pushDisk("remove", d.path);
+          else pushDisk("write", d.path, d.before);
+        }
       },
       openFile: (path) => {
         const { files, openPaths, panels, autoPreview } = get();
@@ -1415,21 +1444,31 @@ export const useIde = create<IdeState>()(
           undo: { ...undo, [path]: stack.slice(-40) },
         });
         queueMicrotask(() => emitPlugin("change", path));
+        void import("@/lib/disk-sync").then((d) => d.scheduleSyncWrite(path, content));
       },
       writeFile: (path, content, opts) => {
         const name = cleanPath(path);
         if (!name) return;
-        const { files, openPaths, dirty, panels, dirs } = get();
+        const { files, openPaths, dirty, panels, dirs, activePath, undo } = get();
+        const quiet = Boolean(opts?.quiet);
+        const prev = files[name];
+        const nextUndo = { ...undo };
+        if (!quiet && prev != null && prev !== content) {
+          const stack = [...(nextUndo[name] ?? [])];
+          if (stack[stack.length - 1] !== prev) stack.push(prev);
+          nextUndo[name] = stack.slice(-40);
+        }
         set({
           files: { ...files, [name]: content },
-          openPaths: openPaths.includes(name) ? openPaths : [...openPaths, name],
-          activePath: name,
+          openPaths: quiet || openPaths.includes(name) ? openPaths : [...openPaths, name],
+          activePath: quiet ? activePath : name,
           dirty: { ...dirty, [name]: false },
           dirs: withParents(dirs, name),
-          panels: { ...panels, code: true },
-          flashPath: opts?.quiet ? get().flashPath : name,
+          panels: quiet ? panels : { ...panels, code: true },
+          flashPath: quiet ? get().flashPath : name,
+          undo: nextUndo,
         });
-        if (!opts?.quiet) {
+        if (!quiet) {
           window.setTimeout(() => {
             if (get().flashPath === name) set({ flashPath: null });
           }, 1400);
@@ -1441,14 +1480,19 @@ export const useIde = create<IdeState>()(
         const { files, openPaths, activePath, dirty } = get();
         const nextFiles = { ...files };
         delete nextFiles[path];
-        const nextDirty = { ...dirty };
-        delete nextDirty[path];
+        const gone = (p: string) => p === path;
         const nextOpen = openPaths.filter((p) => p !== path);
         set({
           files: nextFiles,
-          dirty: nextDirty,
+          dirty: dropRecord(dirty, gone),
           openPaths: nextOpen,
           activePath: activePath === path ? (nextOpen[nextOpen.length - 1] ?? null) : activePath,
+          pendingDiffs: get().pendingDiffs.filter((d) => d.path !== path),
+          undo: dropRecord(get().undo, gone),
+          breakpoints: dropRecord(get().breakpoints, gone),
+          attached: get().attached.filter((p) => p !== path),
+          recentPaths: get().recentPaths.filter((p) => p !== path),
+          testResults: dropTestPaths(get().testResults, (p) => p === path),
         });
         pushDisk("remove", path);
       },
@@ -1464,22 +1508,25 @@ export const useIde = create<IdeState>()(
         const dir = cleanPath(path);
         if (!dir) return;
         const { files, openPaths, activePath, dirty, dirs } = get();
+        const gone = (p: string) => isInside(p, dir);
         const nextFiles = { ...files };
-        const nextDirty = { ...dirty };
         for (const p of Object.keys(files)) {
-          if (isInside(p, dir)) {
-            delete nextFiles[p];
-            delete nextDirty[p];
-          }
+          if (gone(p)) delete nextFiles[p];
         }
-        const nextOpen = openPaths.filter((p) => !isInside(p, dir));
+        const nextOpen = openPaths.filter((p) => !gone(p));
         set({
           files: nextFiles,
-          dirty: nextDirty,
+          dirty: dropRecord(dirty, gone),
           openPaths: nextOpen,
-          activePath: activePath && isInside(activePath, dir) ? (nextOpen[nextOpen.length - 1] ?? null) : activePath,
-          dirs: dirs.filter((d) => !isInside(d, dir)),
-          collapsed: get().collapsed.filter((d) => !isInside(d, dir)),
+          activePath: activePath && gone(activePath) ? (nextOpen[nextOpen.length - 1] ?? null) : activePath,
+          dirs: dirs.filter((d) => !gone(d)),
+          collapsed: get().collapsed.filter((d) => !gone(d)),
+          pendingDiffs: get().pendingDiffs.filter((d) => !gone(d.path)),
+          undo: dropRecord(get().undo, gone),
+          breakpoints: dropRecord(get().breakpoints, gone),
+          attached: get().attached.filter((p) => !gone(p)),
+          recentPaths: get().recentPaths.filter((p) => !gone(p)),
+          testResults: dropTestPaths(get().testResults, gone),
         });
         pushDisk("remove", dir);
       },
@@ -1518,9 +1565,20 @@ export const useIde = create<IdeState>()(
               .filter((d) => isInside(d, src))
               .map((d) => joinPath(target, d.slice(src.length + 1) || d.split("/").pop() || d)),
           );
+        const destRoot = destIsDir ? joinPath(target, src.split("/").pop() ?? src) : target;
         set({
           files: nextFiles,
           dirs: [...new Set([...(target ? [target] : []), ...nextDirs.filter(Boolean)])],
+          openPaths: remapList(get().openPaths, src, destRoot),
+          activePath: get().activePath ? remapPath(get().activePath!, src, destRoot) : get().activePath,
+          dirty: remapRecord(get().dirty, src, destRoot),
+          undo: remapRecord(get().undo, src, destRoot),
+          pendingDiffs: get().pendingDiffs.map((d) => ({ ...d, path: remapPath(d.path, src, destRoot) })),
+          breakpoints: remapRecord(get().breakpoints, src, destRoot),
+          attached: remapList(get().attached, src, destRoot),
+          recentPaths: remapList(get().recentPaths, src, destRoot),
+          collapsed: remapList(get().collapsed, src, destRoot),
+          closedTabs: remapList(get().closedTabs, src, destRoot),
         });
         pushDisk("remove", src);
         for (const [p, c] of Object.entries(nextFiles)) {
@@ -1537,22 +1595,41 @@ export const useIde = create<IdeState>()(
         const cur = get().collapsed;
         set({ collapsed: cur.includes(path) ? cur.filter((p) => p !== path) : [...cur, path] });
       },
-      applyFiles: (next, extraDirs) => {
-        const { openPaths, activePath, collapsed } = get();
-        const keepOpen = openPaths.filter((p) => p in next);
-        const keepActive = activePath && activePath in next ? activePath : keepOpen[0] ?? null;
-        const fromFiles = Object.keys(next).flatMap((p) => ancestorDirs(p));
-        const paths = Object.keys(next);
+      applyFiles: (next, extraDirs, opts) => {
+        const prev = get();
+        const { openPaths, activePath, collapsed } = prev;
+        let files = { ...next };
+        const keepDirty = Boolean(opts?.keepDirty);
+        const dirty: Record<string, boolean> = {};
+        if (keepDirty) {
+          for (const p of Object.keys(prev.dirty)) {
+            if (p in prev.files) {
+              files[p] = prev.files[p];
+              dirty[p] = true;
+            }
+          }
+        }
+        const keepOpen = openPaths.filter((p) => p in files);
+        const keepActive = activePath && activePath in files ? activePath : keepOpen[0] ?? null;
+        const fromFiles = Object.keys(files).flatMap((p) => ancestorDirs(p));
+        const paths = Object.keys(files);
         const nextCollapsed =
           extraDirs != null ? autoCollapsePaths(paths, keepActive) : collapsed.length ? collapsed : autoCollapsePaths(paths, keepActive);
+        const gone = (p: string) => !(p in files);
         set({
-          files: next,
+          files,
           dirs: [...new Set([...(extraDirs ?? []), ...fromFiles])].filter(Boolean),
           openPaths: keepOpen.length ? keepOpen : keepActive ? [keepActive] : [],
           activePath: keepActive,
-          dirty: {},
+          dirty,
           collapsed: nextCollapsed,
+          pendingDiffs: keepDirty ? prev.pendingDiffs.filter((d) => d.path in files) : [],
+          undo: dropRecord(prev.undo, gone),
+          breakpoints: dropRecord(prev.breakpoints, gone),
+          attached: prev.attached.filter((p) => p in files),
+          recentPaths: prev.recentPaths.filter((p) => p in files),
         });
+        void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(files)).catch(() => undefined);
       },
       addChat: (msg) => {
         set({ chat: [...get().chat, { ...msg, id: nid() }] });
@@ -1616,7 +1693,10 @@ export const useIde = create<IdeState>()(
           },
         });
       },
-      setSessionJournal: (sessionJournal) => set({ sessionJournal: normalizeJournal(sessionJournal) }),
+      setSessionJournal: (sessionJournal) => {
+        set({ sessionJournal: normalizeJournal(sessionJournal) });
+        void import("@/lib/session").then((m) => m.persistSessionDisk()).catch(() => undefined);
+      },
       finalizeAssistant: (reply, tools) => {
         flushLiveChat();
         const chat = [...get().chat];
@@ -1666,6 +1746,7 @@ export const useIde = create<IdeState>()(
       resetKeyMap: () => set({ keyMap: { ...KEY_DEFAULTS } }),
       setAgentBusy: (agentBusy) =>
         set(agentBusy ? { agentBusy, agentStartedAt: get().agentStartedAt || Date.now() } : { agentBusy, agentStartedAt: 0 }),
+      setAgentJob: (agentJob) => set({ agentJob }),
       setTestsRunning: (testsRunning) => set({ testsRunning }),
       mergeTestResults: (hits) => {
         const next = { ...get().testResults };
@@ -1712,8 +1793,8 @@ export const useIde = create<IdeState>()(
           });
         }
         if (!r.ok) noteLearn("fail", r.label);
-        if (r.label === "tests" || isTestFile(r.label)) {
-          const hits = parseTests(r.stdout, r.stderr, get().files);
+        if (r.label !== "tests" && isTestFile(r.label)) {
+          const hits = parseTests(r.stdout, r.stderr, { [r.label]: get().files[r.label] ?? "" });
           if (hits.length) get().mergeTestResults(hits);
         }
       },
@@ -1768,6 +1849,12 @@ export const useIde = create<IdeState>()(
           collapsed: [],
           sessionJournal: { ...EMPTY_JOURNAL },
           sessionTokens: { prompt: 0, completion: 0 },
+          agentJob: null,
+          pendingDiffs: [],
+          undo: {},
+          breakpoints: {},
+          checkpoints: [],
+          attached: [],
         }),
       resetSettings: () =>
         set({
@@ -1791,6 +1878,7 @@ export const useIde = create<IdeState>()(
           runLoop: true,
           testLoop: true,
           graphLoop: true,
+          engineLoop: false,
           loopTries: 3,
           harnessAfterWrite: "run",
           harnessMaxRounds: 24,
@@ -1858,6 +1946,7 @@ export const useIde = create<IdeState>()(
           llmSlots: (p.llmSlots as typeof current.llmSlots) ?? {},
           llmProfiles: Array.isArray(p.llmProfiles) ? p.llmProfiles : [],
           runInWindow: typeof p.runInWindow === "boolean" ? p.runInWindow : true,
+          engineLoop: p.engineLoop === true,
           locale: p.locale === "en" || p.locale === "de" ? p.locale : current.locale,
           keyMap: normalizeKeyMap(p.keyMap),
           inputMap: normalizeInputMap(p.inputMap ?? current.inputMap),
@@ -1886,7 +1975,10 @@ export const useIde = create<IdeState>()(
           running: false,
           testsRunning: false,
           agentInbox: null,
-          agentQueue: [],
+          agentJob: normalizeJob(p.agentJob, { revive: true }),
+          agentQueue: Array.isArray(p.agentQueue)
+            ? (p.agentQueue as unknown[]).filter((t): t is string => typeof t === "string" && t.trim().length > 0).slice(0, 8)
+            : [],
           sessionJournal: normalizeJournal(p.sessionJournal),
           workspaceCwd: typeof p.workspaceCwd === "string" ? p.workspaceCwd : "",
         };
@@ -1924,6 +2016,7 @@ export const useIde = create<IdeState>()(
         runLoop: s.runLoop,
         testLoop: s.testLoop,
         graphLoop: s.graphLoop,
+        engineLoop: s.engineLoop,
         loopTries: s.loopTries,
         harnessAfterWrite: s.harnessAfterWrite,
         harnessMaxRounds: s.harnessMaxRounds,
@@ -1953,6 +2046,7 @@ export const useIde = create<IdeState>()(
         llmProfiles: s.llmProfiles,
         sessionTokens: s.sessionTokens,
         sessionJournal: s.sessionJournal,
+        agentJob: s.agentJob,
         undo: Object.fromEntries(
           Object.entries(s.undo)
             .filter(([p]) => s.openPaths.includes(p) || Boolean(s.dirty[p]))
@@ -1972,6 +2066,7 @@ export const useIde = create<IdeState>()(
         trailInChat: s.trailInChat,
         autoHw: s.autoHw,
         hwNote: s.hwNote,
+        agentQueue: s.agentQueue.slice(0, 8).map((t) => t.slice(0, 2000)),
         pluginDisabled: s.pluginDisabled,
         pluginKnown: s.pluginKnown,
         pluginConfig: s.pluginConfig,
@@ -1999,11 +2094,19 @@ export const useIde = create<IdeState>()(
         lspMaxFiles: s.lspMaxFiles,
         recentPaths: s.recentPaths,
         dirty: s.dirty,
-        pendingDiffs: s.pendingDiffs,
+        pendingDiffs: s.pendingDiffs.slice(0, 16).map((d) => ({
+          ...d,
+          before: d.before.length > 400_000 ? d.before.slice(0, 400_000) : d.before,
+          after: d.after.length > 400_000 ? d.after.slice(0, 400_000) : d.after,
+        })),
         attached: s.attached,
       }),
     },
   ),
 );
+
+if (typeof window !== "undefined") {
+  (window as unknown as { __anvilIde?: typeof useIde }).__anvilIde = useIde;
+}
 
 export { parentDir, langFromPath };

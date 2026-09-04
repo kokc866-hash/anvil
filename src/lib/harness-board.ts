@@ -38,10 +38,11 @@ export type Board = {
 export type BoardSettings = {
   runLoop: boolean;
   graphLoop: boolean;
+  testLoop?: boolean;
+  engineLoop?: boolean;
   afterWrite: AfterWrite;
   loopTries: number;
   maxRounds: number;
-  engineLoop?: boolean;
 };
 
 const PHASES: { id: HarnessPhase; label: string; x: number; y: number }[] = [
@@ -114,20 +115,25 @@ export function toggleWire(board: Board, id: string): Board {
   const hit = board.wires.find((w) => w.id === id);
   if (!hit) return board;
   const on = !hit.on;
-  if (hit.kind === "graph") {
-    return { ...board, wires: board.wires.map((w) => (w.id === id ? { ...w, on } : w)) };
+  const spine = SPINE.some((s) => s.id === id);
+  if (spine && (hit.kind === "fail" || hit.kind === "see" || hit.kind === "engine")) {
+    return {
+      ...board,
+      wires: board.wires.map((w) =>
+        SPINE.some((s) => s.id === w.id) && w.kind === hit.kind ? { ...w, on } : w,
+      ),
+    };
   }
-  return { ...board, wires: board.wires.map((w) => (w.kind === hit.kind ? { ...w, on } : w)) };
+  return { ...board, wires: board.wires.map((w) => (w.id === id ? { ...w, on } : w)) };
 }
 
 export function compileBoard(board: Board, s: BoardSettings): { harness: ProjectHarness; graph: ProjectGraph } {
-  const fail = board.wires.some((w) => w.kind === "fail" && w.on);
-  const see = board.wires.some((w) => w.kind === "see" && w.on);
-  const eng = board.wires.some((w) => w.kind === "engine" && w.on);
-  let afterWrite: AfterWrite = "none";
-  if (fail) afterWrite = "run";
-  else if (see) afterWrite = "preview";
-  if (eng && !fail && !see) afterWrite = "engine";
+  const spineOn = (kind: WireKind) =>
+    board.wires.some((w) => w.kind === kind && w.on && SPINE.some((x) => x.id === w.id));
+  const fail = spineOn("fail");
+  const see = spineOn("see");
+  const eng = spineOn("engine");
+  const afterWrite: AfterWrite = s.afterWrite ?? (eng && !fail ? "engine" : fail ? "run" : see ? "preview" : "none");
   const edges: ProjectGraphEdge[] = [];
   const seen = new Set<string>();
   const push = (e: ProjectGraphEdge) => {
@@ -138,7 +144,7 @@ export function compileBoard(board: Board, s: BoardSettings): { harness: Project
   };
   for (const n of board.nodes) if (n.kind === "edge" && n.edge) push(n.edge);
   for (const w of board.wires) {
-    if (!w.on) continue;
+    if (!w.on || !SPINE.some((x) => x.id === w.id)) continue;
     const to = board.nodes.find((n) => n.id === w.to);
     if (w.kind === "see" || to?.phase === "see") {
       push({ when: "Vorschau nach Run", edge: "preview", tool: "see_run", glob: "*.{html,htm}" });
@@ -154,9 +160,10 @@ export function compileBoard(board: Board, s: BoardSettings): { harness: Project
     harness: {
       name: "board",
       when: "Tafel",
-      runLoop: fail || afterWrite === "run",
+      runLoop: fail,
       graphLoop: see,
       engineLoop: eng,
+      testLoop: Boolean(s.testLoop),
       loopTries: s.loopTries,
       maxRounds: s.maxRounds,
       afterWrite,
@@ -180,13 +187,18 @@ function placeUnder(board: Board, from: string, index: number): { x: number; y: 
   return { x, y: y0 + index * (NODE_H + 20) };
 }
 
+let edgeSeq = 0;
+function nextNodeId(): string {
+  edgeSeq += 1;
+  return `e-${edgeSeq.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export function addEdgeNode(board: Board, edge: ProjectGraphEdge, fromId?: string | null): Board {
   const from = sourcePhase(edge, fromId);
   const kids = board.wires.filter((w) => w.from === from && board.nodes.find((n) => n.id === w.to)?.kind === "edge").length;
   const pos = placeUnder(board, from, kids);
-  const n = board.nodes.filter((x) => x.kind === "edge").length;
   const node: BoardNode = {
-    id: `e-${Date.now().toString(36)}-${n}`,
+    id: nextNodeId(),
     kind: "edge",
     x: pos.x,
     y: pos.y,
@@ -603,6 +615,7 @@ export function settingsFromFiles(files: Record<string, string>): BoardSettings 
   return {
     runLoop: h?.runLoop ?? true,
     graphLoop: Boolean(h?.graphLoop),
+    testLoop: Boolean(h?.testLoop),
     engineLoop: Boolean(h?.engineLoop) || h?.afterWrite === "engine",
     afterWrite: h?.afterWrite ?? "run",
     loopTries: h?.loopTries ?? 3,
@@ -707,6 +720,13 @@ export function applyBoardTool(
     return { result: { ok: true, ...compactBoard(board) }, writes: filesFromBoard(board, s) };
   }
   return { result: { error: `unknown ${name}` } };
+}
+
+export function syncBoardSettings(files: Record<string, string>): Record<string, string> {
+  const s = settingsFromFiles(files);
+  const parsed = files[BOARD_PATH] ? parseBoard(files[BOARD_PATH]) : null;
+  const board = applySettings(parsed ?? defaultBoard(s), s);
+  return filesFromBoard(board, s);
 }
 
 export function syncBoardFromFiles(files: Record<string, string>): Record<string, string> {

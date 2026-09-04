@@ -1,13 +1,17 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { gitBin, gitDispatch, listTree, mkdirRel, resolveCwd, writeRel } from "./git.mjs";
+import { gitBin, gitDispatch, insideRoot, listTree, mkdirRel, resolveCwd, writeRel } from "./git.mjs";
 
 describe("git cwd", () => {
   it("rejects drive root", () => {
     assert.throws(() => resolveCwd("/"));
+  });
+  it("rejects ssh", () => {
+    assert.throws(() => resolveCwd(path.join(os.homedir(), ".ssh")));
   });
   it("accepts a temp dir under home or tmp", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-git-"));
@@ -60,6 +64,52 @@ describe("tree", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("keeps .github, empty files, Makefile; skips .anvil/work", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-dots-"));
+    try {
+      mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
+      mkdirSync(path.join(dir, ".anvil", "work"), { recursive: true });
+      writeFileSync(path.join(dir, ".github", "workflows", "ci.yml"), "on: push\n");
+      writeFileSync(path.join(dir, "empty.ts"), "");
+      writeFileSync(path.join(dir, "Makefile"), "all:\n");
+      writeFileSync(path.join(dir, ".anvil", "rules.md"), "ok\n");
+      writeFileSync(path.join(dir, ".anvil", "work", "tmp.ts"), "nope\n");
+      const t = listTree(dir);
+      assert.equal(t.files[".github/workflows/ci.yml"], "on: push\n");
+      assert.equal(t.files["empty.ts"], "");
+      assert.equal(t.files["Makefile"], "all:\n");
+      assert.equal(t.files[".anvil/rules.md"], "ok\n");
+      assert.equal(".anvil/work/tmp.ts" in t.files, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("loads ref png as data url, skips other png, skips data-url writes", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-img-"));
+    try {
+      mkdirSync(path.join(dir, "ref"), { recursive: true });
+      writeFileSync(path.join(dir, "ref", "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(path.join(dir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const t = listTree(dir);
+      assert.match(t.files["ref/shot.png"] ?? "", /^data:image\/png;base64,/);
+      assert.equal("logo.png" in t.files, false);
+      const w = writeRel(dir, "ref/x.png", "data:image/png;base64,aaa");
+      assert.equal(w.skipped, "image");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("insideRoot rejects prefix siblings", () => {
+    assert.equal(insideRoot("/tmp/ab", "/tmp/ab"), true);
+    assert.equal(insideRoot("/tmp/ab", "/tmp/ab/c"), true);
+    assert.equal(insideRoot("/tmp/ab", "/tmp/abc"), false);
+    const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-esc-"));
+    try {
+      assert.throws(() => writeRel(dir, "../x.ts", "no"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("git op", () => {
@@ -89,6 +139,8 @@ describe("git op", () => {
       const init = await gitDispatch("init", { cwd: dir });
       if (!init.ok && /Benutzerbereich/.test(init.error || "")) return;
       assert.equal(init.ok, true);
+      spawnSync(gitBin(), ["config", "user.email", "anvil-test@local"], { cwd: dir, windowsHide: true });
+      spawnSync(gitBin(), ["config", "user.name", "Anvil Test"], { cwd: dir, windowsHide: true });
       const c = await gitDispatch("commit", { cwd: dir, message: "first" });
       assert.equal(c.ok, true);
       assert.equal(c.repo, true);

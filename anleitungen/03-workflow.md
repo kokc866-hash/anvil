@@ -49,7 +49,7 @@ du  →  Agent schreibt  →  Diff  →  Run-Fenster  →  „mach den Button ro
 7. Nachbessern im Chat, Datei bleibt `@index.html`.
 8. Schiefgelaufen: unter der Antwort **Zurück vor diese Runde**.
 
-Run-Schleife an (Einstellungen → Agent): nach dem Schreiben führt Anvil selbst aus. Graph an: Frames gehen zurück an den Agenten.
+Run-Schleife an (Einstellungen → Agent): nach dem Schreiben führt Anvil selbst aus, bei Fehler einmal anders patchen. Graph an: nach HTML-Run ein Frame zurück an den Agenten — nicht parallel zum Loop denselben `run_file`.
 
 ---
 

@@ -21,4 +21,11 @@ describe("vscode snippets", () => {
     assert.equal(got.length, 2);
     assert.ok(got.some((s) => s.lang === "typescript"));
   });
+  it("strips tabstops and choices", () => {
+    const got = parseSnippetFile(
+      JSON.stringify({ X: { prefix: "x", body: "${1|a,b|} $2 ${3:hi}" } }),
+      "*",
+    );
+    assert.equal(got[0]?.body.trim(), "a  hi");
+  });
 });

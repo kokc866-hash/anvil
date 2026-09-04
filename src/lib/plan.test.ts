@@ -46,8 +46,19 @@ describe("plan", () => {
     ];
     plan = planFromTool("write_file", plan)!;
     assert.equal(plan[1]?.status, "ok");
-    plan = planFinish(plan)!;
+    plan = planFinish(plan, false, true)!;
     assert.equal(plan.every((s) => s.status === "ok"), true);
+  });
+  it("unproved finish leaves leftover todos", () => {
+    const left = planFinish(
+      [
+        { text: "Ändern", status: "ok" },
+        { text: "Run", status: "todo" },
+      ],
+      false,
+      false,
+    );
+    assert.equal(left, null);
   });
   it("failed finish only errors the running step", () => {
     const plan = planFinish(
@@ -60,5 +71,15 @@ describe("plan", () => {
     )!;
     assert.equal(plan[1]?.status, "err");
     assert.equal(plan[2]?.status, "todo");
+  });
+  it("english guess and mcp advances MCP step", () => {
+    const g = guessPlan("open the ziva surface", "en");
+    assert.ok(g.some((s) => s.text === "MCP"));
+    let plan = guessPlan("call mcp tools", "de");
+    plan = planStart("mcp_call", plan)!;
+    const mcp = plan.find((s) => /mcp/i.test(s.text))!;
+    assert.equal(mcp.status, "run");
+    plan = planFromTool("mcp_call", plan)!;
+    assert.equal(plan.find((s) => /mcp/i.test(s.text))?.status, "ok");
   });
 });

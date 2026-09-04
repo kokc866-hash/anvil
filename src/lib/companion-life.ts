@@ -1,6 +1,7 @@
 import { nativeHelper } from "./helper-local";
 import { setCompanionToken } from "./companion";
 import { useIde } from "@/store/ide";
+import { jobKeepsCompanion } from "./agent-ask";
 
 export async function holdCompanion(): Promise<boolean> {
   const n = nativeHelper();
@@ -13,7 +14,8 @@ export async function holdCompanion(): Promise<boolean> {
 export async function releaseCompanion(): Promise<void> {
   const n = nativeHelper();
   if (!n?.companionRelease) return;
-  const keep = useIde.getState().companionKeep || useIde.getState().runPopout;
+  const st = useIde.getState();
+  const keep = st.companionKeep || st.runPopout || jobKeepsCompanion(st.agentJob);
   await n.companionRelease(keep);
 }
 

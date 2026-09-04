@@ -1,6 +1,6 @@
 import { downloadBlob, unzipFiles, zipFiles } from "@/lib/archive";
 import { formatCode } from "@/lib/format";
-import { fetchWeb } from "@/lib/web-fetch";
+import { fetchWeb, readWebPage } from "@/lib/web-fetch";
 import { registerBuiltin, type PluginApi } from "./host";
 import { useIde } from "@/store/ide";
 
@@ -112,7 +112,7 @@ registerBuiltin({
       run: async () => {
         const url = window.prompt("URL");
         if (!url) return;
-        const r = await fetchWeb({ data: { url } });
+        const r = await fetchWeb({ data: { url } }).catch(() => readWebPage(url));
         const name = `web/${safeName(url)}.txt`;
         api.write(name, r.text);
         api.open(name);

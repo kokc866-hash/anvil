@@ -3,8 +3,13 @@ import https from "node:https";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
 
 const UA = "Anvil/1.1";
+export const MAX_JSON = 8_000_000;
+export const MAX_FILE = 2_400_000_000;
+export const MAX_REDIRECTS = 5;
+export const MAX_JOB_FILES = 400;
 
 export function hfAllowed(url) {
   let u;
@@ -64,9 +69,27 @@ export function hfSource(rel, src = "") {
   return `https://huggingface.co/mlc-ai/${p.id}/resolve/main/${p.file}`;
 }
 
+export function helperModelId(id) {
+  const s = String(id || "").trim();
+  if (!s || s.length > 180) throw new Error("id ungültig");
+  if (s === "libs" || s === "t" || s.includes("..") || s.startsWith(".")) throw new Error("id ungültig");
+  if (!/^[\w][\w.+-]*$/.test(s)) throw new Error("id ungültig");
+  return s;
+}
+
+export function parseHelperPath(pathname, token) {
+  const raw = decodeURIComponent(String(pathname || "")).replace(/^\/+/, "");
+  const parts = raw.split("/").filter(Boolean);
+  if (parts[0] === "t" && parts[1]) {
+    if (parts[1] !== token) return { ok: false, rest: "", reason: "token" };
+    return { ok: true, rest: parts.slice(2).join("/"), reason: "" };
+  }
+  return { ok: false, rest: "", reason: "token" };
+}
+
 export function nodeReq(url, hops = 0) {
   return new Promise((resolve, reject) => {
-    if (hops > 8) return reject(new Error("zu viele Redirects"));
+    if (hops > MAX_REDIRECTS) return reject(new Error("zu viele Redirects"));
     let u;
     try {
       u = new URL(url);
@@ -102,10 +125,18 @@ export function nodeReq(url, hops = 0) {
   });
 }
 
-export async function nodeText(url) {
+export async function nodeText(url, max = MAX_JSON) {
   const res = await nodeReq(url);
   const chunks = [];
-  for await (const c of res) chunks.push(c);
+  let n = 0;
+  for await (const c of res) {
+    n += c.length;
+    if (n > max) {
+      res.destroy?.();
+      throw new Error("Antwort zu groß");
+    }
+    chunks.push(c);
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 
@@ -133,12 +164,24 @@ export async function downloadFile(url, dest, jsonOk) {
     try {
       const res = await nodeReq(a);
       const len = Number(res.headers["content-length"] || 0);
+      if (len > MAX_FILE) {
+        res.resume();
+        throw new Error("Datei zu groß");
+      }
       if (existsSync(dest) && len && statSync(dest).size === len) {
         res.resume();
         if (!dest.endsWith(".json") || jsonOk(dest)) return { bytes: len, skipped: true };
       }
       const tmp = `${dest}.part`;
-      await pipeline(res, createWriteStream(tmp));
+      let n = 0;
+      const cap = new Transform({
+        transform(chunk, _enc, cb) {
+          n += chunk.length;
+          if (n > MAX_FILE) cb(new Error("Datei zu groß"));
+          else cb(null, chunk);
+        },
+      });
+      await pipeline(res, cap, createWriteStream(tmp));
       renameSync(tmp, dest);
       if (dest.endsWith(".json") && !jsonOk(dest)) {
         try {

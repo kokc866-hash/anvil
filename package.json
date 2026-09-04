@@ -20,7 +20,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' companion/lint.test.mjs companion/lsp.test.mjs companion/git.test.mjs companion/debug.test.mjs companion/paths.test.mjs companion/toolchain.test.mjs companion/compile-plan.test.mjs && node --experimental-strip-types --test src/lib/auth/gate-identity.test.ts src/lib/compile-files.test.ts src/lib/harness.test.ts src/lib/intern.test.ts src/lib/net-guard.test.ts src/lib/ws-index.test.ts src/lib/ws-skip.test.ts src/lib/session.test.ts src/lib/compact.test.ts src/lib/test-parse.test.ts src/lib/diff.test.ts src/lib/search.test.ts src/lib/mcp.test.ts src/lib/vault.test.ts src/lib/starters.test.ts src/lib/tool-fallback.test.ts src/lib/skill-debug.test.ts src/lib/llm-fit.test.ts src/lib/llm-options.test.ts src/lib/model-context.test.ts src/lib/agent-core-read.test.ts src/lib/parse-run.test.ts src/lib/run-error.test.ts src/lib/layout.test.ts src/lib/persist-storage.test.ts src/lib/lsp.test.ts src/lib/fs.test.ts src/lib/monaco-prune.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' companion/lint.test.mjs companion/lsp.test.mjs companion/git.test.mjs companion/debug.test.mjs companion/paths.test.mjs companion/toolchain.test.mjs companion/compile-plan.test.mjs companion/guard.test.mjs companion/tmp.test.mjs electron/helper-host.test.mjs electron/hf-get.test.mjs electron/hw.test.mjs && node --experimental-strip-types --test src/lib/auth/gate-identity.test.ts src/lib/plan.test.ts src/lib/trail-filter.test.ts src/lib/compile-files.test.ts src/lib/harness.test.ts src/lib/intern.test.ts src/lib/learn.test.ts src/lib/net-guard.test.ts src/lib/ws-index.test.ts src/lib/ws-skip.test.ts src/lib/session.test.ts src/lib/compact.test.ts src/lib/test-parse.test.ts src/lib/run-tests.test.ts src/lib/diff.test.ts src/lib/search.test.ts src/lib/mcp.test.ts src/lib/vault.test.ts src/lib/starters.test.ts src/lib/tool-fallback.test.ts src/lib/skill-debug.test.ts src/lib/llm-fit.test.ts src/lib/llm-options.test.ts src/lib/model-context.test.ts src/lib/agent-core-read.test.ts src/lib/agent-loop.test.ts src/lib/agent-ask.test.ts src/lib/parse-run.test.ts src/lib/run-error.test.ts src/lib/layout.test.ts src/lib/hw.test.ts src/lib/persist-storage.test.ts src/lib/lsp.test.ts src/lib/fs.test.ts src/lib/ref.test.ts src/lib/archive.test.ts src/lib/monaco-prune.test.ts src/lib/keymap.test.ts src/lib/plugins/vscode.test.ts src/lib/plugins/plugin.test.ts src/lib/agent-parse.test.ts src/lib/surface.test.ts src/lib/live-write.test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "dist:win": "electron-builder --win nsis portable"
@@ -45,13 +45,14 @@
     "jose": "6.2.9",
     "kysely": "^0.28.5",
     "lucide-react": "^0.510.0",
+    "monaco-editor": "^0.52.2",
     "pg": "^8.16.3",
+    "rcedit": "^4.0.1",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",
     "react-dom": "^19.2.0",
     "react-resizable-panels": "^4.6.5",
     "recharts": "^2.13.0",
-    "rcedit": "^4.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.3.0",
@@ -85,7 +86,9 @@
     "appId": "app.anvil.ide",
     "productName": "Anvil",
     "asar": false,
-    "directories": { "output": "dist-win" },
+    "directories": {
+      "output": "dist-win"
+    },
     "icon": "public/icon.ico",
     "files": [
       "**/*",
@@ -93,8 +96,16 @@
       "!dist-test",
       "!grok.anvil-patch"
     ],
-    "extraMetadata": { "main": "electron/main.mjs" },
-    "win": { "icon": "public/icon.ico", "target": ["nsis", "portable"] },
+    "extraMetadata": {
+      "main": "electron/main.mjs"
+    },
+    "win": {
+      "icon": "public/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,

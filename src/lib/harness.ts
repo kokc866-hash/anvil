@@ -32,14 +32,27 @@ export type HarnessState = {
 
 export type AfterWrite = "run" | "engine" | "preview" | "none";
 
+export function effectiveAfterWrite(opts: HarnessOpts): AfterWrite {
+  const a = opts.afterWrite;
+  if (a === "none") return "none";
+  if (a === "preview") return opts.graphLoop ? "preview" : "none";
+  if (a === "engine") return "engine";
+  if (opts.engineLoop && a !== "run") return "engine";
+  if (opts.runLoop) return "run";
+  return "none";
+}
+
 export type HarnessOpts = {
   runLoop: boolean;
   graphLoop: boolean;
+  testLoop?: boolean;
+  engineLoop?: boolean;
   loopTries: number;
   maxRounds?: number;
   maxTools?: number;
   afterWrite?: AfterWrite;
   graphSees?: number;
+  stopOn?: string[];
 };
 
 const EMPTY: HarnessBudget = { rounds: 0, tools: 0, runs: 0, sees: 0, patches: 0 };
@@ -57,13 +70,14 @@ const PHASE: Record<HarnessPhase, string> = {
 
 export function startHarness(opts: HarnessOpts): HarnessState {
   const tries = clamp(opts.loopTries ?? 3, 1, 5);
+  const rounds = clamp(opts.maxRounds ?? 24, 8, 128);
   return {
     phase: "plan",
     budget: {
-      rounds: opts.maxRounds ?? 24,
+      rounds,
       tools: opts.maxTools ?? 64,
       runs: opts.runLoop ? tries : 1,
-      sees: opts.graphLoop ? clamp(opts.graphSees ?? 4, 0, 8) : 1,
+      sees: opts.graphLoop ? clamp(opts.graphSees ?? 4, 0, 8) : 0,
       patches: opts.runLoop ? tries : 0,
     },
     used: { ...EMPTY },
@@ -72,16 +86,20 @@ export function startHarness(opts: HarnessOpts): HarnessState {
   };
 }
 
-export function kindOfTool(name: string): ObsKind {
+export function kindOfTool(name: string, result?: Record<string, unknown>): ObsKind {
   if (name === "run_file") return "run";
-  if (name === "shell") return "run";
+  if (name === "shell") {
+    const cmd = String(result?.command ?? result?.cmd ?? "");
+    if (/\b(pytest|npm test|npx vitest|vitest|jest|bun test|go test|cargo test|dotnet test|phpunit|rspec)\b/i.test(cmd)) return "test";
+    return "run";
+  }
   if (name.startsWith("engine_")) return "engine";
   if (name === "see_run") return "see";
   if (name === "play") return "play";
   if (name === "write_file" || name === "append_file") return "write";
   if (name === "edit_file") return "edit";
   if (name === "mcp_call") return "mcp";
-  if (/read|list|grep|harness_read/.test(name)) return "read";
+  if (/read|list|grep|harness_read|board_read/.test(name)) return "read";
   return "other";
 }
 
@@ -89,8 +107,17 @@ export function noteObs(state: HarnessState, obs: Observation): HarnessState {
   const used = { ...state.used, tools: state.used.tools + 1 };
   if (obs.kind === "run" || obs.kind === "test") used.runs += 1;
   if (obs.kind === "see" || obs.kind === "play") used.sees += 1;
-  if ((obs.kind === "edit" || obs.kind === "write") && state.last && !state.last.ok) used.patches += 1;
+  if (countsAsPatch(state, obs)) used.patches += 1;
   return { ...state, used, last: obs, history: [...state.history, obs].slice(-20) };
+}
+
+function countsAsPatch(state: HarnessState, obs: Observation): boolean {
+  if (obs.kind !== "edit" && obs.kind !== "write") return false;
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const h = state.history[i];
+    if (h.kind === "run" || h.kind === "engine" || h.kind === "test") return !h.ok;
+  }
+  return Boolean(state.last && !state.last.ok && (state.last.kind === "run" || state.last.kind === "engine" || state.last.kind === "test"));
 }
 
 export type HarnessTick = {
@@ -98,20 +125,31 @@ export type HarnessTick = {
   allow: string[];
   hint: string;
   stop: boolean;
+  strict?: boolean;
 };
 
 export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick {
-  if (state.phase === "abort" || state.phase === "done") {
-    return { state, allow: [], hint: state.reason, stop: true };
+  if (state.phase === "abort") {
+    return { state, allow: [], hint: state.reason, stop: true, strict: true };
+  }
+  if (state.phase === "done") {
+    return { state, allow: [], hint: state.reason, stop: false };
   }
 
-  if (state.used.tools >= state.budget.tools || state.used.rounds >= state.budget.rounds) {
+  const overBudget = state.used.tools >= state.budget.tools || state.used.rounds >= state.budget.rounds;
+  if (overBudget) {
+    const stopBudget = (opts.stopOn ?? []).some((s) => /budget/i.test(s));
+    if (stopBudget && /budget/i.test(state.reason)) {
+      const next = { ...state, phase: "done" as const, reason: "budget" };
+      return { state: next, allow: [], hint: "Budget full.", stop: true, strict: true };
+    }
     const next = { ...state, reason: "budget — core tools only" };
     return {
       state: next,
-      allow: ["read_file", "edit_file", "append_file", "write_file", "run_file", "grep"],
+      allow: ["read_file", "edit_file", "append_file", "write_file", "run_file", "grep", "mcp_call", "set_plan"],
       hint: "Budget full. Core tools only — finish the job, do not restart.",
       stop: false,
+      strict: true,
     };
   }
 
@@ -128,12 +166,12 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
   if (!last.ok && (last.kind === "run" || last.kind === "engine" || last.kind === "test")) {
     if (patchesLeft <= 0 || runsLeft <= 0) {
       const next = { ...state, phase: "act" as const, reason: "run budget — continue without loop" };
-      return { state: next, allow: ["read_file", "edit_file", "append_file", "write_file", "grep"], hint: next.reason, stop: false };
+      return { state: next, allow: ["read_file", "edit_file", "append_file", "write_file", "grep", "mcp_call"], hint: next.reason, stop: false };
     }
     const next = { ...state, phase: "patch" as const, reason: "error — patch and run again" };
     return {
       state: next,
-      allow: ["read_file", "edit_file", "write_file", "run_file", "engine_run", "grep"],
+      allow: ["read_file", "edit_file", "write_file", "run_file", "engine_run", "grep", "mcp_call"],
       hint: `Error. Patch + run_file/engine_run. ${Math.min(patchesLeft, runsLeft)} left.`,
       stop: false,
     };
@@ -154,12 +192,12 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
       const next = { ...state, phase: "act" as const, reason: "continue" };
       return { state: next, allow: [], hint: "", stop: false };
     }
-    const mode = opts.afterWrite ?? (opts.runLoop ? "run" : "none");
-    if (mode === "engine") {
+    const mode = effectiveAfterWrite(opts);
+    if (mode === "engine" || (opts.engineLoop && mode !== "preview" && mode !== "run" && mode !== "none")) {
       const next = { ...state, phase: "engine" as const, reason: "after write: engine" };
       return {
         state: next,
-        allow: ["engine_run", "engine_status", "read_file"],
+        allow: ["engine_run", "engine_status", "read_file", "mcp_call"],
         hint: "engine_run via companion. No mini-engine.",
         stop: false,
       };
@@ -173,7 +211,7 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
         stop: false,
       };
     }
-    if (mode !== "none" && opts.runLoop && runsLeft > 0) {
+    if (mode === "run" && opts.runLoop && runsLeft > 0) {
       const next = { ...state, phase: "observe" as const, reason: "after write: run" };
       return {
         state: next,
@@ -182,6 +220,16 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
         stop: false,
       };
     }
+  }
+
+  if (last.ok && (last.kind === "see" || last.kind === "play")) {
+    const next = { ...state, phase: "act" as const, reason: "frame ok — continue if the job is open" };
+    return { state: next, allow: [], hint: "", stop: false };
+  }
+
+  if (last.ok && (last.kind === "run" || last.kind === "engine" || last.kind === "test") && !last.graphical) {
+    const next = { ...state, phase: "act" as const, reason: "run ok — continue if the job is open" };
+    return { state: next, allow: [], hint: "", stop: false };
   }
 
   const next = { ...state, phase: "act" as const, reason: "continue" };
@@ -203,7 +251,7 @@ export function harnessBar(state: HarnessState): string {
   const b = state.budget;
   const u = state.used;
   const bits = [`${PHASE[state.phase]}`];
-  if (b.runs > 1 || u.runs > 0) bits.push(`Run ${u.runs}/${b.runs}`);
+  if (b.runs > 1 || u.runs > 0) bits.push(`Run ${u.runs}/${Math.max(b.runs, u.runs)}`);
   if (b.sees > 0) bits.push(`See ${u.sees}/${b.sees}`);
   bits.push(`Tools ${u.tools}/${b.tools}`);
   return bits.join(" · ");

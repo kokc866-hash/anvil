@@ -43,10 +43,11 @@ export function HarnessBoard() {
   const setGrid = useIde((s) => s.setHarnessBoardGrid);
   const setSnap = useIde((s) => s.setHarnessBoardSnap);
   const writeFile = useIde((s) => s.writeFile);
-  const setContent = useIde((s) => s.setContent);
   const setNotice = useIde((s) => s.setNotice);
   const setRunLoop = useIde((s) => s.setRunLoop);
   const setGraphLoop = useIde((s) => s.setGraphLoop);
+  const setTestLoop = useIde((s) => s.setTestLoop);
+  const setEngineLoop = useIde((s) => s.setEngineLoop);
   const setAfter = useIde((s) => s.setHarnessAfterWrite);
   const settings = useBoardSettings();
 
@@ -58,6 +59,7 @@ export function HarnessBoard() {
   const [menu, setMenu] = useState<{ x: number; y: number; node?: string; wire?: string } | null>(null);
   const stage = useRef<HTMLDivElement>(null);
   const undo = useRef<Board[]>([]);
+  const redo = useRef<Board[]>([]);
   const boardRef = useRef(board);
   const dirtyRef = useRef(false);
   boardRef.current = board;
@@ -66,7 +68,10 @@ export function HarnessBoard() {
   const livePhase = live.split("·")[0]?.trim().toLowerCase() ?? "";
 
   const commit = useCallback((next: Board, hist = true) => {
-    if (hist) undo.current = [...undo.current.slice(-24), boardRef.current];
+    if (hist) {
+      undo.current = [...undo.current.slice(-24), boardRef.current];
+      redo.current = [];
+    }
     setBoard(next);
     setDirty(true);
   }, []);
@@ -76,27 +81,29 @@ export function HarnessBoard() {
       const c = compileBoard(b, settings);
       setRunLoop(Boolean(c.harness.runLoop));
       setGraphLoop(Boolean(c.harness.graphLoop));
+      setTestLoop(Boolean(c.harness.testLoop));
+      setEngineLoop(Boolean(c.harness.engineLoop));
       if (c.harness.afterWrite) setAfter(c.harness.afterWrite);
     },
-    [settings, setRunLoop, setGraphLoop, setAfter],
+    [settings, setRunLoop, setGraphLoop, setTestLoop, setEngineLoop, setAfter],
   );
 
   const save = useCallback(
     (b = boardRef.current) => {
       const pack = filesFromBoard(b, settings);
       writeFile(BOARD_PATH, pack[BOARD_PATH]);
-      setContent(".anvil/harness.json", pack[".anvil/harness.json"]);
-      setContent(GRAPH_PATH, pack[GRAPH_PATH]);
+      writeFile(".anvil/harness.json", pack[".anvil/harness.json"]);
+      writeFile(GRAPH_PATH, pack[GRAPH_PATH]);
       syncStore(b);
       setDirty(false);
       setNotice("Tafel gespeichert");
     },
-    [settings, writeFile, setContent, setNotice, syncStore],
+    [settings, writeFile, setNotice, syncStore],
   );
 
   useEffect(() => {
     setBoard((b) => applySettings(b, settings));
-  }, [settings.runLoop, settings.graphLoop, settings.afterWrite]);
+  }, [settings.runLoop, settings.graphLoop, settings.afterWrite, settings.engineLoop]);
 
   useEffect(() => {
     if (dirty) return;
@@ -125,7 +132,17 @@ export function HarnessBoard() {
         const prev = undo.current.pop();
         if (!prev) return;
         e.preventDefault();
+        redo.current = [...redo.current.slice(-24), boardRef.current];
         setBoard(prev);
+        setDirty(true);
+        return;
+      }
+      if ((mod && e.key.toLowerCase() === "z" && e.shiftKey) || (mod && e.key.toLowerCase() === "y")) {
+        const nxt = redo.current.pop();
+        if (!nxt) return;
+        e.preventDefault();
+        undo.current = [...undo.current.slice(-24), boardRef.current];
+        setBoard(nxt);
         setDirty(true);
         return;
       }
@@ -378,6 +395,7 @@ export function HarnessBoard() {
       afterWrite: g.harness.afterWrite ?? settings.afterWrite,
       graphLoop: Boolean(g.harness.graphLoop),
       engineLoop: Boolean(g.harness.engineLoop) || g.harness.afterWrite === "engine",
+      testLoop: Boolean(g.harness.testLoop),
     });
     commit(next);
     syncStore(next);
@@ -788,12 +806,22 @@ function Inspector({
 function useBoardSettings() {
   const runLoop = useIde((s) => s.runLoop);
   const graphLoop = useIde((s) => s.graphLoop);
+  const testLoop = useIde((s) => s.testLoop);
+  const engineLoop = useIde((s) => s.engineLoop);
   const afterWrite = useIde((s) => s.harnessAfterWrite);
   const loopTries = useIde((s) => s.loopTries);
   const maxRounds = useIde((s) => s.harnessMaxRounds);
   return useMemo(
-    () => ({ runLoop, graphLoop, afterWrite: afterWrite ?? "run", loopTries, maxRounds: maxRounds ?? 12 }),
-    [runLoop, graphLoop, afterWrite, loopTries, maxRounds],
+    () => ({
+      runLoop,
+      graphLoop,
+      testLoop,
+      engineLoop: Boolean(engineLoop) || afterWrite === "engine",
+      afterWrite: afterWrite ?? "run",
+      loopTries,
+      maxRounds: maxRounds ?? 12,
+    }),
+    [runLoop, graphLoop, testLoop, engineLoop, afterWrite, loopTries, maxRounds],
   );
 }
 
@@ -812,6 +840,8 @@ function load(files: Record<string, string>, s: ReturnType<typeof useBoardSettin
     b = applySettings(b, {
       runLoop: h.runLoop ?? s.runLoop,
       graphLoop: h.graphLoop ?? s.graphLoop,
+      testLoop: h.testLoop ?? s.testLoop,
+      engineLoop: Boolean(h.engineLoop) || h.afterWrite === "engine",
       afterWrite: h.afterWrite ?? s.afterWrite,
       loopTries: h.loopTries ?? s.loopTries,
       maxRounds: h.maxRounds ?? s.maxRounds,

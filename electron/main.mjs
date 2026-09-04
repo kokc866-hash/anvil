@@ -9,6 +9,7 @@ import { execSync } from "node:child_process";
 import { bindHelperIpc, startHelperHost } from "./helper-host.mjs";
 import { startLlmPipe } from "./llm-pipe.mjs";
 import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
+import { bindHwIpc } from "./hw.mjs";
 import { bindSubIpc } from "./sub.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -58,6 +59,11 @@ let companion = null;
 let companionOwned = false;
 let companionRefs = 0;
 let companionIdle = 0;
+
+function companionPort() {
+  const n = Number(process.env.ANVIL_COMPANION_PORT || 7845);
+  return Number.isFinite(n) && n > 0 && n < 65536 ? Math.round(n) : 7845;
+}
 let win = null;
 let splash = null;
 let helperSrv = null;
@@ -284,13 +290,24 @@ async function ensureCompanion() {
     clearTimeout(companionIdle);
     companionIdle = 0;
   }
-  if (await portOpen(7845)) {
+  if (await portOpen(companionPort())) {
     return { ok: true, token: readCompanionToken(), owned: companionOwned };
   }
   companion = startCompanion();
   companionOwned = Boolean(companion);
-  const ok = await waitPort(7845, 10000);
-  return { ok, token: readCompanionToken(), owned: companionOwned };
+  if (!companion) return { ok: false, token: "", owned: false };
+  const crashed = new Promise((resolve) => {
+    companion.once("exit", () => resolve(true));
+    companion.once("error", () => resolve(true));
+  });
+  const ready = waitPort(companionPort(), 10000).then((ok) => !ok);
+  const dead = await Promise.race([crashed, ready]);
+  if (dead && !(await portOpen(companionPort()))) {
+    companion = null;
+    companionOwned = false;
+    return { ok: false, token: readCompanionToken(), owned: false };
+  }
+  return { ok: true, token: readCompanionToken(), owned: companionOwned };
 }
 
 function releaseCompanion(keep) {
@@ -427,6 +444,7 @@ if (!gotLock) {
     helperSrv = await startHelperHost();
     pipeSrv = await startLlmPipe();
     bindPathsIpc();
+    bindHwIpc();
     bindSubIpc();
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());

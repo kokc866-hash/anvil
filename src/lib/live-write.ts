@@ -56,6 +56,7 @@ export function applyMcpLive(server: string, tool: string, args: unknown, chunk:
   const st = useIde.getState();
   if (!st.liveEditor || !chunk) return;
   const path = mcpMirrorPath(server, args, tool);
+  if (!path) return;
   const prev = pending?.path === path ? pending.content : (st.files[path] ?? "");
   pending = { path, content: prev + chunk };
   if (!timer) timer = window.setTimeout(flush, 50) as unknown as number;

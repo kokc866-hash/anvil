@@ -2,10 +2,12 @@ import { BRAIN_MODELS } from "./brain/models";
 
 export const HELPER_HTTP = "http://127.0.0.1:7847";
 let helperPort = 7847;
+let helperToken = "";
 
 type Native = {
   helperDir: () => Promise<string>;
   helperPort: () => Promise<number>;
+  helperAuth?: () => Promise<{ port: number; token: string }>;
   helperList: () => Promise<{ id: string; bytes: number; ready: boolean }[]>;
   helperHas: (id: string) => Promise<boolean>;
   helperDelete: (id: string) => Promise<boolean>;
@@ -24,6 +26,7 @@ type Native = {
   clipboardRead?: () => Promise<{ text: string; image: string }>;
   companionEnsure?: () => Promise<{ ok: boolean; token?: string; owned?: boolean }>;
   companionRelease?: (keep?: boolean) => Promise<{ ok: boolean; running?: boolean }>;
+  hwMachine?: () => Promise<{ cores: number; ramGb: number; freeGb: number; vendor?: string; gpu?: string; arch?: string }>;
   llmPipe?: () => Promise<{ port: number; token: string }>;
   companionToken?: () => Promise<string>;
 };
@@ -31,12 +34,38 @@ type Native = {
 export function nativeHelper(): Native | null {
   if (typeof window === "undefined") return null;
   const n = (window as unknown as { anvilNative?: Native }).anvilNative;
-  if (n?.helperPort) {
+  if (n?.helperAuth) {
+    void n.helperAuth().then((a) => {
+      if (Number(a?.port) > 0) helperPort = Number(a.port);
+      if (a?.token) helperToken = String(a.token);
+    });
+  } else if (n?.helperPort) {
     void n.helperPort().then((p) => {
       if (Number(p) > 0) helperPort = Number(p);
     });
   }
   return n ?? null;
+}
+
+export async function syncHelperAuth(): Promise<{ port: number; token: string }> {
+  const n = nativeHelper();
+  if (n?.helperAuth) {
+    try {
+      const a = await n.helperAuth();
+      if (Number(a?.port) > 0) helperPort = Number(a.port);
+      if (a?.token) helperToken = String(a.token);
+    } catch {
+      /* */
+    }
+  } else if (n?.helperPort) {
+    try {
+      const p = await n.helperPort();
+      if (Number(p) > 0) helperPort = Number(p);
+    } catch {
+      /* */
+    }
+  }
+  return { port: helperPort, token: helperToken };
 }
 
 function helperBase() {
@@ -131,10 +160,10 @@ export async function helperLocalId(id: string): Promise<string | null> {
 
 export function helperLocalUrls(id: string, modelLibUrl: string): { model: string; model_lib: string } {
   const wasm = modelLibUrl.split("/").pop() || "model.wasm";
-  const q = /^https:\/\//i.test(modelLibUrl) ? `?src=${encodeURIComponent(modelLibUrl)}` : "";
+  const auth = helperToken ? `/t/${helperToken}` : "";
   return {
-    model: `${helperBase()}/${id}`,
-    model_lib: `${helperBase()}/libs/${wasm}${q}`,
+    model: `${helperBase()}${auth}/${id}`,
+    model_lib: `${helperBase()}${auth}/libs/${wasm}`,
   };
 }
 

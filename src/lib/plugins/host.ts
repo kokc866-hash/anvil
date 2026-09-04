@@ -1,9 +1,13 @@
 import { completeText } from "@/lib/complete";
 import { formatCode } from "@/lib/format";
 import { tokenize, type SyntaxToken } from "@/lib/syntax";
-import { fetchWeb } from "@/lib/web-fetch";
+import { fetchWeb, readWebPage } from "@/lib/web-fetch";
+import { isSecretPath, omitSecrets } from "@/lib/ref";
+import { skipSearchPath } from "@/lib/search";
+import { matchGlob } from "@/lib/harness-graph";
 import { useIde } from "@/store/ide";
 import { clearPluginHooks, onPlugin, type PluginEvent } from "./events";
+import { isWorkspacePluginPath, pluginTrustFromHead, prunePluginIds } from "./util";
 
 export type PluginCommand = {
   id: string;
@@ -37,6 +41,7 @@ export type PluginApi = {
   prompt: (msg: string, fallback?: string) => string | null;
   highlight: (code: string, lang?: string) => SyntaxToken[];
   cursor: () => { line: number; col: number };
+  range: () => { from: number; to: number };
   insert: (text: string) => void;
   replace: (path: string, old: string, next: string, all?: boolean) => boolean;
   grep: (query: string, glob?: string) => { path: string; line: number; text: string }[];
@@ -59,6 +64,7 @@ let commands: PluginCommand[] = [];
 let version = 0;
 const listeners = new Set<() => void>();
 const unhooks: Array<() => void> = [];
+let reloading = false;
 
 function bump() {
   version += 1;
@@ -71,21 +77,48 @@ function isEnabled(id: string): boolean {
   return !st.pluginDisabled.includes(id);
 }
 
+function noticeErr(label: string, err: unknown) {
+  useIde.getState().setNotice(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+}
+
+async function pluginFetch(url: string): Promise<{ ok: boolean; text: string }> {
+  try {
+    const r = await fetchWeb({ data: { url } });
+    if (r && typeof r === "object" && "ok" in r) return r;
+  } catch {
+    /* Electron has no TanStack server fn — fall through */
+  }
+  return readWebPage(url);
+}
+
 function makeApi(plugin: string, trust = true): PluginApi {
   return {
     command: (cmd) => {
-      commands = [...commands.filter((c) => c.id !== cmd.id), { ...cmd, plugin }];
+      const id = cmd.id.includes(".") || cmd.id.includes(":") ? cmd.id : `${plugin}.${cmd.id}`;
+      const run = () => {
+        try {
+          return cmd.run();
+        } catch (err) {
+          noticeErr(plugin, err);
+        }
+      };
+      commands = [...commands.filter((c) => c.id !== id), { ...cmd, id, plugin, run }];
       bump();
     },
     notify: (msg) => useIde.getState().setNotice(msg),
-    files: () => (trust ? useIde.getState().files : {}),
+    files: () => (trust ? omitSecrets(useIde.getState().files) : {}),
     read: (path) => {
       if (!trust && !path.startsWith("plugins/")) return undefined;
+      if (isSecretPath(path)) return undefined;
       return useIde.getState().files[path];
     },
     write: (path, content) => {
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht schreiben");
+        return;
+      }
+      if (isSecretPath(path)) {
+        useIde.getState().setNotice("Geheimnis — nicht schreiben");
         return;
       }
       useIde.getState().writeFile(path, content);
@@ -105,9 +138,18 @@ function makeApi(plugin: string, trust = true): PluginApi {
       unhooks.push(onPlugin(event, fn));
     },
     status: (text) => useIde.getState().setPluginStatus(text),
-    prompt: (msg, fallback) => window.prompt(msg, fallback ?? ""),
+    prompt: (msg, fallback) => (typeof window !== "undefined" ? window.prompt(msg, fallback ?? "") : fallback ?? null),
     highlight: (code, lang) => tokenize(code, lang || "plaintext"),
     cursor: () => useIde.getState().cursor,
+    range: () => {
+      const s = useIde.getState().selection ?? {
+        startLine: useIde.getState().cursor.line,
+        endLine: useIde.getState().cursor.line,
+        startCol: 1,
+        endCol: 1,
+      };
+      return { from: Math.min(s.startLine, s.endLine), to: Math.max(s.startLine, s.endLine) };
+    },
     insert: (text) => {
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht schreiben");
@@ -140,10 +182,11 @@ function makeApi(plugin: string, trust = true): PluginApi {
         re = null;
       }
       const q = query.toLowerCase();
-      const g = (glob ?? "").toLowerCase().replace(/\*/g, "");
+      const g = (glob ?? "").trim();
       const hits: { path: string; line: number; text: string }[] = [];
       for (const [path, content] of Object.entries(useIde.getState().files)) {
-        if (g && !path.toLowerCase().includes(g)) continue;
+        if (skipSearchPath(path)) continue;
+        if (g && !matchGlob(path, g) && !matchGlob(path.split("/").pop() ?? "", g)) continue;
         content.split("\n").forEach((line, i) => {
           const ok = re ? re.test(line) : line.toLowerCase().includes(q);
           if (ok && hits.length < 80) hits.push({ path, line: i + 1, text: line.trim().slice(0, 200) });
@@ -165,13 +208,14 @@ function makeApi(plugin: string, trust = true): PluginApi {
     },
     fetch: async (url) => {
       if (!trust) return { ok: false, text: "Plugin ohne @trust darf nicht laden" };
-      return fetchWeb({ data: { url } });
+      return pluginFetch(url);
     },
     remove: (path) => {
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht löschen");
         return;
       }
+      if (isSecretPath(path)) return;
       useIde.getState().deleteFile(path);
     },
     mkdir: (path) => {
@@ -210,7 +254,9 @@ function makeApi(plugin: string, trust = true): PluginApi {
       },
     },
     problems: (items) => {
-      useIde.getState().setPluginProblems(items.map((x) => ({ ...x, source: plugin })));
+      const st = useIde.getState();
+      const rest = st.pluginProblems.filter((x) => x.source !== plugin);
+      st.setPluginProblems([...rest, ...items.map((x) => ({ ...x, source: plugin }))]);
     },
   };
 }
@@ -220,53 +266,78 @@ export function registerBuiltin(def: Builtin) {
   builtins.push(def);
 }
 
-export function activateBuiltins() {
-  for (const u of unhooks) u();
-  unhooks.length = 0;
-  clearPluginHooks();
-  commands = commands.filter((c) => extra.some((e) => e.id === c.plugin));
-  for (const b of builtins) {
-    if (isEnabled(b.id)) b.activate(makeApi(b.id));
-  }
-  bump();
-}
-
-export function loadWorkspacePlugins(files: Record<string, string>) {
+function ingestWorkspace(files: Record<string, string>) {
   extra.length = 0;
-  commands = commands.filter((c) => builtins.some((b) => b.id === c.plugin));
+  const live: string[] = [];
+  const st0 = useIde.getState();
+  let known = st0.pluginKnown.slice();
+  let disabled = st0.pluginDisabled.slice();
   for (const [path, code] of Object.entries(files)) {
-    if (!/^plugins\/.+\.js$/.test(path)) continue;
+    if (!isWorkspacePluginPath(path)) continue;
     const id = `ws:${path}`;
-    const head = code.split("\n").slice(0, 8).join("\n");
-    const desc =
-      head.match(/@desc\s+(.+)/)?.[1]?.trim() ||
-      head.match(/^\/\/\s*(.+)/)?.[1]?.trim() ||
-      "Workspace-Plugin";
-    const trust = /@trust\b/.test(head);
+    live.push(id);
+    const trust = pluginTrustFromHead(code);
     extra.push({
       id,
       name: path.slice("plugins/".length).replace(/\.js$/, ""),
-      description: desc + (trust ? "" : " (lesen)"),
+      description:
+        (code.split("\n").slice(0, 8).join("\n").match(/@desc\s+(.+)/)?.[1]?.trim() ||
+          code.split("\n").slice(0, 8).join("\n").match(/^\/\/\s*(.+)/)?.[1]?.trim() ||
+          "Workspace-Plugin") + (trust ? "" : " (lesen)"),
       builtin: false,
       category: "workspace",
       path,
     });
-    const st = useIde.getState();
-    if (!st.pluginKnown.includes(id)) {
-      st.setPluginKnown([...st.pluginKnown, id]);
-      if (!st.pluginDisabled.includes(id)) st.togglePlugin(id);
-      continue;
+    if (!known.includes(id)) {
+      known = [...known, id];
+      if (trust && !disabled.includes(id)) disabled = [...disabled, id];
     }
-    if (!isEnabled(id)) continue;
-    if (!trust) continue;
+    if (disabled.includes(id)) continue;
     try {
       const fn = new Function("anvil", `${code}\n;if (typeof activate === "function") activate(anvil);`);
       fn(makeApi(id, trust));
     } catch (err) {
-      useIde.getState().setNotice(`Plugin ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      noticeErr(`Plugin ${path}`, err);
     }
   }
-  bump();
+  const nextKnown = prunePluginIds(known, "ws:", live);
+  const nextDisabled = prunePluginIds(disabled, "ws:", live);
+  const st = useIde.getState();
+  if (nextKnown.join("\0") !== st.pluginKnown.join("\0")) st.setPluginKnown(nextKnown);
+  if (nextDisabled.join("\0") !== st.pluginDisabled.join("\0")) st.setPluginDisabled(nextDisabled);
+}
+
+/** Drop hooks, re-activate enabled builtins, then workspace plugins. One entry so file-change cannot leak `anvil.on`. */
+export function reloadPlugins(files?: Record<string, string>) {
+  if (reloading) return;
+  reloading = true;
+  try {
+    for (const u of unhooks) u();
+    unhooks.length = 0;
+    clearPluginHooks();
+    commands = [];
+    extra.length = 0;
+    for (const b of builtins) {
+      if (!isEnabled(b.id)) continue;
+      try {
+        b.activate(makeApi(b.id, true));
+      } catch (err) {
+        noticeErr(`Plugin ${b.id}`, err);
+      }
+    }
+    ingestWorkspace(files ?? useIde.getState().files);
+    bump();
+  } finally {
+    reloading = false;
+  }
+}
+
+export function activateBuiltins() {
+  reloadPlugins();
+}
+
+export function loadWorkspacePlugins(files: Record<string, string>) {
+  reloadPlugins(files);
 }
 
 export function listPlugins(): PluginInfo[] {
@@ -289,6 +360,7 @@ export function pluginSnapshot() {
 }
 
 export const PLUGIN_TEMPLATE = `// @desc Mein Plugin
+// @trust  — ohne diese Zeile nur lesen/Status. Mit @trust: schreiben, Agent, Netz.
 function activate(anvil) {
   anvil.command({
     id: "beispiel.zeit",
@@ -308,8 +380,9 @@ notify(msg)                Toast
 status(text)               Statusleiste
 files() / read / write / open / active / remove / mkdir
 insert(text)               An der Schreibmarke
+range()                    Zeilen from/to (Auswahl)
 replace(path, old, next, all?)
-grep(query, glob?)
+grep(query, glob?)         glob: *.py, src/**
 run(path?) / debug()
 fetch(url) → {ok, text}
 agent(prompt)              Chat starten
@@ -318,10 +391,13 @@ format(path, code)
 highlight(code, lang)
 cursor() → {line, col}
 config.get/set(key, value)
-problems([{path, line, text}])
+problems([{path, line, text}])  — merget je Plugin
 on(event, fn)  save | open | run | change | debug | agent
 
-Workspace: plugins/*.js  mit activate(anvil)
+Workspace: plugins/*.js mit activate(anvil)
+  Ohne @trust in den ersten 8 Zeilen: nur lesen.
+  Mit // @trust: voll. Neue @trust-Plugins starten aus, Schalter an = opt-in.
 VS Code: .vsix / plugins/*/package.json / .vscode/*.code-snippets
-  — nur contributes.snippets, languages, Kommentare. Kein vscode-Modul.
+  — contributes.snippets, languages, Kommentare, tmLanguage-Keywords.
+  Kein vscode-Modul, kein Language-Server.
 `;

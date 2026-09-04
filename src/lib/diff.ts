@@ -38,6 +38,22 @@ export function lineDiff(before: string, after: string): DiffRow[] {
   return out;
 }
 
+/** Changed hunks plus `ctx` equal lines, capped. */
+export function diffPreview(before: string, after: string, ctx = 2, max = 80): DiffRow[] {
+  const rows = lineDiff(before, after);
+  const keep = new Set<number>();
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].type === "eq") continue;
+    for (let k = Math.max(0, i - ctx); k <= Math.min(rows.length - 1, i + ctx); k++) keep.add(k);
+  }
+  const out: DiffRow[] = [];
+  for (const i of [...keep].sort((a, b) => a - b)) {
+    if (out.length >= max) break;
+    out.push(rows[i]);
+  }
+  return out;
+}
+
 export type Hunk = { index: number; rows: DiffRow[] };
 
 export function diffHunks(rows: DiffRow[]): Hunk[] {

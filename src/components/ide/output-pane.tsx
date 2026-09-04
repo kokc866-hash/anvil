@@ -2,11 +2,11 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { PanelBottom, PanelRight, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyBtn } from "@/components/ui/copy-btn";
-import { mergeTests, parseTests, testsPrompt, discoverTests } from "@/lib/test-parse";
+import { mergeTests, testsPrompt, discoverTests } from "@/lib/test-parse";
 import { problemsPrompt } from "@/lib/lsp";
 import { evalSnippet } from "@/lib/run-client";
-import { runAgentShell } from "@/lib/agent-shell";
 import { runAllTests } from "@/lib/run-tests";
+import { parseTestCommand, runAgentShell } from "@/lib/agent-shell";
 import { closeOutputWindow, openOutputWindow } from "@/lib/output-window";
 import { cn } from "@/lib/cn";
 import { gotoFile } from "@/lib/goto";
@@ -79,8 +79,7 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
     scroller.current?.scrollTo({ top: 0 });
   }, [logs.length]);
   const last = logs[logs.length - 1];
-  const parsed = last ? parseTests(last.stdout, last.stderr, files) : [];
-  const tests = mergeTests(discoverTests(files), [...Object.values(testResults), ...parsed]);
+  const tests = mergeTests(discoverTests(files), Object.values(testResults));
   const problems = [
     ...lspProblems.map((p) => ({ path: p.path, line: p.line, text: p.message, source: p.source })),
     ...pluginProblems,
@@ -98,9 +97,12 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
       /* ignore */
     }
     setRepl("");
-    if (/^(npm test|npx vitest|pytest|go test|cargo test)$/i.test(code)) {
+    if (parseTestCommand(code)) {
       setTab("test");
-      await runAllTests();
+      const r = await runAgentShell(code, useIde.getState().files);
+      if (!r.ok && r.stderr) {
+        pushOutput({ ok: false, stdout: r.stdout, stderr: r.stderr, duration: 0, label: "tests" });
+      }
       return;
     }
     setTab("out");
@@ -159,6 +161,13 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
         <span className="min-w-0 flex-1 px-2">
           <HelperPrompts where="output" />
         </span>
+        {last?.stage?.kind === "window" ? (
+          <span className="shrink-0 text-[10px] text-ok">Bühne · Fenster</span>
+        ) : last?.stage?.kind === "log" ? (
+          <span className="shrink-0 text-[10px] text-muted">Bühne · Log</span>
+        ) : last?.html || last?.stage?.kind === "html" ? (
+          <span className="shrink-0 text-[10px] text-muted">Bühne · HTML</span>
+        ) : null}
         {popout ? null : (
           <>
             <Button

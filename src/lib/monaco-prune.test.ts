@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { modelsToDrop } from "./monaco-models.ts";
+import {
+  applyModelText,
+  EDITOR_MAX_CHARS,
+  markerEndCol,
+  modelUriString,
+  modelsToDrop,
+  pathFromModelUri,
+} from "./monaco-models.ts";
 
 describe("monaco prune", () => {
   it("keeps open tabs", () => {
@@ -9,5 +16,52 @@ describe("monaco prune", () => {
   });
   it("ignores empty keep", () => {
     assert.deepEqual(modelsToDrop(["/a.ts"], []), ["a.ts"]);
+  });
+  it("strips anvil prefix and decodes", () => {
+    assert.equal(pathFromModelUri("/src/app.ts"), "src/app.ts");
+    assert.equal(pathFromModelUri("/anvil/src/app.ts"), "src/app.ts");
+    assert.equal(pathFromModelUri(modelUriString("src/a b.ts").replace("inmemory://", "")), "src/a b.ts");
+  });
+});
+
+describe("monaco uri / edits", () => {
+  it("builds stable inmemory uri", () => {
+    assert.equal(modelUriString("src/app.ts"), "inmemory://anvil/src/app.ts");
+    assert.equal(modelUriString("\\src\\app.ts"), "inmemory://anvil/src/app.ts");
+    assert.match(modelUriString("src/a b.ts"), /a%20b/);
+  });
+  it("marker is a token, not +200", () => {
+    assert.equal(markerEndCol(3, "undefined foo"), 12);
+    assert.ok(markerEndCol(1, "x") < 50);
+  });
+  it("applyModelText uses pushEditOperations", () => {
+    let value = "old";
+    const model = {
+      getValue: () => value,
+      getLineCount: () => 1,
+      getLineMaxColumn: () => 4,
+      pushEditOperations: (_b: unknown[], edits: unknown[]) => {
+        const e = edits[0] as { text: string };
+        value = e.text;
+      },
+    };
+    assert.equal(applyModelText(model, "old"), false);
+    assert.equal(applyModelText(model, "next"), true);
+    assert.equal(value, "next");
+  });
+  it("applyModelText skips setValue when equal", () => {
+    let sets = 0;
+    const model = {
+      getValue: () => "x",
+      setValue: () => {
+        sets += 1;
+      },
+    };
+    assert.equal(applyModelText(model, "x"), false);
+    assert.equal(sets, 0);
+  });
+  it("caps editor size", () => {
+    assert.ok(EDITOR_MAX_CHARS >= 200_000);
+    assert.ok(EDITOR_MAX_CHARS <= 2_000_000);
   });
 });

@@ -109,6 +109,16 @@ export function applyLlmOptions(
       delete payload.max_tokens;
       payload.think = rt.thinking === "auto" ? true : effort;
       (payload.options as Record<string, unknown>).think = payload.think;
+    } else {
+      payload.think = false;
+      (payload.options as Record<string, unknown>).think = false;
+    }
+    if (rt.provider === "ollama") {
+      delete payload.n_ctx;
+      delete payload.enable_thinking;
+      delete payload.reasoning_budget;
+      delete payload.chat_template_kwargs;
+    } else if (think) {
       payload.enable_thinking = true;
       payload.reasoning_budget = budget;
       payload.chat_template_kwargs = {
@@ -116,8 +126,6 @@ export function applyLlmOptions(
         enable_thinking: true,
       };
     } else {
-      payload.think = false;
-      (payload.options as Record<string, unknown>).think = false;
       payload.enable_thinking = false;
       payload.reasoning_budget = 0;
       payload.chat_template_kwargs = {
@@ -168,8 +176,89 @@ const CODEX_KEYS = new Set([
   "stream",
 ]);
 
+const KEEP_WIRE = new Set(["model", "input", "messages", "instructions"]);
+
 function wireKey(s: string): string {
   return s.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+function textOf(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c) => {
+        if (typeof c === "string") return c;
+        if (c && typeof c === "object" && "text" in (c as object)) return String((c as { text?: string }).text ?? "");
+        return "";
+      })
+      .join("\n");
+  }
+  return content == null ? "" : String(content);
+}
+
+/** Chat-Messages → Responses `input`. Nie leer — OpenAI 400 sonst. */
+export function toResponsesInput(messages: Record<string, unknown>[]): { instructions: string; input: unknown[] } {
+  const inst: string[] = [];
+  const input: unknown[] = [];
+  const calls = new Set<string>();
+  for (const m of messages) {
+    const role = String(m.role ?? "");
+    if (role === "system") {
+      inst.push(textOf(m.content));
+      continue;
+    }
+    if (role === "tool") {
+      const id = String(m.tool_call_id ?? "");
+      if (id && calls.has(id)) {
+        input.push({ type: "function_call_output", call_id: id, output: textOf(m.content) });
+      } else {
+        const t = textOf(m.content).trim();
+        if (t) input.push({ role: "user", content: t });
+      }
+      continue;
+    }
+    if (role === "assistant" && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls as { id?: string; function?: { name?: string; arguments?: string } }[]) {
+        const id = String(tc.id || "");
+        if (id) calls.add(id);
+        input.push({
+          type: "function_call",
+          call_id: id || `call_${calls.size}`,
+          name: tc.function?.name,
+          arguments: tc.function?.arguments || "{}",
+        });
+      }
+      const t = textOf(m.content);
+      if (t) input.push({ role: "assistant", content: t });
+      continue;
+    }
+    input.push({ role, content: textOf(m.content) });
+  }
+  const instructions = inst.filter(Boolean).join("\n\n");
+  if (!input.length) input.push({ role: "user", content: instructions || " " });
+  return { instructions, input };
+}
+
+export function responsesBody(
+  payload: Record<string, unknown>,
+  kind = "",
+): Record<string, unknown> {
+  const { instructions, input } = toResponsesInput((payload.messages as Record<string, unknown>[]) ?? []);
+  const effort = payload.reasoning_effort;
+  const body = applyResponsesStore(
+    {
+      model: payload.model,
+      input,
+      instructions: instructions || undefined,
+      max_output_tokens: payload.max_completion_tokens ?? payload.max_tokens,
+    },
+    kind,
+  );
+  if (effort) body.reasoning = { effort };
+  if (!Array.isArray(body.input) || (body.input as unknown[]).length === 0) {
+    body.input = [{ role: "user", content: instructions || " " }];
+  }
+  return body;
 }
 
 /** Codex-Abo lehnt include/max_output_tokens ab. API-Responses: store false + encrypted reasoning. */
@@ -188,7 +277,7 @@ export function applyResponsesStore(body: Record<string, unknown>, kind = ""): R
   return body;
 }
 
-/** FastAPI / OpenAI 400: unsupported field raus, must-be true|false setzen. */
+/** FastAPI / OpenAI 400: unsupported field raus, must-be true|false setzen. Nie input/model löschen. */
 export function patchResponses400(body: Record<string, unknown>, raw: string): boolean {
   let hit = false;
   const names = new Set<string>();
@@ -200,8 +289,10 @@ export function patchResponses400(body: Record<string, unknown>, raw: string): b
   add(raw.match(/Unknown parameter:\s*['"]?([A-Za-z0-9_]+)/i)?.[1]);
   add(raw.match(/does not support parameter\s+['"]?([A-Za-z0-9_]+)/i)?.[1]);
   add(raw.match(/['"]([A-Za-z0-9_]+)['"]\s+is not supported/i)?.[1]);
-  add(raw.match(/"param"\s*:\s*"([A-Za-z0-9_]+)"/i)?.[1]);
+  const missing = /missing_required_parameter|Missing required parameter/i.test(raw);
+  if (!missing) add(raw.match(/"param"\s*:\s*"([A-Za-z0-9_]+)"/i)?.[1]);
   for (const key of names) {
+    if (KEEP_WIRE.has(key)) continue;
     if (key in body) {
       delete body[key];
       hit = true;
@@ -215,6 +306,13 @@ export function patchResponses400(body: Record<string, unknown>, raw: string): b
       body[key] = val;
       hit = true;
     }
+  }
+  if (missing && /['"]?input['"]?/i.test(raw) && (body.input == null || (Array.isArray(body.input) && body.input.length === 0))) {
+    const fromMsg = (body.messages as Record<string, unknown>[] | undefined) ?? [];
+    const packed = toResponsesInput(fromMsg);
+    body.input = packed.input;
+    if (packed.instructions) body.instructions = packed.instructions;
+    hit = true;
   }
   return hit;
 }
@@ -253,6 +351,7 @@ export function toolDetail(name: string, args: Record<string, unknown>, result?:
   if (name === "engine_detect" || name === "engine_status") return "Engine";
   if (name === "play") return Array.isArray(args.keys) ? (args.keys as string[]).join(" ") : String(args.keys ?? "play");
   if (name === "see_run") return "Canvas";
+  if (name === "ask_user") return String(args.prompt ?? args.question ?? "Nachfrage");
   if (name === "harness_write" || name === "harness_read") return String(args.name ?? args.afterWrite ?? ".anvil/harness.json");
   if (name === "graph_write") return `${Array.isArray(args.edges) ? (args.edges as unknown[]).length : 0} Kanten`;
   if (name === "board_read" || name === "board_open") return "Tafel";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compactMessages, fitMessages, isContextError, prepChatPayload, estimatePrompt, COMPACT_MARK } from "./compact.ts";
+import { compactMessages, fitMessages, isContextError, isVramError, prepChatPayload, estimatePrompt, shrinkLocalCtx, COMPACT_MARK } from "./compact.ts";
 
 test("compact leaves a short list alone", () => {
   const msgs = [
@@ -73,6 +73,14 @@ test("isContextError catches llama.cpp and OpenAI", () => {
   assert.equal(isContextError("HTTP 400 bad tool"), false);
 });
 
+test("isVramError and shrinkLocalCtx", () => {
+  assert.equal(isVramError("model requires more system memory"), true);
+  assert.equal(isVramError("CUDA error: out of memory"), true);
+  assert.equal(isVramError("prompt is too long"), false);
+  assert.equal(shrinkLocalCtx(256000), 128000);
+  assert.equal(shrinkLocalCtx(5000), 4096);
+});
+
 test("prepChatPayload keeps system when tools schema is huge", () => {
   const sys = "SYSTEMSTART " + "Regel ".repeat(400);
   const tools = Array.from({ length: 40 }, (_, i) => ({
@@ -117,4 +125,20 @@ test("compact digest keeps files and prior compact", () => {
   assert.ok(blob);
   const text = String(blob?.content);
   assert.match(text, /src\/app\.ts|src\/store\.ts|Tailwind|Counter/);
+});
+
+test("estimatePrompt stubs data urls so they do not dominate the budget", () => {
+  const img = "data:image/png;base64," + "A".repeat(80_000);
+  const msgs = [
+    { role: "system", content: "sys" },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "siehe screenshot" },
+        { type: "image_url", image_url: { url: img } },
+      ],
+    },
+  ];
+  const n = estimatePrompt(msgs);
+  assert.ok(n < 2000, String(n));
 });

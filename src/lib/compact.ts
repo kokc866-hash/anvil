@@ -21,8 +21,46 @@ function stubTool(m: Record<string, unknown>): Record<string, unknown> {
   return { ...m, content: `[entfernt] ${path} (${text.length} Zeichen)` };
 }
 
+function stubImages(v: unknown): unknown {
+  if (typeof v === "string") return v.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g, "[image]");
+  if (Array.isArray(v)) {
+    return v.map((p) => {
+      if (p && typeof p === "object" && (p as { type?: string }).type === "image_url") {
+        return { type: "image_url", image_url: { url: "[image]" } };
+      }
+      if (p && typeof p === "object" && "text" in (p as object)) {
+        return { ...(p as object), text: stubImages((p as { text: unknown }).text) };
+      }
+      return stubImages(p);
+    });
+  }
+  return v;
+}
+
+function slimMessages(messages: unknown): unknown {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map((m) => {
+    if (!m || typeof m !== "object") return m;
+    return { ...(m as object), content: stubImages((m as { content?: unknown }).content) };
+  });
+}
+
 function trimContent(m: Record<string, unknown>, maxChars: number): Record<string, unknown> {
-  const t = String(m.content ?? "");
+  const c = m.content;
+  if (Array.isArray(c)) {
+    return {
+      ...m,
+      content: c.map((p) => {
+        if (p && typeof p === "object" && (p as { type?: string }).type === "image_url") return p;
+        if (p && typeof p === "object" && "text" in (p as object)) {
+          const t = String((p as { text?: unknown }).text ?? "");
+          return t.length <= maxChars ? p : { ...p, text: `${t.slice(0, Math.max(80, maxChars))}\n…[gekürzt]` };
+        }
+        return p;
+      }),
+    };
+  }
+  const t = String(c ?? "");
   if (t.length <= maxChars) return m;
   return { ...m, content: `${t.slice(0, Math.max(80, maxChars))}\n…[gekürzt]` };
 }
@@ -42,7 +80,7 @@ function keepRecent(rest: Record<string, unknown>[], mode: CompactMode, budget: 
   let n = 0;
   let tok = 0;
   for (let i = rest.length - 1; i >= 0 && n < maxKeep; i--) {
-    const t = estimateTokens(JSON.stringify(rest[i]));
+    const t = estimateTokens(JSON.stringify(slimMessages([rest[i]])));
     if (n >= minKeep && tok + t > tailBudget) break;
     tok += t;
     n += 1;
@@ -57,7 +95,7 @@ export function compactMessages(
 ): { messages: Record<string, unknown>[]; compacted: boolean } {
   if (mode === "off") return { messages, compacted: false };
   const budget = Math.floor(Math.max(2048, context) * (mode === "aggressive" ? 0.5 : 0.75));
-  const used = estimateTokens(JSON.stringify(messages));
+  const used = estimateTokens(JSON.stringify(slimMessages(messages)));
   if (used <= budget) return { messages, compacted: false };
 
   const sys = messages.filter(isSys);
@@ -68,7 +106,7 @@ export function compactMessages(
   if (!old.length) {
     const stubbed = rest.map((m, i) => (isTool(m) && i < rest.length - 1 ? stubTool(m) : m));
     const next = [...sys, ...stubbed];
-    if (estimateTokens(JSON.stringify(next)) <= budget) return { messages: next, compacted: true };
+    if (estimateTokens(JSON.stringify(slimMessages(next))) <= budget) return { messages: next, compacted: true };
     return { messages, compacted: false };
   }
 
@@ -78,7 +116,7 @@ export function compactMessages(
     content: `${COMPACT_MARK}, ${old.length} Nachrichten):\n${blob}`,
   };
   let next = [...sys, compact, ...recent];
-  if (estimateTokens(JSON.stringify(next)) > budget) {
+  if (estimateTokens(JSON.stringify(slimMessages(next))) > budget) {
     const tail = keepTail(recent, 4);
     const mid = recent.slice(0, recent.length - tail.length).map((m) => {
       if (isTool(m)) return stubTool(m);
@@ -87,7 +125,7 @@ export function compactMessages(
         if (typeof copy.content === "string" && copy.content.length > 1200) copy.content = copy.content.slice(0, 1200);
         return copy;
       }
-      return { ...m, content: String(m.content ?? "").slice(0, 1600) };
+      return trimContent(m, 1600);
     });
     next = [...sys, { ...compact, content: String(compact.content).slice(0, 4000) }, ...mid, ...tail];
   }
@@ -96,7 +134,7 @@ export function compactMessages(
 
 /** llama.cpp / OpenAI: Prompt oft ~20 % größer als chars/4. */
 export function estimatePrompt(messages: unknown, tools?: unknown): number {
-  const n = estimateTokens(JSON.stringify(messages ?? [])) + (tools ? estimateTokens(JSON.stringify(tools)) : 0);
+  const n = estimateTokens(JSON.stringify(slimMessages(messages) ?? [])) + (tools ? estimateTokens(JSON.stringify(tools)) : 0);
   return Math.ceil(n * 1.2);
 }
 
@@ -120,7 +158,7 @@ function dropOldestTurn(msgs: Record<string, unknown>[]): Record<string, unknown
 export function fitMessages(messages: Record<string, unknown>[], budget: number): Record<string, unknown>[] {
   const cap = Math.max(1024, budget);
   let next = messages.map((m) => ({ ...m }));
-  const used = () => estimateTokens(JSON.stringify(next));
+  const used = () => estimateTokens(JSON.stringify(slimMessages(next)));
   if (used() <= cap) return next;
 
   const packed = compactMessages(next, cap, "aggressive");
@@ -171,6 +209,15 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
 
 export function isContextError(msg: string): boolean {
   return /exceeds the available context|context.?length|too many tokens|n_ctx|prompt is too long|maximum context|context size|context window|max context|token limit/i.test(msg);
+}
+
+/** Ollama/llama.cpp: KV/VRAM zu groß — num_ctx halbieren, nicht den Prompt zuerst. */
+export function isVramError(msg: string): boolean {
+  return /out of memory|\boom\b|cuda.?oom|unable to allocate|requires more (?:system )?memory|ggml_gallocr|failed to allocate|not enough memory|\bvram\b|kv cache/i.test(msg);
+}
+
+export function shrinkLocalCtx(ctx: number): number {
+  return Math.max(4096, Math.floor(Math.max(2048, ctx) / 2));
 }
 
 /** Prompt + max_tokens/n_predict muss in n_ctx passen — llama.cpp, Ollama, OpenAI, Groq, … */

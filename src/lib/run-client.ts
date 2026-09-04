@@ -7,6 +7,7 @@ import type { RunResult } from "@/store/ide";
 import { useIde } from "@/store/ide";
 import { throwIfAborted } from "./abort";
 import { scrubRunError } from "./run-error";
+import { isTestFile } from "./test-parse";
 
 type PyodideLike = {
   runPythonAsync: (code: string) => Promise<unknown>;
@@ -264,9 +265,45 @@ function wrapRepl(lang: LangId, code: string): string {
   return code;
 }
 
+async function companionJob(
+  lang: string,
+  path: string,
+  files: Record<string, string>,
+): Promise<RunResult | null> {
+  const remoteFiles = compileFiles(lang, path, files);
+  const { withCompanion } = await import("./companion-life");
+  return withCompanion(async () => {
+    try {
+      const { companionCompile, companionPing } = await import("./companion");
+      const st = useIde.getState();
+      const url = st.companionUrl || "http://127.0.0.1:7845";
+      const ping = await companionPing(url);
+      if (!ping.ok) return null;
+      const job = await companionCompile({
+        lang,
+        entry: path,
+        files: remoteFiles,
+        cwd: st.workspaceCwd || undefined,
+      });
+      if (/nicht im PATH|nicht lokal|nicht in Anvil/i.test(job.stderr)) return null;
+      return {
+        ok: job.ok,
+        stdout: job.stdout,
+        stderr: job.stderr,
+        duration: 0,
+        label: path,
+        stage: job.stage ?? { kind: job.running ? "window" : "log" },
+      };
+    } catch {
+      return null;
+    }
+  });
+}
+
 export async function runFile(
   path: string,
   files: Record<string, string>,
+  opts?: { asTest?: boolean },
 ): Promise<RunResult> {
   throwIfAborted();
   const lang = langFromPath(path);
@@ -281,53 +318,50 @@ export async function runFile(
     return done({ ok: false, stdout: "", stderr: `Datei nicht gefunden: ${path}` });
   }
   if (lang === "html") {
-    return done({ ok: true, stdout: "Vorschau.", stderr: "", html: withEngine(code, useIde.getState().inputMap) });
+    return done({ ok: true, stdout: "Vorschau.", stderr: "", html: withEngine(code, useIde.getState().inputMap), stage: { kind: "html" } });
   }
   if (lang === "python") {
+    const live = await companionJob("python", path, files);
+    if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runPython(files, path);
-    return done({ ok: !stderr, stdout, stderr });
+    return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
   }
   if (lang === "javascript" || lang === "typescript") {
     const src = lang === "typescript" ? stripTs(code) : code;
-    const host = isEsm(src) ? htmlHost(path, files) : undefined;
-    if (host && host !== path) {
-      const page = files[host];
-      return done({
-        ok: true,
-        stdout: `Vorschau über ${host}.`,
-        stderr: "",
-        html: withEngine(page, useIde.getState().inputMap),
-      });
+    const testing = Boolean(opts?.asTest) || isTestFile(path);
+    if (!testing) {
+      const host = isEsm(src) ? htmlHost(path, files) : undefined;
+      if (host && host !== path) {
+        const page = files[host];
+        return done({
+          ok: true,
+          stdout: `Vorschau über ${host}.`,
+          stderr: "",
+          html: withEngine(page, useIde.getState().inputMap),
+          stage: { kind: "html" },
+        });
+      }
+      if (looksGraphical(src) || isEsm(src)) {
+        return done({
+          ok: true,
+          stdout: "Vorschau.",
+          stderr: "",
+          html: wrapJsGame(src, useIde.getState().inputMap, { module: isEsm(src) }),
+          stage: { kind: "html" },
+        });
+      }
     }
-    if (looksGraphical(src) || isEsm(src)) {
-      return done({
-        ok: true,
-        stdout: "Vorschau.",
-        stderr: "",
-        html: wrapJsGame(src, useIde.getState().inputMap, { module: isEsm(src) }),
-      });
-    }
+    const live = await companionJob(lang, path, files);
+    if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runJsSandboxed(src);
-    return done({ ok: !stderr, stdout, stderr });
+    return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
   }
   if (langMeta(lang)?.run === "remote") {
+    const live = await companionJob(lang, path, files);
+    if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const remoteFiles = compileFiles(lang, path, files);
     const { withCompanion } = await import("./companion-life");
     return withCompanion(async () => {
-      try {
-        const { companionCompile, companionPing } = await import("./companion");
-        const url = useIde.getState().companionUrl || "http://127.0.0.1:7845";
-        const ping = await companionPing(url);
-        if (ping.ok) {
-          const job = await companionCompile({ lang, entry: path, files: remoteFiles });
-          const missing = /nicht im PATH|nicht lokal|nicht in Anvil/i.test(job.stderr);
-          if (!missing) {
-            return done({ ok: job.ok, stdout: job.stdout, stderr: job.stderr });
-          }
-        }
-      } catch {
-        /* Companion aus → optional Netz */
-      }
       if (!useIde.getState().netCompiler) {
         return done({ ok: false, stdout: "", stderr: "Compiler fehlt. In Einstellungen → Companion in Anvil laden." });
       }
@@ -338,7 +372,12 @@ export async function runFile(
           files: remoteFiles,
         },
       });
-      return done({ ok: remote.ok, stdout: remote.stdout, stderr: remote.stderr });
+      return done({
+        ok: remote.ok,
+        stdout: remote.stdout,
+        stderr: remote.stderr,
+        stage: { kind: "log" },
+      });
     });
   }
   return done({

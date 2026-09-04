@@ -36,6 +36,8 @@ export type CompanionJob = {
   stderr: string;
   duration: number;
   cmd: string;
+  stage?: { kind: "html" | "window" | "log"; out?: string };
+  running?: boolean;
 };
 
 export type CompanionDiag = {
@@ -107,7 +109,7 @@ export async function companionPing(base = DEFAULT_COMPANION): Promise<Companion
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/ping`, {
       method: "GET",
       headers: headers(),
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(8000),
     });
     const j = (await r.json()) as CompanionInfo;
     if (r.status === 401) return { ok: false, needToken: true, error: j.error || "Token fehlt" };
@@ -209,7 +211,7 @@ export async function companionInstall(
 }
 
 export async function companionCompile(
-  body: { lang: string; entry: string; files: { path: string; content: string }[]; timeoutMs?: number },
+  body: { lang: string; entry: string; files: { path: string; content: string }[]; timeoutMs?: number; cwd?: string },
   base = DEFAULT_COMPANION,
 ): Promise<CompanionJob> {
   const r = await fetch(`${base.replace(/\/$/, "")}/v1/compile`, {
@@ -223,6 +225,23 @@ export async function companionCompile(
     return { ok: false, code: r.status, stdout: "", stderr: t.slice(0, 4000), duration: 0, cmd: body.lang };
   }
   return r.json() as Promise<CompanionJob>;
+}
+
+export async function companionFormat(
+  body: { path: string; content: string },
+  base = DEFAULT_COMPANION,
+): Promise<{ ok: boolean; content: string; via?: string; error?: string }> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/format`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    return { ok: false, content: body.content, error: t.slice(0, 400) };
+  }
+  return r.json() as Promise<{ ok: boolean; content: string; via?: string; error?: string }>;
 }
 
 export async function companionLint(

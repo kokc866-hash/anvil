@@ -115,7 +115,7 @@ export function TestsPane() {
                       setMenu({ x: e.clientX, y: e.clientY, path: h.path, name: h.name });
                     }}
                   >
-                    <span className={cn("mt-0.5 font-mono text-[10px]", tone)}>{h.skip ? "○" : h.ok ? "●" : "●"}</span>
+                    <span className={cn("mt-0.5 font-mono text-[10px]", tone)}>{h.skip ? "○" : h.ok ? "✓" : "×"}</span>
                     <span className="min-w-0">
                       <span className="block font-mono text-xs text-fg">{h.name}</span>
                       <span className="block truncate font-mono text-[10px] text-muted">
@@ -138,6 +138,7 @@ export function TestsPane() {
           items={[
             { label: t("open"), onClick: () => gotoFile(menu.path, 1) },
             { label: t("run"), onClick: () => void runTestFiles([menu.path]) },
+            { label: t("runThis"), onClick: () => void runTestFiles([menu.path], menu.name) },
             {
               label: t("fixFails"),
               onClick: () => {

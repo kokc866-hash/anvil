@@ -5,8 +5,15 @@ import { stripZipRoot, unzipFiles } from "@/lib/archive";
 import { companionGit, companionInstall, companionTree, type GitStatus } from "@/lib/companion";
 import { holdCompanion, releaseCompanion } from "@/lib/companion-life";
 import { cloneGithub, pushGithub } from "@/lib/github";
+import { overlayDiskTree } from "@/lib/ws-skip";
 import { openOsWorkspace } from "@/lib/workspace-open";
 import { useIde } from "@/store/ide";
+
+function applyTreeKeep(files?: Record<string, string>, dirs?: string[]) {
+  if (!files) return;
+  const st = useIde.getState();
+  st.applyFiles(overlayDiskTree(files, st.files, st.dirty), dirs, { keepDirty: true });
+}
 
 export function GitPane() {
   const commits = useIde((s) => s.commits);
@@ -281,7 +288,7 @@ export function GitPane() {
                   .then((r) => {
                     if (r.ok) {
                       setLive(r);
-                      if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && t.files && applyFiles(t.files, t.dirs));
+                      if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && applyTreeKeep(t.files, t.dirs));
                     } else setNotice(r.error || "Checkout fehlgeschlagen");
                   })
                   .finally(() => {
@@ -428,7 +435,7 @@ export function GitPane() {
                   .then((r) => {
                     if (r.ok) {
                       setLive(r);
-                      if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && t.files && applyFiles(t.files, t.dirs));
+                      if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && applyTreeKeep(t.files, t.dirs));
                       setNotice("Stash holen");
                     } else setNotice(r.error || "Stash pop fehlgeschlagen");
                   })
@@ -456,7 +463,7 @@ export function GitPane() {
                   if (r.ok) {
                     setLive(r);
                     setBranchName("");
-                    if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && t.files && applyFiles(t.files, t.dirs));
+                    if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && applyTreeKeep(t.files, t.dirs));
                   } else setNotice(r.error || "Branch fehlgeschlagen");
                 })
                 .finally(() => {

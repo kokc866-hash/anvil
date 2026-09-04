@@ -63,3 +63,12 @@ export function firstCsproj(files) {
   const hit = (Array.isArray(files) ? files : []).find((f) => /\.csproj$/i.test(norm(typeof f === "string" ? f : f.path)));
   return hit ? norm(typeof hit === "string" ? hit : hit.path) : "";
 }
+
+export function looksGui(files) {
+  const blob = (Array.isArray(files) ? files : [])
+    .map((f) => String(typeof f === "string" ? "" : f.content || ""))
+    .join("\n");
+  return /WinMain\s*\(|CreateWindowW?\s*\(|ShowWindow\s*\(|RegisterClassW?\s*\(|glfwInit|glfwCreateWindow|SDL_Init|sf::RenderWindow|QApplication|QWidget|gtk_init|HWND\b|tkinter|pygame|raylib|SFML|glutInit|wxApp|ImGui/i.test(
+    blob,
+  );
+}

@@ -20,8 +20,9 @@ import { HSplit, VSplit } from "./splitter";
 import { startDebug, debugStep, debugStop } from "@/lib/debug-engine";
 import { runFile } from "@/lib/run-client";
 import { startIdeSync } from "@/lib/ide-sync";
-import { activateBuiltins, loadWorkspacePlugins } from "@/lib/plugins";
+import { reloadPlugins } from "@/lib/plugins";
 import { loadVscodeFromWorkspace } from "@/lib/plugins/vscode";
+import { pluginWatchPath, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
 import { hasOsFiles, importDropped } from "@/lib/dnd";
 import { restoreLocations, saveSlot, loadSlotAll, hasLocation } from "@/lib/disk";
 import { focusOutputWindow, openOutputWindow } from "@/lib/output-window";
@@ -34,7 +35,7 @@ import { stopAgent } from "@/lib/abort";
 import { gotoFile } from "@/lib/goto";
 import { saveNow, focusAgent } from "@/lib/save";
 import { useIde } from "@/store/ide";
-import { applyLang } from "@/lib/i18n";
+import { applyLang, t } from "@/lib/i18n";
 import { InternPane } from "./intern-pane";
 import { ConfirmHost } from "./confirm-host";
 import { StarterPick } from "./starter-pick";
@@ -124,8 +125,14 @@ export function Workspace() {
         agentQueue: [],
       });
       if (useIde.getState().llmProvider === "brain") useIde.getState().setLlmProvider("ollama");
-      loadWorkspacePlugins(useIde.getState().files);
-      loadVscodeFromWorkspace(useIde.getState().files);
+      reloadPlugins(useIde.getState().files);
+      {
+        const st = useIde.getState();
+        const packs = loadVscodeFromWorkspace(st.files, st.pluginDisabled);
+        const live = packs.map((p) => vsPackPluginId(p.id));
+        st.setPluginKnown(prunePluginIds(st.pluginKnown, "vs:", live));
+        st.setPluginDisabled(prunePluginIds(st.pluginDisabled, "vs:", live));
+      }
       void import("@/lib/brain").then(async (b) => {
         await b.useBrain.persist.rehydrate();
         const lib = await import("@/lib/model-lib");
@@ -158,23 +165,30 @@ export function Workspace() {
             await holdCompanion();
             const tree = await companionTree(cwd);
             if (tree.ok && tree.files) {
-              st.applyFiles(tree.files, tree.dirs);
+              const { overlayDiskTree } = await import("@/lib/ws-skip");
+              const cur = useIde.getState();
+              const merged = overlayDiskTree(tree.files, cur.files, cur.dirty);
+              st.applyFiles(merged, tree.dirs, { keepDirty: true });
               if (tree.skipped) st.setNotice(`${tree.n} Dateien, ${tree.skipped} übersprungen (Platten-Stand)`);
             }
             if (!st.companionKeep) await releaseCompanion();
           } catch {
             /* companion down — keep persisted cache */
           }
+          void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
           return;
         }
         if (st.loadOnStart && names.workspace) {
           try {
             const pack = await loadSlotAll("workspace");
-            st.applyFiles(pack.files, pack.dirs);
+            const { overlayDiskTree } = await import("@/lib/ws-skip");
+            const cur = useIde.getState();
+            st.applyFiles(overlayDiskTree(pack.files, cur.files, cur.dirty), pack.dirs, { keepDirty: true });
           } catch {
             st.setNotice("Workspace-Ordner in Einstellungen → Speicher erneut erlauben");
           }
         }
+        void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
       });
       stopSync = startIdeSync();
       void import("@/lib/model-context").then((m) => m.applyCloudContext());
@@ -289,21 +303,25 @@ export function Workspace() {
   }, []);
 
   useEffect(() => {
-    activateBuiltins();
     const plugSig = (files: Record<string, string>) =>
       Object.keys(files)
-        .filter((p) => p.startsWith("plugins/") || p.startsWith(".vscode/") || p.startsWith(".anvil/") || /\.anvil\.(js|mjs|json)$/.test(p) || p.endsWith(".code-snippets"))
+        .filter((p) => pluginWatchPath(p))
         .sort()
-        .map((p) => `${p}:${files[p].length}`)
+        .map((p) => `${p}:${files[p]!.length}`)
         .join("|");
     let last = "";
     const boot = () => {
-      const files = useIde.getState().files;
-      const sig = plugSig(files);
+      const st = useIde.getState();
+      const sig = `${plugSig(st.files)}#${st.pluginDisabled.join(",")}`;
       if (sig === last) return;
       last = sig;
-      loadWorkspacePlugins(files);
-      loadVscodeFromWorkspace(files);
+      reloadPlugins(st.files);
+      const packs = loadVscodeFromWorkspace(st.files, st.pluginDisabled);
+      const live = packs.map((p) => vsPackPluginId(p.id));
+      const known = prunePluginIds(st.pluginKnown, "vs:", live);
+      const dis = prunePluginIds(st.pluginDisabled, "vs:", live);
+      if (known.join("\0") !== st.pluginKnown.join("\0")) st.setPluginKnown(known);
+      if (dis.join("\0") !== st.pluginDisabled.join("\0")) st.setPluginDisabled(dis);
     };
     boot();
     return useIde.subscribe((s, prev) => {
@@ -327,7 +345,10 @@ export function Workspace() {
       if (/\.html?$/i.test(path) || st.runInWindow || st.runPopout) {
         openRunWindow();
         st.setPreviewOpen(false);
-      } else if (st.openOutputOnRun) st.revealOutput();
+      } else {
+        st.revealOutput();
+        st.setPreviewOpen(false);
+      }
       setRunning(true);
       try {
         pushOutput(await runFile(path, st.files));
@@ -413,7 +434,16 @@ export function Workspace() {
           window.dispatchEvent(new Event("anvil-ask-sel"));
           break;
         case "closeTab":
-          if (st.activePath) st.closeFile(st.activePath);
+          if (st.activePath) {
+            const p = st.activePath;
+            if (st.dirty[p]) {
+              void import("@/lib/confirm").then((c) =>
+                c.confirmApp(`${t("unsavedTab")}: ${p}`, { title: t("tabClose"), ok: t("discard"), danger: true }).then((ok) => {
+                  if (ok) useIde.getState().closeFile(p);
+                }),
+              );
+            } else st.closeFile(p);
+          }
           break;
         case "gotoLine":
           window.dispatchEvent(new Event("anvil-goto"));

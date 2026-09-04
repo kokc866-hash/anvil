@@ -29,6 +29,7 @@ const IDE_KEYS = [
   "runLoop",
   "testLoop",
   "graphLoop",
+  "engineLoop",
   "loopTries",
   "harnessAfterWrite",
   "harnessMaxRounds",
@@ -102,7 +103,7 @@ export function exportSettingsPack(): Record<string, unknown> {
       gpuFitBuffer: b.gpuFitBuffer,
       gpuWarmShaders: b.gpuWarmShaders,
     },
-    learn: { on: l.on, prefs: l.prefs },
+    learn: { on: l.on, prefs: l.prefs, facts: l.facts, skills: l.skills, negs: l.negs, forgotten: l.forgotten },
     intern: { prefs: i.prefs },
   };
 }
@@ -141,12 +142,27 @@ export function applySettingsPack(data: Record<string, unknown>): void {
       }
     }
   }
-  const learn = data.learn as { on?: boolean; prefs?: Record<string, unknown> } | undefined;
+  const learn = data.learn as {
+    on?: boolean;
+    prefs?: Record<string, unknown>;
+    facts?: unknown;
+    skills?: unknown;
+    negs?: unknown;
+    forgotten?: unknown;
+  } | undefined;
   if (learn) {
     if (typeof learn.on === "boolean") useLearn.getState().setOn(learn.on);
     if (learn.prefs) {
       const l = useLearn.getState();
       for (const [k, v] of Object.entries(learn.prefs)) l.setPref(k as keyof typeof LEARN_DEFAULTS, v as never);
+    }
+    if (learn.facts || learn.skills || learn.negs || learn.forgotten) {
+      useLearn.getState().importDump({
+        facts: learn.facts as never,
+        skills: learn.skills as never,
+        negs: learn.negs as never,
+        forgotten: learn.forgotten as never,
+      });
     }
   }
   const intern = data.intern as { prefs?: Record<string, unknown> } | undefined;

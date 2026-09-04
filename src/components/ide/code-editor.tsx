@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { formatCode } from "@/lib/format";
 import type { LangId } from "@/lib/languages";
-import { defineAnvilThemes, editorChrome, loadMonaco, monacoLang, pruneModels, wireCompletions, wireNav, type MonacoEditor, type MonacoNS } from "@/lib/monaco";
+import { defineAnvilThemes, editorChrome, loadMonaco, monacoLang, pruneModels, wireNav, type MonacoEditor, type MonacoNS } from "@/lib/monaco";
+import { applyModelText, markerEndCol, modelUriString } from "@/lib/monaco-models";
 import { defsAt, wordAt } from "@/lib/lsp";
 import { gotoFile } from "@/lib/goto";
 import { emitPlugin } from "@/lib/plugins/events";
@@ -35,12 +36,14 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
   const onAskRef = useRef(onAskSelection);
   const valueRef = useRef(value);
   const langRef = useRef(language);
+  const pathRef = useRef(path);
   onChangeRef.current = onChange;
   onRunRef.current = onRun;
   onInlineRef.current = onInlineEdit;
   onAskRef.current = onAskSelection;
   valueRef.current = value;
   langRef.current = language;
+  pathRef.current = path;
 
   const fontSize = useIde((s) => s.fontSize);
   const tabSize = useIde((s) => s.tabSize);
@@ -51,7 +54,6 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
   const editorGuides = useIde((s) => s.editorGuides);
   const editorWheelZoom = useIde((s) => s.editorWheelZoom);
   const insertSpaces = useIde((s) => s.insertSpaces);
-  const formatOnSave = useIde((s) => s.formatOnSave);
   const suggestOn = useIde((s) => s.suggestOn);
   const theme = useIde((s) => s.theme);
   const filesRef = useRef(useIde.getState().files);
@@ -66,7 +68,10 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
   const decosRef = useRef<string[]>([]);
   hintsRef.current = hints;
   const setCursor = useIde((s) => s.setCursor);
+  const setSelection = useIde((s) => s.setSelection);
   const setPalette = useIde((s) => s.setPalette);
+  const viewsRef = useRef(new Map<string, unknown>());
+  const viewPathRef = useRef(path);
 
   useEffect(() => {
     const el = hostRef.current;
@@ -79,18 +84,17 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         if (dead || !hostRef.current) return;
         monacoRef.current = monaco;
         defineAnvilThemes(monaco, useIde.getState().theme);
-        wireCompletions(monaco);
         wireNav(monaco);
-        const uri = monaco.Uri.parse(`file:///${path}`);
+        const uri = monaco.Uri.parse(modelUriString(pathRef.current));
         let model = monaco.editor.getModel(uri);
-        if (!model) model = monaco.editor.createModel(valueRef.current, monacoLang(language), uri);
+        if (!model) model = monaco.editor.createModel(valueRef.current, monacoLang(langRef.current), uri);
         const ed = monaco.editor.create(hostRef.current, {
           model,
           ...editorChrome(useIde.getState()),
         });
         edRef.current = ed;
         const go = (window as unknown as { __anvilGoto?: { path: string; line: number } }).__anvilGoto;
-        if (go && go.path === path) {
+        if (go && go.path === pathRef.current) {
           ed.revealLineInCenter?.(go.line);
           ed.setPosition({ lineNumber: go.line, column: 1 });
           (window as unknown as { __anvilGoto?: { path: string; line: number } }).__anvilGoto = undefined;
@@ -107,7 +111,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             else if (!st.debug.active) {
               const hasBp = Object.values(st.breakpoints).some((a) => a.length);
               st.revealOutput();
-              void startDebug(path, st.files, { pauseOnEntry: !hasBp });
+              void startDebug(pathRef.current, st.files, { pauseOnEntry: !hasBp });
             }
           },
         });
@@ -129,16 +133,30 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           keybindings: [],
           run: () => {
             const pos = ed.getPosition();
-            if (pos) useIde.getState().toggleBreakpoint(path, pos.lineNumber);
+            if (pos) useIde.getState().toggleBreakpoint(pathRef.current, pos.lineNumber);
           },
         });
         subs.push(
           ed.onMouseDown((e) => {
-            const line = e.target.position?.lineNumber;
-            if (!line) return;
-            if (e.target.type === 2 || e.target.type === 3) {
-              useIde.getState().toggleBreakpoint(path, line);
+            const pos = e.target.position;
+            const line = pos?.lineNumber;
+            if (!line || !pos) return;
+            const gutter = e.target.type === 2 || e.target.type === 3;
+            if (gutter) {
+              useIde.getState().toggleBreakpoint(pathRef.current, line);
+              return;
             }
+            if (!(e.event?.ctrlKey || e.event?.metaKey)) return;
+            const modelNow = ed.getModel();
+            if (!modelNow) return;
+            const src = ed.getValue();
+            const offset = modelNow.getOffsetAt(pos);
+            const st = useIde.getState();
+            const p = pathRef.current;
+            void defsAt({ ...st.files, [p]: src }, p, offset, st.openPaths).then((defs) => {
+              const d = defs[0];
+              if (d) gotoFile(d.path, d.line);
+            });
           }),
         );
         ed.addAction({
@@ -148,7 +166,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           contextMenuGroupId: "1_modification",
           run: () => {
             const pos = ed.getPosition();
-            void import("@/lib/fix-agent").then((m) => m.fixHere(path, pos?.lineNumber));
+            void import("@/lib/fix-agent").then((m) => m.fixHere(pathRef.current, pos?.lineNumber));
           },
         });
         ed.addAction({
@@ -183,8 +201,9 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const src = ed.getValue();
             const offset = modelNow.getOffsetAt(pos);
             const st = useIde.getState();
-            const files = { ...st.files, [path]: src };
-            void defsAt(files, path, offset, st.openPaths).then((defs) => {
+            const p = pathRef.current;
+            const files = { ...st.files, [p]: src };
+            void defsAt(files, p, offset, st.openPaths).then((defs) => {
               const d = defs[0];
               if (!d) {
                 useIde.getState().setNotice("Keine Definition");
@@ -205,9 +224,10 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const src = ed.getValue();
             const offset = modelNow.getOffsetAt(pos);
             const st = useIde.getState();
-            const files = { ...st.files, [path]: src };
+            const p = pathRef.current;
+            const files = { ...st.files, [p]: src };
             const w = wordAt(src, offset);
-            void defsAt(files, path, offset, st.openPaths).then((defs) => {
+            void defsAt(files, p, offset, st.openPaths).then((defs) => {
               if (!defs.length) {
                 useIde.getState().setNotice("Keine Definition");
                 return;
@@ -221,7 +241,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           label: "Dokument formatieren",
           keybindings: [],
           run: () => {
-            void formatCode(path, ed.getValue())
+            void formatCode(pathRef.current, ed.getValue())
               .then((next) => {
                 onChangeRef.current(next);
                 useIde.getState().setNotice("Formatiert");
@@ -272,7 +292,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         ed.addAction({
           id: "anvil.replace",
           label: "Ersetzen",
-          keybindings: [],
+          keybindings: [KM.CtrlCmd | KC.KeyH],
           run: () => window.dispatchEvent(new Event("anvil-replace")),
         });
         ed.addAction({
@@ -305,17 +325,17 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           keybindings: [],
           run: () => ed.trigger?.("anvil", "editor.action.commentLine"),
         });
-        ed.onMouseDown((e) => {
-          if (!(e.event?.ctrlKey || e.event?.metaKey) || !e.target.position) return;
-          const modelNow = ed.getModel();
-          if (!modelNow) return;
-          const src = ed.getValue();
-          const offset = modelNow.getOffsetAt(e.target.position);
-          const st = useIde.getState();
-          void defsAt({ ...st.files, [path]: src }, path, offset, st.openPaths).then((defs) => {
-            const d = defs[0];
-            if (d) gotoFile(d.path, d.line);
-          });
+        ed.addAction({
+          id: "anvil.find",
+          label: "Suchen",
+          keybindings: [KM.CtrlCmd | KC.KeyF],
+          run: () => window.dispatchEvent(new Event("anvil-find")),
+        });
+        ed.addAction({
+          id: "anvil.goto-line",
+          label: "Gehe zu Zeile",
+          keybindings: [KM.CtrlCmd | KC.KeyG],
+          run: () => window.dispatchEvent(new Event("anvil-goto")),
         });
         ed.addAction({
           id: "anvil.files",
@@ -343,7 +363,12 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
               finish(ed.getValue());
               return;
             }
-            void formatCode(path, ed.getValue()).then(finish);
+            void formatCode(pathRef.current, ed.getValue())
+              .then(finish)
+              .catch(() => {
+                useIde.getState().setNotice("Format fehlgeschlagen — ungeformt gespeichert");
+                finish(ed.getValue());
+              });
           },
         });
         ed.addAction({
@@ -358,7 +383,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           contextMenuGroupId: "9_anvil",
           run: () => {
             const line = ed.getPosition()?.lineNumber;
-            void import("@/lib/fix-agent").then((m) => m.fixHere(path, line));
+            void import("@/lib/fix-agent").then((m) => m.fixHere(pathRef.current, line));
           },
         });
         ed.addAction({
@@ -370,7 +395,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const modelNow = ed.getModel();
             if (!sel || !modelNow) return;
             const text = modelNow.getValueInRange(sel).trim() || (ed.getValue().split("\n")[sel.startLineNumber - 1] ?? "");
-            const lang = path.split(".").pop() ?? "js";
+            const lang = pathRef.current.split(".").pop() ?? "js";
             void import("@/lib/brain").then((b) =>
               b.brainComment(lang, text).then((c) => {
                 if (!c) return;
@@ -426,7 +451,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             prev,
             lang: langRef.current,
             files: filesRef.current,
-            path,
+            path: pathRef.current,
           });
           setHints(local);
           window.clearTimeout(brainTimer);
@@ -455,13 +480,15 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         subs.push(
           ed.onDidChangeCursorPosition((e) => {
             setCursor(e.position.lineNumber, e.position.column);
+            const sel = ed.getSelection();
+            if (sel) setSelection(sel.startLineNumber, sel.startColumn, sel.endLineNumber, sel.endColumn);
             refreshHints();
           }),
         );
         ed.focus();
         function onReveal(ev: Event) {
           const d = (ev as CustomEvent<{ path?: string; offset?: number; len?: number }>).detail;
-          if (!d || d.path !== path || typeof d.offset !== "number") return;
+          if (!d || d.path !== pathRef.current || typeof d.offset !== "number") return;
           const modelNow = ed.getModel();
           if (!modelNow?.getPositionAt) return;
           const start = modelNow.getPositionAt(d.offset);
@@ -492,9 +519,9 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       const monaco = monacoRef.current;
       if (monaco) pruneModels(monaco, useIde.getState().openPaths);
     };
-    // mount once per path so models stay intact
+    // ein Editor, Modelle per Tab
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path]);
+  }, []);
 
   useEffect(() => {
     let prev = useIde.getState().openPaths.join("\n");
@@ -540,20 +567,37 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       for (const n of names) window.removeEventListener(n, on);
       window.removeEventListener("anvil-focus-editor", onFocus);
     };
-  }, [path]);
+  }, []);
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const ed = edRef.current;
+    if (!monaco || !ed) return;
+    const prev = viewPathRef.current;
+    if (prev && prev !== path && ed.saveViewState) viewsRef.current.set(prev, ed.saveViewState());
+    viewPathRef.current = path;
+    const uri = monaco.Uri.parse(modelUriString(path));
+    let model = monaco.editor.getModel(uri);
+    if (!model) model = monaco.editor.createModel(valueRef.current, monacoLang(language), uri);
+    else applyModelText(model as Parameters<typeof applyModelText>[0], valueRef.current);
+    if (ed.getModel() !== model) {
+      ed.setModel(model);
+      setHints([]);
+    }
+    monaco.editor.setModelLanguage(model, monacoLang(language));
+    const vs = viewsRef.current.get(path);
+    if (vs && ed.restoreViewState) ed.restoreViewState(vs);
+  }, [path, language]);
 
   useEffect(() => {
     const ed = edRef.current;
-    const monaco = monacoRef.current;
-    if (!ed || !monaco) return;
-    if (ed.getValue() !== value) {
-      const pos = ed.getPosition();
-      ed.setValue(value);
-      if (pos) ed.setPosition(pos);
-    }
-    const model = ed.getModel();
-    if (model) monaco.editor.setModelLanguage(model, monacoLang(language));
-  }, [value, language]);
+    const model = ed?.getModel();
+    if (!ed || !model) return;
+    if (model.getValue() === value) return;
+    const pos = ed.getPosition();
+    applyModelText(model, value);
+    if (pos) ed.setPosition(pos);
+  }, [value]);
 
   useEffect(() => {
     const ed = edRef.current;
@@ -570,7 +614,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           startLineNumber: p.line,
           startColumn: p.col || 1,
           endLineNumber: p.line,
-          endColumn: Math.max((p.col || 1) + 1, 200),
+          endColumn: markerEndCol(p.col || 1, p.message),
           message: p.message,
           severity: p.severity === "warning" ? (sev?.Warning ?? 4) : p.severity === "info" ? (sev?.Info ?? 2) : (sev?.Error ?? 8),
           source: ["syntax", "python", "index", "json", "js", "c"].includes(p.source) ? t("lintHeur") : p.source,

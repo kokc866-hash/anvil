@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   appNameFromHost,
-  createHeadInjector,
+  createHeadInjector as makeHeadInjector,
   grokXCreatorHeadTags,
-  injectGrokPwaHead,
+  injectGrokPwaHead as injectHead,
   isDocumentPath,
   isInstallQuery,
   publicAppHost,
@@ -21,12 +21,35 @@ import { renderInstallPage } from "./grok-pwa-plugin.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** Anvil's workspace has site.json + public/og.jpg. Tests that omit `cwd` must not inherit that identity. */
+function isolatedCwd() {
+  return mkdtempSync(join(tmpdir(), "grok-pwa-"));
+}
+
+function injectGrokPwaHead(html, ctx = {}) {
+  return injectHead(html, Object.hasOwn(ctx, "cwd") ? ctx : { ...ctx, cwd: isolatedCwd() });
+}
+
+function createHeadInjector(ctx = {}) {
+  return makeHeadInjector(Object.hasOwn(ctx, "cwd") ? ctx : { ...ctx, cwd: isolatedCwd() });
+}
+
 test("injects before </head>", () => {
   const out = injectGrokPwaHead("<html><head><title>x</title></head><body></body></html>");
   assert.match(out, /rel="manifest"/);
   assert.match(out, /apple-touch-icon/);
   assert.match(out, /grok-app-builder\/extensions\.js/);
   assert.ok(out.indexOf("manifest") < out.indexOf("</head>"));
+});
+
+test("workspace site.json does not leak into an isolated cwd", () => {
+  const out = injectGrokPwaHead("<html><head><title>Hello World</title></head></html>", {
+    host: "wild-race.grok.me",
+  });
+  assert.match(out, /property="og:title" content="Hello World"/);
+  assert.doesNotMatch(out, /content="Anvil"/);
+  assert.match(out, /og\.grok\.me\/v1\/card\.png/);
+  assert.doesNotMatch(out, /wild-race\.grok\.me\/og\.jpg/);
 });
 
 test("injects the extensions script without a project id", () => {

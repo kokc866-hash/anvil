@@ -15,12 +15,26 @@ import { runLint, lintBins } from "./lint.mjs";
 import { listLsp, pullLsp, checkLsp } from "./lsp.mjs";
 import { installBin, installerKind, refreshPath } from "./install.mjs";
 import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, toolchainProgress, toolHome, toolEnv } from "./toolchain.mjs";
-import { ccArgs, javaMainClass, isCargo, isGoMod, isCsproj, firstCsproj } from "./compile-plan.mjs";
+import { ccArgs, javaMainClass, isCargo, isGoMod, isCsproj, firstCsproj, looksGui } from "./compile-plan.mjs";
 import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
-import { llmUpstream, noTimeout, pipeQuiet, isAbortNoise } from "../scripts/llm-agent.mjs";
+import { llmUpstream, noTimeout, pipeQuiet, isAbortNoise, isCloudLlmHost } from "../scripts/llm-agent.mjs";
+import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
 import { gitDispatch, gitBin, listTree, writeRel, removeRel, mkdirRel, resolveCwd } from "./git.mjs";
 import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
+import {
+  allowCorsOrigin,
+  blockedCwd,
+  homeOk,
+  isLanHost,
+  llmHeaders,
+  MAX_BODY,
+  mcpProtocol,
+  pairTarget,
+  runAllowed,
+  tokenOk,
+  whichExts,
+} from "./guard.mjs";
 
 process.on("uncaughtException", (err) => {
   if (isAbortNoise(err)) return;
@@ -37,7 +51,6 @@ const MAX_MS = Number(process.env.ANVIL_COMPANION_TIMEOUT || 120000);
 const ROOT = path.resolve(process.env.ANVIL_ENGINE_ROOT || process.cwd());
 let workspace = ROOT;
 const TOKEN_PATH = process.env.ANVIL_COMPANION_TOKEN_FILE || path.join(os.homedir(), ".anvil-companion-token");
-const ALLOW = new Set(["godot", "godot4", "unity", "Unity", "UnrealEditor", "cargo", "love"]);
 
 function loadToken() {
   if (process.env.ANVIL_COMPANION_TOKEN) return process.env.ANVIL_COMPANION_TOKEN.trim();
@@ -60,13 +73,19 @@ const TOKEN = loadToken();
 
 function which(bin) {
   const env = process.env.PATH || "";
-  const ext = process.platform === "win32" ? [".exe", ".bat", ""] : [""];
-  for (const dir of env.split(path.delimiter)) {
-    for (const e of ext) {
-      const p = path.join(dir, bin + e);
-      if (existsSync(p)) return p;
+  const ext = whichExts();
+  const lookup = (name) => {
+    for (const dir of env.split(path.delimiter)) {
+      for (const e of ext) {
+        const p = path.join(dir, name + e);
+        if (existsSync(p)) return p;
+      }
     }
-  }
+    return null;
+  };
+  const hit = lookup(bin);
+  if (hit) return hit;
+  if (process.platform === "win32" && (bin === "python" || bin === "python3")) return lookup("py");
   return null;
 }
 
@@ -98,10 +117,11 @@ function bins() {
 }
 
 function safeCwd(cwd) {
-  const dir = path.resolve(cwd || workspace || ROOT);
-  const roots = [...new Set([path.resolve(ROOT), path.resolve(workspace || ROOT)])];
-  if (roots.some((a) => dir === a || dir.startsWith(a + path.sep))) return dir;
-  throw new Error("cwd außerhalb des Engine-Roots");
+  const root = path.resolve(workspace || ROOT);
+  const dir = path.resolve(cwd || root);
+  if (blockedCwd(dir)) throw new Error("Systemordner gesperrt");
+  if (dir === root || dir.startsWith(root + path.sep)) return dir;
+  throw new Error("cwd außerhalb des Workspace");
 }
 
 function parseCmd(cmd) {
@@ -110,7 +130,7 @@ function parseCmd(cmd) {
   if (/[;&|`$()<>\n]/.test(raw)) throw new Error("Shell-Metazeichen verboten");
   const parts = raw.split(/\s+/);
   const base = path.basename(parts[0]);
-  if (!ALLOW.has(base) && !ALLOW.has(parts[0])) throw new Error(`Binärdatei nicht erlaubt: ${base}`);
+  if (!runAllowed(base) && !runAllowed(parts[0])) throw new Error(`Binärdatei nicht erlaubt: ${base}`);
   const file = which(base) || which(parts[0]) || resolveBin(base);
   if (!file) throw new Error(`${base} nicht im PATH`);
   return { file, args: parts.slice(1) };
@@ -165,32 +185,93 @@ function safeRel(p) {
   return n;
 }
 
-function spawnOnce(file, args, cwd, timeoutMs, env) {
+function spawnOnce(file, args, cwd, timeoutMs, env, opts = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const child = spawn(file, args, { cwd, shell: false, env: env || process.env, windowsHide: true });
+    const show = Boolean(opts.show);
+    const detach = Boolean(opts.detach);
+    const child = spawn(file, args, {
+      cwd,
+      shell: false,
+      env: env || process.env,
+      windowsHide: !show,
+      detached: detach,
+      stdio: detach ? ["ignore", "pipe", "pipe"] : undefined,
+    });
     let stdout = "";
     let stderr = "";
-    const cap = (s, add) => (s + add).slice(-24000);
+    let settled = false;
+    const cap = (s, add) => (s + add).toString().slice(-24000);
     child.stdout?.on("data", (d) => {
       stdout = cap(stdout, d.toString());
     });
     child.stderr?.on("data", (d) => {
       stderr = cap(stderr, d.toString());
     });
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    if (detach) {
+      const t = setTimeout(() => {
+        try {
+          child.stdout?.destroy();
+        } catch {
+          /* */
+        }
+        try {
+          child.stderr?.destroy();
+        } catch {
+          /* */
+        }
+        try {
+          child.unref();
+        } catch {
+          /* */
+        }
+        finish({
+          ok: true,
+          code: 0,
+          stdout: (stdout || "Bühne: Fenster läuft.") + (child.pid ? `\npid ${child.pid}` : ""),
+          stderr,
+          duration: Date.now() - start,
+          running: true,
+          pid: child.pid,
+        });
+      }, 2500);
+      child.on("close", (code) => {
+        clearTimeout(t);
+        finish({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start });
+      });
+      child.on("error", (err) => {
+        clearTimeout(t);
+        finish({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start });
+      });
+      return;
+    }
     const t = setTimeout(() => {
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 1500);
     }, timeoutMs || MAX_MS);
     child.on("close", (code) => {
       clearTimeout(t);
-      resolve({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start });
+      finish({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start });
     });
     child.on("error", (err) => {
       clearTimeout(t);
-      resolve({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start });
+      finish({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start });
     });
   });
+}
+
+function trySafeCwd(cwd) {
+  if (!cwd) return "";
+  try {
+    return safeCwd(cwd);
+  } catch {
+    return "";
+  }
 }
 
 async function compileLang(body) {
@@ -198,15 +279,23 @@ async function compileLang(body) {
   const entry = safeRel(body.entry || "");
   const files = Array.isArray(body.files) ? body.files.slice(0, 80) : [];
   const timeoutMs = Math.min(MAX_MS, Number(body.timeoutMs) || 60000);
-  const dir = path.join(os.tmpdir(), "anvil-run-" + randomBytes(6).toString("hex"));
-  mkdirSync(dir, { recursive: true });
+  const persistRoot = trySafeCwd(body.cwd);
+  const tmp = path.join(os.tmpdir(), "anvil-run-" + randomBytes(6).toString("hex"));
+  const workDir = persistRoot ? path.join(persistRoot, ".anvil", "work") : tmp;
+  const outDir = persistRoot ? path.join(persistRoot, ".anvil", "out") : workDir;
+  const runCwd = persistRoot || workDir;
+  mkdirSync(workDir, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
   const win = process.platform === "win32";
-  const exe = (name) => (win ? path.join(dir, name + ".exe") : path.join(dir, name));
+  const exe = (name) => (win ? path.join(outDir, name + ".exe") : path.join(outDir, name));
   const env = toolEnv();
+  const gui = looksGui(files);
+  const abs = (rel) => path.join(workDir, rel);
+  let keepTmp = false;
   try {
     for (const f of files) {
       const rel = safeRel(f.path);
-      const full = path.join(dir, rel);
+      const full = abs(rel);
       mkdirSync(path.dirname(full), { recursive: true });
       writeFileSync(full, String(f.content ?? ""), "utf8");
     }
@@ -216,14 +305,17 @@ async function compileLang(body) {
       return p;
     };
     const steps = [];
+    let projectBound = false;
     if (lang === "go") {
-      if (!isGoMod(files) && !existsSync(path.join(dir, "go.mod"))) writeFileSync(path.join(dir, "go.mod"), "module anvil\n\ngo 1.22\n");
-      if (/_test\.go$/i.test(entry)) steps.push({ file: need("go"), args: ["test", "./..."] });
+      projectBound = true;
+      if (!isGoMod(files) && !existsSync(path.join(workDir, "go.mod"))) writeFileSync(path.join(workDir, "go.mod"), "module anvil\n\ngo 1.22\n");
+      if (/_test\.go$/i.test(entry)) steps.push({ file: need("go"), args: ["test", "-v", "./..."] });
       else steps.push({ file: need("go"), args: ["run", entry] });
     } else if (lang === "rust") {
-      if (isCargo(files) || existsSync(path.join(dir, "Cargo.toml"))) {
+      if (isCargo(files) || existsSync(path.join(workDir, "Cargo.toml"))) {
+        projectBound = true;
         const testRs = /_test\.rs$/i.test(entry) || /(^|\/)tests\//i.test(entry);
-        steps.push({ file: need("cargo"), args: testRs ? ["test", "--quiet"] : ["run", "--quiet"] });
+        steps.push({ file: need("cargo"), args: testRs ? ["test"] : ["run", "--quiet"] });
       } else {
         const out = exe("out");
         steps.push({ file: need("rustc"), args: [entry, "-o", out] });
@@ -231,10 +323,10 @@ async function compileLang(body) {
       }
     } else if (lang === "java") {
       const srcs = files.map((f) => safeRel(f.path)).filter((p) => p.endsWith(".java"));
-      steps.push({ file: need("javac"), args: srcs.length ? srcs : [entry] });
+      steps.push({ file: need("javac"), args: ["-d", outDir, ...(srcs.length ? srcs : [entry])] });
       const src = files.find((f) => safeRel(f.path) === entry);
       const cls = javaMainClass(entry, src?.content ?? "");
-      steps.push({ file: need("java"), args: ["-cp", ".", cls] });
+      steps.push({ file: need("java"), args: ["-cp", outDir, cls] });
     } else if (lang === "c" || lang === "cpp") {
       const bin = lang === "c" ? "cc" : "cxx";
       const compiler =
@@ -245,18 +337,46 @@ async function compileLang(body) {
       steps.push({ file: compiler, args: ccArgs(compiler, lang, entry, files, out) });
       steps.push({ file: out, args: [] });
     } else if (lang === "php") {
-      steps.push({ file: need("php"), args: [entry] });
+      steps.push({ file: need("php"), args: [abs(entry)] });
     } else if (lang === "ruby") {
-      steps.push({ file: need("ruby"), args: [entry] });
+      steps.push({ file: need("ruby"), args: [abs(entry)] });
+    } else if (lang === "python") {
+      const py = resolveBin("python") || which("python") || which("python3") || which("py");
+      if (!py) throw new Error("python nicht in Anvil. Python holen (Einstellungen → Companion).");
+      steps.push({ file: py, args: [abs(entry)] });
+    } else if (lang === "javascript" || lang === "typescript") {
+      const node = resolveBin("node") || which("node");
+      if (!node) throw new Error("node nicht in Anvil. Node holen (Einstellungen → Companion).");
+      if (lang === "typescript") {
+        const tsc = resolveBin("tsc") || which("tsc") || which("tsc.cmd");
+        if (tsc) {
+          steps.push({ file: tsc, args: ["--outDir", ".", "--esModuleInterop", "--module", "commonjs", "--skipLibCheck", entry] });
+          steps.push({ file: node, args: [abs(entry.replace(/\.tsx?$/i, ".js"))] });
+        } else {
+          steps.push({ file: node, args: ["--experimental-strip-types", abs(entry)] });
+        }
+      } else {
+        steps.push({ file: node, args: [abs(entry)] });
+      }
     } else if (lang === "csharp") {
+      projectBound = true;
+      const testCs = /Tests?\.cs$/i.test(entry) || /(^|\/)tests?\//i.test(entry);
       if (!isCsproj(files)) {
-        const src = readFileSync(path.join(dir, entry), "utf8");
-        if (entry !== "Program.cs") writeFileSync(path.join(dir, "Program.cs"), src);
-        const csproj = `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`;
-        writeFileSync(path.join(dir, "app.csproj"), csproj);
+        const src = readFileSync(abs(entry), "utf8");
+        if (entry !== "Program.cs") writeFileSync(path.join(workDir, "Program.cs"), src);
+        const csproj = testCs
+          ? `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" /><PackageReference Include="xunit" Version="2.9.2" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" /></ItemGroup></Project>`
+          : `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`;
+        writeFileSync(path.join(workDir, "app.csproj"), csproj);
       }
       const proj = firstCsproj(files);
-      const args = proj ? ["run", "--nologo", "-v", "q", "--project", proj] : ["run", "--nologo", "-v", "q"];
+      const args = testCs
+        ? proj
+          ? ["test", "--nologo", "-v", "n", "--project", proj]
+          : ["test", "--nologo", "-v", "n"]
+        : proj
+          ? ["run", "--nologo", "-v", "q", "--project", proj]
+          : ["run", "--nologo", "-v", "q"];
       steps.push({ file: need("dotnet"), args });
     } else {
       throw new Error("Sprache nicht lokal: " + lang);
@@ -267,10 +387,16 @@ async function compileLang(body) {
     for (let i = 0; i < steps.length; i++) {
       const s = steps[i];
       cmd = [s.file, ...s.args].join(" ");
-      last = await spawnOnce(s.file, s.args, dir, timeoutMs, env);
+      const isRun = i === steps.length - 1;
+      const cwd = isRun && !projectBound ? runCwd : workDir;
+      last = await spawnOnce(s.file, s.args, cwd, timeoutMs, env, {
+        show: isRun && gui,
+        detach: isRun && gui,
+      });
       last.cmd = cmd;
       const phase = i < steps.length - 1 ? "compile" : "run";
       phases.push({ phase, cmd, ok: last.ok, stdout: last.stdout || "", stderr: last.stderr || "" });
+      if (last.running) keepTmp = !persistRoot;
       if (!last.ok) break;
     }
     const stdout = phases
@@ -281,7 +407,18 @@ async function compileLang(body) {
       })
       .join("\n\n");
     const fail = phases.find((p) => !p.ok);
-    return { ...last, cmd: phases.map((p) => p.cmd).join(" && "), stdout, stderr: fail ? fail.stderr : last.stderr, steps: phases };
+    const outPath = persistRoot ? path.join(".anvil", "out") : "";
+    const stage = last.running
+      ? { kind: "window", out: outPath }
+      : { kind: "log", out: outPath };
+    return {
+      ...last,
+      cmd: phases.map((p) => p.cmd).join(" && "),
+      stdout,
+      stderr: fail ? fail.stderr : last.stderr,
+      steps: phases,
+      stage,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -292,13 +429,52 @@ async function compileLang(body) {
       cmd: lang,
     };
   } finally {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      /* */
+    if (!persistRoot) {
+      if (keepTmp) {
+        rmSoon(workDir, 6, 10 * 60 * 1000);
+        sweepAnvilTemp({ keep: 1, maxAgeMs: 60 * 60 * 1000 });
+      } else {
+        if (!rmDir(workDir)) rmSoon(workDir);
+        sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
+      }
+    } else {
+      sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
     }
   }
 }
+
+async function formatLang(body) {
+  const rel = safeRel(body.path || "file.txt");
+  const src = String(body.content ?? "");
+  const ext = path.extname(rel).toLowerCase();
+  const dir = path.join(os.tmpdir(), "anvil-fmt-" + randomBytes(4).toString("hex"));
+  mkdirSync(dir, { recursive: true });
+  const full = path.join(dir, path.basename(rel) || "file.txt");
+  writeFileSync(full, src, "utf8");
+  try {
+    let bin = "";
+    let args = [];
+    if (ext === ".go") {
+      bin = resolveBin("gofmt") || which("gofmt") || "";
+      args = ["-w", full];
+    } else if (ext === ".rs") {
+      bin = resolveBin("rustfmt") || which("rustfmt") || "";
+      args = [full];
+    } else if ([".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh"].includes(ext)) {
+      bin = which("clang-format") || resolveBin("clang-format") || "";
+      args = ["-i", full];
+    }
+    if (!bin) return { ok: true, content: src, via: "none" };
+    await spawnOnce(bin, args, dir, 20000, toolEnv(), { show: false });
+    return { ok: true, content: readFileSync(full, "utf8"), via: path.basename(bin) };
+  } catch (err) {
+    return { ok: false, content: src, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (!rmDir(dir)) rmSoon(dir);
+    sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
+  }
+}
+
 
 function walkNames(root, max = 80) {
   const out = [];
@@ -399,25 +575,39 @@ async function handleMcp(msg) {
   const fail = (code, message) => (id === undefined ? null : { jsonrpc: "2.0", id, error: { code, message } });
   if (method === "initialize") {
     return reply({
-      protocolVersion: "2024-11-05",
-      capabilities: { tools: {} },
-      serverInfo: { name: "anvil-companion", version: "1.1.0" },
+      protocolVersion: mcpProtocol(params?.protocolVersion),
+      capabilities: { tools: {}, resources: {} },
+      serverInfo: { name: "anvil-companion", version: "1.2.0" },
     });
   }
   if (method === "notifications/initialized" || method === "initialized") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") return reply({ tools: TOOLS });
+  if (method === "resources/list") {
+    return reply({
+      resources: [{ uri: "anvil://workspace", name: "workspace", mimeType: "text/plain" }],
+    });
+  }
+  if (method === "resources/read") {
+    const uri = String(params?.uri || "");
+    if (uri === "anvil://workspace") {
+      return reply({
+        contents: [{ uri, mimeType: "text/plain", text: workspace }],
+      });
+    }
+    return fail(-32002, `Resource unbekannt: ${uri}`);
+  }
   if (method === "tools/call") {
     const data = await callTool(params?.name, params?.arguments || {});
-    return reply({ content: [{ type: "text", text: JSON.stringify(data, null, 2) }] });
+    const err = Boolean(data && typeof data === "object" && (data.ok === false || data.error));
+    return reply({ content: [{ type: "text", text: JSON.stringify(data, null, 2) }], isError: err });
   }
   return fail(-32601, `Methode unbekannt: ${method}`);
 }
 
 function cors(req, res) {
-  const origin = req.headers.origin;
+  const origin = allowCorsOrigin(req.headers.origin);
   if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
-  else res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
   res.setHeader(
@@ -438,7 +628,16 @@ function json(req, res, code, obj) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => chunks.push(c));
+    let n = 0;
+    req.on("data", (c) => {
+      n += c.length;
+      if (n > MAX_BODY) {
+        req.destroy();
+        reject(new Error("Body zu groß"));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on("end", () => {
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
@@ -457,7 +656,7 @@ function isLoopback(req) {
 
 function pairPage(to) {
   const token = TOKEN.replace(/[<>&]/g, "");
-  const target = /^https?:\/\//.test(to) ? to.replace(/"/g, "") : "";
+  const target = pairTarget(to);
   return `<!doctype html><meta charset="utf-8"/><title>Anvil Companion</title>
 <meta http-equiv="X-Frame-Options" content="DENY"/>
 <body style="font:14px system-ui;background:#111;color:#eee;padding:24px;max-width:40rem">
@@ -475,30 +674,15 @@ if(send) send.onclick=function(){
 <\/script></body>`;
 }
 
-function isLanHost(host) {
-  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "169.254.169.254") return false;
-  if (h === "localhost" || h === "0.0.0.0" || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".internal")) return true;
-  if (h === "::1") return true;
-  const p = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!p) return false;
-  const a = Number(p[1]);
-  const b = Number(p[2]);
-  if (a === 10 || a === 127 || a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  return false;
-}
-
 function lanTarget(raw) {
   const u = new URL(String(raw || "").trim());
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("nur http(s)");
-  if (!isLanHost(u.hostname)) throw new Error("nur lokale / LAN-Adressen");
-  return u.toString();
+  if (!isLanHost(u.hostname) && !isCloudLlmHost(u.hostname)) throw new Error("nur LAN oder Cloud-LLM");
+  return u.origin + u.pathname + u.search;
 }
 
 function checkToken(req) {
-  const got = String(req.headers["x-anvil-token"] || "");
-  return Boolean(TOKEN) && got === TOKEN;
+  return tokenOk(req.headers["x-anvil-token"], TOKEN);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -528,7 +712,7 @@ const server = http.createServer(async (req, res) => {
     refreshPath();
     json(req, res, 200, {
       ok: true,
-      version: "1.1.0",
+      version: "1.2.0",
       modes: ["http", "mcp", "compile", "lsp", "install", "toolchain", "git", "debug"],
       bins: bins(),
       lsp: listLsp(),
@@ -552,7 +736,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const target = lanTarget(body.url);
       const method = String(body.method || "GET").toUpperCase();
-      const hdrs = body.headers && typeof body.headers === "object" ? body.headers : {};
+      const hdrs = llmHeaders(body.headers);
       const ac = new AbortController();
       req.on("aborted", () => ac.abort());
       res.on("close", () => {
@@ -562,6 +746,7 @@ const server = http.createServer(async (req, res) => {
       const init = {
         method,
         headers: hdrs,
+        redirect: "error",
         signal: timeoutMs > 0 ? AbortSignal.any([ac.signal, AbortSignal.timeout(timeoutMs)]) : ac.signal,
       };
       if (method !== "GET" && method !== "HEAD" && body.body != null) init.body = typeof body.body === "string" ? body.body : JSON.stringify(body.body);
@@ -624,7 +809,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const cwd = url.searchParams.get("cwd") || workspace;
-      json(req, res, 200, listTree(cwd));
+      json(req, res, 200, listTree(safeCwd(cwd)));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
@@ -637,7 +822,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = await readBody(req);
-      const cwd = String(body.cwd || workspace);
+      const cwd = safeCwd(body.cwd || workspace);
       json(req, res, 200, writeRel(cwd, String(body.path || ""), String(body.content ?? "")));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
@@ -651,7 +836,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = await readBody(req);
-      json(req, res, 200, removeRel(String(body.cwd || workspace), String(body.path || "")));
+      json(req, res, 200, removeRel(safeCwd(body.cwd || workspace), String(body.path || "")));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
@@ -664,7 +849,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = await readBody(req);
-      json(req, res, 200, mkdirRel(String(body.cwd || workspace), String(body.path || "")));
+      json(req, res, 200, mkdirRel(safeCwd(body.cwd || workspace), String(body.path || "")));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
@@ -677,7 +862,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = await readBody(req);
-      json(req, res, 200, await gitDispatch(String(body.action || "status"), { ...body, cwd: body.cwd || workspace }));
+      json(req, res, 200, await gitDispatch(String(body.action || "status"), { ...body, cwd: safeCwd(body.cwd || workspace) }));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
@@ -740,6 +925,15 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
+  if (req.method === "POST" && url.pathname === "/v1/format") {
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, await formatLang(body));
+    } catch (e) {
+      json(req, res, 400, { ok: false, error: String(e) });
+    }
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/v1/lsp") {
     json(req, res, 200, { ok: true, servers: listLsp(), home: lspHome() });
     return;
@@ -797,7 +991,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/v1/term/start") {
     try {
       const body = await readBody(req).catch(() => ({}));
-      json(req, res, 200, { ok: true, ...termStart(String(body.cwd || ROOT)), ...termPlatform() });
+      json(req, res, 200, { ok: true, ...termStart(safeCwd(body.cwd || workspace)), ...termPlatform() });
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e) });
     }
@@ -825,12 +1019,15 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
-  if (req.method === "POST" && (url.pathname === "/mcp" || url.pathname === "/")) {
+  if (req.method === "POST" && url.pathname === "/mcp") {
     try {
       const body = await readBody(req);
       const msgs = Array.isArray(body) ? body : [body];
       const out = [];
       for (const m of msgs) {
+        if (m && m.method === "initialize") {
+          res.setHeader("mcp-session-id", randomBytes(8).toString("hex"));
+        }
         const r = await handleMcp(m);
         if (r) out.push(r);
       }
@@ -851,6 +1048,8 @@ const server = http.createServer(async (req, res) => {
 noTimeout(server);
 server.listen(PORT, HOST, () => {
   ensureHomes();
+  sweepAnvilTemp({ keep: 0, maxAgeMs: 0, toolchain: true });
+  setInterval(() => sweepAnvilTemp({ keep: 0, maxAgeMs: 15 * 60 * 1000, toolchain: true }), 20 * 60 * 1000).unref?.();
   const snap = snapshot();
   console.log(`Anvil companion http://${HOST}:${PORT}`);
   console.log(`Token-Datei ${TOKEN_PATH}`);

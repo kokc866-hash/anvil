@@ -1,19 +1,24 @@
 import { prefixAt, suggest } from "./suggest";
 import { defsAt, hoverFor, renameSymbol } from "./lsp";
-import { modelsToDrop } from "./monaco-models.ts";
+import { modelsToDrop, modelUriString, pathFromModelUri } from "./monaco-models.ts";
 
-export { modelsToDrop };
+export { modelsToDrop, modelUriString, pathFromModelUri, applyModelText, EDITOR_MAX_CHARS, markerEndCol } from "./monaco-models.ts";
 
-const VS = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs";
+const VS_CDN = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs";
+const VS_LOCAL = "/monaco/vs";
 
 export type MonacoEditor = {
   getValue: () => string;
   setValue: (v: string) => void;
   getSelection: () => { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } | null;
   getModel: () => {
+    getValue: () => string;
     getOffsetAt: (p: { lineNumber: number; column: number }) => number;
     getPositionAt?: (offset: number) => { lineNumber: number; column: number };
     getValueInRange: (r: object) => string;
+    getLineCount?: () => number;
+    getLineMaxColumn?: (n: number) => number;
+    pushEditOperations?: (before: unknown[], edits: unknown[], after: unknown) => unknown;
     uri: { path: string };
   } | null;
   getPosition: () => { lineNumber: number; column: number } | null;
@@ -44,6 +49,8 @@ export type MonacoEditor = {
   focus: () => void;
   dispose: () => void;
   layout: () => void;
+  saveViewState?: () => unknown;
+  restoreViewState?: (s: unknown) => void;
 };
 
 export type MonacoNS = {
@@ -129,40 +136,72 @@ export type MonacoNS = {
 
 let cached: Promise<MonacoNS> | null = null;
 
-export function loadMonaco(): Promise<MonacoNS> {
-  if (cached) return cached;
-  cached = new Promise((resolve, reject) => {
-    const w = window as unknown as {
-      require?: { config: (o: { paths: { vs: string } }) => void; (deps: string[], cb: () => void): void };
-      monaco?: MonacoNS;
-    };
-    if (w.monaco) {
-      resolve(w.monaco);
-      return;
-    }
-    const boot = () => {
-      if (!w.require) {
-        reject(new Error("Monaco-Loader fehlt."));
-        return;
-      }
-      w.require.config({ paths: { vs: VS } });
-      w.require(["vs/editor/editor.main"], () => {
-        if (!w.monaco) reject(new Error("Monaco nicht geladen."));
-        else resolve(w.monaco);
-      });
-    };
-    if (w.require) {
-      boot();
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const hit = document.querySelector(`script[src="${src}"]`);
+    if (hit) {
+      resolve();
       return;
     }
     const s = document.createElement("script");
-    s.src = `${VS}/loader.js`;
+    s.src = src;
     s.async = true;
-    s.onload = () => boot();
-    s.onerror = () => reject(new Error("Monaco CDN nicht erreichbar."));
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Monaco-Loader fehlt (${src}).`));
     document.head.appendChild(s);
   });
-  return cached;
+}
+
+async function vsExists(base: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${base}/loader.js`, { method: "GET", cache: "force-cache" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+function requireMonaco(base: string): Promise<MonacoNS> {
+  const w = window as unknown as {
+    require?: { config: (o: { paths: { vs: string } }) => void; (deps: string[], cb: () => void): void };
+    monaco?: MonacoNS;
+  };
+  return new Promise((resolve, reject) => {
+    if (!w.require) {
+      reject(new Error("Monaco-Loader fehlt."));
+      return;
+    }
+    w.require.config({ paths: { vs: base } });
+    w.require(["vs/editor/editor.main"], () => {
+      if (!w.monaco) reject(new Error("Monaco nicht geladen."));
+      else resolve(w.monaco);
+    });
+  });
+}
+
+export function loadMonaco(): Promise<MonacoNS> {
+  if (cached) return cached;
+  const p = (async () => {
+    const w = window as unknown as { monaco?: MonacoNS };
+    if (w.monaco) return w.monaco;
+    const local = await vsExists(VS_LOCAL);
+    const bases = local ? [VS_LOCAL, VS_CDN] : [VS_CDN];
+    let last: Error | undefined;
+    for (const base of bases) {
+      try {
+        await loadScript(`${base}/loader.js`);
+        return await requireMonaco(base);
+      } catch (err) {
+        last = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    throw last ?? new Error("Monaco nicht geladen.");
+  })();
+  cached = p;
+  p.catch(() => {
+    if (cached === p) cached = null;
+  });
+  return p;
 }
 
 export function monacoLang(id: string): string {
@@ -244,12 +283,14 @@ export function defineAnvilThemes(monaco: MonacoNS, theme: "dark" | "light") {
 
 export function pruneModels(monaco: MonacoNS, keep: string[]) {
   const models = monaco.editor.getModels?.() ?? [];
-  const drop = new Set(modelsToDrop(
-    models.map((m) => String(m.uri?.path || "")),
-    keep,
-  ));
+  const drop = new Set(
+    modelsToDrop(
+      models.map((m) => String(m.uri?.path || "")),
+      keep,
+    ),
+  );
   for (const m of models) {
-    const path = String(m.uri?.path || "").replace(/^\/+/, "").replace(/\\/g, "/");
+    const path = pathFromModelUri(String(m.uri?.path || ""));
     if (!drop.has(path)) continue;
     try {
       m.dispose?.();
@@ -322,10 +363,11 @@ export function wireNav(monaco: MonacoNS) {
       return [];
     }
   };
-  const pathOf = (model: { uri: { path: string } }) => String(model.uri.path || "").replace(/^\//, "");
+  const pathOf = (model: { uri: { path: string } }) => pathFromModelUri(model.uri.path);
   for (const lang of langs) {
     monaco.languages.registerHoverProvider(lang, {
       provideHover(model, position) {
+        if (!position) return null;
         const path = pathOf(model);
         const offset = model.getOffsetAt(position);
         const files = { ...filesOf(), [path]: model.getValue() };
@@ -339,16 +381,17 @@ export function wireNav(monaco: MonacoNS) {
     });
     monaco.languages.registerDefinitionProvider(lang, {
       provideDefinition(model, position) {
+        if (!position) return null;
         const path = pathOf(model);
         const offset = model.getOffsetAt(position);
         const files = { ...filesOf(), [path]: model.getValue() };
         const toLoc = (d: { path: string; line: number; col?: number }) => ({
-          uri: monaco.Uri.parse(`file:///${d.path}`),
+          uri: monaco.Uri.parse(modelUriString(d.path)),
           range: {
             startLineNumber: d.line,
             startColumn: d.col || 1,
             endLineNumber: d.line,
-            endColumn: (d.col || 1) + 80,
+            endColumn: (d.col || 1) + 12,
           },
         });
         return defsAt(files, path, offset, openOf()).then((defs) => (defs.length ? defs.map(toLoc) : null));
@@ -356,6 +399,7 @@ export function wireNav(monaco: MonacoNS) {
     });
     monaco.languages.registerRenameProvider?.(lang, {
       provideRenameEdits(model, position, newName) {
+        if (!position) return null;
         const path = pathOf(model);
         const files = { ...filesOf(), [path]: model.getValue() };
         const r = renameSymbol(files, path, model.getOffsetAt(position), newName);
@@ -366,24 +410,7 @@ export function wireNav(monaco: MonacoNS) {
         } catch {
           /* */
         }
-        return {
-          edits: Object.entries(r.files).map(([p, text]) => {
-            const old = files[p] ?? "";
-            const lines = old.split("\n");
-            return {
-              resource: monaco.Uri.parse(`file:///${p}`),
-              textEdit: {
-                range: {
-                  startLineNumber: 1,
-                  startColumn: 1,
-                  endLineNumber: Math.max(1, lines.length),
-                  endColumn: (lines[lines.length - 1]?.length ?? 0) + 1,
-                },
-                text,
-              },
-            };
-          }),
-        };
+        return { edits: [] };
       },
     });
   }
@@ -431,7 +458,7 @@ function wireFix(monaco: MonacoNS) {
   for (const lang of langs) {
     monaco.languages.registerCodeActionProvider(lang, {
       provideCodeActions(model, range, context) {
-        const path = String(model.uri.path || "").replace(/^\//, "");
+        const path = pathFromModelUri(String(model.uri.path || ""));
         const markers = context.markers ?? [];
         const line = range.startLineNumber;
         const has = markers.some((m) => m.startLineNumber >= range.startLineNumber && m.startLineNumber <= range.endLineNumber);
@@ -462,7 +489,6 @@ export function editorChrome(s: {
   editorSticky?: boolean;
   editorGuides?: boolean;
   editorWheelZoom?: boolean;
-  suggestOn?: boolean;
 }): Record<string, unknown> {
   const guides = s.editorGuides !== false;
   return {
@@ -495,7 +521,7 @@ export function editorChrome(s: {
     autoClosingBrackets: "languageDefined",
     autoClosingQuotes: "languageDefined",
     autoSurround: "languageDefined",
-    formatOnPaste: true,
+    formatOnPaste: false,
     dragAndDrop: true,
     emptySelectionClipboard: true,
     multiCursorModifier: "alt",
@@ -505,10 +531,11 @@ export function editorChrome(s: {
     glyphMargin: true,
     lightbulb: { enabled: true },
     contextmenu: true,
-    quickSuggestions: { other: s.suggestOn !== false, comments: false, strings: false },
-    suggestOnTriggerCharacters: s.suggestOn !== false,
-    tabCompletion: "on",
-    wordBasedSuggestions: "currentDocument",
-    snippetSuggestions: "inline",
+    find: { seedSearchStringFromSelection: "never", addExtraSpaceOnTop: false, autoFindInSelection: "never" },
+    quickSuggestions: false,
+    suggestOnTriggerCharacters: false,
+    tabCompletion: "off",
+    wordBasedSuggestions: "off",
+    snippetSuggestions: "none",
   };
 }

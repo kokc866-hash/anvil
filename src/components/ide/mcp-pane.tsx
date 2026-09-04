@@ -1,5 +1,21 @@
 import { useEffect, useState } from "react";
-import { mcpCall, mcpList, mcpReadResource, mcpResourcesCached, mcpToolsCached, newMcpId, type McpResource, type McpTool } from "@/lib/mcp";
+import {
+  decodeMcpPick,
+  encodeMcpPick,
+  mcpCall,
+  mcpClose,
+  mcpList,
+  mcpListError,
+  mcpProbe,
+  mcpReadResource,
+  mcpResourcesCached,
+  mcpToolsCached,
+  newMcpId,
+  schemaHint,
+  uniqueMcpName,
+  type McpResource,
+  type McpTool,
+} from "@/lib/mcp";
 import { loadSecrets, saveSecrets } from "@/lib/secrets";
 import { ANVIL_SURFACE, parseContext, contextLine, surfaceLabel } from "@/lib/surface";
 import { Button } from "@/components/ui/button";
@@ -18,24 +34,42 @@ export function McpPane() {
   const setContext = useIde((s) => s.setMcpContext);
   const log = useIde((s) => s.mcpLog);
   const views = useIde((s) => s.mcpView);
+  const workspaceCwd = useIde((s) => s.workspaceCwd);
   const setNotice = useIde((s) => s.setNotice);
   const [tools, setTools] = useState<McpTool[]>(() => mcpToolsCached());
   const [resources, setResources] = useState<McpResource[]>(() => mcpResourcesCached());
   const [busy, setBusy] = useState(false);
   const [pick, setPick] = useState("");
+  const [argsText, setArgsText] = useState("{}");
+  const [keys, setKeys] = useState<Record<string, string>>(() => loadSecrets().keys);
+  const [errs, setErrs] = useState<Record<string, string>>({});
 
   const live = servers.filter((s) => s.enabled);
   const current = servers.find((s) => s.id === active && s.enabled) ?? live[0] ?? null;
   const view = current ? views[current.id] : undefined;
   const slog = current ? log.filter((e) => e.server === current.id || e.server === current.name) : log;
+  const picked = pick ? decodeMcpPick(pick) : null;
+  const pickedTool = picked
+    ? tools.find((x) => (x.serverId === picked.server || x.server === picked.server) && x.name === picked.name)
+    : undefined;
+
+  function snapErrors() {
+    const next: Record<string, string> = {};
+    for (const s of useIde.getState().mcpServers) {
+      const e = mcpListError(s.id);
+      if (e) next[s.id] = e;
+    }
+    setErrs(next);
+  }
 
   function refresh() {
     setBusy(true);
     void mcpList(useIde.getState().mcpServers)
-      .then((list) => {
-        setTools(list);
+      .then((rows) => {
+        setTools(rows);
         setResources(mcpResourcesCached());
-        const n = list.filter((x) => x.name !== "(fehler)").length;
+        snapErrors();
+        const n = rows.length;
         setNotice(n ? t("mcpOk") : t("mcpNone"));
       })
       .catch((e) => setNotice(e instanceof Error ? e.message : t("mcpNone")))
@@ -47,19 +81,29 @@ export function McpPane() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function saveKey(id: string, value: string) {
+    const cur = loadSecrets();
+    const next = { ...cur.keys, [`mcp:${id}`]: value };
+    saveSecrets({ keys: next });
+    setKeys(next);
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
       <div className="border-b border-border px-3 py-2">
         <p className="text-xs font-medium text-fg">{t("mcp")}</p>
         <p className="text-[11px] text-muted">{t("mcpHint")}</p>
         <div className="mt-1.5 flex flex-wrap gap-1">
-          <Button variant="quiet" className="h-7 px-2 text-[11px]" disabled={busy} onClick={refresh}>
+          <Button variant="quiet" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => refresh()}>
             {busy ? t("running") : t("mcpPing")}
           </Button>
           <Button
             variant="quiet"
             className="h-7 px-2 text-[11px]"
-            onClick={() => setMcpServers([...servers, { id: newMcpId(), name: "MCP", url: "", enabled: true }])}
+            onClick={() => {
+              const id = newMcpId();
+              setMcpServers([...servers, { id, name: uniqueMcpName(servers, "MCP", id), url: "", enabled: true }]);
+            }}
           >
             {t("mcpAdd")}
           </Button>
@@ -84,19 +128,28 @@ export function McpPane() {
       <div className="min-h-0 flex-1 overflow-auto">
         {servers.map((s) => {
           const on = active === s.id;
-          const err = tools.find((t) => t.server === (s.name || s.id) && t.name === "(fehler)");
+          const err = errs[s.id];
           return (
             <div key={s.id} className={cn("border-b border-border px-3 py-2", on && "bg-bg")}>
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   checked={s.enabled}
-                  onChange={(e) => setMcpServers(servers.map((x) => (x.id === s.id ? { ...x, enabled: e.target.checked } : x)))}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    if (!enabled) void mcpClose(s);
+                    setMcpServers(servers.map((x) => (x.id === s.id ? { ...x, enabled } : x)));
+                  }}
                 />
                 <input
                   value={s.name}
                   className="h-7 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 text-xs text-fg"
                   onChange={(e) => setMcpServers(servers.map((x) => (x.id === s.id ? { ...x, name: e.target.value } : x)))}
+                  onBlur={(e) =>
+                    setMcpServers(
+                      servers.map((x) => (x.id === s.id ? { ...x, name: uniqueMcpName(servers, e.target.value, s.id) } : x)),
+                    )
+                  }
                 />
                 <button
                   type="button"
@@ -105,7 +158,35 @@ export function McpPane() {
                 >
                   {on ? t("surfaceHere") : t("surfaceUse")}
                 </button>
-                <button type="button" className="text-[10px] text-danger" onClick={() => setMcpServers(servers.filter((x) => x.id !== s.id))}>
+                <button
+                  type="button"
+                  className="text-[10px] text-muted hover:text-fg"
+                  disabled={busy || !s.url.trim()}
+                  onClick={() => {
+                    setBusy(true);
+                    void mcpProbe(s, servers)
+                      .then((rows) => {
+                        setTools(rows);
+                        setResources(mcpResourcesCached());
+                        snapErrors();
+                      })
+                      .catch((e) => {
+                        snapErrors();
+                        setNotice(e instanceof Error ? e.message : t("mcpNone"));
+                      })
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  {t("mcpPingOne")}
+                </button>
+                <button
+                  type="button"
+                  className="text-[10px] text-danger"
+                  onClick={() => {
+                    void mcpClose(s);
+                    setMcpServers(servers.filter((x) => x.id !== s.id));
+                  }}
+                >
                   {t("remove")}
                 </button>
               </div>
@@ -113,16 +194,28 @@ export function McpPane() {
                 value={s.url}
                 placeholder="https://…/mcp"
                 className="mt-1 h-7 w-full rounded-md border border-border bg-bg px-2 font-mono text-[11px] text-fg"
-                onChange={(e) => setMcpServers(servers.map((x) => (x.id === s.id ? { ...x, url: e.target.value } : x)))}
+                onChange={(e) => {
+                  void mcpClose(s);
+                  setMcpServers(servers.map((x) => (x.id === s.id ? { ...x, url: e.target.value } : x)));
+                }}
               />
               <input
                 type="password"
                 placeholder="Bearer (optional)"
-                defaultValue={loadSecrets().keys[`mcp:${s.id}`] ?? ""}
+                value={keys[`mcp:${s.id}`] ?? ""}
                 className="mt-1 h-7 w-full rounded-md border border-border bg-bg px-2 font-mono text-[11px] text-fg"
-                onBlur={(e) => {
-                  const cur = loadSecrets();
-                  saveSecrets({ keys: { ...cur.keys, [`mcp:${s.id}`]: e.target.value } });
+                onChange={(e) => saveKey(s.id, e.target.value)}
+              />
+              <input
+                type="number"
+                min={8000}
+                step={1000}
+                placeholder={t("mcpTimeout")}
+                value={s.timeoutMs || ""}
+                className="mt-1 h-7 w-full rounded-md border border-border bg-bg px-2 font-mono text-[11px] text-fg"
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setMcpServers(servers.map((x) => (x.id === s.id ? { ...x, timeoutMs: n > 0 ? n : undefined } : x)));
                 }}
               />
               {s.enabled ? (
@@ -134,7 +227,7 @@ export function McpPane() {
                   onChange={(e) => setContext(s.id, parseContext(e.target.value))}
                 />
               ) : null}
-              {err ? <p className="mt-1 text-[10px] text-danger">{err.description}</p> : null}
+              {err ? <p className="mt-1 text-[10px] text-danger">{err}</p> : null}
             </div>
           );
         })}
@@ -151,11 +244,11 @@ export function McpPane() {
             ) : (
               <p className="mt-1 text-[11px] text-muted">{t("surfaceViewEmpty")}</p>
             )}
-            {resources.filter((r) => r.server === (current.name || current.id)).length ? (
+            {resources.filter((r) => r.server === (current.name || current.id) || r.server === current.id).length ? (
               <div className="mt-2">
                 <p className="text-[10px] tracking-wide text-subtle uppercase">{t("surfaceRes")}</p>
                 {resources
-                  .filter((r) => r.server === (current.name || current.id))
+                  .filter((r) => r.server === (current.name || current.id) || r.server === current.id)
                   .slice(0, 16)
                   .map((r) => (
                     <button
@@ -186,49 +279,80 @@ export function McpPane() {
           <p className="px-3 py-2 text-xs text-muted">{live.length ? t("mcpPing") : t("mcpNone")}</p>
         ) : (
           tools.map((tool, i) => {
-            const id = `${tool.server}.${tool.name}`;
-            const bad = tool.name === "(fehler)";
+            const sid = tool.serverId || tool.server;
+            const id = encodeMcpPick(sid, tool.name);
             return (
               <button
                 key={`${id}:${i}`}
                 type="button"
                 className="block w-full px-3 py-1 text-left hover:bg-hover"
-                onClick={() => setPick(id)}
+                onClick={() => {
+                  setPick(id);
+                  const hint = schemaHint(tool.inputSchema);
+                  if (hint && argsText === "{}") {
+                    const req = new Set(tool.inputSchema?.required ?? []);
+                    const seed: Record<string, string> = {};
+                    for (const k of Object.keys(tool.inputSchema?.properties ?? {})) {
+                      if (req.has(k)) seed[k] = "";
+                    }
+                    if (Object.keys(seed).length) setArgsText(JSON.stringify(seed, null, 2));
+                  }
+                }}
               >
-                <span className={`font-mono text-xs ${bad ? "text-danger" : "text-fg"}`}>{id}</span>
+                <span className="font-mono text-xs text-fg">{tool.server}.{tool.name}</span>
                 {tool.description ? <span className="block truncate text-[10px] text-muted">{tool.description}</span> : null}
+                {schemaHint(tool.inputSchema) ? (
+                  <span className="block truncate font-mono text-[10px] text-subtle">{schemaHint(tool.inputSchema)}</span>
+                ) : null}
               </button>
             );
           })
         )}
-        {pick && !pick.endsWith(".(fehler)") ? (
+        {pick && picked?.name ? (
           <div className="px-3 py-2">
+            {schemaHint(pickedTool?.inputSchema) ? (
+              <p className="mb-1 font-mono text-[10px] text-subtle">{t("mcpArgs")}: {schemaHint(pickedTool?.inputSchema)}</p>
+            ) : null}
+            <textarea
+              value={argsText}
+              rows={4}
+              className="mb-1 w-full resize-y rounded-md border border-border bg-bg px-2 py-1 font-mono text-[11px] text-fg"
+              onChange={(e) => setArgsText(e.target.value)}
+            />
             <Button
               className="h-7 px-2 text-[11px]"
               onClick={() => {
-                const [server, ...rest] = pick.split(".");
-                const name = rest.join(".");
+                let parsed: unknown = {};
+                try {
+                  parsed = argsText.trim() ? JSON.parse(argsText) : {};
+                } catch (e) {
+                  setNotice(e instanceof Error ? e.message : t("mcpArgsBad"));
+                  return;
+                }
                 setBusy(true);
-                void mcpCall(useIde.getState().mcpServers, server ?? "", name, {})
+                void mcpCall(useIde.getState().mcpServers, picked.server, picked.name, parsed, undefined, {
+                  cwd: workspaceCwd || undefined,
+                })
                   .then((r) => {
                     const rec = r && typeof r === "object" ? (r as { text?: string; image?: string; isError?: boolean }) : null;
                     const text = rec?.text || (typeof r === "string" ? r : JSON.stringify(r, null, 2).slice(0, 4000));
-                    const sid = servers.find((x) => x.name === server || x.id === server)?.id ?? server ?? "";
+                    const sid = servers.find((x) => x.id === picked.server || x.name === picked.server)?.id ?? picked.server;
                     useIde.getState().pushMcpLog({
                       at: Date.now(),
                       server: sid,
-                      name,
+                      name: picked.name,
                       ok: !rec?.isError,
                       detail: String(text).slice(0, 400),
                       image: rec?.image,
                     });
                     if (sid) useIde.getState().setMcpView(sid, { text: String(text).slice(0, 2000), image: rec?.image, at: Date.now() });
+                    if (rec?.isError) setNotice(String(text).slice(0, 180));
                   })
                   .catch((e) => setNotice(e instanceof Error ? e.message : String(e)))
                   .finally(() => setBusy(false));
               }}
             >
-              {t("mcpCall")} {pick}
+              {t("mcpCall")} {picked.name}
             </Button>
           </div>
         ) : null}

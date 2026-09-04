@@ -162,6 +162,11 @@ export function toolEnv(base = process.env) {
   return { ...base, ...extra };
 }
 
+export function findAnywhere(names) {
+  const want = WIN ? names.flatMap((n) => [n + ".exe", n]) : names;
+  return walkFind(toolHome(), want);
+}
+
 export function findInKind(kind, names) {
   const want = WIN ? names.flatMap((n) => [n + ".exe", n]) : names;
   return walkFind(dirOf(kind), want);

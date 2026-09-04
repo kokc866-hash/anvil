@@ -49,10 +49,11 @@ export function draftFromText(text: string): { path: string; content: string; mo
   return last;
 }
 
-export function mcpMirrorPath(server: string, args: unknown, tool: string) {
+export function mcpMirrorPath(server: string, args: unknown, _tool: string) {
   const a = args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-  const raw = String(a.path ?? a.file ?? a.uri ?? a.target ?? a.script ?? tool ?? "out");
-  const base = raw.split(/[/\\]/).filter(Boolean).pop()?.replace(/[^\w.-]+/g, "_").slice(0, 80) || "out";
+  const raw = a.path ?? a.file ?? a.uri ?? a.target ?? a.script;
+  if (raw == null || String(raw).trim() === "") return "";
+  const base = String(raw).split(/[/\\]/).filter(Boolean).pop()?.replace(/[^\w.-]+/g, "_").slice(0, 80) || "out";
   const host = (server || "mcp").replace(/[^\w.-]+/g, "_").slice(0, 40);
   return `mcp/${host}/${base}`;
 }

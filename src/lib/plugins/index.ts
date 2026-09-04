@@ -3,6 +3,7 @@ import "./extras";
 export {
   activateBuiltins,
   loadWorkspacePlugins,
+  reloadPlugins,
   listPlugins,
   listCommands,
   subscribePlugins,
@@ -12,4 +13,5 @@ export {
   type PluginCommand,
   type PluginInfo,
 } from "./host";
-export { loadVscodeFromWorkspace, importVsix, listVsPacks } from "./vscode";
+export { loadVscodeFromWorkspace, importVsix, listVsPacks, vsPackFilePaths } from "./vscode";
+export { vsPackPluginId, pluginWatchPath } from "./util";

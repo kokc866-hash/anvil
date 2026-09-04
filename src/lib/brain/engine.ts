@@ -2,7 +2,7 @@ import { cacheGet, cacheKey, cacheSet, clearBrainQueue, enqueueBrain, type Brain
 import { activeModelId, brainReady, useBrain } from "./store";
 import { BRAIN_MODELS, brainModelOf, resolveBrainId } from "./models";
 import { cacheOrder } from "../model-lib";
-import { downloadHelperLocal, helperLocalId, helperLocalUrls, nativeHelper } from "../helper-local";
+import { downloadHelperLocal, helperLocalId, helperLocalUrls, nativeHelper, syncHelperAuth } from "../helper-local";
 
 type ChatMsg = { role: string; content: string };
 
@@ -23,7 +23,6 @@ let worker: Worker | null = null;
 let visBound = false;
 let gpuCache: { t: number; v: Awaited<ReturnType<typeof gpuInfoFresh>> } | null = null;
 let hideTimer = 0;
-let keepTimer = 0;
 let warming = false;
 
 async function webllm() {
@@ -40,25 +39,6 @@ function bindVisibility() {
       if (document.hidden && !warming) void engine?.interruptGenerate?.();
     }, 12_000);
   });
-}
-
-function startKeepAlive() {
-  if (typeof window === "undefined") return;
-  window.clearInterval(keepTimer);
-  keepTimer = window.setInterval(() => {
-    const s = useBrain.getState();
-    if (!s.gpuKeepAlive || s.status !== "ready" || s.busy || document.hidden || !engine) return;
-    void brainGenerate({
-      messages: [
-        { role: "system", content: "x" },
-        { role: "user", content: "." },
-      ],
-      maxTokens: 1,
-      temperature: 0,
-      pri: 2,
-      job: "warm",
-    }).catch(() => undefined);
-  }, 70_000);
 }
 
 async function gpuInfoFresh(): Promise<{
@@ -182,6 +162,7 @@ async function createEngine(id: string, onProgress: (p: { progress: number; text
     }
     local = true;
   }
+  await syncHelperAuth();
   const backends = local ? cacheOrder().slice(0, 1) : cacheOrder();
   let last: unknown;
   for (const backend of backends) {
@@ -254,7 +235,6 @@ export async function loadBrain(force = false): Promise<void> {
     if (engine?.unload) await engine.unload().catch(() => undefined);
     engine = await createEngine(id, onProgress);
     engine.setLogLevel?.("ERROR");
-    startKeepAlive();
     const prev = useBrain.getState().loadedId;
     useBrain.getState().setStatus({
       status: "ready",
@@ -390,7 +370,6 @@ export async function unloadBrain(): Promise<void> {
   worker = null;
   gpuCache = null;
   warming = false;
-  if (typeof window !== "undefined") window.clearInterval(keepTimer);
   clearBrainQueue();
   useBrain.getState().setStatus({ status: "idle", loadedId: "", progress: 0, progressText: "", error: "" });
 }

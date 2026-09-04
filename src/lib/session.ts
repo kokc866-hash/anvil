@@ -91,6 +91,44 @@ function uniqCap(xs: string[], cap: number): string[] {
   return out;
 }
 
+function taskLooksNew(next: string, prev: string): boolean {
+  if (!prev || next === prev) return false;
+  if (next.startsWith(prev.slice(0, 24))) return false;
+  const words = (s: string) => new Set(s.toLowerCase().split(/\s+/).filter((w) => w.length > 3));
+  const a = words(next);
+  const b = words(prev);
+  let overlap = 0;
+  for (const w of a) if (b.has(w)) overlap += 1;
+  return overlap < Math.min(2, a.size);
+}
+
+export function parseSessionFile(text: string): SessionJournal {
+  const t = String(text || "");
+  const grab = (label: string) => t.match(new RegExp(`^${label}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? "";
+  const split = (s: string, re: RegExp) => (s ? s.split(re).map((x) => x.trim()).filter(Boolean) : []);
+  const notes = t
+    .replace(/^# Anvil Sitzung\s*/i, "")
+    .replace(/^Ziel:.*$/m, "")
+    .replace(/^Dateien:.*$/m, "")
+    .replace(/^Fest:.*$/m, "")
+    .replace(/^Nicht:.*$/m, "")
+    .replace(/^Offen:.*$/m, "")
+    .replace(/^Nachrichten:.*$/m, "")
+    .replace(/^Stand:.*$/m, "")
+    .replace(/^\(leer\)\s*$/m, "")
+    .trim();
+  const turns = Number(t.match(/Nachrichten:\s*(\d+)/)?.[1] || 0);
+  return normalizeJournal({
+    goal: grab("Ziel"),
+    files: split(grab("Dateien"), /,\s*/),
+    decisions: split(grab("Fest"), /\s·\s/),
+    corrections: split(grab("Nicht"), /\s·\s/),
+    open: split(grab("Offen"), /\s·\s/),
+    notes,
+    turns,
+  });
+}
+
 export function harvestPaths(text: string, into?: Set<string>): string[] {
   const out = into ?? new Set<string>();
   PATH_RE.lastIndex = 0;
@@ -162,12 +200,15 @@ export function extractJournal(
       users += 1;
       const task = text.includes("Auftrag:") ? text.slice(text.lastIndexOf("Auftrag:") + 8).trim() : text.trim();
       const one = task.replace(/\s+/g, " ").slice(0, 240);
-      if (one.length >= 8 && !one.startsWith("[") && !goal) goal = one;
+      if (one.length >= 8 && !one.startsWith("[")) {
+        if (!goal) goal = one;
+        else if (!CORRECT_RE.test(text) && taskLooksNew(one, goal)) goal = one;
+      }
       if (CORRECT_RE.test(text)) corrections.push(text.replace(/\s+/g, " ").trim().slice(0, 160));
       if (OPEN_RE.test(text) && one.length < 160) open.push(one);
     } else if (role === "assistant") {
       const one = text.replace(/\s+/g, " ").trim();
-      if (/\b(stattdessen|wir nutzen| fest:|decision:)\b/i.test(one)) {
+      if (/\b(stattdessen|wir nutzen|wir bleiben bei|wir nehmen|fest:|decision:)\b/i.test(one)) {
         decisions.push(one.slice(0, 160));
       }
     }
@@ -239,9 +280,14 @@ export function sessionFileText(j: SessionJournal, chatLen = 0): string {
 export async function persistSessionDisk(): Promise<void> {
   const { useIde } = await import("@/store/ide");
   const st = useIde.getState();
+  const text = sessionFileText(st.sessionJournal ?? EMPTY_JOURNAL, st.chat.length);
+  try {
+    st.writeFile(".anvil/session.md", text, { quiet: true });
+  } catch {
+    /* workspace not ready */
+  }
   const cwd = st.workspaceCwd?.trim();
   if (!cwd) return;
-  const text = sessionFileText(st.sessionJournal ?? EMPTY_JOURNAL, st.chat.length);
   try {
     const { companionWriteFile } = await import("@/lib/companion");
     await companionWriteFile(".anvil/session.md", text, cwd);

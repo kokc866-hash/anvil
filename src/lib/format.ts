@@ -3,7 +3,23 @@ import { langFromPath } from "./languages";
 export async function formatCode(path: string, code: string): Promise<string> {
   const lang = langFromPath(path);
   if (lang === "json") {
-    return `${JSON.stringify(JSON.parse(code), null, 2)}\n`;
+    try {
+      return `${JSON.stringify(JSON.parse(code), null, 2)}\n`;
+    } catch {
+      return code;
+    }
+  }
+  if (lang === "go" || lang === "rust" || lang === "c" || lang === "cpp") {
+    try {
+      const { companionFormat, companionPing } = await import("./companion");
+      const ping = await companionPing();
+      if (ping.ok) {
+        const r = await companionFormat({ path, content: code });
+        if (r.ok && r.via && r.via !== "none") return r.content;
+      }
+    } catch {
+      /* Companion aus */
+    }
   }
   try {
     const prettier = (await import(/* @vite-ignore */ "https://esm.sh/prettier@3.4.2/standalone")) as {

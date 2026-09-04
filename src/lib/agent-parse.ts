@@ -1,3 +1,56 @@
+export function decodeWriteEscapes(s: string): string {
+  if (!s) return s;
+  let t = s;
+  const lt = "\u003c";
+  const gt = "\u003e";
+  const amp = "&";
+  if (t.includes(amp + "lt;") || t.includes(amp + "gt;") || t.includes(amp + "#")) {
+    t = t.replaceAll(amp + "lt;", lt).replaceAll(amp + "gt;", gt).replaceAll(amp + "quot;", '"');
+    t = t.replace(/&#x([0-9a-fA-F]+);/gi, (_, h) => fromCode(h, 16));
+    t = t.replace(/&#(\d+);/g, (_, d) => fromCode(d, 10));
+    t = t.replaceAll(amp + "amp;", amp);
+  }
+  // Models XML-escape < > as u003c/u003e (backslash dropped). JS XSS "\\u003c" stays.
+  if (/u003c/i.test(t) && /u003e/i.test(t) && !/\\u003[ce]/i.test(t)) {
+    t = t.replace(/u003c/gi, lt).replace(/u003e/gi, gt);
+  }
+  return t;
+}
+
+function fromCode(raw: string, base: number): string {
+  const n = parseInt(raw, base);
+  if (!Number.isFinite(n) || n < 0 || n > 0x10ffff) return "";
+  try {
+    return String.fromCodePoint(n);
+  } catch {
+    return "";
+  }
+}
+
+export function isNudgeEcho(text: string): boolean {
+  return /Auftrag offen|Nächstes Tool, kein Plansatz|Job still open|Next tool, no plan|Dateien liegen\. Fertig schreiben|Files are in place\. Finish writing|Kein Text ohne Tool|No prose without a tool|Run-Schleife aus|enable the run loop via harness_write/i.test(
+    text,
+  );
+}
+
+const RUN_EXT = /\.(cpp|cc|cxx|c|py|js|mjs|cjs|ts|tsx|go|rs|java|cs|php|rb|html|htm)$/i;
+const RUN_PREF = ["main.cpp", "main.c", "src/main.cpp", "src/main.c", "main.py", "index.html", "main.js", "src/main.rs", "main.go"];
+
+export function pickRunPath(files: Iterable<string>, hint = ""): string {
+  const list = [...files].map((p) => p.replace(/\\/g, "/"));
+  const h = hint.replace(/\\/g, "/");
+  if (h && RUN_EXT.test(h) && list.includes(h)) return h;
+  for (const p of RUN_PREF) if (list.includes(p)) return p;
+  const named = list.find((p) => /(^|\/)main\.(cpp|cc|cxx|c|py|go|rs|java|cs)$/i.test(p));
+  if (named) return named;
+  return list.find((p) => RUN_EXT.test(p) && !p.startsWith(".anvil/")) || "";
+}
+
+export function skipAutoRunPath(path: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  return !p || p.startsWith(".anvil/") || /\.(md|json|txt|svg)$/i.test(p);
+}
+
 export function extractFileBlocks(text: string): { path: string; content: string }[] {
   const out: { path: string; content: string }[] = [];
   const re = /```([^\n]*)\n([\s\S]*?)```/g;
@@ -10,7 +63,7 @@ export function extractFileBlocks(text: string): { path: string; content: string
       meta.match(/(?:^|[\s:])([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)\s*$/)?.[1] ||
       (/^[A-Za-z0-9_./-]+\.[A-Za-z0-9]+$/.test(meta) ? meta : "");
     if (!path || path.includes("..")) continue;
-    out.push({ path: path.replace(/^\/+/, ""), content: body });
+    out.push({ path: path.replace(/^\/+/, ""), content: decodeWriteEscapes(body) });
   }
   return out;
 }
@@ -32,6 +85,7 @@ export function looksLikeNoTools(text: string): boolean {
 export function looksIncomplete(text: string): boolean {
   const t = text.trim();
   if (!t || t.length < 24) return false;
+  if (isNudgeEcho(t)) return false;
   if (/^(fertig|done|erledigt|ok)\.?$/i.test(t)) return false;
   if (/\b(geschrieben|angepasst|läuft|done|fertig)\b/i.test(t) && t.length > 400 && !/jetzt |als nächstes|dann noch|ich (prüfe|lese|sehe)/i.test(t)) return false;
   return /als nächstes|jetzt |ich (werde|habe|hab |mach|schreib|änder|öffne|lege|plane|lese|prüfe|sehe|schaue|vertief|teil|strukturiere|erstell|bau|füg|führ)|aufteil|in module|module auf|vertief|let me |i('ll| will) |next i('| )|todo:|to-do|schritt \d|warte kurz|dann (noch|öffne|schreib|änder)|weiter mit|now i (will|am)|i (have|just) (read|looked|found)|gefunden|exception|debug_/i.test(
@@ -50,6 +104,7 @@ export function looksStoppedEarly(choice: {
   const text = (choice.content || "").trim();
   if (!text) return Boolean(choice.reasoning);
   if (text.length < 24) return false;
+  if (/\b(fertig|done|läuft|sauber|kein (fehler|patch)|ok)\b/i.test(text) && !looksIncomplete(text)) return false;
   if (looksLikeNoTools(text) || looksIncomplete(text)) return true;
   const think = (choice.reasoning || "").length;
   if (think > 80 && text.length < 600) return true;
@@ -57,16 +112,26 @@ export function looksStoppedEarly(choice: {
 }
 
 export function wantsWorkspaceWrite(text: string): boolean {
-  return /schreib|erstell|vertief|\bdateien?\b|\bbau|mach(en|e)\b|implement|patch|\bfix\b|anleg|aufteil|modul/i.test(text);
+  const t = String(text || "").replace(/bei fehler[^\n.]*patch(en)?/gi, "");
+  return /schreib|erstell|vertief|\bdateien?\b|\bbau|mach(en|e)\b|implement|\bfix\b|anleg|aufteil|modul/i.test(t) ||
+    (/\bpatch\b/i.test(t) && !/kein patch|nichts/i.test(t));
+}
+
+export function askPickedNone(ask: string): boolean {
+  return /^Antwort auf:/i.test(ask) && /\b(nichts|nothing|kein (patch|änder)|nur stil)/i.test(ask);
 }
 
 export function jobOpen(opts: { ask: string; used: string[]; text?: string }): boolean {
+  if (askPickedNone(opts.ask)) return false;
+  if (/^Antwort auf:/i.test(opts.ask) && /wahl:\s*[b-e]\)/i.test(opts.ask)) return true;
   const wrote = opts.used.some((n) => /write_file|append_file|edit_file/.test(n));
   const ran = opts.used.some((n) => /run_file|engine_run/.test(n));
   if (wrote && !ran) return true;
   if (opts.text && looksIncomplete(opts.text)) return true;
-  if (wantsWorkspaceWrite(opts.ask) && !wrote) return true;
-  if (ran && /fehler|exception|schwarz|blockiert|patch|debug/i.test(`${opts.ask}\n${opts.text || ""}`)) return true;
+  const askBody = opts.ask.replace(/^Antwort auf:[^\n]*\n?/i, "");
+  if (wantsWorkspaceWrite(askBody) && !wrote) return true;
+  const failText = /exception|error:|fehlgeschlagen|nicht (ok|grün)|schwarz|blockiert/i.test(opts.text || "");
+  if (ran && failText) return true;
   return false;
 }
 
@@ -78,8 +143,19 @@ export function harvestTools(text: string): { id: string; type: "function"; func
   return harvestPlain(src);
 }
 
+export function blocksToWriteCalls(
+  blocks: { path: string; content: string }[],
+  round = 0,
+): { id: string; type: "function"; function: { name: string; arguments: string } }[] {
+  return blocks.slice(0, 12).map((b, i) => ({
+    id: `fence_${round}_${i}`,
+    type: "function" as const,
+    function: { name: "write_file", arguments: JSON.stringify({ path: b.path, content: b.content }) },
+  }));
+}
+
 const TOOL_NAMES =
-  /^(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|engine_run|mcp_call|format_file|open_preview)$/;
+  /^(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|play|format_file|open_preview|git_status|git_commit|git_push|git_clone|fetch_url|debug_start|debug_continue|debug_step|debug_stop|debug_breakpoint|debug_eval|debug_state|debug_watch|memory_list|memory_add|memory_forget|skill_list|skill_write|skill_read|skill_run|skill_debug|skill_patch|skill_outcome|mcp_list|mcp_call|engine_detect|engine_status|engine_run|harness_read|harness_write|graph_write|board_read|board_open|board_reset|board_write)$/;
 
 function harvestXml(src: string): { id: string; type: "function"; function: { name: string; arguments: string } }[] {
   if (!/<tool_call>|tool call/i.test(src)) return [];
@@ -98,7 +174,7 @@ function harvestPlain(src: string): { id: string; type: "function"; function: { 
   if (src.length > 12000) return [];
   const out: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
   let n = 0;
-  const nameRe = /"name"\s*:\s*"(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|engine_run|mcp_call)"/g;
+  const nameRe = /"name"\s*:\s*"([a-z][a-z0-9_]*)"/g;
   let nm: RegExpExecArray | null;
   while ((nm = nameRe.exec(src))) {
     const brace = src.lastIndexOf("{", nm.index);
@@ -121,7 +197,7 @@ function harvestPlain(src: string): { id: string; type: "function"; function: { 
   }
   if (out.length) return out;
   const callRe =
-    /(?:^|\n)\s*(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|engine_run|mcp_call)\s*\(/g;
+    /(?:^|\n)\s*(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|play|format_file|open_preview|git_status|git_commit|git_push|git_clone|fetch_url|debug_start|debug_continue|debug_step|debug_stop|debug_breakpoint|debug_eval|debug_state|debug_watch|memory_list|memory_add|memory_forget|skill_list|skill_write|skill_read|skill_run|skill_debug|skill_patch|skill_outcome|mcp_list|mcp_call|engine_detect|engine_status|engine_run|harness_read|harness_write|graph_write|board_read|board_open|board_reset|board_write)\s*\(/g;
   let cm: RegExpExecArray | null;
   while ((cm = callRe.exec(src))) {
     const name = cm[1];
@@ -243,22 +319,33 @@ export function unescapeJsonFrag(s: string): string {
   return out;
 }
 
+function decodeArgStrings(args: Record<string, unknown>): Record<string, unknown> {
+  const keys = ["content", "old_string", "new_string"];
+  const next = { ...args };
+  for (const k of keys) {
+    if (typeof next[k] === "string") next[k] = decodeWriteEscapes(next[k] as string);
+  }
+  return next;
+}
+
 export function parseToolArgs(raw: string): { args: Record<string, unknown>; truncated: boolean } {
   const s = (raw || "").trim() || "{}";
   try {
     const args = JSON.parse(s) as Record<string, unknown>;
-    return { args: args && typeof args === "object" ? args : {}, truncated: false };
+    return { args: args && typeof args === "object" ? decodeArgStrings(args) : {}, truncated: false };
   } catch {
     /* incomplete JSON from a long write */
   }
   const path = s.match(/"path"\s*:\s*"((?:\\.|[^"\\])*)"/)?.[1];
   const mark = s.match(/"content"\s*:\s*"/);
   if (path != null && mark?.index != null) {
-    const body = unescapeJsonFrag(
-      s
-        .slice(mark.index + mark[0].length)
-        .replace(/"\s*,?\s*"truncated".*$/s, "")
-        .replace(/"\s*}\s*$/, ""),
+    const body = decodeWriteEscapes(
+      unescapeJsonFrag(
+        s
+          .slice(mark.index + mark[0].length)
+          .replace(/"\s*,?\s*"truncated".*$/s, "")
+          .replace(/"\s*}\s*$/, ""),
+      ),
     );
     return { args: { path, content: body, truncated: true }, truncated: true };
   }

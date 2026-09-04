@@ -4,7 +4,7 @@
  */
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
-import { isLanHost, llmUpstream, listenLocal, pipeQuiet } from "../scripts/llm-agent.mjs";
+import { isLlmTargetHost, llmUpstream, listenLocal, pipeQuiet } from "../scripts/llm-agent.mjs";
 import { handleOnce, onSync } from "./ipc.mjs";
 
 export const LLM_PIPE_PORT = 7848;
@@ -57,7 +57,7 @@ export async function startLlmPipe() {
       res.setTimeout?.(0);
       const u = new URL(target);
       if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("nur http(s)");
-      if (!isLanHost(u.hostname)) throw new Error("nur LAN/localhost");
+      if (!isLlmTargetHost(u.hostname)) throw new Error("nur LAN/Cloud-LLM");
       const method = (req.method ?? "GET").toUpperCase();
       const buf = method === "GET" || method === "HEAD" ? undefined : await readReq(req);
       const ac = new AbortController();

@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { homeOk } from "./guard.mjs";
 
 const POINTER = process.env.ANVIL_HOME_FILE || path.join(os.homedir(), ".anvil", "home.txt");
 const FALLBACK = path.join(os.homedir(), ".anvil");
@@ -51,6 +52,7 @@ export function snapshot() {
 export function setAnvilHome(raw) {
   const next = clean(raw);
   if (!next) throw new Error("Pfad fehlt");
+  if (!homeOk(next)) throw new Error("Home nur unter dem Benutzerordner oder Temp.");
   mkdirSync(path.join(next, "toolchains"), { recursive: true });
   mkdirSync(path.join(next, "lsp"), { recursive: true });
   mkdirSync(path.dirname(POINTER), { recursive: true });

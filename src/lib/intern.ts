@@ -1,10 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "./persist-storage";
-import { fingerprint, internNoise, suggestHeal, type HealId, type InternKind } from "./intern-core";
+import { fingerprint, internNoise, internPromptFrom, suggestHeal, type HealId, type InternKind } from "./intern-core";
 
 export type { HealId, InternKind };
-export { fingerprint, suggestHeal };
+export { fingerprint, suggestHeal, internPromptFrom };
 export type RestartKind = "soft" | "hard" | "factory";
 
 export type InternFault = {
@@ -150,6 +150,14 @@ export function resolveKind(kind: InternKind): void {
     useIntern.getState().resolveKind(kind);
   } catch {
     /* */
+  }
+}
+
+export function internPrompt(): string {
+  try {
+    return internPromptFrom(useIntern.getState().faults);
+  } catch {
+    return "";
   }
 }
 

@@ -4,20 +4,22 @@ import { CopyMini } from "@/components/ui/copy-btn";
 import { Button } from "@/components/ui/button";
 import { chatWithProvider, providerOf } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
-import { syncMkdir, syncRemove, syncWrite } from "@/lib/disk-sync";
 import { toolCode, toolDetail } from "@/lib/llm-options";
 import { runFile } from "@/lib/run-client";
 import { estimateTokens, formatContext, formatTokens } from "@/lib/tokens";
 import { emitPlugin } from "@/lib/plugins/events";
 import { anvilHandle } from "@/lib/anvil";
-import { packRefContext, refFiles, isSecretPath, isRefPath, REF_DIR } from "@/lib/ref";
-import { snapshotDiff, lineDiff } from "@/lib/diff";
+import { packRefContext, isSecretPath, isRefPath, isRefImage, imageStub, modelSeesImages, REF_DIR, safeRefName } from "@/lib/ref";
+import { snapshotDiff, diffPreview } from "@/lib/diff";
 import { testsPrompt } from "@/lib/test-parse";
 import { shouldTestAfterRound, testAfterRound } from "@/lib/test-loop";
 import { workspaceRules } from "@/lib/rules";
 import { guessPlan, planFinish, planFromTool, planStart } from "@/lib/plan";
+import { filterTrailSteps, hasTrailMsg, stepLabel, stepPath } from "@/lib/trail-filter";
 import { resetLoopFails } from "@/lib/run-loop";
 import { agentGen, beginAgent, explainAbort, explainLlmError, isAbortLike, stopAgent } from "@/lib/abort";
+import { holdCompanion, releaseCompanion } from "@/lib/companion-life";
+import { askCorrection, formatAskAnswer, isAskAnswer, newJob } from "@/lib/agent-ask";
 import { appLog, logHost } from "@/lib/app-log";
 import { brainAsk, brainAttach, brainChatTitle, brainDistill, brainFollowups, brainMentionRank, brainModelOf, brainPlanText, brainReady, brainReview, brainSecretWarn, brainStopNote, lanePrompt, routeKind, scrubSecrets, useBrain } from "@/lib/brain";
 import { heuristicMention } from "@/lib/brain/extra-heur";
@@ -27,7 +29,7 @@ import type { WorkspaceEvent } from "@/lib/agent-core";
 import { cn } from "@/lib/cn";
 import { CodeBlock } from "@/lib/syntax";
 import { nativeHelper } from "@/lib/helper-local";
-import { useIde, type AgentMode, type AgentStep, type ChatMsg } from "@/store/ide";
+import { useIde, type AgentMode, type AgentStep, type ChatMsg, type PlanStep } from "@/store/ide";
 import { SurfaceSwitch } from "./surface-switch";
 import { HelperPrompts } from "./helper-prompts";
 import { t, useT } from "@/lib/i18n";
@@ -38,6 +40,7 @@ import { isFixPrompt } from "@/lib/agent-parse";
 import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { AgentPulse } from "./agent-pulse";
 import { resetLiveWrite } from "@/lib/live-write";
+import { JobAskBar } from "./job-ask-bar";
 
 function parseBlocks(text: string) {
   return text.split(/(```[\s\S]*?```)/g).map((part) => {
@@ -65,7 +68,6 @@ export function ChatPane() {
   const finalizeAssistant = useIde((s) => s.finalizeAssistant);
   const setAgentBusy = useIde((s) => s.setAgentBusy);
   const patchFiles = useIde((s) => s.patchFiles);
-  const applyFiles = useIde((s) => s.applyFiles);
   const writeFile = useIde((s) => s.writeFile);
   const pushOutput = useIde((s) => s.pushOutput);
   const setRunning = useIde((s) => s.setRunning);
@@ -78,7 +80,6 @@ export function ChatPane() {
   const helperId = useBrain((s) => s.customId.trim() || s.modelId);
   const helperLabel = brainModelOf(helperId)?.label ?? helperId;
   const agentMode = useIde((s) => s.agentMode);
-  const graphLoop = useIde((s) => s.graphLoop);
   const setAgentMode = useIde((s) => s.setAgentMode);
   const attached = useIde((s) => s.attached);
   const setAttached = useIde((s) => s.setAttached);
@@ -92,6 +93,7 @@ export function ChatPane() {
   const [dropOn, setDropOn] = useState(false);
   const [menu, setMenu] = useState<ChatMenu | null>(null);
   const pendingAsk = useIde((s) => s.pendingAsk);
+  const agentJob = useIde((s) => s.agentJob);
   const agentQueue = useIde((s) => s.agentQueue);
   const scroller = useRef<HTMLDivElement>(null);
   const pin = useRef(true);
@@ -107,7 +109,10 @@ export function ChatPane() {
 
   async function applyWorkspace(ev: WorkspaceEvent) {
     const s = useIde.getState();
-    if (ev.op === "write") s.writeFile(ev.path, ev.content);
+    if (ev.op === "write") {
+      if (s.autoAcceptDiffs) s.writeFile(ev.path, ev.content, { quiet: true });
+      else s.patchFiles({ [ev.path]: ev.content }, { quiet: true });
+    }
     else if (ev.op === "delete") s.deleteFile(ev.path);
     else if (ev.op === "mkdir") s.createFolder(ev.path);
     else if (ev.op === "rename") s.movePath(ev.from, ev.to);
@@ -127,25 +132,6 @@ export function ChatPane() {
       if (ev.open === false) {
         s.setPanels({ ...s.panels, code: true, files: true });
       }
-    }
-    if (ev.op === "commit" || ev.op === "preview" || ev.op === "board") return;
-    if (!s.diskName && s.storageMode !== "disk" && !s.workspaceCwd) return;
-    try {
-      if (ev.op === "write") await syncWrite(ev.path, ev.content);
-      else if (ev.op === "delete") await syncRemove(ev.path);
-      else if (ev.op === "mkdir") await syncMkdir(ev.path);
-      else if (ev.op === "rename") {
-        await syncRemove(ev.from);
-        const files = useIde.getState().files;
-        if (files[ev.to] != null) await syncWrite(ev.to, files[ev.to]);
-        else {
-          for (const [p, c] of Object.entries(files)) {
-            if (p === ev.to || p.startsWith(`${ev.to}/`)) await syncWrite(p, c);
-          }
-        }
-      }
-    } catch {
-      /* no disk permission */
     }
   }
 
@@ -229,13 +215,23 @@ export function ChatPane() {
     reflectUtterance(draft, "abort");
   }
 
-  async function send(preset?: string, opts?: { queued?: boolean }) {
+  async function send(preset?: string, opts?: { queued?: boolean; choiceId?: string }) {
     const pending = useIde.getState().pendingAsk;
-    let text = (preset ?? draft).trim();
-    if (pending && !text) text = "Erkläre die Auswahl.";
-    if (!text) return;
+    const jobNow = useIde.getState().agentJob;
+    const asking = jobNow?.status === "ask" && Boolean(jobNow.ask);
+    const typed = (preset ?? draft).trim();
+    let text = typed;
+    if (asking && jobNow?.ask) {
+      if (!text && !opts?.choiceId) return;
+      text = isAskAnswer(typed) ? typed : formatAskAnswer(jobNow.ask, opts?.choiceId, typed);
+    } else {
+      if (pending && !text) text = "Erkläre die Auswahl.";
+      if (!text) return;
+    }
     let holdUi = false;
-    if (useIde.getState().agentBusy && !opts?.queued) {
+    let parked = false;
+    let heldJob = false;
+    if (!asking && useIde.getState().agentBusy && !opts?.queued) {
       useIde.getState().pushAgent(text);
       setDraft("");
       setImages([]);
@@ -243,11 +239,11 @@ export function ChatPane() {
     }
     const scrub = scrubSecrets(text);
     let work = scrub.text;
-    if (pending) {
+    if (pending && !asking) {
       work = `Auswahl in ${pending.path}:\n\`\`\`\n${pending.text.slice(0, 4000)}\n\`\`\`\n\n${work}`;
       useIde.getState().setPendingAsk(null);
     }
-    const forceAsk = Boolean(pending);
+    const forceAsk = Boolean(pending) && (!typed || useIde.getState().agentMode === "ask");
     if (scrub.n) useIde.getState().setNotice(t("secretsN", { n: scrub.n }));
     else void brainSecretWarn(text).then((w) => { if (w) useIde.getState().setNotice(w); });
     const my = beginAgent();
@@ -276,23 +272,37 @@ export function ChatPane() {
         finalizeAssistant(routed.reply);
         return;
       }
-      const ck = useIde.getState().pushCheckpoint(work.slice(0, 60));
+      const ck = asking
+        ? [...useIde.getState().chat].reverse().find((m) => m.checkpointId)?.checkpointId || useIde.getState().pushCheckpoint(work.slice(0, 60))
+        : useIde.getState().pushCheckpoint(work.slice(0, 60));
       resetLoopFails();
-      const s = useIde.getState();
-      const extraFiles = [...new Set([...(s.attached ?? []), s.activePath].filter(Boolean))] as string[];
-      const prefer = [...new Set([...(s.attached ?? []), s.activePath, ...s.openPaths, ...s.recentPaths.slice(0, 8)].filter(Boolean))] as string[];
+      let s = useIde.getState();
+      let extraFiles = [...new Set([...(s.attached ?? []), s.activePath].filter(Boolean))] as string[];
       if (useBrain.getState().jobs.attach && brainReady()) {
-        void brainAttach(work, Object.keys(s.files)).then((more) => {
-          if (more.length && my === agentGen()) s.setAttached([...new Set([...extraFiles, ...more])]);
-        });
+        try {
+          const more = await brainAttach(work, Object.keys(s.files));
+          if (more.length && my === agentGen()) {
+            extraFiles = [...new Set([...extraFiles, ...more])];
+            s.setAttached([...new Set([...extraFiles])]);
+          }
+        } catch {
+          /* */
+        }
       }
+      if (my !== agentGen()) return;
+      s = useIde.getState();
+      const prefer = [...new Set([...(s.attached ?? []), s.activePath, ...s.openPaths, ...s.recentPaths.slice(0, 8)].filter(Boolean))] as string[];
       const rules = workspaceRules(s.files, s.agentRules);
-      const memory = learnPrompt(work);
+      const { internPrompt } = await import("@/lib/intern");
+      const { hydrateLearnFromFiles } = await import("@/lib/learn");
+      hydrateLearnFromFiles(s.files);
+      const memory = [learnPrompt(work), internPrompt()].filter(Boolean).join("\n\n");
       const helperNotes = lanePrompt();
-      const refs = packRefContext(s.files, work, extraFiles.filter(isRefPath));
+      const vision = modelSeesImages(s.llmProvider, s.llmModel);
+      const refs = packRefContext(s.files, work, extraFiles.filter(isRefPath).concat(s.openPaths.filter(isRefPath)), { vision });
       const pinBlock = (await import("@/lib/fix-agent")).pinContext(work);
       const context = extraFiles
-        .filter((p) => s.files[p] && !isSecretPath(p))
+        .filter((p) => p !== REF_DIR && s.files[p] && !isSecretPath(p) && !isRefPath(p) && !isRefImage(s.files[p] ?? ""))
         .slice(0, 8)
         .map((p) => {
           const src = s.files[p];
@@ -304,7 +314,6 @@ export function ChatPane() {
       const prefix = scrubSecrets(
         [
           rules ? `Projektregeln:\n${rules}` : "",
-          memory,
           helperNotes,
           refs.text,
           pinBlock,
@@ -313,18 +322,24 @@ export function ChatPane() {
           .filter(Boolean)
           .join("\n\n"),
       ).text;
-      const user = prefix ? `${prefix}\n\nAuftrag:\n${work}` : work;
+      const user = asking
+        ? prefix
+          ? `${prefix}\n\n${work}`
+          : work
+        : prefix
+          ? `${prefix}\n\nAuftrag:\n${work}`
+          : work;
       const history = packChatHistory(
         s.chat.map((m) => ({ role: m.role, content: m.content, images: m.images })),
-        { content: user, images: [...pics, ...refs.images].slice(0, 4) },
+        { content: user, images: vision ? [...pics, ...refs.images].slice(0, 4) : pics.slice(0, 4) },
       );
       if (isFixPrompt(work) && s.agentMode !== "agent") useIde.getState().setAgentMode("agent");
       const fileList = Object.entries(s.files)
         .filter(([path]) => !isSecretPath(path))
-        .map(([path, content]) => ({ path, content }));
+        .map(([path, content]) => ({ path, content: isRefImage(content) ? imageStub(path, content) : content }));
       const promptTok = estimateTokens(user) + estimateTokens(JSON.stringify(Object.keys(s.files)));
 
-      if (!isFixPrompt(work) && (s.agentMode === "ask" || forceAsk)) {
+      if (!asking && !isFixPrompt(work) && (s.agentMode === "ask" || forceAsk)) {
         const helperAsk =
           s.agentMode === "ask" &&
           !forceAsk &&
@@ -334,27 +349,70 @@ export function ChatPane() {
         let reply: string;
         if (helperAsk) {
           try {
-            reply = await brainAsk(user, (chunk) => {
+            reply = await brainAsk([memory, user].filter(Boolean).join("\n\n"), (chunk) => {
               if (my !== agentGen()) return;
               appendAssistant(chunk);
             });
           } catch {
             reply = await completeText({
-              prompt: `You are Anvil in Ask mode. Do not change files. Explain briefly in the user's language.\n\n${user}`,
+              prompt: `You are Anvil in Ask mode. Do not change files. Explain briefly in the user's language.\n\n${memory ? `${memory}\n\n` : ""}${user}`,
               provider: s.llmProvider,
               baseUrl: s.llmBaseUrl,
               model: s.llmModel,
               apiKey: s.llmApiKey,
+              images: vision ? [...pics, ...refs.images].slice(0, 4) : undefined,
             });
           }
         } else {
-          reply = await completeText({
-            prompt: `You are Anvil in Ask mode. Do not change files. Explain briefly in the user's language.\n\n${user}`,
+          useIde.getState().setAgentJob(newJob(work));
+          await holdCompanion();
+          heldJob = true;
+          const asked = await chatWithProvider({
             provider: s.llmProvider,
             baseUrl: s.llmBaseUrl,
             model: s.llmModel,
             apiKey: s.llmApiKey,
+            messages: history,
+            files: fileList,
+            dirs: s.dirs,
+            context: s.llmContext,
+            thinking: s.llmThinking,
+            compact: s.llmCompact,
+            journal: s.sessionJournal,
+            memory,
+            prefer,
+            locale: s.locale,
+            observeOnly: true,
+            maxRounds: 8,
+            loopTries: 1,
+            runLoop: false,
+            graphLoop: false,
+            onDelta: (chunk, kind) => {
+              if (my !== agentGen()) return;
+              if (kind === "think") appendThinking(chunk);
+              else appendAssistant(chunk);
+            },
+            onToolStart: ({ name, args }) => {
+              if (my !== agentGen()) return;
+              addAgentStep({ name, detail: toolDetail(name, args), status: "run", ...toolCode(name, args) });
+            },
+            onTool: ({ name, args, result: out }) => {
+              if (my !== agentGen()) return;
+              const err = out && typeof out === "object" && "error" in out;
+              addAgentStep({
+                name,
+                detail: toolDetail(name, args, out),
+                status: err ? "err" : "ok",
+                ...toolCode(name, args),
+              });
+            },
           });
+          reply = asked.reply;
+          if (asked.parked && asked.ask) {
+            parked = true;
+            const cur = useIde.getState().agentJob;
+            if (cur) useIde.getState().setAgentJob({ ...cur, status: "ask", ask: asked.ask });
+          }
         }
         if (my !== agentGen()) return;
         finalizeAssistant(reply);
@@ -371,7 +429,7 @@ export function ChatPane() {
       useIde.setState((st) => {
         const chat = [...st.chat];
         const last = chat[chat.length - 1];
-        if (last?.role === "assistant") chat[chat.length - 1] = { ...last, checkpointId: ck, plan: guessPlan(work) };
+        if (last?.role === "assistant") chat[chat.length - 1] = { ...last, checkpointId: ck, plan: guessPlan(work, st.locale) };
         return { chat };
       });
       void brainPlanText(work).then((steps) => {
@@ -380,6 +438,17 @@ export function ChatPane() {
         if (!last?.plan?.length || last.plan.some((s) => s.status !== "todo")) return;
         if (steps.length >= 3) useIde.getState().setChatPlan(steps.map((text) => ({ text, status: "todo" as const })));
       });
+      if (asking && jobNow) {
+        useIde.getState().setAgentJob({ ...jobNow, status: "run", ask: null, rounds: jobNow.rounds + 1 });
+        if (jobNow.ask) {
+          const stj = useIde.getState();
+          stj.setSessionJournal(mergeJournal(stj.sessionJournal, { corrections: [askCorrection(jobNow.ask, opts?.choiceId, typed)] }));
+        }
+      } else {
+        useIde.getState().setAgentJob(newJob(work));
+      }
+      await holdCompanion();
+      heldJob = true;
       const result = await chatWithProvider({
         provider: s.llmProvider,
         baseUrl: s.llmBaseUrl,
@@ -399,10 +468,19 @@ export function ChatPane() {
         thinking: s.llmThinking,
         compact: s.llmCompact,
         journal: s.sessionJournal,
+        memory,
         prefer,
+        locale: s.locale,
+        runLoop: s.runLoop,
+        graphLoop: s.graphLoop,
+        testLoop: s.testLoop,
+        engineLoop: s.engineLoop,
+        loopTries: s.loopTries,
+        afterWrite: s.harnessAfterWrite,
+        maxRounds: s.harnessMaxRounds,
+        graphSees: s.graphSees,
         onHarness: (bar) => {
           if (my !== agentGen()) return;
-          if (!useIde.getState().graphLoop && !useIde.getState().runLoop) return;
           useIde.getState().setChatHarness(bar);
         },
         onDelta: (chunk, kind) => {
@@ -417,13 +495,13 @@ export function ChatPane() {
           if (started) useIde.getState().setChatPlan(started);
           addAgentStep({ name, detail: toolDetail(name, args), status: "run", ...toolCode(name, args) });
           void import("@/lib/run-window").then((m) => m.agentToolUi(name, String(args.path ?? "")));
-          if (name === "run_file" || name === "engine_run") {
+          if (name === "run_file" || name === "engine_run" || name === "shell" || name === "mcp_call") {
             const max = useIde.getState().loopTries;
             const prev = useIde.getState().chat.at(-1)?.lastRun;
             const n = (prev?.attempt ?? 0) + (prev?.running ? 0 : 1);
             useIde.getState().setChatLastRun({
               ok: false,
-              path: String(args.path ?? args.cmd ?? args.action ?? ""),
+              path: String(args.path ?? args.cmd ?? args.action ?? args.command ?? `${args.server ?? ""}.${args.name ?? ""}`),
               stdout: "",
               stderr: "",
               attempt: Math.max(1, n || 1),
@@ -460,14 +538,14 @@ export function ChatPane() {
                 : undefined,
             ...toolCode(name, args),
           });
-          if ((name === "run_file" || name === "engine_run") && out && typeof out === "object") {
-            const o = out as { ok?: boolean; stdout?: string; stderr?: string; tries_left?: number; graphical?: boolean; cmd?: string; error?: string };
+          if ((name === "run_file" || name === "engine_run" || name === "shell" || name === "mcp_call") && out && typeof out === "object") {
+            const o = out as { ok?: boolean; isError?: boolean; stdout?: string; stderr?: string; tries_left?: number; graphical?: boolean; cmd?: string; error?: string; text?: string };
             const max = useIde.getState().loopTries;
             const left = typeof o.tries_left === "number" ? o.tries_left : max;
             useIde.getState().setChatLastRun({
-              ok: Boolean(o.ok) && !err,
-              path: String(args.path ?? args.cmd ?? args.action ?? ""),
-              stdout: String(o.stdout ?? ""),
+              ok: !err && o.ok !== false && !o.isError,
+              path: String(args.path ?? args.cmd ?? args.action ?? args.command ?? `${args.server ?? ""}.${args.name ?? ""}`),
+              stdout: String(o.stdout ?? o.text ?? ""),
               stderr: String(o.stderr ?? o.error ?? ""),
               attempt: Math.max(1, max - left + (o.ok ? 0 : 1)),
               max,
@@ -478,6 +556,11 @@ export function ChatPane() {
         },
       });
       if (my !== agentGen()) return;
+      if (result.parked && result.ask) {
+        parked = true;
+        const cur = useIde.getState().agentJob;
+        if (cur) useIde.getState().setAgentJob({ ...cur, status: "ask", ask: result.ask });
+      }
       finalizeAssistant(result.reply, result.tools);
       if (result.ok) {
         void import("@/lib/intern").then((m) => m.resolveKind("agent"));
@@ -488,8 +571,8 @@ export function ChatPane() {
         const changes = snapshotDiff(snap.files, useIde.getState().files);
         useIde.getState().setChatChanges(changes);
         const st = useIde.getState();
-        if (shouldTestAfterRound(changes, st.files, st.chat.at(-1)?.steps)) {
-          void testAfterRound();
+        if (!parked && shouldTestAfterRound(changes, st.files, st.chat.at(-1)?.steps)) {
+          await testAfterRound();
         }
       }
       addSessionTokens(result.usage?.prompt || promptTok, result.usage?.completion || estimateTokens(result.reply));
@@ -519,15 +602,16 @@ export function ChatPane() {
         }
         if (Object.keys(map).length) {
           const st = useIde.getState();
-          if (st.autoAcceptDiffs || isFixPrompt(work)) applyFiles({ ...cur, ...map });
-          else patchFiles(map);
+          if (st.autoAcceptDiffs || isFixPrompt(work)) {
+            for (const [p, c] of Object.entries(map)) st.writeFile(p, c, { quiet: true });
+          } else patchFiles(map);
         }
         void brainReview(result.files.map((f) => f.path)).then((t) => {
           if (t && my === agentGen()) addAgentStep({ name: "review", detail: t, status: "ok" });
         });
       }
-      void brainFollowups(work, result.reply);
-      if (result.runPaths?.length) {
+      if (!parked) void brainFollowups(work, result.reply);
+      if (!parked && result.runPaths?.length) {
         const st = useIde.getState();
         const already = result.tools?.includes("run_file");
         if (st.autoRunAgent && !already) {
@@ -589,15 +673,22 @@ export function ChatPane() {
       const live = my === agentGen();
       const busy = useIde.getState().agentBusy;
       if (live) {
-        const last = useIde.getState().chat.at(-1);
-        const failed = /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test((last?.content || "").trim());
-        const fin = planFinish(last?.plan, failed);
-        if (fin) useIde.getState().setChatPlan(fin);
+        if (!parked) {
+          useIde.getState().setAgentJob(null);
+          const last = useIde.getState().chat.at(-1);
+          const failed = /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test((last?.content || "").trim());
+          const proved = Boolean(
+            last?.tools?.some((n) => /^(run_file|see_run|play|engine_run|shell)$/.test(n)),
+          );
+          const fin = planFinish(last?.plan, failed, proved && !failed);
+          if (fin) useIde.getState().setChatPlan(fin);
+        }
+        if (heldJob) void releaseCompanion();
         setAgentBusy(false);
-        appLog("agent", "ende");
-        useIde.getState().setRunning(false);
-        if (!holdUi) void import("@/lib/run-window").then((m) => m.releaseAgentUi());
-        else {
+        appLog("agent", parked ? "frage" : "ende");
+        if (!parked) useIde.getState().setRunning(false);
+        if (!parked && !holdUi) void import("@/lib/run-window").then((m) => m.releaseAgentUi());
+        else if (!parked) {
           window.setTimeout(() => {
             if (useIde.getState().agentBusy) return;
             void import("@/lib/run-window").then((m) => m.releaseAgentUi());
@@ -622,8 +713,7 @@ export function ChatPane() {
     setDraft(next);
     setMention(null);
     if (path === `${REF_DIR}/` || path === REF_DIR) {
-      const all = refFiles(useIde.getState().files);
-      setAttached([...new Set([...attached, ...all])]);
+      setAttached([...new Set([...attached.filter((p) => !isRefPath(p) || p === REF_DIR), REF_DIR])]);
       return;
     }
     if (/^(run|debug|problems|tests|git)$/.test(path)) return;
@@ -713,6 +803,7 @@ export function ChatPane() {
           title={t("newChat")}
           aria-label={t("newChat")}
           onClick={() => {
+            if (useIde.getState().agentBusy || useIde.getState().agentJob) stopAgent("Neuer Chat");
             clearChat();
             setTitle("");
             setDraft("");
@@ -880,13 +971,7 @@ export function ChatPane() {
                 {trailInline && m.role === "assistant" && m.thinking ? <ThinkBlock text={m.thinking} live={liveThink} since={m.at} /> : null}
                 {trailInline &&
                 m.role === "assistant" &&
-                (m.plan?.length ||
-                  m.steps?.length ||
-                  m.changes?.length ||
-                  m.checkpointId ||
-                  m.lastRun ||
-                  m.lastTests ||
-                  (m.harness && graphLoop)) ? (
+                hasTrailMsg(m) ? (
                   <Trail m={m} live={false} liveTools={false} />
                 ) : null}
                 {m.role === "user" && m.images?.length ? (
@@ -946,7 +1031,7 @@ export function ChatPane() {
             {agentQueue.length ? (
               <div className="mt-1 rounded-md border border-border bg-surface px-2 py-1">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] text-muted">Warteschlange {agentQueue.length}</p>
+                  <p className="text-[11px] text-muted">{t("queued", { n: agentQueue.length })}</p>
                   <button
                     type="button"
                     className="text-[11px] text-danger hover:underline"
@@ -1019,7 +1104,8 @@ export function ChatPane() {
       {trailInline ? <AgentTodo /> : null}
 
       <div className="relative z-10 shrink-0 border-t border-border p-2">
-        {pendingAsk ? (
+        <JobAskBar />
+        {pendingAsk && agentJob?.status !== "ask" ? (
           <div className="mb-1.5 flex items-start justify-between gap-2 rounded-md border border-border bg-bg px-2 py-1">
             <p className="min-w-0 font-mono text-[11px] text-muted">
               Ask · {pendingAsk.path} · {pendingAsk.text.slice(0, 80)}
@@ -1113,7 +1199,15 @@ export function ChatPane() {
                 id="anvil-chat"
                 value={draft}
                 rows={2}
-                placeholder={pendingAsk ? t("chatAskSel") : agentMode === "ask" ? t("chatAsk") : t("chatAgent")}
+                placeholder={
+                  agentJob?.status === "ask"
+                    ? t("chatJobAsk")
+                    : pendingAsk
+                      ? t("chatAskSel")
+                      : agentMode === "ask"
+                        ? t("chatAsk")
+                        : t("chatAgent")
+                }
                 className="min-h-11 flex-1 resize-none rounded-[10px] border border-border bg-bg px-3 py-2 text-sm text-fg outline-none placeholder:text-subtle focus:border-fg/30 focus:ring-0"
                 onPointerDown={(e) => e.currentTarget.focus()}
                 onContextMenu={(e) => {
@@ -1207,6 +1301,7 @@ export function ThinkBlock({
   onOpen,
   hideResize,
   opened,
+  since,
 }: {
   text: string;
   live?: boolean;
@@ -1218,6 +1313,8 @@ export function ThinkBlock({
   opened?: boolean;
   since?: number;
 }) {
+  const t = useT();
+  const thinkMs = useElapsed(since, Boolean(live));
   const [open, setOpen] = useState(Boolean(live));
   const [pinned, setPinned] = useState(false);
   const [h, setH] = useState(180);
@@ -1280,9 +1377,10 @@ export function ThinkBlock({
           }}
         >
           <ChevronRight className={cn("size-3 shrink-0 transition-transform duration-300", shown ? "rotate-90" : "")} />
-          <span className={cn("shrink-0", live ? "think-live text-fg" : "")}>{live ? "Denkt…" : "Denken"}</span>
+          <span className={cn("shrink-0", live ? "think-live text-fg" : "")}>{live ? t("thinkingLive") : t("trailThinkLabel")}</span>
         </button>
         {live ? <AgentPulse className="shrink-0" tip={false} /> : null}
+        {live && thinkMs ? <span className="font-mono text-[10px] text-subtle">{formatElapsed(thinkMs)}</span> : null}
         {text.trim() ? (
           <span className="shrink-0 font-mono text-[10px] text-subtle">{formatTokens(estimateTokens(text))}</span>
         ) : null}
@@ -1300,7 +1398,7 @@ export function ThinkBlock({
             {hideResize ? null : (
             <div
               role="separator"
-              title="Ziehen: höher oder niedriger"
+              title={t("dragHeight")}
               className="flex h-2 shrink-0 cursor-ns-resize items-center justify-center hover:bg-hover"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -1325,7 +1423,7 @@ export function ThinkBlock({
             </pre>
             <div
               role="separator"
-              title="Ziehen: höher oder niedriger"
+              title={t("dragHeight")}
               className="flex h-2 cursor-ns-resize items-center justify-center hover:bg-hover"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -1373,10 +1471,18 @@ function applyCodeBlocks(text: string): number {
   return n;
 }
 
-function saveRef(name: string, content: string) {
+function saveRef(name: string, content: string, mode: "write" | "append" = "write") {
   const st = useIde.getState();
-  const path = uniqueDest(st.files, REF_DIR, name);
-  st.writeFile(path, content.endsWith("\n") ? content : `${content}\n`);
+  const rel = safeRefName(name);
+  const path = `${REF_DIR}/${rel}`;
+  if (isSecretPath(path)) {
+    st.setNotice("Geheimnis bleibt außerhalb von ref/");
+    return;
+  }
+  const body = content.endsWith("\n") ? content : `${content}\n`;
+  const prev = st.files[path] ?? "";
+  if (mode === "append" && prev) st.writeFile(path, `${prev.replace(/\s*$/, "\n\n")}${body}`);
+  else st.writeFile(path, body);
   st.setNotice(path);
 }
 
@@ -1463,7 +1569,7 @@ function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) => void 
   const st = useIde.getState();
   if (menu.kind === "pane") {
     const items: CtxItem[] = [
-      { label: t("newChat"), onClick: () => st.clearChat() },
+      { label: t("newChat"), onClick: () => { stopAgent("Neuer Chat"); st.clearChat(); } },
       { label: t("ask"), onClick: () => st.setAgentMode("ask") },
       { label: t("agent"), onClick: () => st.setAgentMode("agent") },
       { sep: true, label: "" },
@@ -1471,7 +1577,7 @@ function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) => void 
       { label: t("attachImage"), onClick: () => document.getElementById("anvil-chat-img")?.click() },
       { sep: true, label: "" },
       { label: t("chatTranscript"), onClick: () => void navigator.clipboard.writeText(transcript()) },
-      { label: t("chatExport"), onClick: () => saveRef("chat.md", transcript()) },
+      { label: t("chatExport"), onClick: () => saveRef("chat.md", transcript(), "append") },
     ];
     if (st.agentBusy) {
       items.push({
@@ -1590,12 +1696,13 @@ function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) => void 
 
 export function HelperLaneBits() {
   const notes = useBrain((s) => s.lane);
+  const t = useT();
   if (!notes.length) return null;
   return (
     <ul className="mb-1 space-y-0.5">
       {notes.slice(-4).map((n) => (
         <li key={`${n.t}-${n.kind}`} className="min-w-0 truncate font-mono text-[11px] text-muted" title={n.text}>
-          <span className="text-ok">Helfer</span> · {n.text}
+          <span className="text-ok">{t("helper")}</span> · {n.text}
         </li>
       ))}
     </ul>
@@ -1614,6 +1721,7 @@ export function Trail({
   fill?: boolean;
 }) {
   const t = useT();
+  const locale = useIde((s) => s.locale);
   const loopTries = useIde((s) => s.loopTries);
   const run = m.lastRun;
   const attempt = run?.attempt ?? 0;
@@ -1622,20 +1730,21 @@ export function Trail({
   const steps = filterTrailSteps(raw);
   const frames = (m.steps ?? []).filter((s) => s.image).slice(-8);
   const work = [...steps].reverse().find((s) => s.status === "run");
-  const clip = (s: string) => s.trim().split("\n").slice(-8).join("\n").slice(0, 800);
+  const clip = (s: string) => s.trim().split("\n").slice(-24).join("\n").slice(0, 1600);
   const hasRound = Boolean(m.changes?.length);
   const hasRun = Boolean(run?.path || run?.running || run?.stdout || run?.stderr);
+  const labelOf = (name: string) => stepLabel(name, locale);
   if (!steps.length && !hasRun && !frames.length && !m.lastTests && !hasRound && !m.harness && !live) {
-    if (fill) return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-bg px-2.5 py-2"><HelperLaneBits /></div>;
+    if (fill) return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-bg px-2.5 py-2" />;
     return <HelperLaneBits />;
   }
 
   const body = (
     <>
-      <HelperLaneBits />
+      {fill ? null : <HelperLaneBits />}
       <div className="mb-1 flex min-w-0 items-start gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-medium tracking-wide text-subtle uppercase">Spur</p>
+          <p className="text-[10px] font-medium tracking-wide text-subtle uppercase">{t("trail")}</p>
           <p
             className={cn(
               "mt-0.5 truncate text-[11px] tabular-nums",
@@ -1644,11 +1753,11 @@ export function Trail({
           >
             {m.harness ? `${m.harness} · ` : ""}
             {run?.running
-              ? `Run ${Math.min(attempt, max)}/${max}${run.path ? ` · ${run.path}` : ""}`
+              ? `${t("trailRun")} ${Math.min(attempt, max)}/${max}${run.path ? ` · ${run.path}` : ""}`
               : hasRun
-                ? `Versuch ${Math.min(attempt, max)}/${max}${run?.ok ? "" : " · Fehler"}${run?.path ? ` · ${run.path}` : ""}${run?.graphical ? " · Bild" : ""}`
+                ? `${t("trailTry")} ${Math.min(attempt, max)}/${max}${run?.ok ? "" : ` · ${t("fail")}`}${run?.path ? ` · ${run.path}` : ""}${run?.graphical ? ` · ${t("trailPic")}` : ""}`
                 : work
-                  ? `${STEP_LABEL[work.name] ?? work.name}${work.detail ? ` · ${work.detail}` : ""}`
+                  ? `${labelOf(work.name)}${work.detail ? ` · ${work.detail}` : ""}`
                   : live
                     ? t("working")
                     : ""}
@@ -1661,10 +1770,10 @@ export function Trail({
             onClick={() => {
               const p = run.path;
               if (!p) return;
-              useIde.getState().pushAgent(`Führe ${p} nochmal aus. Bei Fehler patchen.`, true);
+              useIde.getState().pushAgent(t("trailAgainAsk", { p }), true);
             }}
           >
-            Nochmal
+            {t("trailAgain")}
           </button>
         ) : null}
       </div>
@@ -1677,7 +1786,8 @@ export function Trail({
               className="shrink-0"
               title={s.detail || s.name}
               onClick={() => {
-                if (s.path) useIde.getState().openFile(s.path);
+                const p = s.path || stepPath(s);
+                if (p) useIde.getState().openFile(p);
               }}
             >
               <img src={s.image} alt="" className="h-16 w-auto rounded-sm border border-border" />
@@ -1688,8 +1798,8 @@ export function Trail({
       {steps.length ? <StepList steps={steps} /> : live ? (
         <p className="mt-1 text-[11px] text-muted think-live">
           {work
-            ? `${STEP_LABEL[work.name] ?? work.name}${work.detail ? ` · ${work.detail}` : ""}`
-            : "Denkt…"}
+            ? `${labelOf(work.name)}${work.detail ? ` · ${work.detail}` : ""}`
+            : t("thinkingLive")}
         </p>
       ) : null}
       {run && (run.stdout || run.stderr) ? (
@@ -1697,7 +1807,7 @@ export function Trail({
           {clip(run.stderr || run.stdout) || run.path}
         </pre>
       ) : run?.running ? (
-        <p className="mt-1 text-[10px] text-muted think-live">Ausgabe kommt…</p>
+        <p className="mt-1 text-[10px] text-muted think-live">{t("trailOut")}</p>
       ) : null}
       {m.lastTests ? (
         <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
@@ -1787,7 +1897,7 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
           )
         ) : null}
       </div>
-      {changes.slice(0, 16).map((c) => {
+      {changes.slice(0, 32).map((c) => {
         const shown = open === c.path;
         const before = ck?.files[c.path] ?? "";
         const after = c.kind === "del" ? "" : (now[c.path] ?? "");
@@ -1813,7 +1923,7 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
             {shown ? (
               <div className="mt-0.5 pl-4">
                 {c.kind === "del" ? (
-                  <p className="text-[10px] text-danger">gelöscht</p>
+                  <p className="text-[10px] text-danger">{t("trailDeleted")}</p>
                 ) : (
                   <MiniDiff before={before} after={after} />
                 )}
@@ -1834,23 +1944,23 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
 }
 
 function MiniDiff({ before, after }: { before: string; after: string }) {
-  const rows = lineDiff(before, after)
-    .filter((r) => r.type !== "eq")
-    .slice(0, 32);
+  const rows = diffPreview(before, after, 2, 80);
   if (!rows.length) return <p className="text-[10px] text-subtle">—</p>;
   return (
     <pre className="max-h-40 overflow-auto font-mono text-[10px] leading-4">
       {rows.map((r, i) => (
-        <div key={i} className={r.type === "add" ? "text-ok" : "text-danger"}>
-          {r.type === "add" ? "+" : "−"} {r.text || " "}
+        <div key={i} className={r.type === "add" ? "text-ok" : r.type === "del" ? "text-danger" : "text-subtle"}>
+          {r.type === "add" ? "+" : r.type === "del" ? "−" : " "} {r.text || " "}
         </div>
       ))}
     </pre>
   );
 }
 
-export function AgentTodo() {
+export function AgentTodo({ plan: forced, msgId }: { plan?: PlanStep[]; msgId?: string } = {}) {
   const plan = useIde((s) => {
+    if (msgId) return s.chat.find((m) => m.id === msgId)?.plan ?? forced;
+    if (forced) return forced;
     for (let i = s.chat.length - 1; i >= 0; i--) {
       const m = s.chat[i];
       if (m.role === "assistant" && m.plan?.length) return m.plan;
@@ -1889,109 +1999,61 @@ export function AgentTodo() {
         {!open && !run && busy ? <span className="think-live">…</span> : null}
       </button>
       {open ? (
-        <div className="max-h-40 overflow-auto px-3 pb-2">
-          <PlanList steps={plan} />
+        <div className="max-h-56 overflow-auto px-3 pb-2">
+          <PlanList steps={plan} msgId={msgId} />
         </div>
       ) : null}
     </div>
   );
 }
 
-function PlanList({ steps }: { steps: { text: string; status: "todo" | "run" | "ok" | "err" }[] }) {
+function PlanList({ steps, msgId }: { steps: { text: string; status: "todo" | "run" | "ok" | "err" }[]; msgId?: string }) {
   return (
     <ol className="space-y-0.5">
       {steps.map((s, i) => (
-        <li key={i} className="flex items-baseline gap-2 text-[11px] leading-4">
-          <span className={s.status === "ok" ? "text-ok" : s.status === "err" ? "text-danger" : s.status === "run" ? "think-live text-fg" : "text-muted"}>
-            {s.status === "ok" ? "☑" : s.status === "err" ? "✕" : s.status === "run" ? "…" : "☐"}
-          </span>
-          <span className={s.status === "ok" ? "text-muted line-through" : "text-fg"}>{s.text}</span>
+        <li key={i}>
+          <button
+            type="button"
+            className="flex w-full items-baseline gap-2 text-left text-[11px] leading-4 hover:bg-hover"
+            onClick={() => {
+              const next = s.status === "ok" || s.status === "err" ? "todo" : s.status === "run" ? "ok" : "ok";
+              useIde.getState().updatePlanStep(i, next, msgId);
+            }}
+          >
+            <span className={s.status === "ok" ? "text-ok" : s.status === "err" ? "text-danger" : s.status === "run" ? "think-live text-fg" : "text-muted"}>
+              {s.status === "ok" ? "☑" : s.status === "err" ? "✕" : s.status === "run" ? "…" : "☐"}
+            </span>
+            <span className={s.status === "ok" ? "text-muted line-through" : "text-fg"}>{s.text}</span>
+          </button>
         </li>
       ))}
     </ol>
   );
 }
 
-const STEP_LABEL: Record<string, string> = {
-  write_file: "Schreiben",
-  edit_file: "Ändern",
-  delete_file: "Löschen",
-  rename: "Umbenennen",
-  mkdir: "Ordner",
-  run_file: "Run",
-  engine_run: "Engine",
-  engine_detect: "Engine",
-  engine_status: "Engine",
-  mcp_call: "MCP",
-  git_commit: "Commit",
-  git_push: "Push",
-  shell: "Shell",
-  format_file: "Format",
-  grep: "Suche",
-  read_file: "Lesen",
-  list_files: "Dateien",
-  skill_run: "Skill",
-  skill_write: "Skill",
-  skill_debug: "Skill-Debug",
-  skill_patch: "Skill",
-  append_file: "Anhängen",
-  harness_write: "Harness",
-  harness_read: "Harness",
-  graph_write: "Graph",
-  see_run: "Bild",
-};
-
-const STEP_HIDE = /^(set_plan|memory_|debug_state|skill_list|mcp_list)$/;
-const STEP_FOLD = /^(grep|read_file|list_files)$/;
-
-function filterTrailSteps(steps: AgentStep[]): AgentStep[] {
-  const raw = steps.filter((s) => s.status === "run" || !STEP_HIDE.test(s.name)).slice(-24);
-  const out: AgentStep[] = [];
-  let pack: AgentStep[] = [];
-  const flush = () => {
-    if (!pack.length) return;
-    const last = pack[pack.length - 1];
-    const q = shortTrail(pack[0].detail);
-    out.push({
-      ...last,
-      detail: pack.length === 1 ? q : `${pack.length}× ${q}`,
-    });
-    pack = [];
-  };
-  for (const s of raw) {
-    if (STEP_FOLD.test(s.name) && s.status !== "run") {
-      if (pack.length && pack[0].name !== s.name) flush();
-      pack.push(s);
-    } else {
-      flush();
-      out.push({ ...s, detail: shortTrail(s.detail) });
-    }
-  }
-  flush();
-  return out;
-}
-
-function shortTrail(d?: string) {
-  const t = (d ?? "").replace(/\s+/g, " ").trim();
-  if (t.length <= 42) return t;
-  return `${t.slice(0, 40)}…`;
-}
-
 function StepList({ steps }: { steps: AgentStep[] }) {
+  const locale = useIde((s) => s.locale);
   const live = steps.some((s) => s.status === "run");
   const now = useElapsed(live ? steps.find((s) => s.status === "run")?.at : undefined, live);
   return (
     <ol className="mt-1 space-y-1">
       {steps.map((s) => {
         const ms = s.status === "run" && s.at ? now : s.ms;
+        const path = s.path || stepPath(s);
         return (
         <li key={s.id} className="flex min-w-0 items-start gap-2 font-mono text-[11px] leading-4">
           <span className={cn("mt-0.5 shrink-0", s.status === "err" ? "text-danger" : s.status === "run" ? "think-live text-fg" : "text-ok")}>
             {s.status === "err" ? "✕" : s.status === "run" ? "…" : "✓"}
           </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="flex min-w-0 items-baseline gap-1.5">
-              <span className="shrink-0 text-fg">{STEP_LABEL[s.name] ?? s.name}</span>
+            <button
+              type="button"
+              className="flex min-w-0 items-baseline gap-1.5 text-left"
+              onClick={() => {
+                if (path) useIde.getState().openFile(path);
+              }}
+            >
+              <span className="shrink-0 text-fg">{stepLabel(s.name, locale)}</span>
               {s.detail ? (
                 <span className="min-w-0 truncate text-muted" title={s.detail}>
                   {s.detail}
@@ -2002,7 +2064,7 @@ function StepList({ steps }: { steps: AgentStep[] }) {
                   {formatElapsed(ms)}
                 </span>
               ) : null}
-            </p>
+            </button>
             {s.code ? <WriteBlock path={s.path} code={s.code} before={s.before} live={s.status === "run"} /> : null}
             {s.image ? (
               <img src={s.image} alt="" className="mt-1 max-h-28 rounded-md border border-border" />
@@ -2016,11 +2078,12 @@ function StepList({ steps }: { steps: AgentStep[] }) {
 }
 
 export function LiveTools({ steps }: { steps: AgentStep[] }) {
+  const t = useT();
   if (!steps.length) return null;
   return (
     <div className="mb-2 overflow-hidden rounded-md border border-border bg-hover px-2 py-1.5">
       <p className="mb-0.5 flex items-center gap-2 text-[10px] font-medium tracking-wide text-muted uppercase">
-        <span className="think-live text-fg">Läuft</span>
+        <span className="think-live text-fg">{t("trailLive")}</span>
       </p>
       <StepList steps={steps} />
     </div>
@@ -2028,6 +2091,7 @@ export function LiveTools({ steps }: { steps: AgentStep[] }) {
 }
 
 function WriteBlock({ path, code, before, live }: { path?: string; code: string; before?: string; live?: boolean }) {
+  const t = useT();
   const [open, setOpen] = useState(Boolean(live));
   const wasLive = useRef(Boolean(live));
   useEffect(() => {
@@ -2049,10 +2113,10 @@ function WriteBlock({ path, code, before, live }: { path?: string; code: string;
       >
         {open ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
         <span className={cn("font-mono", live ? "think-live text-fg" : "text-fg")}>
-          {live ? "schreibt" : before ? "Patch" : "Datei"}
+          {live ? t("trailWrites") : before ? t("trailPatch") : t("trailFile")}
         </span>
         <span className="min-w-0 truncate font-mono">{path || "code"}</span>
-        <span className="ml-auto tabular-nums text-subtle">{lines} Z.</span>
+        <span className="ml-auto tabular-nums text-subtle">{t("trailLines", { n: lines })}</span>
       </button>
       {open ? (
         <div className="border-t border-border">

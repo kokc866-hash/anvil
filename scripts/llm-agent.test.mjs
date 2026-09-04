@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { isAbortNoise, isLanHost, listenLocal, noTimeout } from "./llm-agent.mjs";
+import { isAbortNoise, isCloudLlmHost, isLanHost, isLlmTargetHost, listenLocal, noTimeout } from "./llm-agent.mjs";
 
 test("isLanHost", () => {
   assert.equal(isLanHost("192.168.178.41"), true);
   assert.equal(isLanHost("8.8.8.8"), false);
+});
+
+test("cloud llm hosts for electron pipe", () => {
+  assert.equal(isCloudLlmHost("api.x.ai"), true);
+  assert.equal(isCloudLlmHost("api.openai.com"), true);
+  assert.equal(isCloudLlmHost("chatgpt.com"), true);
+  assert.equal(isCloudLlmHost("8.8.8.8"), false);
+  assert.equal(isLlmTargetHost("api.x.ai"), true);
+  assert.equal(isLlmTargetHost("192.168.178.41"), true);
+  assert.equal(isLlmTargetHost("example.com"), false);
 });
 
 test("noTimeout", () => {

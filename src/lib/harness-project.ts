@@ -1,7 +1,9 @@
-import type { AfterWrite, HarnessOpts } from "./harness.ts";
+import type { AfterWrite, HarnessOpts, HarnessTick } from "./harness.ts";
+import { effectiveAfterWrite } from "./harness.ts";
 import type { GraphEdge, GraphPolicy } from "./harness-graph.ts";
 import { graphEdge, graphPrompt } from "./harness-graph.ts";
 import { kindOfTool, noteObs, stepHarness, harnessPrompt, startHarness, type HarnessState, type Observation } from "./harness.ts";
+import { isTestFile } from "./test-parse.ts";
 
 export const HARNESS_PATH = ".anvil/harness.json";
 export const GRAPH_PATH = ".anvil/graph.json";
@@ -64,28 +66,43 @@ export function loadProjectGraph(files: Record<string, string>): ProjectGraph | 
 }
 
 export function mergeOpts(base: HarnessOpts, proj: ProjectHarness | null): HarnessOpts {
-  if (!proj) return base;
-  return {
-    runLoop: proj.runLoop ?? base.runLoop,
-    graphLoop: proj.graphLoop ?? base.graphLoop,
-    loopTries: clamp(proj.loopTries ?? base.loopTries, 1, 5),
-    maxRounds: proj.maxRounds ?? base.maxRounds,
-    maxTools: proj.maxTools ?? base.maxTools,
-    afterWrite: proj.afterWrite ?? base.afterWrite,
-    graphSees: proj.graphSees ?? base.graphSees,
+  const engineLoop = base.engineLoop ?? proj?.engineLoop;
+  const runLoop = base.runLoop ?? proj?.runLoop ?? false;
+  const graphLoop = base.graphLoop ?? proj?.graphLoop ?? false;
+  const raw: HarnessOpts = {
+    runLoop,
+    graphLoop,
+    testLoop: base.testLoop ?? proj?.testLoop,
+    engineLoop,
+    loopTries: clamp(proj?.loopTries ?? base.loopTries, 1, 5),
+    maxRounds: base.maxRounds ?? proj?.maxRounds,
+    maxTools: base.maxTools ?? proj?.maxTools,
+    afterWrite: base.afterWrite ?? proj?.afterWrite ?? (engineLoop ? "engine" : undefined),
+    graphSees: base.graphSees ?? proj?.graphSees,
+    stopOn: proj?.stopOn ?? base.stopOn,
   };
+  return { ...raw, afterWrite: effectiveAfterWrite(raw) };
+}
+
+function isEngineProject(files: Record<string, string>): boolean {
+  const paths = Object.keys(files);
+  if (paths.some((p) => /project\.godot|\.uproject|ProjectSettings/i.test(p))) return true;
+  if (paths.some((p) => /(^|\/)(bevy|godot|unity|unreal)(\/|$)/i.test(p))) return true;
+  const cargoKey = paths.find((p) => /(^|\/)Cargo\.toml$/i.test(p));
+  if (cargoKey && /\bbevy\b/i.test(files[cargoKey] ?? "")) return true;
+  return false;
 }
 
 export function guessProjectHarness(files: Record<string, string>): { harness: ProjectHarness; graph: ProjectGraph } {
   const paths = Object.keys(files);
   const has = (re: RegExp) => paths.some((p) => re.test(p));
-  const engine = has(/project\.godot|\.uproject|ProjectSettings|bevy|Cargo\.toml/i);
+  const engine = isEngineProject(files);
   const html = has(/\.html?$/i);
   const py = has(/\.py$/i);
   const js = has(/\.(js|mjs|cjs|ts|tsx)$/i);
   const go = has(/\.go$/i);
   const rust = has(/\.rs$/i) && !engine;
-  const tests = has(/(^|\/)tests\/|\.test\.|\.spec\.|pytest|package\.json/i);
+  const tests = paths.some((p) => isTestFile(p));
   const md = has(/\.md$/i);
   const harness: ProjectHarness = {
     name: engine ? "engine" : html ? "app-preview" : py ? "python" : js ? "app" : "app",
@@ -135,13 +152,21 @@ export function dumpGraph(g: ProjectGraph): string {
   return `${JSON.stringify(g, null, 2)}\n`;
 }
 
-export function projectHarnessPrompt(h: ProjectHarness | null, g: ProjectGraph | null): string {
+export function projectHarnessPrompt(h: ProjectHarness | null, g: ProjectGraph | null, flags?: { runLoop?: boolean; graphLoop?: boolean }): string {
+  const run = flags?.runLoop;
+  const graph = flags?.graphLoop;
+  if (run === false && graph === false) {
+    return "Run loop and graph are off. Do not call run_file or see_run unless the user asked. Do not harness_write to turn them on.";
+  }
   if (!h && !g) {
-    return "No .anvil/harness.json. Repeated run/test/engine: harness_write + graph_write once. Else defaults.";
+    if (run === false) return "Run loop is off. Do not auto-run after write. Call run_file only if the user asked.";
+    return "No .anvil/harness.json. Call run_file only when the run loop is on or the user asked. Do not harness_write to enable it.";
   }
   const lines = ["Project harness (.anvil):"];
   if (h) {
     lines.push(`- ${h.name ?? "harness"}: afterWrite=${h.afterWrite ?? "run"}, tries=${h.loopTries ?? 3}`);
+    if (h.testLoop) lines.push("- testLoop on");
+    if (h.engineLoop) lines.push("- engineLoop on");
     if (h.when) lines.push(`- when: ${h.when}`);
   }
   if (g?.edges?.length) {
@@ -170,7 +195,10 @@ export function applyHarnessTool(
       afterWrite: (String(args.afterWrite ?? prev.afterWrite ?? guessed.afterWrite ?? "run") as ProjectHarness["afterWrite"]),
       loopTries: num(args.loopTries, prev.loopTries ?? guessed.loopTries ?? 3),
       graphLoop: args.graphLoop != null ? Boolean(args.graphLoop) : prev.graphLoop ?? guessed.graphLoop,
-      runLoop: true,
+      runLoop: args.runLoop != null ? Boolean(args.runLoop) : prev.runLoop ?? guessed.runLoop ?? true,
+      testLoop: args.testLoop != null ? Boolean(args.testLoop) : prev.testLoop ?? guessed.testLoop,
+      engineLoop: args.engineLoop != null ? Boolean(args.engineLoop) : prev.engineLoop ?? guessed.engineLoop,
+      maxRounds: num(args.maxRounds, prev.maxRounds ?? guessed.maxRounds ?? 24),
     };
     return { result: { ok: true, path: HARNESS_PATH, harness: next }, writes: { [HARNESS_PATH]: dumpHarness(next) } };
   }
@@ -185,19 +213,20 @@ export function applyHarnessTool(
   return { result: { error: `unknown ${name}` } };
 }
 
-export type WireOpts = HarnessOpts & { engineOk?: boolean; edges?: ProjectGraphEdge[] };
+export type WireOpts = HarnessOpts & { engineOk?: boolean; edges?: ProjectGraphEdge[]; queued?: string[] };
 
 export function afterTool(
   state: HarnessState,
   name: string,
   result: Record<string, unknown>,
   opts: WireOpts,
-): { state: HarnessState; stop: boolean; inject: string; graph: GraphPolicy } {
+): { state: HarnessState; stop: boolean; inject: string; graph: GraphPolicy; allow: string[]; strict?: boolean } {
   const err = "error" in result && result.error;
+  const queued = Boolean(result.queued);
   const obs: Observation = {
-    kind: kindOfTool(name),
+    kind: queued ? "other" : kindOfTool(name, result),
     name,
-    ok: !err && result.ok !== false,
+    ok: queued ? true : !err && result.ok !== false,
     path: typeof result.path === "string" ? result.path : undefined,
     stdout: typeof result.stdout === "string" ? result.stdout : undefined,
     stderr: typeof result.stderr === "string" ? result.stderr : typeof result.error === "string" ? result.error : undefined,
@@ -208,8 +237,20 @@ export function afterTool(
   const tick = stepHarness(next, opts);
   next = tick.state;
   const g = graphEdge(obs, opts, Boolean(opts.engineOk), opts.edges);
-  const inject = [harnessPrompt(tick), graphPrompt(g)].filter(Boolean).join("\n");
-  return { state: next, stop: tick.stop, inject, graph: g };
+  const coming = new Set((opts.queued ?? []).filter(Boolean));
+  if (coming.size && (coming.has(g.tool || "") || (tick.allow.length && tick.allow.some((t) => coming.has(t))))) {
+    return { state: next, stop: tick.stop, inject: "", graph: { edge: "none", tool: null, why: "" }, allow: tick.allow, strict: tick.strict };
+  }
+  const inject = mergeHarnessGraph(tick, g);
+  return { state: next, stop: tick.stop, inject, graph: g, allow: tick.allow, strict: tick.strict };
+}
+
+export function mergeHarnessGraph(tick: HarnessTick, g: GraphPolicy): string {
+  const h = harnessPrompt(tick);
+  if (!g.tool || g.edge === "none") return h;
+  if (tick.allow.length && !tick.allow.includes(g.tool)) return h;
+  if (h && g.tool && /Allowed:/.test(h) && !h.includes(g.tool)) return h;
+  return [h, graphPrompt(g)].filter(Boolean).join("\n");
 }
 
 export { startHarness };

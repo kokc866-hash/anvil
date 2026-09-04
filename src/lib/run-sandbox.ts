@@ -40,7 +40,11 @@ export function runJsSandboxed(code: string, ms = 8000): Promise<{ stdout: strin
   window.onerror=function(m){parent.postMessage({anvilRun:1,err:String(m),logs:logs},"*")};
   try{
     var r=(0,eval)(${payload});
-    parent.postMessage({anvilRun:1,logs:logs,result:r===undefined?"":fmt(r)},"*");
+    Promise.resolve(r).then(function(v){
+      parent.postMessage({anvilRun:1,logs:logs,result:v===undefined?"":fmt(v)},"*");
+    }, function(e){
+      parent.postMessage({anvilRun:1,err:String(e&&e.stack||e),logs:logs},"*");
+    });
   }catch(e){
     parent.postMessage({anvilRun:1,err:String(e&&e.stack||e),logs:logs},"*");
   }

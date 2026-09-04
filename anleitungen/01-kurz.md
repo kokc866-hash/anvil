@@ -52,7 +52,7 @@ Chat-Modus **Agent** ändert Dateien. **Ask** erklärt nur.
 
 1. Dateien → neue Datei `index.html`.
 2. Chat (Agent): `Bau eine kleine To-do-Liste in index.html`.
-3. Enter. Diffs **Übernehmen**.
+3. Enter. Datei landet im Workspace. Auto-Diffs aus: **Übernehmen**.
 4. **Run** — HTML öffnet ein eigenes Fenster.
 
 Python/JS: Konsole. Go/Rust/Java: Run in Anvil (Compiler auf dem PC oder im Netz). Companion ist kein Internet — Einstellungen → **Companion**.

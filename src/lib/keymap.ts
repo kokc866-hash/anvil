@@ -13,6 +13,7 @@ export type KeyId =
   | "debugStep"
   | "breakpoint"
   | "search"
+  | "find"
   | "gotoLine"
   | "gotoDef"
   | "peek"
@@ -76,6 +77,7 @@ export const KEY_DEFAULTS: Record<KeyId, Chord> = {
   debugStep: { key: "F10" },
   breakpoint: { key: "F9" },
   search: { key: "f", ctrl: true, shift: true },
+  find: { key: "f", ctrl: true },
   gotoLine: { key: "g", ctrl: true },
   gotoDef: { key: "F12" },
   peek: { key: "F12", alt: true },
@@ -125,7 +127,7 @@ export const KEY_GROUPS: { i18n: string; ids: KeyId[] }[] = [
   },
   {
     i18n: "keyGrpEdit",
-    ids: ["replace", "gotoLine", "gotoDef", "peek", "symbols", "format", "dup", "moveUp", "moveDown", "comment", "inline"],
+    ids: ["find", "replace", "gotoLine", "gotoDef", "peek", "symbols", "format", "dup", "moveUp", "moveDown", "comment", "inline"],
   },
   {
     i18n: "keyGrpView",
@@ -177,6 +179,7 @@ export const KEY_LABEL: Record<KeyId, string> = {
   debugStep: "keyStep",
   breakpoint: "keyBreakpoint",
   search: "search",
+  find: "findInFile",
   gotoLine: "keyGotoLine",
   gotoDef: "keyGotoDef",
   peek: "keyPeek",
@@ -223,7 +226,7 @@ export const KEY_ROWS: { id: KeyId; i18n: string }[] = KEY_GROUPS.flatMap((g) =>
   g.ids.map((id) => ({ id, i18n: KEY_LABEL[id] })),
 );
 
-/** Auch in Eingabefeldern (Chat, Suche). */
+/** Auch in Eingabefeldern (Chat, Suche, Monaco-Textarea). */
 export const KEY_IN_FIELD: KeyId[] = [
   "save",
   "saveAll",
@@ -243,6 +246,9 @@ export const KEY_IN_FIELD: KeyId[] = [
   "stopAgent",
   "nextTab",
   "prevTab",
+  "find",
+  "replace",
+  "gotoLine",
 ];
 
 export function chordFromEvent(e: KeyboardEvent): Chord {

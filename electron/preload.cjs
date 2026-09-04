@@ -11,13 +11,16 @@ function sync(ch, fallback) {
 }
 
 const pipe = sync("llm-pipe-sync", null);
-const helperPort = Number(sync("helper-port-sync", 7847)) || 7847;
+const helperAuth = sync("helper-auth-sync", null) || {};
+const helperPort = Number(helperAuth.port || sync("helper-port-sync", 7847)) || 7847;
+const helperToken = String(helperAuth.token || "");
 const companionToken = String(sync("companion-token-sync", "") || "");
 
 contextBridge.exposeInMainWorld("anvilCompanionToken", companionToken);
 contextBridge.exposeInMainWorld("anvilNative", {
   helperDir: () => ipcRenderer.invoke("helper-dir"),
-  helperPort: () => Promise.resolve(helperPort),
+  helperPort: () => ipcRenderer.invoke("helper-port").catch(() => helperPort),
+  helperAuth: () => ipcRenderer.invoke("helper-auth").catch(() => ({ port: helperPort, token: helperToken })),
   helperList: () => ipcRenderer.invoke("helper-list"),
   helperHas: (id) => ipcRenderer.invoke("helper-has", id),
   helperDelete: (id) => ipcRenderer.invoke("helper-delete", id),
@@ -45,4 +48,5 @@ contextBridge.exposeInMainWorld("anvilNative", {
   clipboardRead: () => ipcRenderer.invoke("clipboard-read"),
   companionEnsure: () => ipcRenderer.invoke("companion-ensure"),
   companionRelease: (keep) => ipcRenderer.invoke("companion-release", keep),
+  hwMachine: () => ipcRenderer.invoke("hw-machine"),
 });

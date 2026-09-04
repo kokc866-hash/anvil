@@ -2,7 +2,7 @@ import { abortAgent, agentAborted, agentBeatN, beginAgent, stopAgent } from "./a
 import { note } from "./intern";
 import { useIde } from "@/store/ide";
 
-const STALL_NOTE_MS = 180_000;
+const STALL_NOTE_MS = 90_000;
 
 function killMs(): number {
   const n = useIde.getState().llmHardStopMin ?? 0;
@@ -30,7 +30,6 @@ export function recoverSession(): void {
   st.setRunning(false);
   st.setTestsRunning(false);
   void import("./run-window").then((m) => m.releaseAgentUi());
-  if (st.agentQueue.length) useIde.setState({ agentQueue: [] });
   busySince = 0;
   noted = false;
   beginAgent();

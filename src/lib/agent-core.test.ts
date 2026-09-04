@@ -12,6 +12,7 @@ describe("system prompt", () => {
   it("leads with tools-not-prose and stays short", () => {
     assert.match(body, /tools/i);
     assert.match(body, /set_plan/);
+    assert.match(body, /ask_user/);
     assert.doesNotMatch(body, /Du bist/);
     assert.ok(body.length > 400 && body.length < 2800, String(body.length));
   });

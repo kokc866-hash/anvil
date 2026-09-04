@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fingerprint, internNoise, suggestHeal } from "./intern-core.ts";
+import { fingerprint, internNoise, internPromptFrom, suggestHeal } from "./intern-core.ts";
 
 describe("intern", () => {
   it("fingerprints numbers and urls", () => {
@@ -31,5 +31,14 @@ describe("intern", () => {
     assert.equal(internNoise("timeout"), true);
     assert.equal(internNoise("js timeout"), true);
     assert.equal(internNoise("AbortError"), true);
+    assert.equal(internNoise("signal timed out"), true);
+  });
+  it("intern prompt lists open faults only", () => {
+    const text = internPromptFrom([
+      { open: true, kind: "board", msg: "json kaputt" },
+      { open: false, kind: "js", msg: "alt" },
+    ]);
+    assert.match(text, /board/);
+    assert.doesNotMatch(text, /alt/);
   });
 });

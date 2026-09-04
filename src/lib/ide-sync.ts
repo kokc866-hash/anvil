@@ -1,3 +1,4 @@
+import { isSecretPath, omitSecrets } from "@/lib/ref";
 import { useIde } from "@/store/ide";
 
 const CHANNEL = "anvil-output";
@@ -5,6 +6,14 @@ const CHANNEL = "anvil-output";
 function popout(): boolean {
   const p = window.location.pathname;
   return p.startsWith("/run") || p.startsWith("/console");
+}
+
+function keepSecrets(incoming: Record<string, string>, cur: Record<string, string>): Record<string, string> {
+  const out = { ...incoming };
+  for (const [p, c] of Object.entries(cur)) {
+    if (isSecretPath(p)) out[p] = c;
+  }
+  return out;
 }
 
 export function startIdeSync() {
@@ -18,7 +27,7 @@ export function startIdeSync() {
     return {
       output: s.output,
       running: s.running,
-      files: s.files,
+      files: omitSecrets(s.files),
       activePath: s.activePath,
       theme: s.theme,
       inputMap: s.inputMap,
@@ -71,7 +80,7 @@ export function startIdeSync() {
     useIde.setState({
       output: d.output ?? cur.output,
       running: typeof d.running === "boolean" ? d.running : cur.running,
-      files: d.files ?? cur.files,
+      files: d.files ? keepSecrets(d.files, cur.files) : cur.files,
       activePath: typeof d.activePath === "string" ? d.activePath : cur.activePath,
       theme: d.theme ?? cur.theme,
       inputMap: d.inputMap ?? cur.inputMap,

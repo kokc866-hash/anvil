@@ -14,7 +14,7 @@ import { canDebug } from "@/lib/debug-remote";
 import { debugContinue, debugStep, debugStop, startDebug } from "@/lib/debug-engine";
 import { runFile } from "@/lib/run-client";
 import { cn } from "@/lib/cn";
-import { isRefImage, uniqueRefPath, isSecretPath } from "@/lib/ref";
+import { isRefImage, refImageSrc, copyIntoRef, isSecretPath } from "@/lib/ref";
 import { envNames } from "@/lib/vault";
 import { listSymbols } from "@/lib/lsp";
 import { gotoFile } from "@/lib/goto";
@@ -26,6 +26,8 @@ import { StarterPick } from "./starter-pick";
 import { useT } from "@/lib/i18n";
 import { useKbd } from "@/lib/use-kbd";
 import { EDITOR_COMPACT } from "@/lib/layout";
+import { confirmApp } from "@/lib/confirm";
+import { EDITOR_MAX_CHARS } from "@/lib/monaco-models";
 
 export function EditorPane() {
   const t = useT();
@@ -46,7 +48,6 @@ export function EditorPane() {
   const running = useIde((s) => s.running);
   const pending = useIde((s) => s.pendingDiffs);
   const openFile = useIde((s) => s.openFile);
-  const closeFile = useIde((s) => s.closeFile);
   const setContent = useIde((s) => s.setContent);
   const setRunning = useIde((s) => s.setRunning);
   const pushOutput = useIde((s) => s.pushOutput);
@@ -80,6 +81,26 @@ export function EditorPane() {
   const debug = useIde((s) => s.debug);
   const liveGen = useRef(0);
   const currentDiff = pending.find((d) => d.path === activePath);
+
+  async function askClose(path: string) {
+    const st = useIde.getState();
+    if (st.dirty[path]) {
+      const ok = await confirmApp(`${t("unsavedTab")}: ${path}`, { title: t("tabClose"), ok: t("discard"), danger: true });
+      if (!ok) return;
+    }
+    st.closeFile(path);
+  }
+
+  async function askCloseOthers(keep: string) {
+    const st = useIde.getState();
+    const rest = st.openPaths.filter((p) => p !== keep);
+    const dirtyN = rest.filter((p) => st.dirty[p]);
+    if (dirtyN.length) {
+      const ok = await confirmApp(`${t("unsavedTab")}: ${dirtyN.length}`, { title: t("tabClose"), ok: t("discard"), danger: true });
+      if (!ok) return;
+    }
+    for (const p of rest) useIde.getState().closeFile(p);
+  }
 
   useEffect(() => {
     if (!activePath) return;
@@ -150,6 +171,9 @@ export function EditorPane() {
     function onReplace() {
       setFind((f) => ({ q: f?.q ?? "", i: f?.i ?? 0, repl: f?.repl ?? "" }));
     }
+    function onFind() {
+      setFind((f) => ({ q: f?.q || "", i: 0, repl: f?.repl }));
+    }
     function onSymbols() {
       setSymOpen(true);
       setSym("");
@@ -157,11 +181,13 @@ export function EditorPane() {
     window.addEventListener("anvil-goto", onGoto);
     window.addEventListener("anvil-escape", onEsc);
     window.addEventListener("anvil-replace", onReplace);
+    window.addEventListener("anvil-find", onFind);
     window.addEventListener("anvil-symbols", onSymbols);
     return () => {
       window.removeEventListener("anvil-goto", onGoto);
       window.removeEventListener("anvil-escape", onEsc);
       window.removeEventListener("anvil-replace", onReplace);
+      window.removeEventListener("anvil-find", onFind);
       window.removeEventListener("anvil-symbols", onSymbols);
     };
   }, []);
@@ -197,7 +223,7 @@ export function EditorPane() {
     return hits;
   }, [find?.q, activeSrc, activePath]);
 
-  async function run(opts?: { live?: boolean }) {
+  async function run(opts?: { live?: boolean; tok?: number }) {
     let path = activePath;
     if (!path) return;
     if (!opts?.live && !canRun(path)) {
@@ -217,15 +243,18 @@ export function EditorPane() {
         openRunWindow();
         s.setPreviewOpen(false);
       } else {
-        s.setPreviewOpen(true);
-        if (s.openOutputOnRun) s.revealOutput();
+        s.revealOutput();
+        s.setPreviewOpen(false);
       }
     }
-    setRunning(true);
+    if (!opts?.live) setRunning(true);
     try {
-      pushOutput(await runFile(path, useIde.getState().files));
+      const result = await runFile(path, useIde.getState().files);
+      if (opts?.live && opts.tok != null && opts.tok !== liveGen.current) return;
+      pushOutput(result);
       emitPlugin("run", path);
     } catch (err) {
+      if (opts?.live && opts.tok != null && opts.tok !== liveGen.current) return;
       pushOutput({
         ok: false,
         stdout: "",
@@ -234,7 +263,7 @@ export function EditorPane() {
         label: path,
       });
     } finally {
-      setRunning(false);
+      if (!opts?.live) setRunning(false);
     }
   }
 
@@ -249,9 +278,12 @@ export function EditorPane() {
     const id = ++liveGen.current;
     const t = window.setTimeout(() => {
       if (id !== liveGen.current) return;
-      void run({ live: true });
+      void run({ live: true, tok: id });
     }, 700);
-    return () => window.clearTimeout(t);
+    return () => {
+      window.clearTimeout(t);
+      liveGen.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRun, activePath, activeSrc]);
 
@@ -359,6 +391,8 @@ export function EditorPane() {
                   st.setDiskName(d.diskFolderName());
                   const first = Object.keys(pack.files).sort()[0];
                   if (first) st.openFile(first);
+                  const n = Object.keys(pack.files).length;
+                  st.setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
                 } catch (err) {
                   useIde.getState().setNotice(err instanceof Error ? err.message : "Ordner fehlgeschlagen");
                 }
@@ -463,8 +497,12 @@ export function EditorPane() {
                 e.stopPropagation();
                 setTabOver(null);
                 if (hasOsFiles(e.dataTransfer) && e.dataTransfer.files.length) {
-                  void importDropped([...e.dataTransfer.files], "").then((n) => {
-                    if (n) useIde.getState().setNotice(`${n} Dateien`);
+                  const files = [...e.dataTransfer.files];
+                  void confirmApp(t("dropFiles").replace("{n}", String(files.length)), { ok: t("dropOk") }).then((ok) => {
+                    if (!ok) return;
+                    void importDropped(files, "").then((n) => {
+                      if (n) useIde.getState().setNotice(`${n} Dateien`);
+                    });
                   });
                   return;
                 }
@@ -480,7 +518,7 @@ export function EditorPane() {
               onMouseDown={(e) => {
                 if (e.button === 1) {
                   e.preventDefault();
-                  closeFile(p);
+                  void askClose(p);
                 }
               }}
               title={getTabHint(p) ? `${p} — ${getTabHint(p)}` : p}
@@ -505,7 +543,7 @@ export function EditorPane() {
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
-                  closeFile(p);
+                  void askClose(p);
                 }}
               >
                 <X className="size-3.5" />
@@ -592,7 +630,7 @@ export function EditorPane() {
             aria-label="Run-Fenster"
             kbd={kRunWin}
             onClick={() => {
-              openRunWindow();
+              if (/\.html?$/i.test(activePath || "")) openRunWindow();
               void run();
             }}
           >
@@ -821,8 +859,12 @@ export function EditorPane() {
             setEdOver(false);
             const dir = activePath.includes("/") ? activePath.slice(0, activePath.lastIndexOf("/")) : "";
             if (hasOsFiles(e.dataTransfer) && e.dataTransfer.files.length) {
-              void importDropped([...e.dataTransfer.files], dir).then((n) => {
-                if (n) useIde.getState().setNotice(`${n} nach ${dir || "/"}`);
+              const files = [...e.dataTransfer.files];
+              void confirmApp(t("dropFiles").replace("{n}", String(files.length)), { ok: t("dropOk") }).then((ok) => {
+                if (!ok) return;
+                void importDropped(files, dir).then((n) => {
+                  if (n) useIde.getState().setNotice(`${n} nach ${dir || "/"}`);
+                });
               });
               return;
             }
@@ -839,11 +881,15 @@ export function EditorPane() {
               />
             ) : isRefImage(activeSrc) ? (
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-bg p-4">
-                <img src={activeSrc} alt={activePath} className="max-h-full max-w-full object-contain" />
+                <img src={refImageSrc(activeSrc)} alt={activePath} className="max-h-full max-w-full object-contain" />
+              </div>
+            ) : (activeSrc?.length ?? 0) > EDITOR_MAX_CHARS ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+                <p className="mb-2 text-xs text-muted">{t("fileTooBig").replace("{n}", String(activeSrc.length))}</p>
+                <pre className="whitespace-pre-wrap font-mono text-[11px] text-subtle">{activeSrc.slice(0, 24_000)}…</pre>
               </div>
             ) : (
             <CodeEditor
-              key={activePath}
               path={activePath}
               value={activeSrc}
               language={lang}
@@ -873,12 +919,10 @@ export function EditorPane() {
           y={tabMenu.y}
           onClose={() => setTabMenu(null)}
           items={[
-            { label: "Schließen", onClick: () => closeFile(tabMenu.path) },
+            { label: "Schließen", onClick: () => void askClose(tabMenu.path) },
             {
               label: "Andere schließen",
-              onClick: () => {
-                for (const p of useIde.getState().openPaths) if (p !== tabMenu.path) closeFile(p, { force: true });
-              },
+              onClick: () => void askCloseOthers(tabMenu.path),
             },
             { label: "Im Explorer", onClick: () => useIde.getState().revealPath(tabMenu.path) },
             { label: "Pfad kopieren", onClick: () => void navigator.clipboard.writeText(tabMenu.path) },
@@ -886,9 +930,13 @@ export function EditorPane() {
               label: "Nach ref/",
               onClick: () => {
                 const st = useIde.getState();
-                const dest = uniqueRefPath(st.files, tabMenu.path.split("/").pop() ?? tabMenu.path);
-                st.writeFile(dest, st.files[tabMenu.path] ?? "");
-                st.setNotice(`→ ${dest}`);
+                const dest = copyIntoRef(st.files, tabMenu.path);
+                if ("error" in dest) {
+                  st.setNotice(dest.error);
+                  return;
+                }
+                st.writeFile(dest.path, st.files[tabMenu.path] ?? "");
+                st.setNotice(`→ ${dest.path}`);
               },
             },
             {
@@ -929,7 +977,7 @@ export function EditorPane() {
                 className="shrink-0 text-subtle hover:text-fg"
                 onClick={(e) => {
                   e.stopPropagation();
-                  closeFile(p);
+                  void askClose(p);
                 }}
               >
                 ×

@@ -1,8 +1,12 @@
 import { langFromPath } from "@/lib/languages";
 import { grammarOf, listGrammars, tokenize } from "@/lib/syntax";
-import { fetchWeb } from "@/lib/web-fetch";
+import { fetchWeb, readWebPage } from "@/lib/web-fetch";
+import { fetchPublic } from "@/lib/net-guard";
 import { registerBuiltin } from "./host";
 import { useIde } from "@/store/ide";
+import { vscodeLineComment } from "./vscode";
+import { lintFile, lintWorkspace } from "./lint";
+import { parseHttpFile } from "./http-parse";
 
 registerBuiltin({
   id: "snippets",
@@ -33,7 +37,7 @@ registerBuiltin({
           markdown: "## Titel\n\n",
         };
         const snip = map[lang] ?? "// \n";
-        api.write(path, (api.read(path) ?? "") + (api.read(path)?.endsWith("\n") ? "" : "\n") + snip);
+        api.insert(snip);
         api.notify("Snippet");
       },
     });
@@ -55,24 +59,24 @@ registerBuiltin({
         const path = api.active();
         if (!path) return;
         const lang = langFromPath(path);
-        const mark = grammarOf(lang)?.lineComment ?? (lang === "html" ? null : "//");
+        const mark = grammarOf(lang)?.lineComment ?? vscodeLineComment(lang) ?? (lang === "html" ? null : "//");
         const cur = api.read(path) ?? "";
         if (!mark) {
           api.notify("HTML: <!-- --> manuell");
           return;
         }
+        const { from, to } = api.range();
         const lines = cur.split("\n");
-        const all = lines.filter((l) => l.trim()).every((l) => l.trimStart().startsWith(mark));
-        api.write(
-          path,
-          lines
-            .map((l) => {
-              if (!l.trim()) return l;
-              if (all) return l.replace(new RegExp(`^(\\s*)${mark}\\s?`), "$1");
-              return l.replace(/^(\s*)/, `$1${mark} `);
-            })
-            .join("\n"),
-        );
+        const a = Math.max(0, from - 1);
+        const b = Math.min(lines.length - 1, to - 1);
+        const slice = lines.slice(a, b + 1);
+        const all = slice.filter((l) => l.trim()).every((l) => l.trimStart().startsWith(mark));
+        const next = slice.map((l) => {
+          if (!l.trim()) return l;
+          if (all) return l.replace(new RegExp(`^(\\s*)${mark.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s?`), "$1");
+          return l.replace(/^(\s*)/, `$1${mark} `);
+        });
+        api.write(path, [...lines.slice(0, a), ...next, ...lines.slice(b + 1)].join("\n"));
       },
     });
   },
@@ -191,12 +195,17 @@ registerBuiltin({
       run: async () => {
         const path = api.active();
         const cur = path ? api.read(path) ?? "" : "";
-        const fromFile = cur.match(/https?:\/\/\S+/);
-        const url = fromFile?.[0] || window.prompt("URL");
-        if (!url) return;
-        const r = await fetchWeb({ data: { url } });
-        const out = `web/${safeHost(url)}.txt`;
-        api.write(out, r.text);
+        const parsed = path && /\.http$/i.test(path) ? parseHttpFile(cur) : [];
+        const req =
+          parsed[0] ||
+          (() => {
+            const url = cur.match(/https?:\/\/\S+/)?.[0] || (typeof window !== "undefined" ? window.prompt("URL") : null);
+            return url ? { method: "GET", url, headers: {} as Record<string, string>, body: "" } : null;
+          })();
+        if (!req) return;
+        const r = await runHttp(req);
+        const out = `web/${safeHost(req.url)}.txt`;
+        api.write(out, `${req.method} ${req.url}\n\n${r.text}`);
         api.open(out);
         api.notify(r.ok ? `HTTP ${out}` : "Request fehlgeschlagen");
       },
@@ -220,7 +229,8 @@ registerBuiltin({
         if (!path) return;
         const hits = lintFile(path, api.read(path) ?? "");
         useIde.getState().revealOutput();
-        api.output(hits.length ? hits.join("\n") : "Keine Probleme.", hits.length === 0);
+        api.output(hits.length ? hits.map((h) => `${h.path}:${h.line} ${h.text}`).join("\n") : "Keine Probleme.", hits.length === 0);
+        api.problems(hits);
         api.status(hits.length ? `${hits.length} Probleme` : "Lint ok");
       },
     });
@@ -228,10 +238,10 @@ registerBuiltin({
       id: "lint.workspace",
       title: "Workspace prüfen",
       run: () => {
-        const hits: string[] = [];
-        for (const [path, content] of Object.entries(api.files())) hits.push(...lintFile(path, content));
+        const hits = lintWorkspace(api.files());
         useIde.getState().revealOutput();
-        api.output(hits.length ? hits.join("\n") : "Workspace sauber.", hits.length === 0);
+        api.output(hits.length ? hits.map((h) => `${h.path}:${h.line} ${h.text}`).join("\n") : "Workspace sauber.", hits.length === 0);
+        api.problems(hits);
       },
     });
   },
@@ -494,28 +504,21 @@ registerBuiltin({
   },
 });
 
-function lintFile(path: string, content: string): string[] {
-  const hits: string[] = [];
-  const pairs: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
-  const stack: string[] = [];
-  for (let i = 0; i < content.length; i++) {
-    const ch = content[i];
-    if (pairs[ch]) stack.push(pairs[ch]);
-    else if (ch === ")" || ch === "]" || ch === "}") {
-      const want = stack.pop();
-      if (want !== ch) hits.push(`${path}: unerwartete ${ch}`);
-    }
-  }
-  if (stack.length) hits.push(`${path}: fehlende ${stack.join(" ")}`);
-  if (path.endsWith(".json")) {
+async function runHttp(req: { method: string; url: string; headers: Record<string, string>; body: string }) {
+  if (req.method === "GET" || req.method === "HEAD") {
     try {
-      JSON.parse(content);
-    } catch (err) {
-      hits.push(`${path}: ${err instanceof Error ? err.message : "JSON"}`);
+      return await fetchWeb({ data: { url: req.url } });
+    } catch {
+      return readWebPage(req.url);
     }
   }
-  if (/^\t/m.test(content) && /^ {2,}/m.test(content)) hits.push(`${path}: Tabs und Spaces gemischt`);
-  return hits.slice(0, 20);
+  const res = await fetchPublic(req.url, {
+    method: req.method,
+    headers: req.headers,
+    body: req.body || undefined,
+  });
+  const text = (await res.text()).slice(0, 20_000);
+  return { ok: res.ok, text: res.ok ? text : `HTTP ${res.status}: ${text.slice(0, 400)}` };
 }
 
 function inferTs(name: string, value: unknown, depth = 0): string {

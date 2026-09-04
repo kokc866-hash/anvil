@@ -18,6 +18,44 @@ export function isLanHost(host) {
   return false;
 }
 
+const CLOUD_LLM = new Set([
+  "api.openai.com",
+  "chatgpt.com",
+  "api.anthropic.com",
+  "generativelanguage.googleapis.com",
+  "api.groq.com",
+  "api.together.xyz",
+  "api.together.ai",
+  "api.fireworks.ai",
+  "api.mistral.ai",
+  "api.deepseek.com",
+  "openrouter.ai",
+  "api.x.ai",
+  "api.perplexity.ai",
+  "api.cohere.ai",
+  "api.cohere.com",
+  "router.huggingface.co",
+  "api.cerebras.ai",
+  "integrate.api.nvidia.com",
+  "models.inference.ai.azure.com",
+  "models.github.ai",
+  "api.githubcopilot.com",
+  "api.individual.githubcopilot.com",
+]);
+
+export function isCloudLlmHost(host) {
+  const h = String(host || "")
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  if (CLOUD_LLM.has(h)) return true;
+  if (h.endsWith(".openai.azure.com") || h.endsWith(".googleapis.com")) return true;
+  return false;
+}
+
+export function isLlmTargetHost(host) {
+  return isLanHost(host) || isCloudLlmHost(host);
+}
+
 export function isAbortNoise(err) {
   if (!err) return false;
   const c = typeof err === "object" && err && "code" in err ? String(err.code) : "";

@@ -1,4 +1,5 @@
 import { skipPath } from "./ws-skip.ts";
+import { isSecretPath } from "./ref.ts";
 
 export type SearchOpts = {
   regex?: boolean;
@@ -15,16 +16,10 @@ export type SearchHit = {
   match: string;
 };
 
-const SECRET = /(^|\/)(\.env($|\.)|\.env\.[^/]+|id_rsa|\.pem$|credentials|secrets?\.|vault)/i;
-
 export function skipSearchPath(path: string): boolean {
-  const base = path.split("/").pop() ?? "";
-  return (
-    skipPath(path) ||
-    SECRET.test(path) ||
-    /(api[_-]?key|token|password)/i.test(base)
-  );
+  return skipPath(path) || isSecretPath(path) || /\.(png|jpe?g|gif|webp|ico|bmp)$/i.test(path);
 }
+
 
 export function compileSearch(needle: string, opts: SearchOpts): RegExp | null {
   const n = needle.trim();

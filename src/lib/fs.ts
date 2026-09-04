@@ -53,6 +53,36 @@ export function dupPath(path: string, taken: Set<string>): string {
   return next;
 }
 
+export function remapPath(path: string, from: string, to: string): string {
+  if (path === from) return to;
+  if (from && path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`;
+  return path;
+}
+
+export function remapRecord<T>(rec: Record<string, T>, from: string, to: string): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(rec)) out[remapPath(k, from, to)] = v;
+  return out;
+}
+
+export function remapList(xs: string[], from: string, to: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of xs) {
+    const n = remapPath(p, from, to);
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+export function dropRecord<T>(rec: Record<string, T>, pred: (p: string) => boolean): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(rec)) if (!pred(k)) out[k] = v;
+  return out;
+}
+
 export type FsNode = { path: string; type: "dir" | "file"; depth: number };
 
 /** System folders stay at the top of the explorer, with their files. */
@@ -133,4 +163,3 @@ export function autoCollapsePaths(files: string[], active: string | null, minFil
   }
   return [...dirs];
 }
-

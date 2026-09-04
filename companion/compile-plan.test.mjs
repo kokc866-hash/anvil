@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ccArgs, javaMainClass, nativeSources, isCargo, isGoMod, firstCsproj } from "./compile-plan.mjs";
+import { ccArgs, javaMainClass, nativeSources, isCargo, isGoMod, firstCsproj, looksGui } from "./compile-plan.mjs";
 
 describe("compile-plan", () => {
   it("compiles all C++ units plus include dirs", () => {
@@ -28,5 +28,11 @@ describe("compile-plan", () => {
     assert.equal(isGoMod([{ path: "cmd/app.go" }]), false);
     assert.equal(isGoMod([{ path: "go.mod" }]), true);
     assert.equal(firstCsproj([{ path: "App.csproj" }, { path: "Program.cs" }]), "App.csproj");
+  });
+  it("detects native GUI sources", () => {
+    assert.equal(looksGui([{ path: "main.cpp", content: "int WinMain() { return 0; }" }]), true);
+    assert.equal(looksGui([{ path: "game.py", content: "import pygame\npygame.init()\n" }]), true);
+    assert.equal(looksGui([{ path: "ui.py", content: "import tkinter as tk\n" }]), true);
+    assert.equal(looksGui([{ path: "main.c", content: "int main() { return 0; }" }]), false);
   });
 });

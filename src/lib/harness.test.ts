@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { startHarness } from "./harness.ts";
-import { afterTool, applyHarnessTool, guessProjectHarness } from "./harness-project.ts";
-import { GRAPH_TOOLS } from "./harness-graph.ts";
+import { afterTool, applyHarnessTool, guessProjectHarness, mergeHarnessGraph, mergeOpts } from "./harness-project.ts";
+import { GRAPH_TOOLS, globScore, matchGlob, pickProjectEdge } from "./harness-graph.ts";
 import {
   addEdgeNode,
   applyBoardTool,
@@ -14,6 +14,7 @@ import {
   resetLayout,
   routeAll,
   syncBoardFromFiles,
+  syncBoardSettings,
   toggleWire,
 } from "./harness-board.ts";
 
@@ -23,6 +24,11 @@ describe("harness loop", () => {
     let h = startHarness(o);
     const w = afterTool(h, "write_file", { path: "src/a.py" }, o);
     assert.ok(w.inject);
+  });
+  it("does not auto-run when runLoop off", () => {
+    const off = { afterWrite: "run" as const, runLoop: false, graphLoop: false, loopTries: 3 };
+    const w = afterTool(startHarness(off), "write_file", { path: "src/a.py" }, off);
+    assert.equal(w.inject ?? "", "");
   });
   it("patches after failed run", () => {
     let h = startHarness(o);
@@ -40,10 +46,22 @@ describe("harness loop", () => {
   it("one see after html even if graphLoop off", () => {
     const g = { afterWrite: "run" as const, runLoop: true, graphLoop: false, loopTries: 3 };
     let h = startHarness(g);
-    assert.equal(h.budget.sees, 1);
+    assert.equal(h.budget.sees, 0);
     h = afterTool(h, "write_file", { path: "index.html" }, g).state;
     const w = afterTool(h, "run_file", { path: "index.html", ok: true, html: "<canvas>" }, g);
-    assert.match(w.inject, /see_run|play|Vorschau|look/i);
+    assert.equal(w.inject ?? "", "");
+  });
+  it("marks done after a plain successful run", () => {
+    let h = startHarness(o);
+    h = afterTool(h, "write_file", { path: "src/a.py" }, o).state;
+    const w = afterTool(h, "run_file", { path: "src/a.py", ok: true, stdout: "ok" }, o);
+    assert.equal(w.state.phase, "act");
+    assert.equal(w.stop, false);
+    assert.equal(w.inject ?? "", "");
+  });
+  it("skips run hint when run_file is already queued", () => {
+    const w = afterTool(startHarness(o), "write_file", { path: "src/a.py" }, { ...o, queued: ["run_file"] });
+    assert.equal(w.inject ?? "", "");
   });
 });
 
@@ -61,6 +79,12 @@ describe("project harness", () => {
     assert.ok(g.harness);
     assert.ok(g.graph.edges?.some((e) => e.tool === "see_run"));
     assert.ok(g.graph.edges?.some((e) => e.tool === "run_file"));
+  });
+  it("testLoop only when real test files exist, not every package.json", () => {
+    const none = guessProjectHarness({ "package.json": "{}", "index.html": "<p>" });
+    assert.equal(none.harness.testLoop, false);
+    const yes = guessProjectHarness({ "tests/test_add.py": "def test_add():\n  pass\n" });
+    assert.equal(yes.harness.testLoop, true);
   });
   it("graph_write without edges uses sources not append", () => {
     const files = { "index.html": "<p>", "main.py": "print(1)" };
@@ -207,5 +231,110 @@ describe("board", () => {
     assert.equal(keep.wires.find((w) => w.kind === "engine")?.on, true);
     const off = applySettings(b, { ...s, afterWrite: "run", engineLoop: false });
     assert.equal(off.wires.find((w) => w.kind === "engine")?.on, false);
+  });
+  it("toggling patch spine does not kill test leaves", () => {
+    let b = addEdgeNode(defaultBoard(s), { when: "t", edge: "test", tool: "shell", glob: "tests/**" });
+    const leaf = b.wires.find((w) => w.to.startsWith("e-"));
+    assert.ok(leaf);
+    b = toggleWire(b, "obs-patch");
+    assert.equal(b.wires.find((w) => w.id === "obs-patch")?.on, false);
+    assert.equal(b.wires.find((w) => w.id === leaf!.id)?.on, true);
+  });
+  it("compileBoard keeps testLoop from settings", () => {
+    const c = compileBoard(defaultBoard({ ...s, testLoop: true }), { ...s, testLoop: true });
+    assert.equal(c.harness.testLoop, true);
+    assert.equal(c.harness.afterWrite, "run");
+  });
+  it("harness settings sync keeps extra nodes", () => {
+    const files = applyBoardTool("board_write", { tool: "skill_run", edge: "skill", glob: "*" }, applyBoardTool("board_reset", {}, {}).writes ?? {}).writes ?? {};
+    const next = syncBoardSettings({
+      ...files,
+      ".anvil/harness.json": JSON.stringify({ name: "t", runLoop: true, testLoop: true, afterWrite: "run" }),
+    });
+    assert.match(next[".anvil/board.json"] ?? "", /skill_run/);
+  });
+});
+
+describe("tafel holes", () => {
+  const o = { afterWrite: "run" as const, runLoop: true, graphLoop: true, loopTries: 3 };
+  const s = { runLoop: true, graphLoop: true, afterWrite: "run" as const, loopTries: 3, maxRounds: 12 };
+  it("Cargo.toml alone is not an engine", () => {
+    const cli = guessProjectHarness({ "Cargo.toml": "[package]\nname='x'\n", "src/main.rs": "fn main(){}" });
+    assert.equal(cli.harness.engineLoop, false);
+    assert.equal(cli.harness.afterWrite, "run");
+    assert.ok(cli.graph.edges?.some((e) => e.tool === "run_file" && (e.glob ?? "").includes("rs")));
+    const bevy = guessProjectHarness({ "Cargo.toml": "[dependencies]\nbevy = '0.13'\n", "src/main.rs": "" });
+    assert.equal(bevy.harness.engineLoop, true);
+  });
+  it("star glob is catch-all with lowest score", () => {
+    assert.equal(matchGlob("src/a.py", "*"), true);
+    assert.equal(matchGlob("src/a.py", "*.py"), true);
+    assert.equal(matchGlob("src/a.py", "*.js"), false);
+    assert.equal(matchGlob("tests/foo.py", "tests/**"), true);
+    assert.equal(matchGlob("src/a.py", "tests/**"), false);
+    assert.ok(globScore("*.py") > globScore("*"));
+  });
+  it("run beats format on write", () => {
+    const hit = pickProjectEdge(
+      "src/app.ts",
+      [
+        { when: "fmt", edge: "format", tool: "format_file", glob: "*.{js,ts,tsx,json,html,css}" },
+        { when: "js", edge: "run", tool: "run_file", glob: "*.{js,ts,tsx,mjs}" },
+      ],
+      "write",
+    );
+    assert.equal(hit?.tool, "run_file");
+  });
+  it("after write injects run not format", () => {
+    const edges = guessProjectHarness({ "app.ts": "export {}" }).graph.edges ?? [];
+    const w = afterTool(startHarness(o), "write_file", { path: "app.ts" }, { ...o, edges });
+    assert.match(w.inject, /run_file/);
+    assert.doesNotMatch(w.inject, /format_file/);
+  });
+  it("queued run is not a green proof", () => {
+    let h = startHarness(o);
+    h = afterTool(h, "write_file", { path: "a.py" }, o).state;
+    const w = afterTool(h, "run_file", { path: "a.py", queued: "a.py", hint: "later" }, o);
+    assert.notEqual(w.state.phase, "done");
+  });
+  it("counts patch after read between fail and edit", () => {
+    let h = startHarness(o);
+    h = afterTool(h, "write_file", { path: "a.py" }, o).state;
+    h = afterTool(h, "run_file", { path: "a.py", ok: false, stderr: "x" }, o).state;
+    h = afterTool(h, "read_file", { path: "a.py" }, o).state;
+    const w = afterTool(h, "edit_file", { path: "a.py" }, o);
+    assert.ok(w.state.used.patches >= 1);
+  });
+  it("harness_write can turn runLoop off", () => {
+    const out = applyHarnessTool("harness_write", { name: "t", runLoop: false }, {});
+    const h = JSON.parse(out.writes![".anvil/harness.json"] as string) as { runLoop: boolean };
+    assert.equal(h.runLoop, false);
+  });
+  it("UI loop/graph off beats project harness.json", () => {
+    const merged = mergeOpts(
+      { runLoop: false, graphLoop: false, loopTries: 3, afterWrite: "run" },
+      { runLoop: true, graphLoop: true, afterWrite: "run", loopTries: 3 },
+    );
+    assert.equal(merged.runLoop, false);
+    assert.equal(merged.graphLoop, false);
+    assert.equal(merged.afterWrite, "none");
+  });
+  it("drops graph when it contradicts allow list", () => {
+    const tick = {
+      state: startHarness(o),
+      allow: ["run_file"],
+      hint: "run_file this round.",
+      stop: false,
+    };
+    const text = mergeHarnessGraph(tick, { edge: "format", tool: "format_file", why: "fmt" });
+    assert.doesNotMatch(text, /format_file/);
+    assert.match(text, /run_file/);
+  });
+  it("two edge nodes get distinct ids", () => {
+    let b = defaultBoard(s);
+    b = addEdgeNode(b, { when: "a", edge: "run", tool: "run_file", glob: "*.py" });
+    b = addEdgeNode(b, { when: "b", edge: "run", tool: "run_file", glob: "*.js" });
+    const ids = b.nodes.filter((n) => n.kind === "edge").map((n) => n.id);
+    assert.equal(new Set(ids).size, ids.length);
   });
 });

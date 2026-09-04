@@ -31,3 +31,17 @@ test("all seed skills pass debug and have unique ids", () => {
     names.add(s.name);
   }
 });
+
+test("ref-halten points at ref/ not .anvil/ref", () => {
+  const s = SEED.find((x) => x.id === "ref-halten" || x.name === "ref-halten");
+  assert.ok(s);
+  assert.match(s!.body, /list_files.*ref\//);
+  assert.doesNotMatch(s!.body, /\.anvil\/ref/);
+  assert.doesNotMatch(s!.when, /\.anvil\/ref/);
+});
+
+test("tests-schreiben does not claim a system pytest", () => {
+  const s = SEED.find((x) => x.id === "tests" || x.name === "tests-schreiben");
+  assert.ok(s);
+  assert.match(s!.body, /Anvil führt die Testdateien/);
+});

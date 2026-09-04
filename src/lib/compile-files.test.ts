@@ -30,3 +30,31 @@ test("go bundle includes go.mod", () => {
   const files = compileFiles("go", "main.go", { "main.go": "package main", "go.mod": "module a\n" });
   assert.ok(files.some((f) => f.path === "go.mod"));
 });
+
+test("python bundle includes sibling modules", () => {
+  const files = compileFiles("python", "src/app.py", {
+    "src/app.py": "import util",
+    "src/util.py": "x=1",
+    "README.md": "no",
+  });
+  const paths = files.map((f) => f.path).sort();
+  assert.ok(paths.includes("src/app.py"));
+  assert.ok(paths.includes("src/util.py"));
+  assert.ok(!paths.includes("README.md"));
+});
+
+test("keeps more than 80 same-language files", () => {
+  const files: Record<string, string> = { "main.go": "package main" };
+  for (let i = 0; i < 90; i++) files[`f${i}.go`] = "package f";
+  const got = compileFiles("go", "main.go", files);
+  assert.equal(got.length, 91);
+});
+
+test("decodes u003c in C++ snapshot before compile", () => {
+  const files = compileFiles("cpp", "main.cpp", {
+    "main.cpp": "#include u003ciostreamu003e\nint main(){return 0;}\n",
+    "util.hpp": "int add(int a, int b);\n",
+  });
+  const main = files.find((f) => f.path === "main.cpp");
+  assert.match(main?.content ?? "", /#include <iostream>/);
+});

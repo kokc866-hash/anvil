@@ -1,6 +1,6 @@
 import { grokRound } from "./agent";
 import {
-  AGENT_TOOLS,
+  pickAgentTools,
   runAgentLoop,
   type AgentFile,
   type AgentMessage,
@@ -12,12 +12,12 @@ import {
 import { stripPayload, shrinkTools } from "./tool-fallback";
 import { runAgentShell } from "./agent-shell";
 import { agentDebug } from "./debug-engine";
-import { agentLearn } from "./learn";
+import { agentLearn, useLearn } from "./learn";
 import { stripZipRoot, unzipFiles } from "./archive";
 import { formatCode } from "./format";
 import { cloneGithub, pushGithub } from "./github";
-import { applyLlmOptions, type ThinkingMode } from "./llm-options";
-import { fitMessages, isContextError, prepChatPayload, type CompactMode } from "./compact";
+import { applyLlmOptions, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { fitMessages, isContextError, isVramError, prepChatPayload, shrinkLocalCtx, type CompactMode } from "./compact";
 import { isPrivateHost } from "./net-guard";
 import { proxyLlm } from "./llm-proxy";
 import { readSseChat, StreamStallError } from "./sse";
@@ -31,7 +31,7 @@ import {
 
 import { credsForProvider } from "./sub-auth";
 import { lanFetch } from "./lan-fetch";
-import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs } from "./abort";
+import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs } from "./abort";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, surfaceLabel, surfacePrompt, toolsAllowed, type SurfaceSnap } from "./surface";
 import {
@@ -222,13 +222,18 @@ export async function chatWithProvider(opts: {
   onHarness?: (bar: string) => void;
   runLoop?: boolean;
   graphLoop?: boolean;
+  testLoop?: boolean;
+  engineLoop?: boolean;
   loopTries?: number;
   engineOk?: boolean;
   afterWrite?: "run" | "engine" | "preview" | "none";
   maxRounds?: number;
   graphSees?: number;
   journal?: SessionJournal;
+  memory?: string;
   prefer?: string[];
+  locale?: "de" | "en";
+  observeOnly?: boolean;
 }): Promise<AgentResult> {
   const spec = providerOf(opts.provider);
   const surface = await surfaceNote();
@@ -240,7 +245,45 @@ export async function chatWithProvider(opts: {
       onDelta?: (s: string, kind?: "text" | "think") => void,
     ): Promise<LlmChoice> => {
       throwIfAborted();
-      const r = await raceAbort(grokRound({ data: { messages, useTools: Boolean(useTools) } }));
+      const stop = cloudStopMs(useIde.getState().llmHardStopMin);
+      const key = (opts.apiKey || credsForProvider("xai", useIde.getState().llmAuthMode).token).trim();
+      if (key) {
+        try {
+          const payload = applyLlmOptions(
+            {
+              model: "grok-4.5",
+              messages,
+              stream: Boolean(onDelta),
+            },
+            { provider: "xai", model: "grok-4.5", api: "openai", context: opts.context ?? 131072, thinking: opts.thinking ?? "auto" },
+            { tools: Boolean(useTools) },
+          );
+          if (useTools) {
+            payload.tools = toolsForCall(opts.observeOnly);
+            payload.tool_choice = useTools === "required" ? "required" : "auto";
+          }
+          prepChatPayload(payload, Number(opts.context) || 131072);
+          const res = await lanFetch("https://api.x.ai/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+            body: JSON.stringify(payload),
+            signal: withAgentTimeout(stop),
+          });
+          if (res.ok) {
+            if (payload.stream) return readSseChat(res, onDelta);
+            const json = (await res.json()) as { choices: { message: LlmChoice }[] };
+            const choice = json.choices[0]?.message;
+            if (!choice) throw new Error("Leere Antwort vom Modell");
+            if (choice.reasoning) onDelta?.(choice.reasoning, "think");
+            if (choice.content) onDelta?.(choice.content, "text");
+            return choice;
+          }
+        } catch (err) {
+          if (err instanceof AgentAbortError) throw err;
+          if (agentAborted()) throw new AgentAbortError(explainAbort(err));
+        }
+      }
+      const r = await raceAbort(grokRound({ data: { messages, useTools: Boolean(useTools) } }), stop);
       if (!r.ok || !r.choice) throw new Error(r.error || "Keine Antwort vom Modell");
       if (r.choice.reasoning) onDelta?.(r.choice.reasoning, "think");
       if (r.choice.content && !r.choice.tool_calls?.length) onDelta?.(r.choice.content, "text");
@@ -259,7 +302,10 @@ export async function chatWithProvider(opts: {
         surfaceId: surface.id,
         surfaceMode: surface.mode,
         journal: opts.journal,
+        memory: opts.memory,
         prefer: opts.prefer,
+        locale: opts.locale,
+        observeOnly: opts.observeOnly,
       },
       complete,
       { ...clientTools(opts), onHarness: opts.onHarness },
@@ -279,8 +325,8 @@ export async function chatWithProvider(opts: {
   }
 
   const complete = isBrowserTarget(spec, opts.baseUrl)
-    ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking)
-    : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking);
+    ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly)
+    : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly);
 
   try {
     return await runAgentLoop(
@@ -296,7 +342,10 @@ export async function chatWithProvider(opts: {
         surfaceId: surface.id,
         surfaceMode: surface.mode,
         journal: opts.journal,
+        memory: opts.memory,
         prefer: opts.prefer,
+        locale: opts.locale,
+        observeOnly: opts.observeOnly,
       },
       complete,
       { ...clientTools(opts), onHarness: opts.onHarness },
@@ -315,6 +364,8 @@ export async function chatWithProvider(opts: {
 function harnessFrom(opts: {
   runLoop?: boolean;
   graphLoop?: boolean;
+  testLoop?: boolean;
+  engineLoop?: boolean;
   loopTries?: number;
   engineOk?: boolean;
   afterWrite?: "run" | "engine" | "preview" | "none";
@@ -323,8 +374,10 @@ function harnessFrom(opts: {
 }) {
   const st = useIde.getState();
   return {
-    runLoop: opts.runLoop ?? st.runLoop ?? true,
+    runLoop: opts.runLoop ?? st.runLoop ?? false,
     graphLoop: opts.graphLoop ?? st.graphLoop ?? false,
+    testLoop: opts.testLoop ?? st.testLoop,
+    engineLoop: opts.engineLoop ?? st.engineLoop,
     loopTries: opts.loopTries ?? st.loopTries ?? 3,
     engineOk: opts.engineOk ?? Boolean(st.engineLink?.ok),
     afterWrite: opts.afterWrite ?? st.harnessAfterWrite,
@@ -354,6 +407,39 @@ function clientTools(opts: {
       return r.text;
     },
     formatFile: (path: string, content: string) => formatCode(path, content),
+    gitStatus: async () => {
+      const { useIde } = await import("@/store/ide");
+      const st = useIde.getState();
+      const cwd = st.workspaceCwd?.trim();
+      const ram = {
+        ram: true,
+        dirty: Object.keys(st.dirty || {}),
+        commits: (st.commits ?? []).slice(-8),
+        repo: st.githubRepo || "",
+      };
+      if (!cwd) return { ok: false, error: "Kein Projektordner. Companion koppeln für echtes git.", ...ram };
+      const { companionGit } = await import("./companion");
+      const live = await companionGit("status", { cwd });
+      if (!live.ok) return { ...live, ...ram };
+      return {
+        ok: true,
+        branch: live.branch,
+        files: live.files,
+        log: live.log,
+        repo: live.repo,
+        cwd: live.cwd,
+      };
+    },
+    gitCommit: async (message: string) => {
+      const { useIde } = await import("@/store/ide");
+      const st = useIde.getState();
+      const cwd = st.workspaceCwd?.trim();
+      if (!cwd) return { ok: false, error: "Kein Projektordner. Commit wäre nur Sitzung — Companion koppeln." };
+      const { flushDiskSync } = await import("./disk-sync");
+      await flushDiskSync();
+      const { companionGit } = await import("./companion");
+      return companionGit("commit", { cwd, message });
+    },
     gitClone: async (url: string) => {
       const r = await cloneGithub({ data: { url, token: opts.githubToken } });
       const raw = atob(r.zipB64);
@@ -363,9 +449,24 @@ function clientTools(opts: {
       return Object.entries(pack).map(([path, content]) => ({ path, content }));
     },
     gitPush: async (message: string, files: Record<string, string>) => {
+      const { useIde } = await import("@/store/ide");
+      const cwd = useIde.getState().workspaceCwd?.trim();
+      if (cwd) {
+        const { flushDiskSync } = await import("./disk-sync");
+        await flushDiskSync();
+        const { companionGit } = await import("./companion");
+        const c = await companionGit("commit", { cwd, message });
+        const p = await companionGit("push", { cwd });
+        if (p.ok) return { sha: "git", repo: cwd, via: "companion" as const };
+        if (c.ok === false && /nothing to commit|nichts zu/i.test(String(c.error || c.stdout || ""))) {
+          const p2 = await companionGit("push", { cwd });
+          if (p2.ok) return { sha: "git", repo: cwd, via: "companion" as const };
+        }
+        if (!opts.githubToken) return { sha: "", repo: cwd, error: p.error || c.error || "git push fehlgeschlagen" };
+      }
       const repo = opts.git?.repo?.trim();
       const token = opts.githubToken?.trim() ?? "";
-      if (!repo || !token) throw new Error("GitHub-Repo und Token unter Einstellungen eintragen.");
+      if (!repo || !token) throw new Error("GitHub-Repo und Token unter Einstellungen eintragen — oder Projektordner koppeln.");
       const { isSecretPath } = await import("./ref");
       const safe: Record<string, string> = {};
       for (const [p, c] of Object.entries(files)) if (!isSecretPath(p)) safe[p] = c;
@@ -397,14 +498,21 @@ function clientTools(opts: {
       if (action === "list") return mcpList(servers);
       const t0 = Date.now();
       try {
-        const r = await mcpCall(servers, want, name ?? "", args, st.mcpStream
+        const r = await mcpCall(
+          servers,
+          want,
+          name ?? "",
+          args,
+          st.mcpStream
           ? (chunk) => {
               const sid = servers.find((s) => s.id === want || s.name === want)?.id || want;
               const prev = useIde.getState().mcpView[sid]?.text ?? "";
               useIde.getState().setMcpView(sid, { text: (prev + chunk).slice(-8000), at: Date.now() });
               void import("./live-write").then((m) => m.applyMcpLive(sid, name ?? "", args, chunk));
             }
-          : undefined);
+          : undefined,
+          { cwd: st.workspaceCwd || undefined },
+        );
         const rec = r && typeof r === "object" ? (r as { text?: string; image?: string; isError?: boolean }) : null;
         const text = rec?.text || (typeof r === "string" ? r : JSON.stringify(r).slice(0, 800));
         const image = rec?.image;
@@ -450,8 +558,7 @@ function clientTools(opts: {
       const { useIde } = await import("@/store/ide");
       const st = useIde.getState();
       st.setRunPath(path);
-      if (!st.runLoop) return { queued: path, hint: "Run-Schleife aus — wird nach der Runde ausgeführt." };
-      const r = await runLoopFile(path, files, { graph: st.graphLoop, tries: st.loopTries });
+      const r = await runLoopFile(path, files, { graph: st.graphLoop, tries: st.runLoop ? st.loopTries : 1 });
       st.pushOutput({
         ok: r.ok,
         stdout: r.stdout,
@@ -459,13 +566,15 @@ function clientTools(opts: {
         duration: r.duration,
         label: path,
         html: r.html,
+        stage: r.stage,
       });
       if (r.graphical || /\.html?$/i.test(path)) {
         const { openRunWindow } = await import("./run-window");
         openRunWindow({ agent: true });
         st.setPreviewOpen(false);
-      } else if (st.openOutputOnRun) {
+      } else if (r.stage?.kind === "window" || r.stage?.kind === "log" || st.openOutputOnRun) {
         st.revealOutput();
+        if (r.stage?.kind === "window" || r.stage?.kind === "log") st.setPreviewOpen(false);
       }
       const { html: _html, ...out } = r;
       return out;
@@ -484,6 +593,32 @@ function clientTools(opts: {
       const { openRunWindow, keepAgentRun } = await import("./run-window");
       const st = useIde.getState();
       keepAgentRun();
+      const last = [...st.output].reverse().find((o) => o.stdout || o.stderr || o.html);
+      if (last?.stage?.kind === "window") {
+        st.revealOutput();
+        return {
+          ok: true,
+          stage: "window",
+          stdout: (last.stdout || "").slice(0, 4000),
+          note: "Bühne: natives Fenster. Kein HTML-Frame.",
+        };
+      }
+      const htmlPath =
+        (st.runPath && /\.html?$/i.test(st.runPath) ? st.runPath : "") ||
+        (st.activePath && /\.html?$/i.test(st.activePath) ? st.activePath : "") ||
+        (last?.label && /\.html?$/i.test(last.label) ? last.label : "") ||
+        Object.keys(st.files).find((p) => /\.html?$/i.test(p)) ||
+        "";
+      if (!htmlPath && last && !last.html) {
+        st.revealOutput();
+        return {
+          ok: last.ok,
+          stage: last.stage?.kind || "log",
+          stdout: (last.stdout || "").slice(0, 4000),
+          stderr: (last.stderr || "").slice(0, 1500),
+          note: "Bühne: Compile/Run-Log. see_run hat bei Native kein iframe.",
+        };
+      }
       if (st.runInWindow || st.runPopout) {
         openRunWindow({ agent: true });
         st.setPreviewOpen(false);
@@ -492,12 +627,7 @@ function clientTools(opts: {
         const { agentOpenedPreview } = await import("./run-window");
         agentOpenedPreview();
       }
-      const path =
-        (st.runPath && /\.html?$/i.test(st.runPath) ? st.runPath : "") ||
-        (st.activePath && /\.html?$/i.test(st.activePath) ? st.activePath : "") ||
-        [...st.output].reverse().find((o) => o.label && /\.html?$/i.test(o.label))?.label ||
-        Object.keys(st.files).find((p) => /\.html?$/i.test(p)) ||
-        "";
+      const path = htmlPath;
       const src = path ? st.files[path] : "";
       let html = src;
       if (path && src) {
@@ -511,11 +641,41 @@ function clientTools(opts: {
         ),
       ]);
       if (!shot.image) {
+        if (last && !last.html) {
+          return {
+            ok: last.ok,
+            stage: "log",
+            stdout: (last.stdout || "").slice(0, 4000),
+            note: "Kein HTML-Frame. Letzter Compile/Run.",
+          };
+        }
         return { ok: false, error: "Kein Frame. Vorschau/Run muss HTML mit Canvas zeigen.", logs: shot.logs };
       }
       return { ok: true, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
   };
+}
+
+function toolsForCall(observeOnly = false) {
+  const st = useIde.getState();
+  const picked = pickAgentTools({
+    observeOnly,
+    mcp: st.mcpServers.some((s) => s.enabled) || Boolean(st.activeSurfaceId && st.activeSurfaceId !== "anvil"),
+    engine: Boolean(st.engineLoop || st.engineLink?.ok),
+    skills: useLearn.getState().skills.length > 0,
+    debug: Boolean(st.debug.paused) || Object.values(st.breakpoints).some((b) => b.length),
+    git: Boolean(st.workspaceCwd?.trim()),
+  });
+  return picked.filter((t) => toolsAllowed(st.activeSurfaceId, st.surfaceMode, t.function.name));
+}
+
+function setWireCtx(payload: Record<string, unknown>, ctx: number): void {
+  const n = Math.max(2048, ctx);
+  if ("n_ctx" in payload) payload.n_ctx = n;
+  const opt = ((payload.options as Record<string, unknown>) || {});
+  opt.num_ctx = n;
+  opt.n_ctx = n;
+  payload.options = opt;
 }
 
 function makeLocalComplete(
@@ -525,6 +685,7 @@ function makeLocalComplete(
   apiKey: string,
   context = 32768,
   thinking: ThinkingMode = "auto",
+  observeOnly = false,
 ) {
   const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
   const headers: Record<string, string> = {
@@ -542,6 +703,7 @@ function makeLocalComplete(
     const wantTools = sendTools(cap0, Boolean(useTools));
     const think = wantTools && cap0.noThinkWithTools ? "off" : thinking;
     const st = useIde.getState();
+    let wireCtx = Math.max(2048, context);
     const payload: Record<string, unknown> = applyLlmOptions(
       {
         model,
@@ -549,10 +711,10 @@ function makeLocalComplete(
         messages,
         stream: Boolean(onDelta) && !(wantTools && cap0.noStreamTools),
       },
-      { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
+      { provider: spec.id, model, api: spec.api, context: wireCtx, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
       { tools: wantTools },
     );
-    let tools = wantTools ? AGENT_TOOLS.filter((t) => toolsAllowed(useIde.getState().activeSurfaceId, useIde.getState().surfaceMode, t.function.name)) : null;
+    let tools = wantTools ? toolsForCall(observeOnly) : null;
     let choiceMode: "auto" | "required" = useTools === "required" && wantTools && !cap0.noRequired ? "required" : "auto";
     if (tools) {
       payload.tools = tools;
@@ -570,7 +732,7 @@ function makeLocalComplete(
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
       try {
         payload.model = current;
-        prepChatPayload(payload, context);
+        prepChatPayload(payload, wireCtx);
         const res = await lanFetch(`${base}/chat/completions`, {
           method: "POST",
           headers,
@@ -593,6 +755,13 @@ function makeLocalComplete(
             } catch {
               /* Liste ging nicht */
             }
+          }
+          if (isVramError(body) && attempt < tries && wireCtx > 4096) {
+            wireCtx = shrinkLocalCtx(wireCtx);
+            setWireCtx(payload, wireCtx);
+            prepChatPayload(payload, wireCtx);
+            last = new Error(`VRAM, num_ctx ${wireCtx}`);
+            continue;
           }
           if ((isContextError(body) || (res.status === 500 && isContextError(body))) && attempt < tries) {
             const opt = ((payload.options as Record<string, unknown>) || {});
@@ -710,6 +879,7 @@ function makeProxyComplete(
   apiKey: string,
   context = 32768,
   thinking: ThinkingMode = "auto",
+  observeOnly = false,
 ) {
   return async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void): Promise<LlmChoice> => {
     const creds = credsForProvider(spec.id, useIde.getState().llmAuthMode);
@@ -718,13 +888,73 @@ function makeProxyComplete(
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
     let last: unknown;
     const gen = agentGen();
+    const stop = cloudStopMs(useIde.getState().llmHardStopMin);
+    const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
     for (let attempt = 1; attempt <= tries; attempt++) {
       throwIfAborted();
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
       const cap = getCap(spec.id, model);
       const wantTools = sendTools(cap, Boolean(useTools));
       const think = wantTools && cap.noThinkWithTools ? "off" : thinking;
+      const rt = { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: useIde.getState().llmTemperature, maxOut: useIde.getState().llmMaxOut };
+      const pipeChat =
+        spec.api === "openai" &&
+        spec.id !== "codex" &&
+        spec.id !== "azure" &&
+        spec.id !== "github" &&
+        Boolean(base) &&
+        !cap.responsesApi &&
+        !usesResponsesApi(rt, wantTools);
       try {
+        if (pipeChat) {
+          const st = useIde.getState();
+          const payload: Record<string, unknown> = applyLlmOptions(
+            {
+              model,
+              temperature: st.llmTemperature,
+              messages,
+              stream: Boolean(onDelta) && !(wantTools && cap.noStreamTools),
+            },
+            { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
+            { tools: wantTools },
+          );
+          if (wantTools) {
+            payload.tools = toolsForCall(observeOnly);
+            payload.tool_choice = useTools === "required" && !cap.noRequired ? "required" : "auto";
+          }
+          applyCapToPayload(payload, cap, wantTools);
+          prepChatPayload(payload, context);
+          const res = await lanFetch(`${base}/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${key}`,
+            },
+            body: JSON.stringify(payload),
+            signal: withAgentTimeout(stop),
+          });
+          if (res.ok) {
+            if (payload.stream) return await readSseChat(res, onDelta);
+            const json = (await res.json()) as { choices: { message: LlmChoice }[] };
+            const choice = json.choices[0]?.message;
+            if (!choice) throw new Error("Leere Antwort vom Modell.");
+            if (choice.reasoning) onDelta?.(choice.reasoning, "think");
+            if (choice.content) onDelta?.(choice.content, "text");
+            return choice;
+          }
+          const body = await res.text();
+          const learned = learnFromError(spec.id, model, res.status, body);
+          if (learned && attempt < tries) {
+            last = new Error(learned.note || `HTTP ${res.status}`);
+            continue;
+          }
+          if (attempt < tries && (isContextError(body) || /500|502|503|timeout/i.test(body))) {
+            last = new Error(`HTTP ${res.status}`);
+            await new Promise((r) => setTimeout(r, 700 * attempt));
+            continue;
+          }
+          last = new Error(`HTTP ${res.status}: ${body.slice(0, 280)}`);
+        }
         const r = await raceAbort(
           proxyLlm({
             data: {
@@ -744,7 +974,7 @@ function makeProxyComplete(
               refresh: creds.refresh,
             },
           }),
-          hardStopMs(useIde.getState().llmHardStopMin),
+          stop,
         );
         if (!r.ok || !r.choice) {
           const err = r.error || "Keine Antwort";
@@ -787,6 +1017,7 @@ export async function completeLocal(opts: {
   baseUrl: string;
   model: string;
   apiKey: string;
+  images?: string[];
 }): Promise<string> {
   const spec = providerOf(opts.provider);
   const model = opts.model.trim() || spec.model;
@@ -803,19 +1034,32 @@ export async function completeLocal(opts: {
   if (isBrowserTarget(spec, opts.baseUrl)) {
     const base = normalizeBaseUrl(opts.baseUrl || spec.baseUrl);
     if (!base || !model) throw new Error("URL und Modell setzen.");
+    const pics = (opts.images ?? []).filter((u) => /^data:image\//i.test(u)).slice(0, 4);
+    const userContent =
+      pics.length > 0
+        ? [
+            { type: "text", text: opts.prompt.slice(0, 12000) },
+            ...pics.map((url) => ({ type: "image_url", image_url: { url } })),
+          ]
+        : opts.prompt.slice(0, 12000);
+    const st = useIde.getState();
+    const ctx = Math.max(2048, st.llmContext || 32768);
+    const payload = applyLlmOptions(
+      {
+        model,
+        messages: [{ role: "user", content: userContent }],
+        stream: false,
+      },
+      { provider: spec.id, model, api: spec.api, context: ctx, thinking: "off", temperature: 0.2, maxOut: 1200 },
+    );
     const res = await lanFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${opts.apiKey.trim() || "local"}`,
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        max_tokens: 1200,
-        messages: [{ role: "user", content: opts.prompt.slice(0, 12000) }],
-      }),
-      signal: withAgentTimeout(60_000),
+      body: JSON.stringify(payload),
+      signal: withAgentTimeout(0),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = (await res.json()) as { choices: { message: { content?: string } }[] };

@@ -1,10 +1,20 @@
 import { grammarOf, registerGrammar } from "@/lib/syntax";
 import { unzipFiles } from "@/lib/archive";
 import { joinManifest, parseSnippetFile, type VsSnip } from "./vscode-snip";
+import { vsPackPluginId } from "./util";
+import { keywordsFromTm, shouldKeepVsixPath } from "./vscode-keep";
 
 export type { VsSnip };
 export { parseSnippetFile };
-export type VsPack = { id: string; name: string; snippets: number; languages: number; note: string };
+export { keywordsFromTm, shouldKeepVsixPath };
+export type VsPack = {
+  id: string;
+  name: string;
+  snippets: number;
+  languages: number;
+  note: string;
+  path: string;
+};
 
 const extraSnips: VsSnip[] = [];
 const extraExt: Record<string, string> = {};
@@ -41,6 +51,7 @@ export function resetVscode() {
 type Contrib = {
   languages?: Array<{ id?: string; extensions?: string[]; aliases?: string[]; configuration?: string }>;
   snippets?: Array<{ language?: string; path?: string }>;
+  grammars?: Array<{ language?: string; path?: string; scopeName?: string }>;
 };
 
 function readJson(files: Record<string, string>, path: string): unknown {
@@ -57,7 +68,15 @@ function join(base: string, rel: string): string {
   return joinManifest(base, rel);
 }
 
-export function ingestContrib(files: Record<string, string>, manifestPath: string): VsPack | null {
+function dirOf(manifestPath: string): string {
+  return manifestPath.includes("/") ? manifestPath.slice(0, manifestPath.lastIndexOf("/")) : manifestPath;
+}
+
+export function ingestContrib(
+  files: Record<string, string>,
+  manifestPath: string,
+  apply = true,
+): VsPack | null {
   const json = readJson(files, manifestPath) as {
     name?: string;
     displayName?: string;
@@ -74,27 +93,60 @@ export function ingestContrib(files: Record<string, string>, manifestPath: strin
     const langId = lang.id;
     if (!langId) continue;
     languages += 1;
-    for (const ext of lang.extensions ?? []) {
-      extraExt[ext.replace(/^\./, "").toLowerCase()] = langId;
-    }
-    if (!grammarOf(langId)) {
-      registerGrammar({
-        id: langId,
-        aliases: lang.aliases?.map((a) => a.toLowerCase()),
-        keywords: [],
-        lineComment: extraComment[langId],
-      });
+    if (apply) {
+      for (const ext of lang.extensions ?? []) {
+        extraExt[ext.replace(/^\./, "").toLowerCase()] = langId;
+      }
+      if (!grammarOf(langId)) {
+        registerGrammar({
+          id: langId,
+          aliases: lang.aliases?.map((a) => a.toLowerCase()),
+          keywords: [],
+          lineComment: extraComment[langId],
+        });
+      }
     }
     if (lang.configuration) {
       const cfgPath = join(manifestPath, lang.configuration);
       const cfg = readJson(files, cfgPath) as { comments?: { lineComment?: string } } | null;
       const line = cfg?.comments?.lineComment;
-      if (line) {
+      if (line && apply) {
         extraComment[langId] = line;
-        if (!grammarOf(langId)?.lineComment) {
-          registerGrammar({ id: langId, aliases: lang.aliases?.map((a) => a.toLowerCase()), keywords: grammarOf(langId)?.keywords ?? [], lineComment: line, builtins: grammarOf(langId)?.builtins, types: grammarOf(langId)?.types });
-        }
+        const prev = grammarOf(langId);
+        registerGrammar({
+          id: langId,
+          aliases: lang.aliases?.map((a) => a.toLowerCase()),
+          keywords: prev?.keywords ?? [],
+          lineComment: line,
+          builtins: prev?.builtins,
+          types: prev?.types,
+        });
       }
+    }
+  }
+  for (const g of c.grammars ?? []) {
+    if (!g.path) continue;
+    const p = join(manifestPath, g.path);
+    const raw = files[p];
+    if (!raw) continue;
+    let data: unknown = raw;
+    try {
+      data = JSON.parse(raw.replace(/^\uFEFF/, ""));
+    } catch {
+      data = raw;
+    }
+    const kws = keywordsFromTm(data);
+    const langId = g.language;
+    if (apply && langId && kws.length) {
+      const prev = grammarOf(langId);
+      registerGrammar({
+        id: langId,
+        aliases: prev?.aliases,
+        keywords: [...new Set([...(prev?.keywords ?? []), ...kws])],
+        lineComment: extraComment[langId] ?? prev?.lineComment,
+        builtins: prev?.builtins,
+        types: prev?.types,
+      });
     }
   }
   for (const sn of c.snippets ?? []) {
@@ -103,26 +155,36 @@ export function ingestContrib(files: Record<string, string>, manifestPath: strin
     const raw = files[p];
     if (!raw) continue;
     const got = parseSnippetFile(raw, sn.language || "*");
-    extraSnips.push(...got);
+    if (apply) extraSnips.push(...got);
     snippets += got.length;
   }
-  const skip = json.main ? "Aktivierungscode (vscode-Modul) übersprungen." : "Nur Beiträge: Snippets, Sprachen, Kommentare.";
-  const pack: VsPack = { id, name, snippets, languages, note: skip };
+  const skip = json.main
+    ? "Aktivierungscode (vscode-Modul) übersprungen."
+    : "Nur Beiträge: Snippets, Sprachen, Kommentare.";
+  const pack: VsPack = { id, name, snippets, languages, note: skip, path: dirOf(manifestPath) };
   packs.push(pack);
   return pack;
 }
 
-export function loadVscodeFromWorkspace(files: Record<string, string>): VsPack[] {
+export function loadVscodeFromWorkspace(files: Record<string, string>, disabled: string[] = []): VsPack[] {
   resetVscode();
   const found: VsPack[] = [];
+  const off = new Set(disabled);
   for (const [path, content] of Object.entries(files)) {
-    if (path.endsWith(".code-snippets") || (path.startsWith(".vscode/") && path.endsWith(".json") && path.includes("snippet"))) {
+    if (
+      path.endsWith(".code-snippets") ||
+      (path.startsWith(".vscode/") && path.endsWith(".json") && path.includes("snippet"))
+    ) {
+      const pid = vsPackPluginId(path);
+      const apply = !off.has(pid);
       const got = parseSnippetFile(content, "*");
-      extraSnips.push(...got);
-      if (got.length) found.push({ id: path, name: path, snippets: got.length, languages: 0, note: "Workspace-Snippets" });
+      if (apply) extraSnips.push(...got);
+      if (got.length) found.push({ id: path, name: path, snippets: got.length, languages: 0, note: "Workspace-Snippets", path });
     }
     if (/(^|\/)package\.json$/.test(path) && (path.startsWith("plugins/") || path.startsWith(".vscode/"))) {
-      const pack = ingestContrib(files, path);
+      const preview = readJson(files, path) as { name?: string; contributes?: Contrib } | null;
+      const pid = vsPackPluginId(preview?.name || path);
+      const pack = ingestContrib(files, path, !off.has(pid));
       if (pack) found.push(pack);
     }
   }
@@ -130,7 +192,15 @@ export function loadVscodeFromWorkspace(files: Record<string, string>): VsPack[]
   return found;
 }
 
-export async function importVsix(buf: ArrayBuffer, dest = "plugins/vscode"): Promise<{ files: Record<string, string>; skipped: number; name: string }> {
+export function vsPackFilePaths(files: Record<string, string>, packPath: string): string[] {
+  if (!packPath) return [];
+  return Object.keys(files).filter((p) => p === packPath || p.startsWith(`${packPath}/`));
+}
+
+export async function importVsix(
+  buf: ArrayBuffer,
+  dest = "plugins/vscode",
+): Promise<{ files: Record<string, string>; skipped: number; name: string }> {
   const raw = await unzipFiles(buf);
   const files: Record<string, string> = {};
   let skipped = 0;
@@ -142,13 +212,7 @@ export async function importVsix(buf: ArrayBuffer, dest = "plugins/vscode"): Pro
       skipped += 1;
       continue;
     }
-    const keep =
-      /(^|\/)package\.json$/.test(p) ||
-      /\.code-snippets$/.test(p) ||
-      /language-configuration\.json$/.test(p) ||
-      /snippets?\/.+\.json$/i.test(p) ||
-      /\.vsixmanifest$/i.test(p);
-    if (!keep) {
+    if (!shouldKeepVsixPath(p)) {
       skipped += 1;
       continue;
     }
