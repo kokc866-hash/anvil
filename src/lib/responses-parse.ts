@@ -47,67 +47,119 @@ export function parseResponses(json: ResponsesJson): LlmChoice {
   };
 }
 
+export type ResponsesAcc = {
+  content: string;
+  reasoning: string;
+  tools: Map<string, { id: string; name: string; args: string }>;
+  completed: LlmChoice | null;
+  done: boolean;
+  error: string;
+};
+
+export function emptyResponsesAcc(): ResponsesAcc {
+  return { content: "", reasoning: "", tools: new Map(), completed: null, done: false, error: "" };
+}
+
+export function choiceFromAcc(acc: ResponsesAcc): LlmChoice {
+  if (acc.completed && (acc.completed.content || acc.completed.tool_calls?.length) && acc.done) return acc.completed;
+  const tool_calls = [...acc.tools.values()].filter((t) => t.name).map((t) => asToolCall(t.id, t.name, t.args));
+  return {
+    role: "assistant",
+    content: acc.content || acc.completed?.content || null,
+    reasoning: acc.reasoning || acc.completed?.reasoning,
+    tool_calls: tool_calls.length ? tool_calls : acc.completed?.tool_calls,
+    usage: acc.completed?.usage,
+  };
+}
+
+export function applyResponsesEvent(
+  acc: ResponsesAcc,
+  j: Record<string, unknown>,
+  onDelta?: (text: string, kind?: "text" | "think") => void,
+): void {
+  const type = String(j.type ?? "");
+  if (type === "error" || type === "response.failed") {
+    const err = j.error;
+    const msg =
+      typeof err === "string"
+        ? err
+        : err && typeof err === "object" && "message" in err
+          ? String((err as { message?: string }).message ?? "")
+          : String(j.message ?? "");
+    if (msg) acc.error = msg;
+    acc.done = true;
+    return;
+  }
+  if (type === "response.output_text.delta") {
+    const s = String(j.delta ?? j.text ?? "");
+    if (s) {
+      acc.content += s;
+      onDelta?.(s, "text");
+    }
+  }
+  if (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta") {
+    const s = String(j.delta ?? j.text ?? "");
+    if (s) {
+      acc.reasoning += s;
+      onDelta?.(s, "think");
+    }
+  }
+  if (type === "response.function_call_arguments.delta") {
+    const id = String(j.call_id ?? j.item_id ?? "call");
+    const cur = acc.tools.get(id) ?? { id, name: String(j.name ?? ""), args: "" };
+    cur.args += String(j.delta ?? "");
+    if (j.name) cur.name = String(j.name);
+    acc.tools.set(id, cur);
+  }
+  if (type === "response.output_item.added" || type === "response.output_item.done") {
+    const item = (j.item && typeof j.item === "object" ? j.item : j) as {
+      type?: string;
+      call_id?: string;
+      id?: string;
+      name?: string;
+      arguments?: string | Record<string, unknown>;
+    };
+    if (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "tool_call") {
+      const id = String(item.call_id ?? item.id ?? "call");
+      const args = item.arguments;
+      acc.tools.set(id, {
+        id,
+        name: String(item.name ?? acc.tools.get(id)?.name ?? ""),
+        args: typeof args === "string" ? args : args ? JSON.stringify(args) : acc.tools.get(id)?.args ?? "",
+      });
+    }
+  }
+  if ((type === "response.completed" || type === "response.incomplete") && j.response && typeof j.response === "object") {
+    acc.completed = parseResponses(j.response as ResponsesJson);
+    acc.done = type === "response.completed";
+  }
+  if (type === "response.completed") acc.done = true;
+}
+
 export function parseResponsesSse(raw: string): LlmChoice {
   const trimmed = raw.trim();
   if (trimmed.startsWith("{")) {
     return parseResponses(JSON.parse(trimmed) as ResponsesJson);
   }
-  let content = "";
-  let reasoning = "";
-  const tools = new Map<string, { id: string; name: string; args: string }>();
-  let completed: LlmChoice | null = null;
+  const acc = emptyResponsesAcc();
   for (const block of raw.split(/\n\n+/)) {
     const data = block
       .split("\n")
       .filter((l) => l.startsWith("data:"))
       .map((l) => l.slice(5).trim())
       .join("\n");
-    if (!data || data === "[DONE]") continue;
+    if (!data || data === "[DONE]") {
+      if (data === "[DONE]") acc.done = true;
+      continue;
+    }
     let j: Record<string, unknown>;
     try {
       j = JSON.parse(data) as Record<string, unknown>;
     } catch {
       continue;
     }
-    const type = String(j.type ?? "");
-    if (type === "response.output_text.delta") content += String(j.delta ?? j.text ?? "");
-    if (type === "response.reasoning_summary_text.delta") reasoning += String(j.delta ?? "");
-    if (type === "response.function_call_arguments.delta") {
-      const id = String(j.call_id ?? j.item_id ?? "call");
-      const cur = tools.get(id) ?? { id, name: String(j.name ?? ""), args: "" };
-      cur.args += String(j.delta ?? "");
-      if (j.name) cur.name = String(j.name);
-      tools.set(id, cur);
-    }
-    if (type === "response.output_item.added" || type === "response.output_item.done") {
-      const item = (j.item && typeof j.item === "object" ? j.item : j) as {
-        type?: string;
-        call_id?: string;
-        id?: string;
-        name?: string;
-        arguments?: string | Record<string, unknown>;
-      };
-      if (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "tool_call") {
-        const id = String(item.call_id ?? item.id ?? "call");
-        const args = item.arguments;
-        tools.set(id, {
-          id,
-          name: String(item.name ?? tools.get(id)?.name ?? ""),
-          args: typeof args === "string" ? args : args ? JSON.stringify(args) : tools.get(id)?.args ?? "",
-        });
-      }
-    }
-    if ((type === "response.completed" || type === "response.incomplete") && j.response && typeof j.response === "object") {
-      completed = parseResponses(j.response as ResponsesJson);
-    }
+    applyResponsesEvent(acc, j);
   }
-  if (completed && (completed.content || completed.tool_calls?.length)) return completed;
-  const tool_calls = [...tools.values()].filter((t) => t.name).map((t) => asToolCall(t.id, t.name, t.args));
-  return {
-    role: "assistant",
-    content: content || completed?.content || null,
-    reasoning: reasoning || completed?.reasoning,
-    tool_calls: tool_calls.length ? tool_calls : completed?.tool_calls,
-    usage: completed?.usage,
-  };
+  if (acc.error) throw new Error(acc.error);
+  return choiceFromAcc(acc);
 }

@@ -4,6 +4,7 @@ import { agentBeat, hardStopMs } from "./abort";
 import { useIde } from "@/store/ide";
 import { isToolTemplateEcho } from "./agent-parse";
 import { applyLiveDraft, applyLiveText } from "./live-write";
+import { applyResponsesEvent, choiceFromAcc, emptyResponsesAcc } from "./responses-parse";
 
 const AFTER_FINISH_MS = 8_000;
 const AFTER_STOP_MS = 2_000;
@@ -261,4 +262,97 @@ export async function readSseChat(
     finish_reason: finish || (tool_calls.length ? "tool_calls" : sawDone ? "stop" : undefined),
     usage: promptTok || completionTok ? { prompt: promptTok, completion: completionTok } : undefined,
   };
+}
+
+export async function readSseResponses(
+  res: Response,
+  onDelta?: (text: string, kind?: "text" | "think") => void,
+): Promise<LlmChoice> {
+  if (!res.body) throw new Error("Keine Stream-Antwort.");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const acc = emptyResponsesAcc();
+  let sawDone = false;
+
+  const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
+    new Promise((resolve, reject) => {
+      const wait = sawDone || acc.done ? AFTER_FINISH_MS : stallWait();
+      const t =
+        wait > 0
+          ? setTimeout(() => {
+              if (sawDone || acc.done) {
+                resolve({ done: true });
+                return;
+              }
+              reject(new StreamStallError("Kein Token — Verbindung weg. Nochmal senden."));
+            }, wait)
+          : 0;
+      reader
+        .read()
+        .then((r) => {
+          if (t) clearTimeout(t);
+          resolve(r);
+        })
+        .catch((err) => {
+          if (t) clearTimeout(t);
+          reject(err);
+        });
+    });
+
+  try {
+    while (true) {
+      const { value, done } = await readChunk();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        if (t.startsWith(":")) {
+          agentBeat();
+          continue;
+        }
+        if (!t.startsWith("data:")) continue;
+        const data = t.slice(5).trim();
+        if (data === "[DONE]") {
+          sawDone = true;
+          acc.done = true;
+          continue;
+        }
+        try {
+          const j = JSON.parse(data) as Record<string, unknown>;
+          const beforeC = acc.content.length;
+          const beforeR = acc.reasoning.length;
+          applyResponsesEvent(acc, j, onDelta);
+          if (acc.content.length > beforeC) applyLiveText(acc.content);
+          if (acc.content.length > beforeC || acc.reasoning.length > beforeR || acc.tools.size) agentBeat();
+          for (const tcall of acc.tools.values()) {
+            if (tcall.name && tcall.args) applyLiveDraft(tcall.name, tcall.args);
+          }
+          if (acc.error) throw new Error(acc.error);
+        } catch (err) {
+          if (err instanceof Error && acc.error) throw err;
+        }
+      }
+      if (sawDone || acc.done) break;
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* */
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      /* */
+    }
+  }
+  const choice = choiceFromAcc(acc);
+  if (!choice.content && !choice.reasoning && !choice.tool_calls?.length && !sawDone && !acc.done) {
+    throw new StreamStallError("Leerer Stream — Modell hat abgebrochen (oft kalt oder Context zu groß).");
+  }
+  return choice;
 }

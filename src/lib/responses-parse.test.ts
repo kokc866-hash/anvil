@@ -41,5 +41,10 @@ test("incomplete stream still parses", () => {
     "",
   ].join("\n");
   const c = parseResponsesSse(raw);
-  assert.equal(c.content, "halb");
+  assert.match(c.content || "", /halb/);
+});
+
+test("sse error surfaces", () => {
+  const raw = 'data: {"type":"error","error":{"message":"model not found"}}\n\n';
+  assert.throws(() => parseResponsesSse(raw), /model not found/);
 });

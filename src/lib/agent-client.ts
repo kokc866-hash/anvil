@@ -16,11 +16,12 @@ import { agentLearn, useLearn } from "./learn";
 import { stripZipRoot, unzipFiles } from "./archive";
 import { formatCode } from "./format";
 import { cloneGithub, pushGithub } from "./github";
-import { applyLlmOptions, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { applyLlmOptions, patchResponses400, responsesBody, toResponsesTools, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { parseResponsesSse } from "./responses-parse";
 import { fitMessages, isContextError, isVramError, prepChatPayload, shrinkLocalCtx, type CompactMode } from "./compact";
 import { isPrivateHost } from "./net-guard";
 import { proxyLlm } from "./llm-proxy";
-import { readSseChat, StreamStallError } from "./sse";
+import { readSseChat, readSseResponses, StreamStallError } from "./sse";
 import { fetchWeb } from "./web-fetch";
 import {
   PROVIDER_DEFAULTS,
@@ -897,15 +898,80 @@ function makeProxyComplete(
       const wantTools = sendTools(cap, Boolean(useTools));
       const think = wantTools && cap.noThinkWithTools ? "off" : thinking;
       const rt = { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: useIde.getState().llmTemperature, maxOut: useIde.getState().llmMaxOut };
-      const pipeChat =
+      const pipeOk =
         spec.api === "openai" &&
         spec.id !== "codex" &&
         spec.id !== "azure" &&
         spec.id !== "github" &&
-        Boolean(base) &&
-        !cap.responsesApi &&
-        !usesResponsesApi(rt, wantTools);
+        Boolean(base);
+      const needResponses = Boolean(cap.responsesApi) || usesResponsesApi(rt, wantTools);
+      const pipeChat = pipeOk && !needResponses;
       try {
+        if (pipeOk && needResponses) {
+          const st = useIde.getState();
+          const chatPayload: Record<string, unknown> = applyLlmOptions(
+            { model, temperature: st.llmTemperature, messages },
+            { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
+            { tools: wantTools },
+          );
+          prepChatPayload(chatPayload, context);
+          const body = responsesBody(chatPayload, spec.id);
+          body.stream = true;
+          if (wantTools) {
+            body.tools = toResponsesTools(toolsForCall(observeOnly));
+            body.tool_choice = useTools === "required" && !cap.noRequired ? "required" : "auto";
+          }
+          let res = await lanFetch(`${base}/responses`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "text/event-stream",
+              Authorization: `Bearer ${key}`,
+            },
+            body: JSON.stringify(body),
+            signal: withAgentTimeout(stop),
+          });
+          if (!res.ok) {
+            let errText = await res.text();
+            if (res.status === 400 && patchResponses400(body, errText)) {
+              res = await lanFetch(`${base}/responses`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Accept: "text/event-stream",
+                  Authorization: `Bearer ${key}`,
+                },
+                body: JSON.stringify(body),
+                signal: withAgentTimeout(stop),
+              });
+              if (!res.ok) errText = await res.text();
+            }
+            if (res.ok) {
+              /* continue below */
+            } else if (res.status === 404) {
+              last = new Error(`HTTP 404: ${errText.slice(0, 180)}`);
+            } else {
+              const learned = learnFromError(spec.id, model, res.status, errText);
+              if (learned && attempt < tries) {
+                last = new Error(learned.note || `HTTP ${res.status}`);
+                continue;
+              }
+              last = new Error(`HTTP ${res.status}: ${errText.slice(0, 280)}`);
+              void import("./app-log").then((m) => m.appLog("http", String(last).slice(0, 180)));
+              if (attempt >= tries) throw last;
+              continue;
+            }
+          }
+          if (res.ok) {
+            const ct = res.headers.get("content-type") || "";
+            if (/event-stream|text\/plain/i.test(ct) || body.stream) return await readSseResponses(res, onDelta);
+            const raw = await res.text();
+            const choice = parseResponsesSse(raw);
+            if (choice.reasoning) onDelta?.(choice.reasoning, "think");
+            if (choice.content) onDelta?.(choice.content, "text");
+            return choice;
+          }
+        }
         if (pipeChat) {
           const st = useIde.getState();
           const payload: Record<string, unknown> = applyLlmOptions(

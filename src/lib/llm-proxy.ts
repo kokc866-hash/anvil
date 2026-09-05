@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
 import { AGENT_TOOLS, CORE_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
 import { isContextError, prepChatPayload } from "./compact";
-import { applyLlmOptions, patchResponses400, responsesBody, usesResponsesApi, type ThinkingMode } from "./llm-options";
+import { applyLlmOptions, patchResponses400, responsesBody, toResponsesTools, usesResponsesApi, type ThinkingMode } from "./llm-options";
 import { parseResponses, parseResponsesSse } from "./responses-parse";
 import { shrinkTools, stripPayload } from "./tool-fallback";
 import { applyCapToPayload, classifyLlmError, sendTools, type ModelCap } from "./model-caps";
@@ -262,12 +262,7 @@ async function postResponses(
 ): Promise<LlmChoice> {
   const body: Record<string, unknown> = responsesBody(payload, kind);
   if (useTools) {
-    body.tools = AGENT_TOOLS.map((t) => ({
-      type: "function",
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters ?? { type: "object", properties: {} },
-    }));
+    body.tools = toResponsesTools(AGENT_TOOLS);
     body.tool_choice = "auto";
   }
   const send = (b: Record<string, unknown>) =>
@@ -293,12 +288,7 @@ async function postResponses(
   if (!res.ok && res.status === 400 && useTools) {
     const next = shrinkTools(AGENT_TOOLS);
     if (next) {
-      body.tools = next.map((t) => ({
-        type: "function",
-        name: t.function.name,
-        description: t.function.description,
-        parameters: t.function.parameters ?? { type: "object", properties: {} },
-      }));
+      body.tools = toResponsesTools(next);
       res = await send(body);
       raw = await res.text();
     }

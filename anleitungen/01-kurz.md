@@ -1,4 +1,4 @@
-# Anvil 1.2.7 — Kurz
+# Anvil 1.2.8 — Kurz
 
 Lokale IDE: Dateien, Agent, Run. Eigenes Fenster, kein Browser.
 

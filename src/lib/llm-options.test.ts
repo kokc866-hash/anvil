@@ -79,6 +79,7 @@ test("responses api when gpt-5 tools and thinking on", () => {
   assert.equal(usesResponsesApi({ ...rt, thinking: "off" }, true), false);
   assert.equal(usesResponsesApi(rt, false), false);
   assert.equal(usesResponsesApi({ ...rt, provider: "codex" }, true), false);
+  assert.equal(usesResponsesApi({ ...rt, model: "gpt-6-astra" }, true), true);
 });
 
 test("responses store is always false", () => {
@@ -99,7 +100,7 @@ test("openai api responses keeps max_output_tokens", () => {
   const body = applyResponsesStore({ model: "gpt-5.6-sol", max_output_tokens: 8000 }, "openai");
   assert.equal(body.store, false);
   assert.equal(body.max_output_tokens, 8000);
-  assert.equal("stream" in body, false);
+  assert.equal(body.stream, true);
   assert.deepEqual(body.include, ["reasoning.encrypted_content"]);
 });
 

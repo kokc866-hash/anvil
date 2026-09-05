@@ -28,14 +28,16 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.7' }}
-          name: Anvil 1.2.7
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.8' }}
+          name: Anvil 1.2.8
           generate_release_notes: true
           files: |
             dist-win/*.exe
             dist-win/*.zip
           body: |
-            **Anvil 1.2.7** (2026-09-05)
+            **Anvil 1.2.8** (2026-09-05)
+
+            GPT-5/6 über die API **streamt** (Responses). Spur zeigt Denken statt 1 min Leere.
 
             Cloud/API-Kontext immer **Auto** (alle Anbieter, nicht nur OpenAI).
             gpt-6-astra = 1.05M, gpt-5.5-pro nicht mehr als gpt-5/256k.

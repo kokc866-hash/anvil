@@ -11,7 +11,7 @@ export type LlmRuntime = {
 };
 
 const THINK_RE =
-  /r1|reason|think|qwq|qwen3|qwen2\.5|o1|o3|o4|gpt-5|grok-3|grok-4|sonnet-4|opus-4|haiku-4|deepseek-reason/i;
+  /r1|reason|think|qwq|qwen3|qwen2\.5|o1|o3|o4|gpt-5|gpt-6|grok-3|grok-4|sonnet-4|opus-4|opus-5|fable|haiku-4|deepseek-reason/i;
 
 export function normalizeThinking(v: string): ThinkingMode {
   if (v === "on" || v === "mid") return "medium";
@@ -53,7 +53,7 @@ export function needsCompletionTokens(model: string, provider = ""): boolean {
   if (provider === "anthropic" || provider === "ollama" || provider === "lmstudio" || provider === "llamacpp") {
     return false;
   }
-  return /gpt-5|o1-|o1$|\bo1\b|o3-|o3$|o4-|o4$|codex|grok-4/i.test(model);
+  return /gpt-5|gpt-6|o1-|o1$|\bo1\b|o3-|o3$|o4-|o4$|codex|grok-4/i.test(model);
 }
 
 export function applyLlmOptions(
@@ -161,7 +161,7 @@ export function usesResponsesApi(rt: LlmRuntime, tools: boolean): boolean {
   if (!wantsThinking(rt)) return false;
   if (rt.api === "anthropic" || rt.provider === "anthropic") return false;
   if (rt.provider === "codex" || rt.provider === "github") return false;
-  return /gpt-5|o1|o3|o4|codex/i.test(rt.model);
+  return /gpt-5|gpt-6|o1|o3|o4|codex/i.test(rt.model);
 }
 
 const CODEX_KEYS = new Set([
@@ -264,8 +264,8 @@ export function responsesBody(
 /** Codex-Abo lehnt include/max_output_tokens ab. API-Responses: store false + encrypted reasoning. */
 export function applyResponsesStore(body: Record<string, unknown>, kind = ""): Record<string, unknown> {
   body.store = false;
+  body.stream = true;
   if (kind === "codex") {
-    body.stream = true;
     body.parallel_tool_calls = false;
     delete body.include;
     for (const k of Object.keys(body)) {
@@ -315,6 +315,17 @@ export function patchResponses400(body: Record<string, unknown>, raw: string): b
     hit = true;
   }
   return hit;
+}
+
+export function toResponsesTools(
+  tools: { function: { name: string; description?: string; parameters?: unknown } }[],
+): { type: "function"; name: string; description?: string; parameters: unknown }[] {
+  return tools.map((t) => ({
+    type: "function",
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters ?? { type: "object", properties: {} },
+  }));
 }
 
 export function toolCode(
