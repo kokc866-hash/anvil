@@ -122,13 +122,18 @@ export function askPickedNone(ask: string): boolean {
 }
 
 export function jobOpen(opts: { ask: string; used: string[]; text?: string }): boolean {
-  if (askPickedNone(opts.ask)) return false;
-  if (/^Antwort auf:/i.test(opts.ask) && /wahl:\s*[b-e]\)/i.test(opts.ask)) return true;
+  // ChatPane prepends references and attached files. Those may contain words
+  // such as "Dateien"/"schreiben" without the user asking us to change anything.
+  const marker = "\n\nAuftrag:\n";
+  const taskAt = opts.ask.lastIndexOf(marker);
+  const ask = taskAt >= 0 ? opts.ask.slice(taskAt + marker.length) : opts.ask;
+  if (askPickedNone(ask)) return false;
+  if (/^Antwort auf:/i.test(ask) && /wahl:\s*[b-e]\)/i.test(ask)) return true;
   const wrote = opts.used.some((n) => /write_file|append_file|edit_file/.test(n));
   const ran = opts.used.some((n) => /run_file|engine_run/.test(n));
   if (wrote && !ran) return true;
   if (opts.text && looksIncomplete(opts.text)) return true;
-  const askBody = opts.ask.replace(/^Antwort auf:[^\n]*\n?/i, "");
+  const askBody = ask.replace(/^Antwort auf:[^\n]*\n?/i, "");
   if (wantsWorkspaceWrite(askBody) && !wrote) return true;
   const failText = /exception|error:|fehlgeschlagen|nicht (ok|grün)|schwarz|blockiert/i.test(opts.text || "");
   if (ran && failText) return true;

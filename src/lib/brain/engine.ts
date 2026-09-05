@@ -1,4 +1,4 @@
-import { cacheGet, cacheKey, cacheSet, clearBrainQueue, enqueueBrain, type BrainPri } from "./queue";
+import { cacheGet, cacheKey, cacheSet, resetBrainQueue, enqueueBrain, type BrainPri } from "./queue";
 import { activeModelId, brainReady, useBrain } from "./store";
 import { BRAIN_MODELS, brainModelOf, resolveBrainId } from "./models";
 import { cacheOrder } from "../model-lib";
@@ -232,8 +232,9 @@ export async function loadBrain(force = false): Promise<void> {
     });
   };
   try {
-    if (engine?.unload) await engine.unload().catch(() => undefined);
+    await disposeBrainEngine();
     engine = await createEngine(id, onProgress);
+    const loadedEngine = engine;
     engine.setLogLevel?.("ERROR");
     const prev = useBrain.getState().loadedId;
     useBrain.getState().setStatus({
@@ -265,11 +266,13 @@ export async function loadBrain(force = false): Promise<void> {
       job: "ping",
     })
       .then((t) => {
+        if (engine !== loadedEngine) return;
         const ok = (t.trim() || "ok").slice(0, 40);
         useBrain.getState().setLastAuto(ok);
         useBrain.getState().setStatus({ progressText: `antwortet · ${ok}` });
       })
       .catch((err) => {
+        if (engine !== loadedEngine) return;
         const msg = err instanceof Error ? err.message : "keine Antwort";
         useBrain.getState().setStatus({
           status: "error",
@@ -327,6 +330,7 @@ export async function interruptBrain(): Promise<void> {
 
 async function warmShaders(): Promise<void> {
   if (!engine) return;
+  const loadedEngine = engine;
   warming = true;
   useBrain.getState().setStatus({ progressText: "Shader kompilieren…" });
   try {
@@ -340,12 +344,14 @@ async function warmShaders(): Promise<void> {
       pri: 0,
       job: "shader",
     });
+    if (engine !== loadedEngine) return;
     const ok = (t.trim() || "ok").slice(0, 40);
     useBrain.getState().setLastAuto(ok);
     useBrain.getState().setStatus({
       progressText: worker ? `bereit · GPU-Worker · Shader · ${ok}` : `bereit · GPU · Shader · ${ok}`,
     });
   } catch (err) {
+    if (engine !== loadedEngine) return;
     const msg = err instanceof Error ? err.message : "Shader-Warmup fehlgeschlagen";
     useBrain.getState().setStatus({
       status: "error",
@@ -354,23 +360,40 @@ async function warmShaders(): Promise<void> {
       loadedId: "",
     });
   } finally {
-    warming = false;
+    if (engine === loadedEngine) warming = false;
+  }
+}
+
+async function disposeBrainEngine(): Promise<void> {
+  const previous = engine;
+  const previousWorker = worker;
+  // A worker that no longer replies cannot acknowledge interrupt/unload.
+  // Detach it first so cancelled jobs cannot use a subsequently loaded engine.
+  engine = null;
+  worker = null;
+  gpuCache = null;
+  warming = false;
+  resetBrainQueue();
+  if (previousWorker) {
+    previousWorker.terminate();
+    return;
+  }
+  if (!previous) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => previous.unload?.()),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, 1500); }),
+    ]);
+  } catch {
+    /* a lost GPU device may reject unload */
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 export async function unloadBrain(): Promise<void> {
-  try {
-    await engine?.interruptGenerate?.();
-    if (engine?.unload) await engine.unload();
-  } catch {
-    /* ignore */
-  }
-  engine = null;
-  worker?.terminate();
-  worker = null;
-  gpuCache = null;
-  warming = false;
-  clearBrainQueue();
+  await disposeBrainEngine();
   useBrain.getState().setStatus({ status: "idle", loadedId: "", progress: 0, progressText: "", error: "" });
 }
 
@@ -474,57 +497,76 @@ export async function brainGenerate(opts: {
   onDelta?: (s: string) => void;
 }): Promise<string> {
   if (!brainReady() || !engine) throw new Error("Helfer nicht geladen");
+  const loadedEngine = engine;
   const st = useBrain.getState();
   const job = opts.job ?? "gen";
   if (!opts.onDelta) {
     const hit = cacheGet(cacheKey([job, JSON.stringify(opts.messages), String(opts.maxTokens ?? 0)]));
     if (hit != null) return hit;
   }
-  return enqueueBrain(opts.pri ?? 1, job, async () => {
-    const payload: Record<string, unknown> = {
-      messages: opts.messages,
-      temperature: opts.temperature ?? st.temperature,
-      max_tokens: opts.maxTokens ?? st.maxTokens,
-      top_p: 0.9,
-      repetition_penalty: st.repeatPenalty,
-      stream: Boolean(opts.onDelta),
+  return enqueueBrain(opts.pri ?? 1, job, async (signal) => {
+    const check = () => {
+      signal.throwIfAborted();
+      if (engine !== loadedEngine) throw new Error("Helfer entladen");
     };
-    if (opts.stop?.length) payload.stop = opts.stop;
-    if (opts.json) payload.response_format = { type: "json_object" };
-    const once = async () => {
-      const raw = await engine!.chat.completions.create(payload);
-      let text = "";
-      if (opts.onDelta && raw && typeof raw === "object" && Symbol.asyncIterator in (raw as object)) {
-        for await (const chunk of raw as AsyncIterable<{ choices?: { delta?: { content?: string } }[] }>) {
-          const t = chunk.choices?.[0]?.delta?.content ?? "";
-          if (t) {
-            text += t;
-            opts.onDelta(t);
-          }
-        }
-      } else {
-        const choice = raw as { choices?: { message?: { content?: string } }[] };
-        text = choice.choices?.[0]?.message?.content ?? "";
-        if (opts.onDelta && text) opts.onDelta(text);
-      }
-      return String(text).trim();
+    const interrupt = () => {
+      try { void Promise.resolve(loadedEngine.interruptGenerate?.()).catch(() => undefined); } catch { /* lost worker */ }
     };
-    let out = "";
+    check();
+    signal.addEventListener("abort", interrupt, { once: true });
     try {
-      out = await once();
-    } catch (err) {
-      const m = err instanceof Error ? err.message : String(err);
-      if (/device lost/i.test(m) && useBrain.getState().status === "ready") {
-        gpuCache = null;
-        void loadBrain(true);
-        throw err;
+      const payload: Record<string, unknown> = {
+        messages: opts.messages,
+        temperature: opts.temperature ?? st.temperature,
+        max_tokens: opts.maxTokens ?? st.maxTokens,
+        top_p: 0.9,
+        repetition_penalty: st.repeatPenalty,
+        stream: Boolean(opts.onDelta),
+      };
+      if (opts.stop?.length) payload.stop = opts.stop;
+      if (opts.json) payload.response_format = { type: "json_object" };
+      const once = async () => {
+        check();
+        const raw = await loadedEngine.chat.completions.create(payload);
+        check();
+        let text = "";
+        if (opts.onDelta && raw && typeof raw === "object" && Symbol.asyncIterator in (raw as object)) {
+          for await (const chunk of raw as AsyncIterable<{ choices?: { delta?: { content?: string } }[] }>) {
+            check();
+            const t = chunk.choices?.[0]?.delta?.content ?? "";
+            if (t) {
+              text += t;
+              opts.onDelta(t);
+            }
+          }
+        } else {
+          const choice = raw as { choices?: { message?: { content?: string } }[] };
+          text = choice.choices?.[0]?.message?.content ?? "";
+          if (opts.onDelta && text) opts.onDelta(text);
+        }
+        return String(text).trim();
+      };
+      let out = "";
+      try {
+        out = await once();
+      } catch (err) {
+        check();
+        const m = err instanceof Error ? err.message : String(err);
+        if (/device lost/i.test(m) && useBrain.getState().status === "ready") {
+          gpuCache = null;
+          void loadBrain(true);
+          throw err;
+        }
+        if (!/abort|device lost|timeout|oom|interrupted/i.test(m)) throw err;
+        await new Promise((r) => setTimeout(r, 500));
+        out = await once();
       }
-      if (!/abort|device lost|timeout|oom|interrupted/i.test(m)) throw err;
-      await new Promise((r) => setTimeout(r, 500));
-      out = await once();
+      check();
+      if (!opts.onDelta && job !== "warm" && job !== "shader" && job !== "ping") cacheSet(cacheKey([job, JSON.stringify(opts.messages), String(opts.maxTokens ?? 0)]), out);
+      return out;
+    } finally {
+      signal.removeEventListener("abort", interrupt);
     }
-    if (!opts.onDelta && job !== "warm" && job !== "shader" && job !== "ping") cacheSet(cacheKey([job, JSON.stringify(opts.messages), String(opts.maxTokens ?? 0)]), out);
-    return out;
   });
 }
 

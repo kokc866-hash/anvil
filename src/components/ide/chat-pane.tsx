@@ -262,7 +262,7 @@ export function ChatPane() {
     startAssistant();
     const asstId = useIde.getState().chat.at(-1)?.id;
     resetLiveWrite();
-    if (!title) void brainChatTitle(work).then(setTitle);
+    if (!title) void brainChatTitle(work).then(setTitle).catch(() => undefined);
     emitPlugin("agent", work);
     reflectUtterance(work, "ask");
     try {
@@ -367,6 +367,7 @@ export function ChatPane() {
           useIde.getState().setAgentJob(newJob(work));
           await holdCompanion();
           heldJob = true;
+          if (my !== agentGen()) return;
           const asked = await chatWithProvider({
             provider: s.llmProvider,
             baseUrl: s.llmBaseUrl,
@@ -463,6 +464,7 @@ export function ChatPane() {
       }
       await holdCompanion();
       heldJob = true;
+      if (my !== agentGen()) return;
       const result = await chatWithProvider({
         provider: s.llmProvider,
         baseUrl: s.llmBaseUrl,

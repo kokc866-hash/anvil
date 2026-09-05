@@ -66,6 +66,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:chat-send
 
   windows:
     needs: [metadata, verify]
