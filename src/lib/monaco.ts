@@ -1,6 +1,7 @@
 import { prefixAt, suggest } from "./suggest";
 import { defsAt, hoverFor, renameSymbol } from "./lsp";
 import { modelsToDrop, modelUriString, pathFromModelUri } from "./monaco-models.ts";
+import { monacoVsAbs, monacoWorkerBootstrap } from "./monaco-worker.ts";
 
 export { modelsToDrop, modelUriString, pathFromModelUri, applyModelText, EDITOR_MAX_CHARS, markerEndCol } from "./monaco-models.ts";
 
@@ -161,6 +162,13 @@ async function vsExists(base: string): Promise<boolean> {
   }
 }
 
+function wireMonacoWorkers(base: string) {
+  const w = window as unknown as { MonacoEnvironment?: { getWorkerUrl: (id: string, label: string) => string } };
+  const vs = monacoVsAbs(base, window.location.origin);
+  const blob = URL.createObjectURL(new Blob([monacoWorkerBootstrap(vs)], { type: "text/javascript" }));
+  w.MonacoEnvironment = { getWorkerUrl: () => blob };
+}
+
 function requireMonaco(base: string): Promise<MonacoNS> {
   const w = window as unknown as {
     require?: { config: (o: { paths: { vs: string } }) => void; (deps: string[], cb: () => void): void };
@@ -171,6 +179,7 @@ function requireMonaco(base: string): Promise<MonacoNS> {
       reject(new Error("Monaco-Loader fehlt."));
       return;
     }
+    wireMonacoWorkers(base);
     w.require.config({ paths: { vs: base } });
     w.require(["vs/editor/editor.main"], () => {
       if (!w.monaco) reject(new Error("Monaco nicht geladen."));

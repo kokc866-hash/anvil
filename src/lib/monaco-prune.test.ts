@@ -8,6 +8,7 @@ import {
   modelsToDrop,
   pathFromModelUri,
 } from "./monaco-models.ts";
+import { monacoVsAbs, monacoWorkerBootstrap } from "./monaco-worker.ts";
 
 describe("monaco prune", () => {
   it("keeps open tabs", () => {
@@ -63,5 +64,17 @@ describe("monaco uri / edits", () => {
   it("caps editor size", () => {
     assert.ok(EDITOR_MAX_CHARS >= 200_000);
     assert.ok(EDITOR_MAX_CHARS <= 2_000_000);
+  });
+});
+
+describe("monaco worker url", () => {
+  it("makes vs absolute so workers can fetch", () => {
+    assert.equal(monacoVsAbs("/monaco/vs", "http://127.0.0.1:8080"), "http://127.0.0.1:8080/monaco/vs");
+    assert.equal(monacoVsAbs("https://cdn.example/vs", "http://127.0.0.1:8080"), "https://cdn.example/vs");
+  });
+  it("bootstrap importScripts is absolute, not /monaco/vs/...", () => {
+    const src = monacoWorkerBootstrap("http://127.0.0.1:8080/monaco/vs");
+    assert.match(src, /importScripts\("http:\/\/127\.0\.0\.1:8080\/monaco\/vs\/base\/worker\/workerMain\.js"\)/);
+    assert.match(src, /baseUrl:"http:\/\/127\.0\.0\.1:8080\/monaco\/vs\/"/);
   });
 });

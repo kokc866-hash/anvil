@@ -33,7 +33,7 @@ export function suggestHeal(fp: string, kind: InternKind): { heal: HealId; auto:
 }
 
 export function internNoise(msg: string): boolean {
-  return /resizeobserver|script error\.|chrome-extension:|moz-extension:|anvil-intern|ohne fortschritt|wartet auf das modell|superseded|\bjs timeout\b|^(js )?timeout$|signal timed out|AbortError|The operation was aborted|signal is aborted/i.test(msg);
+  return /resizeobserver|script error\.|chrome-extension:|moz-extension:|anvil-intern|ohne fortschritt|wartet auf das modell|superseded|\bjs timeout\b|^(js )?timeout$|signal timed out|AbortError|The operation was aborted|signal is aborted|monaco\/vs\/|htmlWorker\.js|Failed to parse URL from \/monaco/i.test(msg);
 }
 
 export function internPromptFrom(faults: { open?: boolean; kind: string; msg: string }[]): string {

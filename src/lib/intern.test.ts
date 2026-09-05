@@ -32,6 +32,7 @@ describe("intern", () => {
     assert.equal(internNoise("js timeout"), true);
     assert.equal(internNoise("AbortError"), true);
     assert.equal(internNoise("signal timed out"), true);
+    assert.equal(internNoise("Failed to parse URL from /monaco/vs/language/html/htmlWorker.js"), true);
   });
   it("intern prompt lists open faults only", () => {
     const text = internPromptFrom([

@@ -28,16 +28,14 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.3' }}
-          name: Anvil 1.2.3
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.4' }}
+          name: Anvil 1.2.4
           generate_release_notes: true
           files: dist-win/*.exe
           body: |
-            **Anvil 1.2.3** (2026-09-05)
+            **Anvil 1.2.4** (2026-09-05)
 
-            Windows Setup + portable. Die UI ist **eingebaut** — kein Node.js, kein Vite auf dem PC.
-
-            1.2.2 suchte Vite in der Installation und brach ab. Neu laden.
+            Windows Setup + portable. Editor-Worker (Monaco HTML) mit absoluter URL — 1.2.3 warf intern `htmlWorker.js`.
 
             - To-do-Quelle einstellbar: Auto / Anvil / Helfer / Agent
             - Run-Fenster zeigt die laufende Datei
