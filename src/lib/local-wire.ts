@@ -88,28 +88,25 @@ export function localWireNote(url: string, payload: Record<string, unknown>): st
   return `POST ${url} model=${payload.model || "-"} stream=${payload.stream ? 1 : 0} think=${String(payload.think)} tools=${tools} ctx=${opt.num_ctx ?? "-"} msgs=${msgs} bytes=${raw.length}`;
 }
 
+/** Pack-UI greift nach dieser Marke — sonst ist der Wire nicht im Bundle. */
+export const LOCAL_WIRE_MARK = "anvil-local-wire-v18";
+
 export function rewriteOllamaChat(url: string, init: RequestInit): { url: string; init: RequestInit } {
-  let next = url;
   try {
     const parsed = new URL(url.includes("://") ? url : `http://${url}`);
     const ollama = parsed.port === "11434" || /:11434\b/.test(url);
     if (!ollama) return { url, init };
-    if (/\/v1\/chat\/completions\/?$/i.test(parsed.pathname) || /\/chat\/completions\/?$/i.test(parsed.pathname)) {
-      parsed.pathname = "/api/chat";
-      parsed.search = "";
-      next = parsed.toString();
-    }
   } catch {
     return { url, init };
   }
-  if (typeof init.body !== "string") return { url: next, init };
+  if (typeof init.body !== "string") return { url, init };
   try {
     const body = JSON.parse(init.body) as Record<string, unknown>;
     const toolsOn = Array.isArray(body.tools) && (body.tools as unknown[]).length > 0;
     const clean = sanitizeLocalPayload("ollama", body, toolsOn);
-    return { url: next, init: { ...init, body: JSON.stringify(clean) } };
+    return { url, init: { ...init, body: JSON.stringify(clean) } };
   } catch {
-    return { url: next, init };
+    return { url, init };
   }
 }
 

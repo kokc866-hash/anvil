@@ -57,7 +57,7 @@ describe("local-wire", () => {
 });
 
 describe("ollama rewrite", () => {
-  it("rewrite 11434 OpenAI path to native /api/chat and kills think with tools", () => {
+  it("keeps /v1/chat/completions so Ollama still loads weights, but think off with tools", () => {
     const r = rewriteOllamaChat("http://192.168.178.41:11434/v1/chat/completions", {
       method: "POST",
       body: JSON.stringify({
@@ -69,7 +69,7 @@ describe("ollama rewrite", () => {
         input: [],
       }),
     });
-    assert.equal(r.url, "http://192.168.178.41:11434/api/chat");
+    assert.equal(r.url, "http://192.168.178.41:11434/v1/chat/completions");
     const body = JSON.parse(String(r.init.body));
     assert.equal(body.think, false);
     assert.equal("input" in body, false);
