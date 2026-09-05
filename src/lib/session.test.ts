@@ -4,6 +4,7 @@ import {
   CHAT_RAM,
   COMPACT_MARK,
   EMPTY_JOURNAL,
+  beginJournal,
   extractJournal,
   formatJournal,
   harvestPaths,
@@ -66,6 +67,12 @@ describe("journal", () => {
   it("empty stays empty", () => {
     assert.equal(isJournalEmpty(EMPTY_JOURNAL), true);
     assert.equal(journalPrompt(EMPTY_JOURNAL), "");
+  });
+  it("new task drops stale ask-goal", () => {
+    const old = extractJournal([{ role: "user", content: "Antwort auf: Code läuft fehlerfrei. Was soll ich schreiben/ändern?\nWahl: A) Nichts" }]);
+    const next = beginJournal("Build a mini gallery language-check as one job. Create index.html and main.py.", old);
+    assert.match(next.goal, /language-check|gallery|index.html/i);
+    assert.equal(/^Antwort auf:/i.test(next.goal), false);
   });
   it("writes a session file", () => {
     const text = sessionFileText({ ...EMPTY_JOURNAL, goal: "Spiel", files: ["index.html"], at: 1, turns: 2, decisions: [], corrections: [], open: [], notes: "" }, 9);

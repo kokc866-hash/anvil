@@ -8,6 +8,7 @@ export type McpServer = {
 };
 
 export type { McpTool, McpResource } from "./mcp-parse";
+import { ANVIL_VERSION } from "./version";
 import {
   parseMcpBody,
   unwrapMcp,
@@ -173,7 +174,7 @@ async function initialize(s: McpServer): Promise<void> {
   const init = (await rpc(s, "initialize", {
     protocolVersion: MCP_PROTOCOL_PREFER,
     capabilities: { resources: {}, tools: {} },
-    clientInfo: { name: "anvil", version: "1.2.0" },
+    clientInfo: { name: "anvil", version: ANVIL_VERSION },
   })) as { capabilities?: Record<string, unknown>; protocolVersion?: string };
   const capKeys = Object.keys(init?.capabilities ?? {});
   const proto = String(init?.protocolVersion || MCP_PROTOCOL_PREFER);

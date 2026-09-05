@@ -1,8 +1,12 @@
-# Anvil 1.2.0 — Kurz
+# Anvil 1.2.1 — Kurz
 
 Lokale IDE: Dateien, Agent, Run. Eigenes Fenster, kein Browser.
 
 ## Start
+
+**Installer (Windows):** [Releases](https://github.com/kokc866-hash/anvil/releases) → Setup-exe oder portable. Installer legt Verknüpfung an.
+
+Oder aus dem Ordner:
 
 1. [Node.js LTS](https://nodejs.org) einmalig.
 2. **install.bat** (nur beim ersten Mal).
@@ -26,6 +30,8 @@ Zahnrad → **Einstellungen → Agent**
 **Verbindung prüfen**. Profil speichern.
 
 Auf dem Ollama-Rechner: `OLLAMA_HOST=0.0.0.0` und `OLLAMA_ORIGINS=*`.
+
+To-do: Einstellungen → Agent → **To-do** (Auto / Anvil / Helfer / Agent). Auto: nummerierter Prompt bleibt.
 
 ## Fenster
 
@@ -53,9 +59,11 @@ Chat-Modus **Agent** ändert Dateien. **Ask** erklärt nur.
 1. Dateien → neue Datei `index.html`.
 2. Chat (Agent): `Bau eine kleine To-do-Liste in index.html`.
 3. Enter. Datei landet im Workspace. Auto-Diffs aus: **Übernehmen**.
-4. **Run** — HTML öffnet ein eigenes Fenster.
+4. **Run** — HTML öffnet ein eigenes Fenster (Titel `Run · index.html`).
 
 Python/JS: Konsole. Go/Rust/Java: Run in Anvil (Compiler auf dem PC oder im Netz). Companion ist kein Internet — Einstellungen → **Companion**.
+
+Neuer Auftrag: neuer Chat oder klarer Prompt. Alte Nachfrage (Ask) gilt nicht weiter.
 
 ## Acht Tasten
 

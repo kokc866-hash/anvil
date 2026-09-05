@@ -1,6 +1,6 @@
-# Anvil 1.2.0 — Handbuch
+# Anvil 1.2.1 — Handbuch
 
-Ausführlich, mit Vorschau der Fenster. Kurzfassung: `01-kurz.md`. Abläufe: `03-workflow.md`. Stand: 29.08.2026.
+Ausführlich, mit Vorschau der Fenster. Kurzfassung: `01-kurz.md`. Abläufe: `03-workflow.md`. Stand: 05.09.2026.
 
 ---
 
@@ -23,10 +23,14 @@ Anvil handelt (Dateien, Run, Git). Das Hauptmodell denkt. Der Helfer ist optiona
 
 ### Voraussetzungen
 
-- Windows, [Node.js LTS](https://nodejs.org)
+- Windows, [Node.js LTS](https://nodejs.org) — nur wenn du aus dem Ordner startest
 - Optional: Ollama / LM Studio auf diesem PC oder im LAN
 
-### Start
+### Installer
+
+[GitHub Releases](https://github.com/kokc866-hash/anvil/releases): **Setup** (Ordner wählen, Verknüpfung) oder **portable** (eine exe, kein Setup). Version steht im Fenster und unter Einstellungen → Daten.
+
+### Ordner
 
 ```
 anvil\
@@ -225,6 +229,17 @@ Cloud (OpenAI, xAI, …): Electron-Pipe holt den Strom direkt — Tokens live, n
 
 Chip **aktiv**, solange die Runde läuft. Abbrechen: Quadrat neben dem Feld.
 
+**To-do** (Einstellungen → Agent): wer die Checkliste schreibt.
+
+| | |
+|---|---|
+| **Auto** | Nummerierter Prompt bleibt. Sonst der Agent, solange kein Schritt läuft |
+| **Anvil** | Nur Anvil. `set_plan` tickt, ersetzt nicht |
+| **Helfer** | Nur der kleine Helfer |
+| **Agent** | Nur `set_plan` |
+
+Neuer Chat / neuer Auftrag: altes Ask-Ziel (*Antwort auf: …*) gilt nicht weiter.
+
 Wenn das Modell eine Entscheidung braucht, stellt es eine **Nachfrage** mit 2–5 Optionen in Chat und Spur. Der Job bleibt stehen, Companion bleibt. Option klicken oder Enter = weiter am gleichen Auftrag. Stop / **Job beenden** = Job tot.
 
 Wenn das Modell abbricht (lokal): Einstellungen → Agent → **Versuche** (Standard 3). Ohne Fortschritt: Hinweis nach 90 s. Harter Stop (Minuten) nur wenn gesetzt.
@@ -248,7 +263,7 @@ Zwei getrennte Dinge:
 └───────────────────┘     └──────────────────────┘
 ```
 
-HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**.
+HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**. Titel **Run · datei.html** — nicht „Keine Datei“, wenn HTML im Workspace liegt. Anvil schickt `runPath` ins Kindfenster.
 
 Konsole docken: unten oder Seite, oder Knopf **Eigenes Fenster**.
 
@@ -283,7 +298,7 @@ Zahnrad oder Suche oben in den Einstellungen.
 
 | Kategorie | Inhalt |
 |---|---|
-| **Agent** | Anbieter, URL, Modell, Key, Profil, Context, Thinking, Versuche, Compacting, Ask/Agent, Diffs, Run, Harness, Regeln, MCP |
+| **Agent** | Anbieter, URL, Modell, Key, Profil, Context, Thinking, Versuche, Compacting, Ask/Agent, To-do (Auto/Anvil/Helfer/Agent), Diffs, Run, Harness, Regeln, MCP |
 | **Companion** | Anlassen, Adresse, Port, Token, Prüfen, Koppeln, Compiler-Liste, MCP |
 | **Helfer** | An, Profil, Autonomie, Laden, GPU, Context, Jobs |
 | **Modelle** | Pins, Cache, Vorladen, Löschen |
@@ -319,6 +334,8 @@ Einstellungen → **Companion**
 Browser ohne Electron: `companion\start.bat` oder `node companion\server.mjs`. Fenster offen lassen.
 
 Patch für Anvil selbst: `grok.anvil-patch` neben `grok.mjs`, dann `node grok.mjs`, danach stop.bat / start.bat.
+
+Companion räumt alte `anvil-run-*` unter `%TEMP%` auf (Windows). Volle Temp-Platte: Anvil beenden, dann start.bat.
 
 ---
 

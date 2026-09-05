@@ -6,11 +6,41 @@ function pack(locale: Locale, de: string[], en: string[]): PlanStep[] {
   return (locale === "en" ? en : de).map(step);
 }
 
-export function guessPlan(text: string, locale: Locale = "de"): PlanStep[] {
-  const numbered = text
+export type PlanWho = "auto" | "anvil" | "helper" | "agent";
+
+export function normalizePlanWho(v: unknown): PlanWho {
+  return v === "anvil" || v === "helper" || v === "agent" ? v : "auto";
+}
+
+export function planSeedNow(who: PlanWho): boolean {
+  return who === "anvil" || who === "auto";
+}
+
+export function planHelperNow(who: PlanWho, hasPlan: boolean, locked: boolean): boolean {
+  if (who === "helper") return true;
+  if (who === "auto") return !hasPlan && !locked;
+  return false;
+}
+
+export function planAgentMayReplace(who: PlanWho, locked: boolean): boolean {
+  if (who === "anvil" || who === "helper") return false;
+  if (who === "agent") return true;
+  return !locked;
+}
+
+export function planFromAsk(text: string): boolean {
+  return numberedSteps(text).length >= 3;
+}
+
+function numberedSteps(text: string): string[] {
+  return String(text || "")
     .split("\n")
     .map((l) => l.replace(/^\s*\d+[.)]\s*/, "").trim())
     .filter((l) => l.length > 2 && l.length < 72);
+}
+
+export function guessPlan(text: string, locale: Locale = "de"): PlanStep[] {
+  const numbered = numberedSteps(text);
   if (numbered.length >= 3) return numbered.slice(0, 7).map((t) => step(t));
   if (/godot|unity|unreal|bevy/i.test(text)) return pack(locale, ["Lesen", "Ändern", "Engine", "Prüfen"], ["Read", "Edit", "Engine", "Check"]);
   if (/mcp|ziva|fläche|surface/i.test(text)) return pack(locale, ["Lesen", "MCP", "Prüfen"], ["Read", "MCP", "Check"]);
@@ -87,6 +117,14 @@ export function planFinish(plan: PlanStep[] | undefined, failed = false, proved 
     return { ...s, status: "ok" as const };
   });
   return changed ? next : null;
+}
+
+export function applySetPlan(cur: PlanStep[] | undefined, next: string[], locked = false): PlanStep[] | null {
+  const steps = next.map((s) => s.trim()).filter((s) => s.length >= 1).slice(0, 10);
+  if (steps.length < 2) return null;
+  if (locked) return null;
+  if (cur?.some((s) => s.status === "ok" || s.status === "run" || s.status === "err")) return null;
+  return steps.map((text) => step(text));
 }
 
 function step(text: string): PlanStep {

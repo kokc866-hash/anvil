@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { guessPlan, planFinish, planFromTool, planStart } from "./plan.ts";
+import { applySetPlan, guessPlan, normalizePlanWho, planAgentMayReplace, planFinish, planFromAsk, planFromTool, planHelperNow, planSeedNow, planStart } from "./plan.ts";
 import type { PlanStep } from "@/store/ide";
 
 describe("plan", () => {
@@ -81,5 +81,30 @@ describe("plan", () => {
     assert.equal(mcp.status, "run");
     plan = planFromTool("mcp_call", plan)!;
     assert.equal(plan.find((s) => /mcp/i.test(s.text))?.status, "ok");
+  });
+  it("keeps the prompt plan against set_plan", () => {
+    const ask = "1. Write files\n2. Run Python\n3. Run C++\n4. Open HTML";
+    assert.equal(planFromAsk(ask), true);
+    const cur = guessPlan(ask, "en");
+    assert.ok(cur.length >= 3);
+    assert.equal(applySetPlan(cur, ["Verstehen", "Ändern", "Run", "Prüfen"], true), null);
+    assert.equal(applySetPlan(cur, ["A", "B", "C"], false)?.[0]?.text, "A");
+  });
+  it("set_plan does not wipe progress", () => {
+    const cur: PlanStep[] = [
+      { text: "Write", status: "ok" },
+      { text: "Run", status: "todo" },
+    ];
+    assert.equal(applySetPlan(cur, ["Neu", "Plan", "Hier"]), null);
+  });
+  it("planWho auto/anvil/helper/agent", () => {
+    assert.equal(normalizePlanWho("nope"), "auto");
+    assert.equal(planSeedNow("anvil"), true);
+    assert.equal(planSeedNow("agent"), false);
+    assert.equal(planHelperNow("helper", true, true), true);
+    assert.equal(planHelperNow("auto", true, false), false);
+    assert.equal(planAgentMayReplace("anvil", false), false);
+    assert.equal(planAgentMayReplace("agent", true), true);
+    assert.equal(planAgentMayReplace("auto", true), false);
   });
 });

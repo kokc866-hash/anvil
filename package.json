@@ -1,7 +1,7 @@
 {
   "name": "anvil",
   "productName": "Anvil",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -68,6 +68,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.20.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
@@ -111,6 +112,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "Anvil"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "kokc866-hash",
+      "repo": "anvil"
     }
   }
 }

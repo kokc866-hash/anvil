@@ -14,7 +14,7 @@ import { snapshotDiff, diffPreview } from "@/lib/diff";
 import { testsPrompt } from "@/lib/test-parse";
 import { shouldTestAfterRound, testAfterRound } from "@/lib/test-loop";
 import { workspaceRules } from "@/lib/rules";
-import { guessPlan, planFinish, planFromTool, planStart } from "@/lib/plan";
+import { applySetPlan, guessPlan, normalizePlanWho, planAgentMayReplace, planFinish, planFromAsk, planFromTool, planHelperNow, planSeedNow, planStart } from "@/lib/plan";
 import { filterTrailSteps, hasTrailMsg, stepLabel, stepPath } from "@/lib/trail-filter";
 import { resetLoopFails } from "@/lib/run-loop";
 import { agentGen, beginAgent, explainAbort, explainLlmError, isAbortLike, stopAgent } from "@/lib/abort";
@@ -24,7 +24,7 @@ import { appLog, logHost } from "@/lib/app-log";
 import { brainAsk, brainAttach, brainChatTitle, brainDistill, brainFollowups, brainMentionRank, brainModelOf, brainPlanText, brainReady, brainReview, brainSecretWarn, brainStopNote, lanePrompt, routeKind, scrubSecrets, useBrain } from "@/lib/brain";
 import { heuristicMention } from "@/lib/brain/extra-heur";
 import { learnPrompt, markSkills, reflectUtterance, skillOutcome, useLearn } from "@/lib/learn";
-import { extractJournal, mergeJournal, packChatHistory, pruneSession } from "@/lib/session";
+import { beginJournal, extractJournal, mergeJournal, packChatHistory, pruneSession } from "@/lib/session";
 import type { WorkspaceEvent } from "@/lib/agent-core";
 import { cn } from "@/lib/cn";
 import { CodeBlock } from "@/lib/syntax";
@@ -429,13 +429,25 @@ export function ChatPane() {
       useIde.setState((st) => {
         const chat = [...st.chat];
         const last = chat[chat.length - 1];
-        if (last?.role === "assistant") chat[chat.length - 1] = { ...last, checkpointId: ck, plan: guessPlan(work, st.locale) };
+        const who = normalizePlanWho(st.planWho);
+        if (last?.role === "assistant") {
+          const locked = who === "anvil" || (who === "auto" && planFromAsk(work));
+          chat[chat.length - 1] = {
+            ...last,
+            checkpointId: ck,
+            plan: planSeedNow(who) ? guessPlan(work, st.locale) : last.plan,
+            planLocked: locked,
+          };
+        }
         return { chat };
       });
       void brainPlanText(work).then((steps) => {
         if (my !== agentGen()) return;
-        const last = useIde.getState().chat.at(-1);
-        if (!last?.plan?.length || last.plan.some((s) => s.status !== "todo")) return;
+        const st = useIde.getState();
+        const last = st.chat.at(-1);
+        const who = normalizePlanWho(st.planWho);
+        if (!last?.role || !planHelperNow(who, Boolean(last.plan?.length), Boolean(last.planLocked))) return;
+        if (who !== "helper" && last.plan?.length) return;
         if (steps.length >= 3) useIde.getState().setChatPlan(steps.map((text) => ({ text, status: "todo" as const })));
       });
       if (asking && jobNow) {
@@ -446,6 +458,8 @@ export function ChatPane() {
         }
       } else {
         useIde.getState().setAgentJob(newJob(work));
+        const stj = useIde.getState();
+        stj.setSessionJournal(beginJournal(work, stj.sessionJournal));
       }
       await holdCompanion();
       heldJob = true;
@@ -518,8 +532,12 @@ export function ChatPane() {
             Boolean(out && typeof out === "object" && "ok" in out && (out as { ok?: boolean }).ok === false);
           if (name === "skill_run") markSkills([String(args.name ?? "")]);
           if (name === "set_plan" && out && typeof out === "object" && "steps" in out) {
+            const st = useIde.getState();
+            const last = st.chat.at(-1);
+            const who = normalizePlanWho(st.planWho);
             const steps = (out as { steps?: string[] }).steps ?? [];
-            useIde.getState().setChatPlan(steps.map((text) => ({ text, status: "todo" as const })));
+            const next = applySetPlan(last?.plan, steps, !planAgentMayReplace(who, Boolean(last?.planLocked)));
+            if (next) useIde.getState().setChatPlan(next);
           } else {
             const bumped = planFromTool(name, useIde.getState().chat.at(-1)?.plan, failed);
             if (bumped) useIde.getState().setChatPlan(bumped);

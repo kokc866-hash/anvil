@@ -26,6 +26,7 @@ const IDE_KEYS = [
   "mcpStream",
   "autoAcceptDiffs",
   "autoRunAgent",
+  "planWho",
   "runLoop",
   "testLoop",
   "graphLoop",

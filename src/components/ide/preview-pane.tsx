@@ -5,18 +5,15 @@ import { langFromPath } from "@/lib/languages";
 import { previewFor } from "@/lib/preview-doc";
 import { cn } from "@/lib/cn";
 import { runFile } from "@/lib/run-client";
-import { closeRunWindow, dockRunWindow, fileForRun, openRunWindow } from "@/lib/run-window";
+import { closeRunWindow, dockRunWindow, fileForRun, openRunWindow, pickRunPreview } from "@/lib/run-window";
 import { useIde } from "@/store/ide";
 
 export function PreviewPane({ popout = false }: { popout?: boolean }) {
-  const path = useIde((s) => (s.runPath && s.runPath in s.files ? s.runPath : s.activePath));
-  const src = useIde((s) => {
-    const p = s.runPath && s.runPath in s.files ? s.runPath : s.activePath;
-    return p ? s.files[p] ?? "" : "";
-  });
+  const path = useIde((s) => pickRunPreview(s.files, s.runPath, s.activePath, popout));
   const files = useIde((s) => s.files);
+  const src = path ? files[path] ?? "" : "";
   const last = useIde((s) => {
-    const p = s.runPath && s.runPath in s.files ? s.runPath : s.activePath;
+    const p = pickRunPreview(s.files, s.runPath, s.activePath, popout);
     if (!p) return undefined;
     for (let i = s.output.length - 1; i >= 0; i--) if (s.output[i].label === p) return s.output[i];
     return undefined;

@@ -185,10 +185,23 @@ export function agentOpenedPreview() {
   agentPreview = true;
 }
 
+export function pickRunPreview(
+  files: Record<string, string>,
+  runPath: string | null | undefined,
+  activePath: string | null | undefined,
+  popout = false,
+): string {
+  if (runPath && runPath in files) return runPath;
+  if (popout) {
+    if (activePath && activePath in files && /\.html?$/i.test(activePath)) return activePath;
+    return Object.keys(files).find((p) => /\.html?$/i.test(p) && !p.startsWith(".anvil/")) || activePath || "";
+  }
+  return activePath && activePath in files ? activePath : activePath || "";
+}
+
 export function fileForRun(): string {
   const s = useIde.getState();
-  if (s.runPath && s.runPath in s.files) return s.runPath;
-  return s.activePath || "";
+  return pickRunPreview(s.files, s.runPath, s.activePath, true);
 }
 
 export function rememberRunFile(path: string) {

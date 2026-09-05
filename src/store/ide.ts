@@ -21,6 +21,7 @@ import { clampContext } from "@/lib/tokens";
 import { rejectHunk as rejectHunkLines } from "@/lib/diff";
 import { parseRunTrace } from "@/lib/parse-run";
 import type { AfterWrite } from "@/lib/harness";
+import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 import { abortReason } from "@/lib/abort";
 import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
@@ -189,6 +190,7 @@ export type ChatMsg = {
   thinking?: string;
   images?: string[];
   plan?: PlanStep[];
+  planLocked?: boolean;
   checkpointId?: string;
   at?: number;
   ms?: number;
@@ -295,6 +297,7 @@ type IdeState = {
   autoPreview: boolean;
   autoAcceptDiffs: boolean;
   autoRunAgent: boolean;
+  planWho: PlanWho;
   runLoop: boolean;
   testLoop: boolean;
   graphLoop: boolean;
@@ -423,6 +426,7 @@ type IdeState = {
   setAutoPreview: (v: boolean) => void;
   setAutoAcceptDiffs: (v: boolean) => void;
   setAutoRunAgent: (v: boolean) => void;
+  setPlanWho: (v: PlanWho) => void;
   setRunLoop: (v: boolean) => void;
   setTestLoop: (v: boolean) => void;
   setGraphLoop: (v: boolean) => void;
@@ -661,6 +665,7 @@ export const useIde = create<IdeState>()(
       autoPreview: true,
       autoAcceptDiffs: false,
       autoRunAgent: true,
+      planWho: "auto",
       runLoop: true,
       testLoop: true,
       graphLoop: true,
@@ -794,6 +799,7 @@ export const useIde = create<IdeState>()(
       setAutoPreview: (autoPreview) => set({ autoPreview }),
       setAutoAcceptDiffs: (autoAcceptDiffs) => set({ autoAcceptDiffs }),
       setAutoRunAgent: (autoRunAgent) => set({ autoRunAgent }),
+      setPlanWho: (planWho) => set({ planWho: normalizePlanWho(planWho) }),
       setRunLoop: (runLoop) => set({ runLoop }),
       setTestLoop: (testLoop) => set({ testLoop }),
       setGraphLoop: (graphLoop) => set({ graphLoop }),
@@ -1875,6 +1881,7 @@ export const useIde = create<IdeState>()(
           autoPreview: true,
           autoAcceptDiffs: false,
           autoRunAgent: true,
+          planWho: "auto" as PlanWho,
           runLoop: true,
           testLoop: true,
           graphLoop: true,
@@ -1946,6 +1953,7 @@ export const useIde = create<IdeState>()(
           llmSlots: (p.llmSlots as typeof current.llmSlots) ?? {},
           llmProfiles: Array.isArray(p.llmProfiles) ? p.llmProfiles : [],
           runInWindow: typeof p.runInWindow === "boolean" ? p.runInWindow : true,
+          planWho: normalizePlanWho(p.planWho),
           engineLoop: p.engineLoop === true,
           locale: p.locale === "en" || p.locale === "de" ? p.locale : current.locale,
           keyMap: normalizeKeyMap(p.keyMap),
@@ -2013,6 +2021,7 @@ export const useIde = create<IdeState>()(
         autoPreview: s.autoPreview,
         autoAcceptDiffs: s.autoAcceptDiffs,
         autoRunAgent: s.autoRunAgent,
+        planWho: s.planWho,
         runLoop: s.runLoop,
         testLoop: s.testLoop,
         graphLoop: s.graphLoop,

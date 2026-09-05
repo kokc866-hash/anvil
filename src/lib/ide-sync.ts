@@ -29,6 +29,7 @@ export function startIdeSync() {
       running: s.running,
       files: omitSecrets(s.files),
       activePath: s.activePath,
+      runPath: s.runPath,
       theme: s.theme,
       inputMap: s.inputMap,
     };
@@ -50,6 +51,7 @@ export function startIdeSync() {
       s.running === prev.running &&
       s.files === prev.files &&
       s.activePath === prev.activePath &&
+      s.runPath === prev.runPath &&
       s.theme === prev.theme &&
       s.inputMap === prev.inputMap
     ) {
@@ -66,6 +68,7 @@ export function startIdeSync() {
       running?: boolean;
       files?: Record<string, string>;
       activePath?: string;
+      runPath?: string | null;
       theme?: ReturnType<typeof useIde.getState>["theme"];
       inputMap?: ReturnType<typeof useIde.getState>["inputMap"];
     } | null;
@@ -82,6 +85,7 @@ export function startIdeSync() {
       running: typeof d.running === "boolean" ? d.running : cur.running,
       files: d.files ? keepSecrets(d.files, cur.files) : cur.files,
       activePath: typeof d.activePath === "string" ? d.activePath : cur.activePath,
+      runPath: typeof d.runPath === "string" ? d.runPath : d.runPath === null ? null : cur.runPath,
       theme: d.theme ?? cur.theme,
       inputMap: d.inputMap ?? cur.inputMap,
     });

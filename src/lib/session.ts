@@ -232,6 +232,14 @@ export function extractJournal(
   };
 }
 
+export function beginJournal(work: string, prev?: SessionJournal | null): SessionJournal {
+  const one = String(work || "").replace(/\s+/g, " ").trim().slice(0, 240);
+  const cur = normalizeJournal(prev);
+  if (/^Antwort auf:/i.test(one)) return cur;
+  if (cur.goal && !/^Antwort auf:/i.test(cur.goal) && !taskLooksNew(one, cur.goal)) return cur;
+  return extractJournal([{ role: "user", content: work }]);
+}
+
 export function mergeJournal(a: SessionJournal | null | undefined, b: SessionJournal | Partial<SessionJournal> | null | undefined): SessionJournal {
   const left = normalizeJournal(a);
   const right = normalizeJournal(b);

@@ -1,21 +1,21 @@
-# Anvil 1.2.0 — Workflows
+# Anvil 1.2.1 — Workflows
 
-Schritt für Schritt. Fenster erklärt: `02-handbuch.md`. Stand: 29.08.2026.
+Schritt für Schritt. Fenster erklärt: `02-handbuch.md`. Stand: 05.09.2026.
 
 ---
 
 ## A. Neu auf diesem PC
 
-1. Node.js LTS installieren.
-2. Zip nach `I:\Anvil` (oder wo du willst) entpacken.
-3. **start.bat**. Erstes Mal warten, bis das Fenster da ist.
-4. Einstellungen → Editor → Sprache.
-5. Einstellungen → Agent:
+1. **Installer:** [Releases](https://github.com/kokc866-hash/anvil/releases) Setup oder portable. Oder Zip + Node.js LTS nach `I:\Anvil` (oder wo du willst) entpacken, **start.bat**.
+2. Erstes Mal warten, bis das Fenster da ist.
+3. Einstellungen → Editor → Sprache.
+4. Einstellungen → Agent:
    - Anbieter **Ollama**
    - URL `http://127.0.0.1:11434/v1` (gleicher PC) oder `http://192.168.x.x:11434/v1` (LAN)
    - Modellname wie in `ollama list`
-6. **Verbindung prüfen**. Profilname z. B. `Ollama LAN` → Speichern.
-7. Eine Datei anlegen, Chat testen: `Sag nur: bereit.`
+   - **To-do** auf Auto, wenn der Prompt Schritte vorgibt
+5. **Verbindung prüfen**. Profilname z. B. `Ollama LAN` → Speichern.
+6. Eine Datei anlegen, Chat testen: `Sag nur: bereit.`
 
 Ollama-Host im LAN:
 
@@ -43,9 +43,9 @@ du  →  Agent schreibt  →  Diff  →  Run-Fenster  →  „mach den Button ro
    Bau in index.html eine To-do-Liste: Eingabe, Hinzufügen, Durchstreichen, lokal speichern. Nur diese Datei.
    ```
 
-4. Warten. Denken klappt zu. Plan-Haken füllen sich.
+4. Warten. Denken klappt zu. Plan-Haken füllen sich (To-do Auto: deine nummerierte Liste bleibt).
 5. Diff **Übernehmen** (oder „Diffs automatisch“ an).
-6. **Run** — zweites Fenster mit der Seite.
+6. **Run** — zweites Fenster, Titel `Run · index.html`.
 7. Nachbessern im Chat, Datei bleibt `@index.html`.
 8. Schiefgelaufen: unter der Antwort **Zurück vor diese Runde**.
 

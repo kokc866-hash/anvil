@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --win nsis portable --publish never
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.1' }}
+          name: Anvil 1.2.1
+          generate_release_notes: true
+          files: dist-win/*.exe
+          body: |
+            **Anvil 1.2.1** (2026-09-05)
+
+            Windows: **Setup** (Installer) oder **portable** exe.
+
+            - To-do-Quelle einstellbar: Auto / Anvil / Helfer / Agent
+            - Run-Fenster zeigt die laufende Datei
+            - Neuer Auftrag wischt altes Ask-Ziel im Journal
+            - Temp `anvil-run-*` wird aufgeräumt
+            - Loop/Graph aus bleibt aus
+            - C++-Writes: echte `#include <…>`, kein `u003c`
+
+            Anleitungen im Repo unter `anleitungen/`.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

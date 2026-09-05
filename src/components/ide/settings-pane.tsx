@@ -42,6 +42,7 @@ import {
 } from "@/lib/harness-project";
 import { BOARD_PATH, filesFromBoard, rebuildBoardFromGraph } from "@/lib/harness-board";
 import type { AfterWrite } from "@/lib/harness";
+import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 import { loadVault, saveVault, type VaultEntry } from "@/lib/vault";
 import { providerOf, type LlmProvider } from "@/lib/providers";
 import { nativeHelper } from "@/lib/helper-local";
@@ -292,6 +293,7 @@ function AgentSection({ q }: { q: string }) {
   const agentMode = useIde((s) => s.agentMode);
   const autoAcceptDiffs = useIde((s) => s.autoAcceptDiffs);
   const autoRunAgent = useIde((s) => s.autoRunAgent);
+  const planWho = useIde((s) => s.planWho);
   const learnOn = useLearn((s) => s.on);
   const setLlmProvider = useIde((s) => s.setLlmProvider);
   const setLlmAuthMode = useIde((s) => s.setLlmAuthMode);
@@ -667,6 +669,20 @@ function AgentSection({ q }: { q: string }) {
       <Vis q={q} label="Diffs automatisch übernehmen">
         <Row label={t("autoDiffs")} hint={t("autoDiffsHint")}>
           <Toggle on={autoAcceptDiffs} onChange={setAutoAcceptDiffs} />
+        </Row>
+      </Vis>
+      <Vis q={q} label="To-do Plan set_plan Anvil Helfer Agent Auto Checkliste">
+        <Row label={t("planWho")} hint={t("planWhoH")}>
+          <Seg<PlanWho>
+            value={normalizePlanWho(planWho)}
+            onChange={(v) => useIde.getState().setPlanWho(v)}
+            options={[
+              { id: "auto", label: t("planWhoAuto") },
+              { id: "anvil", label: t("planWhoAnvil") },
+              { id: "helper", label: t("planWhoHelper") },
+              { id: "agent", label: t("planWhoAgent") },
+            ]}
+          />
         </Row>
       </Vis>
       <Vis q={q} label="Run nach Agent automatisch">

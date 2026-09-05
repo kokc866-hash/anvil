@@ -1,6 +1,6 @@
-# Anvil 1.1.0 — Kurzpräsentation
+# Anvil 1.2.1 — Kurzpräsentation
 
-5 Minuten. Für Demo, Pitch oder den ersten Blick. Stand: 29.08.2026.
+5 Minuten. Für Demo, Pitch oder den ersten Blick. Stand: 05.09.2026.
 
 ---
 
@@ -44,7 +44,7 @@ Das ist der Kreis. Alles andere ist Beiwerk.
 
 ## 4. Was man merkt
 
-- **Eigenes Fenster** — start.bat, fertig.
+- **Eigenes Fenster** — Setup-exe oder start.bat, fertig.
 - **Lokal oder Cloud** — Ollama / LM Studio im LAN, oder OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, OpenRouter, xAI, Azure, … Key in den Einstellungen, Profil speichern.
 - **Run-Schleife** — schreiben, ausführen, Fehler sehen, nachlegen. Ohne Ritual.
 - **Companion** — kein Internet. Startet bei Run auf diesem PC, Go/Rust bleiben in Anvil.
@@ -67,7 +67,7 @@ Kein Pflicht-Helfer. Ohne ihn läuft der Agent trotzdem.
 
 ## 6. Start in 30 Sekunden
 
-1. Node.js LTS, Ordner entpacken.
+1. [Releases](https://github.com/kokc866-hash/anvil/releases) Setup, oder Node.js LTS und Ordner entpacken, **start.bat**.
 2. **start.bat**.
 3. Einstellungen → Agent → Anbieter (Ollama **oder** OpenAI, Anthropic, …), URL/Key, Modell, prüfen.
 4. Chat: *Bau eine To-do-Liste in index.html.*
