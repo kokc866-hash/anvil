@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, ".output");
 const dest = join(root, "ui-build");
 const entry = join(src, "server", "index.mjs");
-const WIRE_MARK = "anvil-local-wire-v18";
+const WIRE_MARK = "x-anvil-target";
 
 if (!existsSync(entry)) {
   console.error("UI-Build fehlt. Zuerst: ANVIL_ELECTRON_BUILD=1 npm run build");
@@ -41,7 +41,7 @@ function hasMark(dir, mark) {
 }
 
 if (!hasMark(dest, WIRE_MARK)) {
-  console.error("UI-Build ohne local-wire. Bundle unvollständig — Release abbrechen.");
+  console.error("UI-Build ohne Pipe-Wire (x-anvil-target). Bundle unvollständig — Release abbrechen.");
   process.exit(1);
 }
 console.log("ui-build bereit");
