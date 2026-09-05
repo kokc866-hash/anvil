@@ -15,4 +15,9 @@ if (!existsSync(entry)) {
 }
 rmSync(dest, { recursive: true, force: true });
 cpSync(src, dest, { recursive: true });
+const monaco = join(dest, "public", "monaco", "vs", "loader.js");
+if (!existsSync(monaco)) {
+  console.error("Monaco fehlt im UI-Build:", monaco);
+  process.exit(1);
+}
 console.log("ui-build bereit");

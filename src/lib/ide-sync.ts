@@ -2,6 +2,9 @@ import { isSecretPath, omitSecrets } from "@/lib/ref";
 import { useIde } from "@/store/ide";
 
 const CHANNEL = "anvil-output";
+/** Run/Console windows must share the editor Chromium session (persist:anvil).
+ * BroadcastChannel does not cross Electron partitions — a temp: session
+ * on /run shows "Keine Datei." and swallows compile output. */
 
 function popout(): boolean {
   const p = window.location.pathname;

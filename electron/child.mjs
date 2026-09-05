@@ -1,5 +1,6 @@
 import { BrowserWindow } from "electron";
 import { handleOnce } from "./ipc.mjs";
+import { anvilWebPrefs } from "./session.mjs";
 
 const kids = new Map();
 
@@ -13,7 +14,6 @@ export function bindChildWindows({ root, port, preload, icon }) {
       old.focus();
       return old.id;
     }
-    const isolated = key === "run";
     const child = new BrowserWindow({
       width: Math.max(480, Number(opts.w) || (key === "run" ? 960 : 780)),
       height: Math.max(360, Number(opts.h) || (key === "run" ? 640 : 520)),
@@ -24,13 +24,7 @@ export function bindChildWindows({ root, port, preload, icon }) {
       backgroundColor: "#0a0a0b",
       autoHideMenuBar: true,
       show: false,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        partition: isolated ? "temp:anvil-run" : "persist:anvil",
-        ...(isolated ? {} : { preload }),
-      },
+      webPreferences: anvilWebPrefs(preload),
     });
     child.setMenuBarVisibility(false);
     if (icon && typeof child.setIcon === "function") {

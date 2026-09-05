@@ -17,6 +17,7 @@ import { handleOnce, onSync } from "./ipc.mjs";
 import { isAbortNoise } from "../scripts/llm-agent.mjs";
 import { nodeCommand, withNodeEnv } from "./node-cmd.mjs";
 import { serverLaunch } from "./ui-boot.mjs";
+import { ANVIL_PARTITION, allowAnvilPerm, anvilWebPrefs } from "./session.mjs";
 import { sweepAnvilTemp } from "../companion/tmp.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -343,13 +344,7 @@ async function createWindow() {
     backgroundColor: "#0a0a0b",
     autoHideMenuBar: true,
     show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      partition: "persist:anvil",
-      preload: join(ROOT, "electron", "preload.cjs"),
-    },
+    webPreferences: anvilWebPrefs(join(ROOT, "electron", "preload.cjs")),
   });
   win.setMenuBarVisibility(false);
   if (icon) {
@@ -420,20 +415,11 @@ if (!gotLock) {
       /* */
     }
     const allowNet = (_wc, perm, cb) => {
-      if (
-        perm === "local-network-access" ||
-        perm === "media" ||
-        perm === "clipboard-sanitized-write" ||
-        perm === "clipboard-read"
-      ) {
-        cb(true);
-        return;
-      }
-      cb(false);
+      cb(allowAnvilPerm(perm));
     };
     session.defaultSession.setPermissionRequestHandler(allowNet);
     try {
-      session.fromPartition("persist:anvil").setPermissionRequestHandler(allowNet);
+      session.fromPartition(ANVIL_PARTITION).setPermissionRequestHandler(allowNet);
     } catch {
       /* */
     }

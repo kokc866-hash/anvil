@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { isLlmTargetHost, llmUpstream, listenLocal, pipeQuiet } from "../scripts/llm-agent.mjs";
 import { handleOnce, onSync } from "./ipc.mjs";
+import { pipeCorsOrigin } from "./llm-pipe-cors.mjs";
 
 export const LLM_PIPE_PORT = 7848;
 
@@ -27,22 +28,6 @@ function fwdHeaders(req) {
   }
   return out;
 }
-
-function pipeCorsOrigin(origin) {
-  const raw = String(origin || "").trim();
-  if (!raw) return "http://127.0.0.1:8080";
-  try {
-    const u = new URL(raw);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
-    const h = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    if (h === "127.0.0.1" || h === "localhost" || h === "::1") return u.origin;
-  } catch {
-    /* */
-  }
-  return "";
-}
-
-export { pipeCorsOrigin };
 
 export async function startLlmPipe() {
   const token = randomBytes(16).toString("hex");

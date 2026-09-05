@@ -1,4 +1,4 @@
-# Anvil 1.3.0 — Handbuch
+# Anvil 1.3.1 — Handbuch
 
 Ausführlich, mit Vorschau der Fenster. Kurzfassung: `01-kurz.md`. Abläufe: `03-workflow.md`. Stand: 05.09.2026.
 
@@ -263,7 +263,7 @@ Zwei getrennte Dinge:
 └───────────────────┘     └──────────────────────┘
 ```
 
-HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**. Beliebiges HTML (auch vom Agenten) läuft, solange **HTML ausführen** an ist — dort auch ausstellbar. Titel **Run · datei.html** — nicht „Keine Datei“, wenn HTML im Workspace liegt. Anvil schickt `runPath` ins Kindfenster.
+HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**. Beliebiges HTML (auch vom Agenten) läuft, solange **HTML ausführen** an ist — dort auch ausstellbar. Das Run-Fenster teilt die Session mit dem Editor (sonst „Keine Datei.“). Isolation sitzt im iframe, nicht in einer extra Electron-Session. Titel **Run · datei.html** — nicht „Keine Datei“, wenn HTML im Workspace liegt. Anvil schickt `runPath` ins Kindfenster.
 
 Konsole docken: unten oder Seite, oder Knopf **Eigenes Fenster**.
 
