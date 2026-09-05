@@ -195,9 +195,14 @@ function monacoPlugin(): Plugin {
     },
     closeBundle() {
       if (!existsSync(join(vsSrc, "loader.js"))) return;
-      const dest = join(process.cwd(), "dist", "monaco", "vs");
-      mkdirSync(dest, { recursive: true });
-      cpSync(vsSrc, dest, { recursive: true });
+      const dests = [
+        join(process.cwd(), "dist", "monaco", "vs"),
+        join(process.cwd(), ".output", "public", "monaco", "vs"),
+      ];
+      for (const dest of dests) {
+        mkdirSync(dest, { recursive: true });
+        cpSync(vsSrc, dest, { recursive: true });
+      }
     },
   };
 }
@@ -236,7 +241,7 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === "build" || isPreview
       ? [
           nitro({
-            preset: "vercel",
+            preset: process.env.ANVIL_ELECTRON_BUILD === "1" ? "node-server" : "vercel",
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.

@@ -1,10 +1,10 @@
-# Anvil 1.2.2 — Kurz
+# Anvil 1.2.3 — Kurz
 
 Lokale IDE: Dateien, Agent, Run. Eigenes Fenster, kein Browser.
 
 ## Start
 
-**Installer (Windows):** [Releases](https://github.com/kokc866-hash/anvil/releases) → Setup-exe oder portable. Installer legt Verknüpfung an. Portable braucht **kein** Node.js.
+**Installer (Windows):** [Releases](https://github.com/kokc866-hash/anvil/releases) → Setup-exe oder portable. UI ist eingebaut, **kein** Node.js, **kein** Vite auf dem PC.
 
 Oder aus dem Ordner:
 

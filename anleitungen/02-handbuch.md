@@ -1,4 +1,4 @@
-# Anvil 1.2.2 — Handbuch
+# Anvil 1.2.3 — Handbuch
 
 Ausführlich, mit Vorschau der Fenster. Kurzfassung: `01-kurz.md`. Abläufe: `03-workflow.md`. Stand: 05.09.2026.
 
@@ -28,7 +28,7 @@ Anvil handelt (Dateien, Run, Git). Das Hauptmodell denkt. Der Helfer ist optiona
 
 ### Installer
 
-[GitHub Releases](https://github.com/kokc866-hash/anvil/releases): **Setup** (Ordner wählen, Verknüpfung) oder **portable** (eine exe, kein Setup). Version steht im Fenster und unter Einstellungen → Daten.
+[GitHub Releases](https://github.com/kokc866-hash/anvil/releases): **Setup** (Ordner wählen, Verknüpfung) oder **portable** (eine exe, kein Setup). Die UI ist mitgebaut — kein Node.js und kein Vite auf dem PC. Version steht im Fenster und unter Einstellungen → Daten.
 
 ### Ordner
 

@@ -15,6 +15,7 @@ import { iconPath, loadAppIcon } from "./icon.mjs";
 import { handleOnce, onSync } from "./ipc.mjs";
 import { isAbortNoise } from "../scripts/llm-agent.mjs";
 import { nodeCommand, withNodeEnv } from "./node-cmd.mjs";
+import { serverLaunch } from "./ui-boot.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.ANVIL_PORT || 8080);
@@ -193,7 +194,7 @@ function waitForServer(ms = 60000) {
   });
 }
 
-function startChild(args) {
+function startChild(args, extraEnv = {}) {
   const cmd = spawnNode();
   const logPath = logFile();
   let stdio = "ignore";
@@ -208,7 +209,7 @@ function startChild(args) {
     cwd: ROOT,
     windowsHide: true,
     stdio,
-    env: nodeEnv(cmd.electronAsNode),
+    env: { ...nodeEnv(cmd.electronAsNode), ...extraEnv },
   });
   child.on("error", (err) => {
     bootFail = err?.message || String(err);
@@ -221,17 +222,12 @@ function startChild(args) {
 }
 
 function startServer() {
-  const wrapper = join(ROOT, "scripts", "with-app-env.mjs");
-  const vite = join(ROOT, "node_modules", "vite", "bin", "vite.js");
-  if (!existsSync(vite)) {
-    bootFail = "Vite fehlt in der Installation: " + vite;
-    throw new Error(bootFail);
+  const plan = serverLaunch(ROOT, app.isPackaged, PORT);
+  if (plan.error) {
+    bootFail = plan.error;
+    throw new Error(plan.error);
   }
-  if (!existsSync(wrapper)) {
-    bootFail = "Startskript fehlt: " + wrapper;
-    throw new Error(bootFail);
-  }
-  return startChild([wrapper, vite, "dev", "--host", "127.0.0.1", "--port", String(PORT)]);
+  return startChild(plan.args, plan.extraEnv);
 }
 
 function startCompanion() {
