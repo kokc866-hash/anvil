@@ -109,16 +109,16 @@ export function applyLlmOptions(
     if (think) {
       delete payload.max_tokens;
       payload.think = rt.thinking === "auto" ? true : effort;
-      (payload.options as Record<string, unknown>).think = payload.think;
     } else {
       payload.think = false;
-      (payload.options as Record<string, unknown>).think = false;
     }
     if (rt.provider === "ollama") {
       delete payload.n_ctx;
       delete payload.enable_thinking;
       delete payload.reasoning_budget;
       delete payload.chat_template_kwargs;
+      const opt = payload.options as Record<string, unknown>;
+      delete opt.think;
     } else if (think) {
       payload.enable_thinking = true;
       payload.reasoning_budget = budget;

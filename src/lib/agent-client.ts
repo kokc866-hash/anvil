@@ -698,6 +698,7 @@ function makeLocalComplete(
   const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    Accept: "text/event-stream",
     Authorization: `Bearer ${apiKey.trim() || "local"}`,
   };
   return async (
@@ -741,6 +742,13 @@ function makeLocalComplete(
       try {
         payload.model = current;
         prepChatPayload(payload, wireCtx);
+        if (spec.id === "ollama") delete payload.tool_choice;
+        void import("./app-log").then((m) =>
+          m.appLog(
+            "agent",
+            `POST ${base}/chat/completions model=${current} think=${String(payload.think)} tools=${Array.isArray(payload.tools) ? (payload.tools as unknown[]).length : 0} ctx=${wireCtx} stream=${payload.stream ? 1 : 0}`,
+          ),
+        );
         const res = await lanFetch(`${base}/chat/completions`, {
           method: "POST",
           headers,

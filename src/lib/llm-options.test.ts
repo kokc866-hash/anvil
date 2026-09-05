@@ -187,10 +187,10 @@ test("ollama thinking: no 8k cap, think level, no max_tokens", () => {
     { model: "qwen3.8:27b" },
     { provider: "ollama", model: "qwen3.8:27b", api: "openai", context: 131072, thinking: "high" },
   );
-  const opt = p.options as { num_predict: number; think: unknown; num_ctx: number };
+  const opt = p.options as { num_predict: number; think?: unknown; num_ctx: number };
   assert.equal("max_tokens" in p, false);
   assert.equal(p.think, "high");
-  assert.equal(opt.think, "high");
+  assert.equal("think" in opt, false);
   assert.equal(opt.num_ctx, 131072);
   assert.equal("enable_thinking" in p, false);
   assert.ok(opt.num_predict > 8192);
@@ -203,7 +203,7 @@ test("ollama thinking off sends think false, leaves the user text alone", () => 
     { provider: "ollama", model: "qwen3-vl:30b-a3b-thinking-q8_0", api: "openai", context: 32768, thinking: "off" },
   );
   assert.equal(p.think, false);
-  assert.equal((p.options as { think: boolean }).think, false);
+  assert.equal("think" in (p.options as object), false);
   assert.equal("enable_thinking" in p, false);
   assert.equal(String((p.messages as { content: string }[])[0].content), "hi");
 });

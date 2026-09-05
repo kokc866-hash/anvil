@@ -35,9 +35,8 @@ describe("local-wire", () => {
     assert.equal("input" in p, false);
     assert.equal("reasoning" in p, false);
     assert.equal("max_output_tokens" in p, false);
-    assert.equal(p.think, false);
-    assert.equal(p.tool_choice, "auto");
-    assert.equal((p.options as { think: boolean; foo?: number }).think, false);
+    assert.equal(p.think, "low");
+    assert.equal("tool_choice" in p, false);
     assert.equal("foo" in (p.options as object), false);
   });
 
@@ -57,7 +56,7 @@ describe("local-wire", () => {
 });
 
 describe("ollama rewrite", () => {
-  it("keeps /v1/chat/completions so Ollama still loads weights, but think off with tools", () => {
+  it("keeps /v1/chat/completions and keeps think with tools", () => {
     const r = rewriteOllamaChat("http://192.168.178.41:11434/v1/chat/completions", {
       method: "POST",
       body: JSON.stringify({
@@ -71,7 +70,7 @@ describe("ollama rewrite", () => {
     });
     assert.equal(r.url, "http://192.168.178.41:11434/v1/chat/completions");
     const body = JSON.parse(String(r.init.body));
-    assert.equal(body.think, false);
+    assert.equal(body.think, "low");
     assert.equal("input" in body, false);
   });
 

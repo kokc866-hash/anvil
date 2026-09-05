@@ -5,7 +5,6 @@ const OLLAMA_KEYS = new Set([
   "messages",
   "stream",
   "tools",
-  "tool_choice",
   "think",
   "keep_alive",
   "options",
@@ -62,18 +61,8 @@ export function sanitizeLocalPayload(
     }
     out.options = opt;
   }
-  if (toolsOn) {
-    out.think = false;
-    const opt = (out.options as Record<string, unknown>) || {};
-    opt.think = false;
-    out.options = opt;
-    if (out.tool_choice === "required") out.tool_choice = "auto";
-    delete out.enable_thinking;
-    delete out.reasoning_budget;
-    if (out.chat_template_kwargs && typeof out.chat_template_kwargs === "object") {
-      out.chat_template_kwargs = { ...(out.chat_template_kwargs as object), enable_thinking: false };
-    }
-  }
+  // Think stays what the user set. Do not force it off when tools are on.
+  if (toolsOn && out.tool_choice === "required") out.tool_choice = "auto";
   if (!Array.isArray(out.messages) || !(out.messages as unknown[]).length) {
     out.messages = [{ role: "user", content: " " }];
   }

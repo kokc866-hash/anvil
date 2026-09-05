@@ -52,15 +52,15 @@ describe("abort", () => {
     assert.equal(streamIdleMs(true, 0), SSE_IDLE_MS);
     assert.equal(streamIdleMs(false, 1), SSE_FIRST_MS);
     assert.equal(streamIdleMs(true, 1), 60_000);
-    assert.equal(streamIdleMs(false, 0, true), 0);
+    assert.equal(streamIdleMs(false, 0, true), 600_000);
     assert.equal(streamIdleMs(true, 0, true), 0);
     assert.equal(isLocalLlm("ollama"), true);
     assert.equal(isLocalLlm("openai"), false);
   });
-  it("local slider 0 has no SSE cap; cloud stays 25s/90s", () => {
+  it("local slider 0: 10 min to first real token, no idle cap after", () => {
     assert.equal(streamIdleMs(false, 0, false), 25_000);
     assert.equal(streamIdleMs(true, 0, false), 90_000);
-    assert.equal(streamIdleMs(false, 0, true), 0);
+    assert.equal(streamIdleMs(false, 0, true), 600_000);
     assert.equal(streamIdleMs(true, 0, true), 0);
     assert.equal(streamIdleMs(false, 5, true), 5 * 60_000);
     assert.equal(streamIdleMs(true, 5, true), 5 * 60_000);
