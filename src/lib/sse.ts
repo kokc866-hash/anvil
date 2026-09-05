@@ -135,6 +135,7 @@ export async function readSseChat(
   while (true) {
     const { value, done } = await readChunk();
     if (done) break;
+    if (value && value.byteLength) gotEvent = true;
     buf += dec.decode(value, { stream: true });
     const lines = buf.split("\n");
     buf = lines.pop() ?? "";
@@ -190,14 +191,8 @@ export async function readSseChat(
         }
         const delta = ch?.delta;
         const think = delta?.reasoning_content || delta?.reasoning || delta?.thinking;
-        if (think) {
-          gotEvent = true;
-          pumpThink(think);
-        }
-        if (delta?.content) {
-          gotEvent = true;
-          takeContent(delta.content);
-        }
+        if (think) pumpThink(think);
+        if (delta?.content) takeContent(delta.content);
         if (content && (content.includes("write_file") || content.includes("edit_file") || content.includes("append_file"))) {
           applyLiveText(content);
         }
@@ -205,10 +200,7 @@ export async function readSseChat(
           sawDone = true;
           finish = finish || "stop";
         }
-        if (think || delta?.content || delta?.tool_calls?.length || delta?.function_call) {
-          gotEvent = true;
-          agentBeat();
-        }
+        if (think || delta?.content || delta?.tool_calls?.length || delta?.function_call || (delta && !delta.content)) agentBeat();
         if (delta?.function_call) {
           const cur = tools.get(0) ?? { id: "legacy", name: "", args: "" };
           if (delta.function_call.name) cur.name += delta.function_call.name;
