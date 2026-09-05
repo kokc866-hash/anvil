@@ -18,7 +18,7 @@ import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, 
 import { ccArgs, javaMainClass, isCargo, isGoMod, isCsproj, firstCsproj, looksGui } from "./compile-plan.mjs";
 import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
-import { llmUpstream, noTimeout, pipeQuiet, isAbortNoise, isCloudLlmHost } from "../scripts/llm-agent.mjs";
+import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, isCloudLlmHost } from "../scripts/llm-agent.mjs";
 import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
 import { gitDispatch, gitBin, listTree, writeRel, removeRel, mkdirRel, resolveCwd } from "./git.mjs";
 import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
@@ -577,7 +577,7 @@ async function handleMcp(msg) {
     return reply({
       protocolVersion: mcpProtocol(params?.protocolVersion),
       capabilities: { tools: {}, resources: {} },
-      serverInfo: { name: "anvil-companion", version: "1.3.1" },
+      serverInfo: { name: "anvil-companion", version: "1.3.2" },
     });
   }
   if (method === "notifications/initialized" || method === "initialized") return null;
@@ -712,7 +712,7 @@ const server = http.createServer(async (req, res) => {
     refreshPath();
     json(req, res, 200, {
       ok: true,
-      version: "1.3.1",
+      version: "1.3.2",
       modes: ["http", "mcp", "compile", "lsp", "install", "toolchain", "git", "debug"],
       bins: bins(),
       lsp: listLsp(),
@@ -759,15 +759,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       cors(req, res);
-      res.writeHead(r.status, {
-        "content-type": r.headers.get("content-type") || "application/json",
-        "cache-control": "no-store",
-      });
-      if (!r.stream) {
-        res.end();
-        return;
-      }
-      pipeQuiet(r.stream, res);
+      openLlmPipe(res, r);
     } catch (e) {
       res.setHeader("x-anvil-proxy", "1");
       json(req, res, 400, { error: String(e instanceof Error ? e.message : e) });

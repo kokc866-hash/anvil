@@ -4,7 +4,7 @@
  */
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
-import { isLlmTargetHost, llmUpstream, listenLocal, pipeQuiet } from "../scripts/llm-agent.mjs";
+import { isLlmTargetHost, llmUpstream, listenLocal, openLlmPipe } from "../scripts/llm-agent.mjs";
 import { handleOnce, onSync } from "./ipc.mjs";
 import { pipeCorsOrigin } from "./llm-pipe-cors.mjs";
 
@@ -79,13 +79,7 @@ export async function startLlmPipe() {
         signal: ac.signal,
       });
       res.statusCode = r.status;
-      const ct = r.headers.get("content-type");
-      if (ct) res.setHeader("content-type", ct);
-      if (!r.stream) {
-        res.end();
-        return;
-      }
-      pipeQuiet(r.stream, res);
+      openLlmPipe(res, r);
     } catch (e) {
       if (res.headersSent) {
         try {

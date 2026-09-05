@@ -129,10 +129,19 @@ export function hardStopMs(min = 0): number {
   return Math.min(480, min) * 60_000;
 }
 
-/** Cloud/Proxy: Slider 0 = kein hartes Limit. Trotzdem nicht ewig warten. */
+/** Cloud/Abo: Slider 0 = kein Limit. Nie eine heimliche 3-Minuten-Kappe. */
 export function cloudStopMs(min = 0): number {
-  const n = hardStopMs(min);
-  return n > 0 ? n : 180_000;
+  return hardStopMs(min);
+}
+
+/** Tot-Stream, nicht Job-Limit: erste Bytes vs. Pause danach. */
+export const SSE_FIRST_MS = 25_000;
+export const SSE_IDLE_MS = 90_000;
+
+export function streamIdleMs(gotEvent: boolean, hardMin = 0): number {
+  const hard = hardStopMs(hardMin);
+  const cap = gotEvent ? SSE_IDLE_MS : SSE_FIRST_MS;
+  return hard > 0 ? Math.min(hard, cap) : cap;
 }
 
 export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {

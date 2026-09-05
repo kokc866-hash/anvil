@@ -704,6 +704,7 @@ const de: Record<string, string> = {
   learnN: "Lernen {n}",
   helperLine: "Helfer · {name} · {state}",
   helperThink: "Helfer · {name} · denkt…",
+  anvilVerTip: "Anvil {v} — Einstellungen",
 };
 
 const en: Record<string, string> = {
@@ -1408,6 +1409,7 @@ const en: Record<string, string> = {
   learnN: "Learn {n}",
   helperLine: "Helper · {name} · {state}",
   helperThink: "Helper · {name} · thinking…",
+  anvilVerTip: "Anvil {v} — Settings",
 };
 
 function fill(s: string, vars?: Record<string, string | number>) {

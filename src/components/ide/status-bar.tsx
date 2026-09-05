@@ -8,6 +8,7 @@ import { saveNow } from "@/lib/save";
 import { useIntern } from "@/lib/intern";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, surfaceLabel } from "@/lib/surface";
+import { ANVIL_VERSION } from "@/lib/version";
 import { useT } from "@/lib/i18n";
 import { useKbd } from "@/lib/use-kbd";
 
@@ -70,6 +71,11 @@ export function StatusBar() {
 
   return (
     <footer className={`flex h-6 shrink-0 items-center gap-3 border-t border-border bg-surface px-2 font-mono text-[11px] text-muted ${agentBusy ? "ui-busy" : ""}`}>
+      <Tip label={t("anvilVerTip", { v: ANVIL_VERSION })} side="top">
+        <button type="button" className="shrink-0 hover:text-fg" onClick={() => setSettingsOpen(true)}>
+          Anvil {ANVIL_VERSION}
+        </button>
+      </Tip>
       <Tip label={t("mainModel")} side="top">
         <button
           type="button"

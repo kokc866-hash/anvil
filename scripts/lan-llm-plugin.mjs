@@ -1,4 +1,4 @@
-import { isLanHost, llmUpstream, noTimeout, pipeQuiet } from "./llm-agent.mjs";
+import { isLanHost, llmUpstream, noTimeout, openLlmPipe } from "./llm-agent.mjs";
 
 function readReq(req) {
   return new Promise((resolve, reject) => {
@@ -61,13 +61,7 @@ export function lanLlmPlugin() {
             signal: ac.signal,
           });
           res.statusCode = r.status;
-          const ct = r.headers.get("content-type");
-          if (ct) res.setHeader("content-type", ct);
-          if (!r.stream) {
-            res.end();
-            return;
-          }
-          pipeQuiet(r.stream, res);
+          openLlmPipe(res, r);
         } catch (e) {
           if (res.headersSent) return;
           const cause = e && typeof e === "object" && "cause" in e ? e.cause : null;

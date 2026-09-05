@@ -15,6 +15,7 @@ test("responses native only openai and azure", () => {
 
 test("pipe headers per provider", () => {
   const or = pipeHeaders("openrouter", "sk-or");
+  assert.equal(or.Accept, "text/event-stream");
   assert.equal(or["HTTP-Referer"], "https://anvil.app");
   assert.equal(or["X-Title"], "Anvil");
   const g = pipeHeaders("google", "AIzaTEST");

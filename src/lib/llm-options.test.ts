@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyLlmOptions, applyResponsesStore, needsCompletionTokens, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
+import { applyLlmOptions, applyResponsesStore, clampMaxOut, needsCompletionTokens, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
 
 test("gpt-5 o3 o4 grok-4 use max_completion_tokens", () => {
   assert.equal(needsCompletionTokens("gpt-5.6-luna"), true);
@@ -240,4 +240,45 @@ test("ollama sends slider num_ctx, strips enable_thinking", () => {
   assert.equal("n_ctx" in p, false);
   assert.equal("enable_thinking" in p, false);
   assert.equal("chat_template_kwargs" in p, false);
+});
+
+test("cloud default max out stays modest even with 1M context", () => {
+  assert.equal(clampMaxOut(undefined, 1_048_576, false), 8192);
+  assert.equal(clampMaxOut(32000, 1_048_576, false), 32000);
+  assert.ok(clampMaxOut(undefined, 131072, true) > 8192);
+});
+
+test("openai responses asks for a live reasoning summary", () => {
+  const body = responsesBody(
+    {
+      model: "gpt-5.5",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "medium",
+    },
+    "openai",
+  );
+  assert.deepEqual(body.reasoning, { effort: "medium", summary: "auto" });
+  const codex = responsesBody(
+    {
+      model: "gpt-5.6-luna",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "low",
+    },
+    "codex",
+  );
+  assert.deepEqual(codex.reasoning, { effort: "low" });
+});
+
+test("anthropic auto uses adaptive summarized thinking", () => {
+  const p = applyLlmOptions(
+    { model: "claude-opus-5" },
+    { provider: "anthropic", model: "claude-opus-5", api: "anthropic", context: 1_000_000, thinking: "auto" },
+  );
+  assert.deepEqual(p.thinking, { type: "adaptive", display: "summarized" });
+});
+
+test("patchResponses400 drops nested reasoning.summary", () => {
+  const body: Record<string, unknown> = { model: "gpt-5.5", reasoning: { effort: "medium", summary: "auto" } };
+  assert.equal(patchResponses400(body, "Unsupported parameter: summary"), true);
+  assert.deepEqual(body.reasoning, { effort: "medium" });
 });

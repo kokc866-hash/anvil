@@ -46,7 +46,8 @@ function clampTemp(n?: number): number {
 
 export function clampMaxOut(n: number | undefined, ctx: number, local: boolean): number {
   if (typeof n === "number" && n > 0) return Math.min(65536, Math.max(16, Math.round(n)));
-  return Math.min(65536, Math.max(2048, Math.floor(ctx * (local ? 0.18 : 0.35))));
+  const share = Math.max(2048, Math.floor(ctx * (local ? 0.18 : 0.35)));
+  return Math.min(local ? 65536 : 8192, share);
 }
 
 export function needsCompletionTokens(model: string, provider = ""): boolean {
@@ -144,9 +145,17 @@ export function applyLlmOptions(
   if (anthropic) {
     const maxTok = Math.max(maxOut, budget + 2048);
     payload.max_tokens = maxTok;
-    payload.thinking = { type: "enabled", budget_tokens: Math.min(budget, maxTok - 1024) };
     payload.temperature = 1;
     delete payload.max_completion_tokens;
+    if (rt.thinking === "auto") {
+      payload.thinking = { type: "adaptive", display: "summarized" };
+    } else {
+      payload.thinking = {
+        type: "enabled",
+        budget_tokens: Math.min(budget, maxTok - 1024),
+        display: "summarized",
+      };
+    }
   } else if (completion || rt.provider === "grok" || rt.provider === "xai" || /grok/i.test(rt.model)) {
     payload.reasoning_effort = effort;
   } else if (local) {
@@ -253,7 +262,9 @@ export function responsesBody(
     },
     kind,
   );
-  if (effort) body.reasoning = { effort };
+  if (effort) {
+    body.reasoning = kind === "codex" ? { effort } : { effort, summary: "auto" };
+  }
   if (!Array.isArray(body.input) || (body.input as unknown[]).length === 0) {
     body.input = [{ role: "user", content: instructions || " " }];
   }
@@ -312,6 +323,13 @@ export function patchResponses400(body: Record<string, unknown>, raw: string): b
     body.input = packed.input;
     if (packed.instructions) body.instructions = packed.instructions;
     hit = true;
+  }
+  if (/summary/i.test(raw) && body.reasoning && typeof body.reasoning === "object") {
+    const r = body.reasoning as Record<string, unknown>;
+    if ("summary" in r) {
+      delete r.summary;
+      hit = true;
+    }
   }
   return hit;
 }

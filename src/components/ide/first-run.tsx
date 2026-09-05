@@ -8,6 +8,7 @@ import { PROVIDER_GROUPS, providerOf, type ProviderId } from "@/lib/providers";
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { AnvilMark } from "./anvil-mark";
+import { ANVIL_VERSION } from "@/lib/version";
 import { credsForProvider } from "@/lib/sub-auth";
 
 type Ping = "idle" | "ok" | "bad";
@@ -97,6 +98,7 @@ export function FirstRun() {
           <AnvilMark className="size-10 shrink-0" />
           <div>
             <p className="text-sm font-medium text-fg">{t("setupTitle")}</p>
+            <p className="font-mono text-[11px] text-subtle">Anvil {ANVIL_VERSION}</p>
             <p className="mt-1 text-[12px] text-muted">{t("setupHint")}</p>
           </div>
         </div>

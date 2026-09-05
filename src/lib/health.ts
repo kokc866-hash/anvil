@@ -2,7 +2,7 @@ import { abortAgent, agentAborted, agentBeatN, beginAgent, stopAgent } from "./a
 import { note } from "./intern";
 import { useIde } from "@/store/ide";
 
-const STALL_NOTE_MS = 90_000;
+const STALL_NOTE_MS = 20_000;
 
 function killMs(): number {
   const n = useIde.getState().llmHardStopMin ?? 0;

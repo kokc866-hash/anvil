@@ -3,7 +3,9 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import appCss from "../styles.css?url";
 
-const APP_NAME = "Anvil";
+import { ANVIL_VERSION } from "@/lib/version";
+
+const APP_NAME = `Anvil ${ANVIL_VERSION}`;
 
 export const Route = createRootRoute({
   head: () => ({

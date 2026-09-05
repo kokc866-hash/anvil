@@ -1,6 +1,6 @@
 import type { LlmChoice, ToolCall } from "./agent-core";
 import { asToolCall } from "./agent-core";
-import { agentBeat, hardStopMs } from "./abort";
+import { agentBeat, streamIdleMs } from "./abort";
 import { useIde } from "@/store/ide";
 import { isToolTemplateEcho } from "./agent-parse";
 import { applyLiveDraft, applyLiveText } from "./live-write";
@@ -18,11 +18,11 @@ function thinkOff(): boolean {
   }
 }
 
-function stallWait(): number {
+function stallWait(gotEvent: boolean): number {
   try {
-    return hardStopMs(useIde.getState().llmHardStopMin ?? 0);
+    return streamIdleMs(gotEvent, useIde.getState().llmHardStopMin ?? 0);
   } catch {
-    return 0;
+    return streamIdleMs(gotEvent, 0);
   }
 }
 
@@ -51,6 +51,7 @@ export async function readSseChat(
   let gotThink = false;
   let sawStop = false;
   let thinkAt = 0;
+  let gotEvent = false;
   const tools = new Map<number, { id: string; name: string; args: string }>();
 
   const pumpThink = (s: string) => {
@@ -106,7 +107,7 @@ export async function readSseChat(
 
   const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
     new Promise((resolve, reject) => {
-      const wait = sawDone ? AFTER_FINISH_MS : sawStop ? AFTER_STOP_MS : stallWait();
+      const wait = sawDone ? AFTER_FINISH_MS : sawStop ? AFTER_STOP_MS : stallWait(gotEvent);
       const t =
         wait > 0
           ? setTimeout(() => {
@@ -133,6 +134,7 @@ export async function readSseChat(
   while (true) {
     const { value, done } = await readChunk();
     if (done) break;
+    if (value && value.byteLength) gotEvent = true;
     buf += dec.decode(value, { stream: true });
     const lines = buf.split("\n");
     buf = lines.pop() ?? "";
@@ -274,10 +276,11 @@ export async function readSseResponses(
   let buf = "";
   const acc = emptyResponsesAcc();
   let sawDone = false;
+  let gotEvent = false;
 
   const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
     new Promise((resolve, reject) => {
-      const wait = sawDone || acc.done ? AFTER_FINISH_MS : stallWait();
+      const wait = sawDone || acc.done ? AFTER_FINISH_MS : stallWait(gotEvent);
       const t =
         wait > 0
           ? setTimeout(() => {
@@ -304,6 +307,7 @@ export async function readSseResponses(
     while (true) {
       const { value, done } = await readChunk();
       if (done) break;
+      if (value && value.byteLength) gotEvent = true;
       buf += dec.decode(value, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop() ?? "";
@@ -326,6 +330,7 @@ export async function readSseResponses(
           const beforeC = acc.content.length;
           const beforeR = acc.reasoning.length;
           applyResponsesEvent(acc, j, onDelta);
+          agentBeat();
           if (acc.content.length > beforeC) applyLiveText(acc.content);
           if (acc.content.length > beforeC || acc.reasoning.length > beforeR || acc.tools.size) agentBeat();
           for (const tcall of acc.tools.values()) {
@@ -374,10 +379,11 @@ export async function readSseAnthropic(
   let promptTok = 0;
   let completionTok = 0;
   let errMsg = "";
+  let gotEvent = false;
 
   const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
     new Promise((resolve, reject) => {
-      const wait = sawStop ? AFTER_STOP_MS : stallWait();
+      const wait = sawStop ? AFTER_STOP_MS : stallWait(gotEvent);
       const t =
         wait > 0
           ? setTimeout(() => {
@@ -404,6 +410,7 @@ export async function readSseAnthropic(
     while (true) {
       const { value, done } = await readChunk();
       if (done) break;
+      if (value && value.byteLength) gotEvent = true;
       buf += dec.decode(value, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop() ?? "";

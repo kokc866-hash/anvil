@@ -18,6 +18,7 @@ import { cn } from "@/lib/cn";
 import { Tip } from "@/components/ui/tooltip";
 import { focusOutputWindow } from "@/lib/output-window";
 import { useIde, type SidebarId } from "@/store/ide";
+import { ANVIL_VERSION } from "@/lib/version";
 import { useT } from "@/lib/i18n";
 import { useKbd } from "@/lib/use-kbd";
 
@@ -100,6 +101,15 @@ export function ActivityBar() {
         <Terminal className="size-4" />
       </IconBtn>
       <div className="flex-1" />
+      <Tip label={t("anvilVerTip", { v: ANVIL_VERSION })} side="right">
+        <button
+          type="button"
+          className="mb-0.5 w-10 px-0.5 text-center font-mono text-[9px] leading-tight text-subtle hover:text-fg"
+          onClick={() => setSettingsOpen(true)}
+        >
+          {ANVIL_VERSION}
+        </button>
+      </Tip>
       <IconBtn label={t("settings")} kbd={kSet} on={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>
         <Settings className="size-4" />
       </IconBtn>

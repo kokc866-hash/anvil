@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { abortAgent, agentGen, beginAgent, cloudStopMs, explainAbort, explainLlmError, hardStopMs, isAbortLike, AgentAbortError } from "./abort.ts";
+import { abortAgent, agentGen, beginAgent, cloudStopMs, explainAbort, explainLlmError, hardStopMs, isAbortLike, streamIdleMs, AgentAbortError } from "./abort.ts";
 
 describe("abort", () => {
   it("maps the chrome empty abort", () => {
@@ -28,9 +28,13 @@ describe("abort", () => {
       'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}';
     assert.match(explainLlmError(new Error(raw)), /Guthaben/);
   });
-  it("cloud stop defaults to 3 min when slider is off", () => {
+  it("slider 0 is no cloud time lock", () => {
     assert.equal(hardStopMs(0), 0);
-    assert.equal(cloudStopMs(0), 180_000);
+    assert.equal(cloudStopMs(0), 0);
     assert.equal(cloudStopMs(5), 5 * 60_000);
+    assert.equal(streamIdleMs(false, 0), 25_000);
+    assert.equal(streamIdleMs(true, 0), 90_000);
+    assert.equal(streamIdleMs(false, 1), 25_000);
+    assert.equal(streamIdleMs(true, 1), 60_000);
   });
 });

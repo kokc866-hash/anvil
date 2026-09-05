@@ -36,6 +36,7 @@ import { gotoFile } from "@/lib/goto";
 import { saveNow, focusAgent } from "@/lib/save";
 import { useIde } from "@/store/ide";
 import { applyLang, t } from "@/lib/i18n";
+import { ANVIL_VERSION } from "@/lib/version";
 import { InternPane } from "./intern-pane";
 import { ConfirmHost } from "./confirm-host";
 import { StarterPick } from "./starter-pick";
@@ -88,6 +89,10 @@ export function Workspace() {
 
   useEffect(() => {
     startIntern();
+  }, []);
+
+  useEffect(() => {
+    document.title = `Anvil ${ANVIL_VERSION}`;
   }, []);
 
   useEffect(() => {

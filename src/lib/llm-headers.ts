@@ -43,6 +43,7 @@ export function pipeHeaders(provider: string, apiKey: string): Record<string, st
   const key = apiKey.trim();
   const h: Record<string, string> = {
     "Content-Type": "application/json",
+    Accept: "text/event-stream",
     Authorization: `Bearer ${key || "none"}`,
   };
   if (provider === "openrouter") {
@@ -61,6 +62,7 @@ export function pipeHeaders(provider: string, apiKey: string): Record<string, st
 export function anthropicHeaders(apiKey: string, oauth: boolean): Record<string, string> {
   const h: Record<string, string> = {
     "Content-Type": "application/json",
+    Accept: "text/event-stream",
     "anthropic-version": "2023-06-01",
   };
   if (oauth) {

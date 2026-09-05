@@ -149,6 +149,29 @@ export function pipeQuiet(src, dest) {
   src.pipe(dest);
 }
 
+/** Header sofort raus — sonst wartet der Browser bis zum ersten Token. */
+export function openLlmPipe(res, upstream) {
+  res.statusCode = upstream?.status || 200;
+  const ct = upstream?.headers?.get?.("content-type");
+  if (ct) res.setHeader("content-type", ct);
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering", "no");
+  try {
+    res.flushHeaders?.();
+  } catch {
+    /* */
+  }
+  if (!upstream?.stream) {
+    try {
+      res.end();
+    } catch {
+      /* */
+    }
+    return;
+  }
+  pipeQuiet(upstream.stream, res);
+}
+
 function killReq(req, incoming) {
   try {
     incoming?.destroy();

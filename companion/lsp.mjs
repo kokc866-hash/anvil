@@ -607,7 +607,7 @@ export async function checkLsp(id) {
       method: "initialize",
       params: {
         processId: process.pid,
-        clientInfo: { name: "Anvil", version: "1.3.1" },
+        clientInfo: { name: "Anvil", version: "1.3.2" },
         rootUri: root,
         workspaceFolders: [{ uri: root, name: "anvil" }],
         capabilities: {

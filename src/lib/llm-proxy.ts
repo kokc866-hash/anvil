@@ -199,7 +199,6 @@ async function postOpenAi(
       method: "POST",
       headers: hdr,
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(120000),
     });
   let res = await send();
   if (res.ok) {
@@ -271,7 +270,6 @@ async function postResponses(
       method: "POST",
       headers: withUa({ ...headers, ...(b.stream ? { Accept: "text/event-stream" } : {}) }),
       body: JSON.stringify(b),
-      signal: AbortSignal.timeout(180000),
     });
   let res = await send(body);
   let raw = await res.text();
@@ -460,6 +458,7 @@ async function anthropicChat(
   if (tools) body.tools = mapTools(tools);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    Accept: "text/event-stream",
     "anthropic-version": "2023-06-01",
   };
   if (isClaudeOauth(apiKey)) {
@@ -475,7 +474,6 @@ async function anthropicChat(
       method: "POST",
       headers: h,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
     });
   let res = await send(hdr);
   if (!res.ok) {

@@ -23,6 +23,14 @@ import { sweepAnvilTemp } from "../companion/tmp.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.ANVIL_PORT || 8080);
 const URL = `http://127.0.0.1:${PORT}/`;
+function appTitle() {
+  try {
+    const v = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
+    return v ? `Anvil ${v}` : "Anvil";
+  } catch {
+    return "Anvil";
+  }
+}
 
 app.commandLine.appendSwitch(
   "disable-features",
@@ -339,7 +347,7 @@ async function createWindow() {
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    title: "Anvil",
+    title: appTitle(),
     icon: icon || iconPath(ROOT) || undefined,
     backgroundColor: "#0a0a0b",
     autoHideMenuBar: true,

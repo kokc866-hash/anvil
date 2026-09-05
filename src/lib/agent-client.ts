@@ -268,7 +268,7 @@ export async function chatWithProvider(opts: {
           prepChatPayload(payload, Number(opts.context) || 131072);
           const res = await lanFetch("https://api.x.ai/v1/chat/completions", {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+            headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: `Bearer ${key}` },
             body: JSON.stringify(payload),
             signal: withAgentTimeout(stop),
           });
@@ -967,14 +967,34 @@ function makeProxyComplete(
               input_schema: t.function.parameters ?? { type: "object", properties: {} },
             }));
           }
-          const res = await lanFetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: anthropicHeaders(key, isClaudeOauth(key)),
-            body: JSON.stringify(body),
-            signal: withAgentTimeout(stop),
-          });
+          const sendAnt = () =>
+            lanFetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: anthropicHeaders(key, isClaudeOauth(key)),
+              body: JSON.stringify(body),
+              signal: withAgentTimeout(stop),
+            });
+          let res = await sendAnt();
+          if (!res.ok && res.status === 400) {
+            const errText = await res.text();
+            const think = body.thinking as Record<string, unknown> | undefined;
+            if (think?.type === "adaptive" && /adaptive|thinking/i.test(errText)) {
+              const maxTok = Number(body.max_tokens) || 8192;
+              body.thinking = {
+                type: "enabled",
+                budget_tokens: Math.min(8192, Math.max(1024, maxTok - 1024)),
+                display: "summarized",
+              };
+              res = await sendAnt();
+            } else if (think && "display" in think && /display/i.test(errText)) {
+              delete think.display;
+              res = await sendAnt();
+            } else {
+              last = new Error(`HTTP ${res.status}: ${errText.slice(0, 180)}`);
+            }
+          }
           if (res.ok) return await readSseAnthropic(res, onDelta);
-          last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
+          if (!last) last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
         } else if (spec.id === "azure") {
           const raw = (baseUrl || spec.baseUrl).trim();
           const host = new URL(raw.includes("://") ? raw : `https://${raw}`);

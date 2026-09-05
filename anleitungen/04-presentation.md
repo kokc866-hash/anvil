@@ -1,4 +1,4 @@
-# Anvil 1.3.1 — Kurzpräsentation
+# Anvil 1.3.2 — Kurzpräsentation
 
 5 Minuten. Für Demo, Pitch oder den ersten Blick. Stand: 05.09.2026.
 

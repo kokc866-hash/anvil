@@ -42,9 +42,9 @@ async function grokChat(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        Accept: "text/event-stream",
       },
       body: JSON.stringify(p),
-      signal: AbortSignal.timeout(180000),
     });
   let res = await send(payload);
   let raw = await res.text();
