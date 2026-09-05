@@ -200,12 +200,7 @@ export function localSseStall(provider: string, baseUrl = ""): boolean {
 
 export function streamIdleMs(gotEvent: boolean, hardMin = 0, local = false): number {
   const hard = hardStopMs(hardMin);
-  if (local) {
-    // Slider 0 = no job kill AFTER real tokens. First byte still 10 min so a dead
-    // Ollama (role-only SSE, GPU 0) does not sit for hours.
-    if (gotEvent) return hard;
-    return hard > 0 ? Math.min(hard, SSE_FIRST_LOCAL_MS) : SSE_FIRST_LOCAL_MS;
-  }
+  if (local) return hard;
   const cap = gotEvent ? SSE_IDLE_MS : SSE_FIRST_MS;
   return hard > 0 ? Math.min(hard, cap) : cap;
 }
