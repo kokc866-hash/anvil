@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { abortAgent, agentGen, beginAgent, cloudStopMs, explainAbort, explainLlmError, hardStopMs, isAbortLike, streamIdleMs, AgentAbortError } from "./abort.ts";
+import { abortAgent, agentGen, beginAgent, cloudStopMs, explainAbort, explainLlmError, hardStopMs, isAbortLike, isLocalLlm, streamIdleMs, AgentAbortError } from "./abort.ts";
 
 describe("abort", () => {
   it("maps the chrome empty abort", () => {
@@ -36,5 +36,9 @@ describe("abort", () => {
     assert.equal(streamIdleMs(true, 0), 90_000);
     assert.equal(streamIdleMs(false, 1), 25_000);
     assert.equal(streamIdleMs(true, 1), 60_000);
+    assert.equal(streamIdleMs(false, 0, true), 600_000);
+    assert.equal(streamIdleMs(true, 0, true), 180_000);
+    assert.equal(isLocalLlm("ollama"), true);
+    assert.equal(isLocalLlm("openai"), false);
   });
 });
