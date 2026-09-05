@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { localChatUrl, sanitizeLocalPayload, usesOllamaNative, ollamaRoot, localWireNote } from "./local-wire.ts";
+import { localChatUrl, sanitizeLocalPayload, usesOllamaNative, ollamaRoot, localWireNote, rewriteOllamaChat, ndjsonLineToSse } from "./local-wire.ts";
 
 describe("local-wire", () => {
   it("ollama talks native /api/chat, not OpenAI /v1", () => {
@@ -53,5 +53,41 @@ describe("local-wire", () => {
     assert.match(n, /\/api\/chat/);
     assert.match(n, /tools=2/);
     assert.match(n, /think=false/);
+  });
+});
+
+describe("ollama rewrite", () => {
+  it("rewrite 11434 OpenAI path to native /api/chat and kills think with tools", () => {
+    const r = rewriteOllamaChat("http://192.168.178.41:11434/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "qwen",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+        think: "low",
+        tools: [{ type: "function", function: { name: "read_file" } }],
+        input: [],
+      }),
+    });
+    assert.equal(r.url, "http://192.168.178.41:11434/api/chat");
+    const body = JSON.parse(String(r.init.body));
+    assert.equal(body.think, false);
+    assert.equal("input" in body, false);
+  });
+
+  it("does not touch OpenAI cloud", () => {
+    const r = rewriteOllamaChat("https://api.openai.com/v1/chat/completions", {
+      body: JSON.stringify({ model: "gpt", messages: [] }),
+    });
+    assert.equal(r.url, "https://api.openai.com/v1/chat/completions");
+  });
+
+  it("ndjson becomes SSE the existing reader understands", () => {
+    const sse = ndjsonLineToSse('{"message":{"content":"Hi","thinking":"hmm"},"done":false}');
+    assert.match(sse, /^data: /);
+    const j = JSON.parse(sse.slice(5).trim());
+    assert.equal(j.choices[0].delta.content, "Hi");
+    assert.equal(j.choices[0].delta.reasoning, "hmm");
+    assert.equal(ndjsonLineToSse('{"done":true}'), "data: [DONE]\n\n");
   });
 });

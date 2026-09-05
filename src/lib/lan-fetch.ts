@@ -3,6 +3,7 @@ import { loadSecrets } from "./secrets";
 import { useIde } from "@/store/ide";
 import { lanAlts } from "./lan-url";
 import { hardStopMs } from "./abort";
+import { rewriteOllamaChat, wrapOllamaResponse } from "./local-wire";
 
 export { lanAlts };
 
@@ -144,6 +145,9 @@ async function lanFetchOne(url: string, init: RequestInit = {}): Promise<Respons
 }
 
 export async function lanFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const rw = rewriteOllamaChat(url, init);
+  url = rw.url;
+  init = rw.init;
   const alts = lanAlts(url);
   let last: Response | null = null;
   const errs: string[] = [];
@@ -161,7 +165,7 @@ export async function lanFetch(url: string, init: RequestInit = {}): Promise<Res
             /* */
           }
         }
-        return r;
+        return wrapOllamaResponse(u, r);
       }
       if (r) last = r;
     } catch (e) {
@@ -169,6 +173,6 @@ export async function lanFetch(url: string, init: RequestInit = {}): Promise<Res
       errs.push(`${u}: ${e instanceof Error ? e.message : e}`);
     }
   }
-  if (last) return last;
+  if (last) return wrapOllamaResponse(url, last);
   throw new Error(errs.join(" · ") || "Keine Verbindung zum Modell.");
 }
