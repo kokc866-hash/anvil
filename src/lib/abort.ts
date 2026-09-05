@@ -200,8 +200,6 @@ export function localSseStall(provider: string, baseUrl = ""): boolean {
 
 export function streamIdleMs(gotEvent: boolean, hardMin = 0, local = false): number {
   const hard = hardStopMs(hardMin);
-  // Local + slider 0: never invent a 3/10-min cap. Prefill on 27B can sit silent
-  // for minutes after the first SSE "role" chunk. Only the user slider stops it.
   if (local) return hard;
   const cap = gotEvent ? SSE_IDLE_MS : SSE_FIRST_MS;
   return hard > 0 ? Math.min(hard, cap) : cap;
@@ -213,8 +211,8 @@ export function shouldRetryLocalLlm(err: unknown): boolean {
   const name = err instanceof Error ? err.name : "";
   const msg = err instanceof Error ? err.message : String(err);
   if (name === "StreamStallError") return false;
-  if (/Leere Antwort|Leerer Stream|Kein Token/i.test(msg)) return false;
-  return /Failed to fetch|network|ECONNRESET|hang|unload|HTTP 500|HTTP 502|HTTP 503/i.test(msg);
+  if (/Leere Antwort|Leerer Stream|Kein Token|HTTP 400|HTTP 500|XML syntax/i.test(msg)) return false;
+  return /Failed to fetch|network|ECONNRESET|ECONNREFUSED/i.test(msg);
 }
 
 export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {
