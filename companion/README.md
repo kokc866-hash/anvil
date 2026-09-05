@@ -1,6 +1,6 @@
 # Companion — außerhalb von Anvil
 
-Anvil **1.2.1**. Electron startet Companion **selbst bei Run** und beendet ihn, wenn das Run-Fenster zu ist (oder lässt ihn, wenn **Anlassen** an ist).  
+Anvil **1.2.2**. Electron startet Companion **selbst bei Run** und beendet ihn, wenn das Run-Fenster zu ist (oder lässt ihn, wenn **Anlassen** an ist).  
 `companion\start.bat` nur, wenn Anvil **im Browser** läuft oder du Companion dauerhaft willst.
 
 Kein Internet. Ein kleines Node-Programm **auf diesem PC**. Standard: `127.0.0.1:7845`. Anderer Port: `ANVIL_COMPANION_PORT`. LAN-Bind (selten): `ANVIL_COMPANION_HOST=0.0.0.0` — Token bleibt Pflicht, Pair nur localhost.

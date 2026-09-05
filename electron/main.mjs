@@ -5,7 +5,6 @@ import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
-import { execSync } from "node:child_process";
 import { bindHelperIpc, startHelperHost } from "./helper-host.mjs";
 import { startLlmPipe } from "./llm-pipe.mjs";
 import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
@@ -15,6 +14,7 @@ import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
 import { handleOnce, onSync } from "./ipc.mjs";
 import { isAbortNoise } from "../scripts/llm-agent.mjs";
+import { nodeCommand, withNodeEnv } from "./node-cmd.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.ANVIL_PORT || 8080);
@@ -59,6 +59,7 @@ let companion = null;
 let companionOwned = false;
 let companionRefs = 0;
 let companionIdle = 0;
+let bootFail = "";
 
 function companionPort() {
   const n = Number(process.env.ANVIL_COMPANION_PORT || 7845);
@@ -152,31 +153,19 @@ function stopLocals() {
   pipeSrv = null;
 }
 
-function findNode() {
-  const skip = (p) => !p || /electron/i.test(p);
-  const fromNpm = process.env.npm_node_execpath;
-  if (!skip(fromNpm) && existsSync(fromNpm)) return fromNpm;
-  try {
-    const cmd = process.platform === "win32" ? "where node" : "command -v node";
-    const out = execSync(cmd, { encoding: "utf8" }).trim().split(/\r?\n/)[0];
-    if (!skip(out) && existsSync(out)) return out;
-  } catch {
-    /* fall through */
-  }
-  return "node";
+function spawnNode() {
+  return nodeCommand({ isPackaged: app.isPackaged, execPath: process.execPath });
 }
 
-function nodeEnv() {
+function nodeEnv(electronAsNode = false) {
   const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ASAR;
   try {
     const p = loadPaths().packages;
     if (p) env.ANVIL_HOME = p;
   } catch {
     /* */
   }
-  return env;
+  return withNodeEnv(env, electronAsNode);
 }
 
 function portOpen(port) {
@@ -193,18 +182,19 @@ function waitForServer(ms = 60000) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const tick = async () => {
+      if (bootFail) return reject(new Error(bootFail));
       if (await portOpen(PORT)) return resolve();
-      if (Date.now() - start > ms) return reject(new Error("Server startet nicht (Port " + PORT + ")."));
+      if (Date.now() - start > ms) {
+        return reject(new Error(bootFail || "Server startet nicht (Port " + PORT + ")."));
+      }
       setTimeout(tick, 250);
     };
     void tick();
   });
 }
 
-function startServer() {
-  const node = findNode();
-  const wrapper = join(ROOT, "scripts", "with-app-env.mjs");
-  const vite = join(ROOT, "node_modules", "vite", "bin", "vite.js");
+function startChild(args) {
+  const cmd = spawnNode();
   const logPath = logFile();
   let stdio = "ignore";
   try {
@@ -213,36 +203,41 @@ function startServer() {
   } catch {
     stdio = "ignore";
   }
-  const child = spawn(node, [wrapper, vite, "dev", "--host", "127.0.0.1", "--port", String(PORT)], {
+  bootFail = "";
+  const child = spawn(cmd.file, args, {
     cwd: ROOT,
     windowsHide: true,
     stdio,
-    env: nodeEnv(),
+    env: nodeEnv(cmd.electronAsNode),
+  });
+  child.on("error", (err) => {
+    bootFail = err?.message || String(err);
+  });
+  child.on("exit", (code, signal) => {
+    if (code && !bootFail) bootFail = `Server beendet (${code}${signal ? "/" + signal : ""}).`;
   });
   child.unref?.();
   return child;
 }
 
+function startServer() {
+  const wrapper = join(ROOT, "scripts", "with-app-env.mjs");
+  const vite = join(ROOT, "node_modules", "vite", "bin", "vite.js");
+  if (!existsSync(vite)) {
+    bootFail = "Vite fehlt in der Installation: " + vite;
+    throw new Error(bootFail);
+  }
+  if (!existsSync(wrapper)) {
+    bootFail = "Startskript fehlt: " + wrapper;
+    throw new Error(bootFail);
+  }
+  return startChild([wrapper, vite, "dev", "--host", "127.0.0.1", "--port", String(PORT)]);
+}
+
 function startCompanion() {
-  const node = findNode();
   const script = join(ROOT, "companion", "server.mjs");
   if (!existsSync(script)) return null;
-  const logPath = logFile();
-  let stdio = "ignore";
-  try {
-    const fd = openSync(logPath, "a");
-    stdio = ["ignore", fd, fd];
-  } catch {
-    stdio = "ignore";
-  }
-  const child = spawn(node, [script], {
-    cwd: ROOT,
-    windowsHide: true,
-    stdio,
-    env: nodeEnv(),
-  });
-  child.unref?.();
-  return child;
+  return startChild([script]);
 }
 
 function stopCompanion() {
@@ -466,13 +461,16 @@ if (!gotLock) {
     const up = await portOpen(PORT);
     if (!up) {
       server = startServer();
-      await waitForServer();
+      await waitForServer(app.isPackaged ? 180000 : 60000);
     }
     await createWindow();
   }).catch((err) => {
     hideSplash();
     const msg = err instanceof Error ? err.message : String(err);
-    dialog.showErrorBox("Anvil", msg + "\n\nstop.bat, dann start.bat. Log: anvil-desktop.log");
+    const hint = app.isPackaged
+      ? "Log: anvil-desktop.log (unter AppData\\Roaming\\Anvil\\logs)."
+      : "stop.bat, dann start.bat. Log: anvil-desktop.log";
+    dialog.showErrorBox("Anvil", msg + "\n\n" + hint);
     stopCompanion();
     stopServer();
     stopLocals();

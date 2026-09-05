@@ -24,14 +24,14 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.1' }}
-          name: Anvil 1.2.1
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.2.2' }}
+          name: Anvil 1.2.2
           generate_release_notes: true
           files: dist-win/*.exe
           body: |
-            **Anvil 1.2.1** (2026-09-05)
+            **Anvil 1.2.2** (2026-09-05)
 
-            Windows: **Setup** (Installer) oder **portable** exe.
+            Windows: **Setup** (Installer) oder **portable** exe. Die exe startet ohne Node.js (Electron als Node).
 
             - To-do-Quelle einstellbar: Auto / Anvil / Helfer / Agent
             - Run-Fenster zeigt die laufende Datei

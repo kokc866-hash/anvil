@@ -577,7 +577,7 @@ async function handleMcp(msg) {
     return reply({
       protocolVersion: mcpProtocol(params?.protocolVersion),
       capabilities: { tools: {}, resources: {} },
-      serverInfo: { name: "anvil-companion", version: "1.2.1" },
+      serverInfo: { name: "anvil-companion", version: "1.2.2" },
     });
   }
   if (method === "notifications/initialized" || method === "initialized") return null;
@@ -712,7 +712,7 @@ const server = http.createServer(async (req, res) => {
     refreshPath();
     json(req, res, 200, {
       ok: true,
-      version: "1.2.1",
+      version: "1.2.2",
       modes: ["http", "mcp", "compile", "lsp", "install", "toolchain", "git", "debug"],
       bins: bins(),
       lsp: listLsp(),
