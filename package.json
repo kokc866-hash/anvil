@@ -1,7 +1,7 @@
 {
   "name": "anvil",
   "productName": "Anvil",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Lokale IDE: Dateien, Agent, Run.",
   "author": "Anvil",
   "private": true,
@@ -89,7 +89,7 @@
     "appId": "app.anvil.ide",
     "productName": "Anvil",
     "asar": false,
-    "compression": "maximum",
+    "compression": "normal",
     "directories": {
       "output": "dist-win"
     },
