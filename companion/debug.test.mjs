@@ -56,7 +56,11 @@ describe("native python debug", () => {
       debugStop(id);
     } finally {
       if (id) debugStop(id);
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch (e) {
+        if (!e || !/EBUSY|EPERM|ENOTEMPTY/i.test(String(e.code || e.message))) throw e;
+      }
     }
   });
 });
