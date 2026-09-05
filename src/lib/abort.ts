@@ -137,10 +137,32 @@ export function cloudStopMs(min = 0): number {
 /** Tot-Stream, nicht Job-Limit: erste Bytes vs. Pause danach. */
 export const SSE_FIRST_MS = 25_000;
 export const SSE_IDLE_MS = 90_000;
+/** Ollama/LAN: 27B-Q8 braucht Minuten für VRAM, bevor das erste Byte kommt. */
+export const SSE_FIRST_LOCAL_MS = 600_000;
+export const SSE_IDLE_LOCAL_MS = 180_000;
 
-export function streamIdleMs(gotEvent: boolean, hardMin = 0): number {
+const LOCAL_LLM = new Set([
+  "ollama",
+  "lmstudio",
+  "llamacpp",
+  "vllm",
+  "localai",
+  "jan",
+  "gpt4all",
+  "koboldcpp",
+  "textgen",
+  "openwebui",
+  "brain",
+  "custom",
+]);
+
+export function isLocalLlm(provider: string): boolean {
+  return LOCAL_LLM.has(String(provider || "").toLowerCase());
+}
+
+export function streamIdleMs(gotEvent: boolean, hardMin = 0, local = false): number {
   const hard = hardStopMs(hardMin);
-  const cap = gotEvent ? SSE_IDLE_MS : SSE_FIRST_MS;
+  const cap = gotEvent ? (local ? SSE_IDLE_LOCAL_MS : SSE_IDLE_MS) : local ? SSE_FIRST_LOCAL_MS : SSE_FIRST_MS;
   return hard > 0 ? Math.min(hard, cap) : cap;
 }
 
