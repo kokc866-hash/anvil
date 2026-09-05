@@ -18,7 +18,7 @@ import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, 
 import { ccArgs, javaMainClass, isCargo, isGoMod, isCsproj, firstCsproj, looksGui } from "./compile-plan.mjs";
 import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
-import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, isCloudLlmHost } from "../scripts/llm-agent.mjs";
+import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, assertLlmTarget } from "../scripts/llm-agent.mjs";
 import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
 import { gitDispatch, gitBin, listTree, writeRel, removeRel, mkdirRel, resolveCwd } from "./git.mjs";
 import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
@@ -26,7 +26,6 @@ import {
   allowCorsOrigin,
   blockedCwd,
   homeOk,
-  isLanHost,
   llmHeaders,
   MAX_BODY,
   mcpProtocol,
@@ -674,11 +673,8 @@ if(send) send.onclick=function(){
 <\/script></body>`;
 }
 
-function lanTarget(raw) {
-  const u = new URL(String(raw || "").trim());
-  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("nur http(s)");
-  if (!isLanHost(u.hostname) && !isCloudLlmHost(u.hostname)) throw new Error("nur LAN oder Cloud-LLM");
-  return u.origin + u.pathname + u.search;
+function lanTarget(raw, customBase = "") {
+  return assertLlmTarget(String(raw || "").trim(), customBase).toString();
 }
 
 function checkToken(req) {
@@ -734,7 +730,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/v1/llm") {
     try {
       const body = await readBody(req);
-      const target = lanTarget(body.url);
+      const target = lanTarget(body.url, String(body.customBase || ""));
       const method = String(body.method || "GET").toUpperCase();
       const hdrs = llmHeaders(body.headers);
       const ac = new AbortController();

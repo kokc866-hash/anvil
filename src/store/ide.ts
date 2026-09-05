@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
 import { langFromPath } from "@/lib/languages";
-import { modelForProvider, providerOf, type LlmProvider } from "@/lib/providers";
+import { modelForProvider, providerOf, connectionMode, connectionSlot, connectionDefaults, type LlmProvider } from "@/lib/providers";
 import { ancestorDirs, autoCollapsePaths, cleanPath, dropRecord, dupPath, isInside, joinPath, parentDir, remapList, remapPath, remapRecord } from "@/lib/fs";
 import { DEFAULT_INPUT_MAP, normalizeInputMap, type InputMap } from "@/lib/input-map";
 import { KEY_DEFAULTS, normalizeKeyMap, type Chord, type KeyId } from "@/lib/keymap";
@@ -80,6 +80,8 @@ import { shrinkFiles } from "@/lib/persist-storage";
 import type { FileChange } from "@/lib/diff";
 
 export type LlmSlot = {
+  authMode?: "abo" | "key";
+  contextAuto?: boolean;
   baseUrl: string;
   model: string;
   context: number;
@@ -96,6 +98,8 @@ export type LlmProfile = LlmSlot & {
 };
 
 function slotOf(s: {
+  llmAuthMode: "abo" | "key";
+  llmContextAuto: boolean;
   llmBaseUrl: string;
   llmModel: string;
   llmContext: number;
@@ -105,6 +109,8 @@ function slotOf(s: {
   llmMaxOut: number;
 }): LlmSlot {
   return {
+    authMode: s.llmAuthMode,
+    contextAuto: s.llmContextAuto,
     baseUrl: s.llmBaseUrl,
     model: s.llmModel,
     context: s.llmContext,
@@ -448,7 +454,7 @@ type IdeState = {
   setRunPopout: (v: boolean) => void;
   setRunPath: (path: string | null) => void;
   setSplitMode: (v: SplitMode) => void;
-  setLlmProvider: (v: LlmProvider) => void;
+  setLlmProvider: (v: LlmProvider, mode?: "abo" | "key") => void;
   setLlmAuthMode: (v: "abo" | "key") => void;
   setLlmBaseUrl: (v: string) => void;
   setLlmModel: (v: string) => void;
@@ -825,27 +831,26 @@ export const useIde = create<IdeState>()(
       setRunPopout: (runPopout) => set({ runPopout }),
       setRunPath: (runPath) => set({ runPath: runPath || null }),
       setSplitMode: (splitMode) => set({ splitMode }),
-      setLlmProvider: (llmProvider) => {
+      setLlmProvider: (llmProvider, mode) => {
         const cur = get();
         const d = providerOf(llmProvider);
-        const slots = { ...(cur.llmSlots ?? {}), [cur.llmProvider]: slotOf(cur) };
+        const slots = { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur) };
         const leaving = providerOf(cur.llmProvider);
         if (!leaving.needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
-        const saved = slots[d.id];
+        const authMode = connectionMode(d.id, mode ?? (d.id === cur.llmProvider ? cur.llmAuthMode : "key"));
+        const defaults = connectionDefaults(d.id, authMode);
+        const legacy = slots[d.id];
+        const saved = slots[connectionSlot(d.id, authMode)] ?? (connectionMode(d.id, legacy?.authMode) === authMode ? legacy : undefined);
         const key = keyForProvider(d.id);
-        let url = saved?.baseUrl || "";
-        const curUrl = (cur.llmBaseUrl || "").trim();
-        if (d.kind === "local" && curUrl && /11434|1234|8080|1337/.test(curUrl)) {
-          const savedIsDefault = !url || url === d.baseUrl || /127\.0\.0\.1/.test(url);
-          if (savedIsDefault) url = curUrl;
-        }
-        const model = modelForProvider(d.id, saved?.model || d.model);
-        const fit = fitCloudAbo(d.id, model);
+        let url = saved?.baseUrl ?? defaults.baseUrl;
+        let model = modelForProvider(d.id, saved?.model || defaults.model);
+        if (d.id === "github") { url = ""; model = model.replace(/^openai\//, ""); }
+        const fit = saved ? null : fitCloudAbo(d.id, model, authMode);
         set({
           llmSlots: slots,
           llmProvider: d.id,
-          llmAuthMode: d.id === "codex" ? "abo" : d.kind === "local" ? "key" : cur.llmAuthMode,
-          llmBaseUrl: url || d.baseUrl,
+          llmAuthMode: authMode,
+          llmBaseUrl: url,
           llmModel: model,
           llmApiKey: key,
           llmCompact: saved?.compact ?? cur.llmCompact,
@@ -856,29 +861,23 @@ export const useIde = create<IdeState>()(
                 llmThinking: saved?.thinking ?? cur.llmThinking,
                 llmTemperature: saved?.temperature ?? cur.llmTemperature,
                 llmMaxOut: saved?.maxOut ?? cur.llmMaxOut,
-                llmContextAuto: d.kind === "local" ? cur.llmContextAuto : true,
+                llmContextAuto: saved?.contextAuto ?? (d.kind === "local" || d.id === "custom" ? cur.llmContextAuto : true),
               }),
         });
         if (fit || get().llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
       },
-      setLlmAuthMode: (llmAuthMode) => {
-        const mode = llmAuthMode === "abo" ? "abo" : "key";
-        const cur = get();
-        const fit = mode === "abo" ? fitCloudAbo(cur.llmProvider, cur.llmModel) : null;
-        set(fit ? { llmAuthMode: mode, ...fit } : { llmAuthMode: mode });
-        if (fit) void import("@/lib/model-context").then((m) => m.applyCloudContext());
-      },
+      setLlmAuthMode: (mode) => get().setLlmProvider(get().llmProvider, mode),
       setLlmBaseUrl: (llmBaseUrl) => {
         const cur = get();
-        set({ llmBaseUrl, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), baseUrl: llmBaseUrl } } });
+        set({ llmBaseUrl, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), baseUrl: llmBaseUrl } } });
       },
       setLlmModel: (llmModel) => {
         const cur = get();
         const next = modelForProvider(cur.llmProvider, llmModel);
-        const fit = fitCloudAbo(cur.llmProvider, next);
+        const fit = fitCloudAbo(cur.llmProvider, next, cur.llmAuthMode);
         set({
           llmModel: next,
-          llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), model: next } },
+          llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), model: next } },
           ...(fit ?? {}),
         });
         if (fit || cur.llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
@@ -890,7 +889,7 @@ export const useIde = create<IdeState>()(
       setLlmContext: (n) => {
         const llmContext = clampContext(n);
         const cur = get();
-        set({ llmContext, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), context: llmContext } } });
+        set({ llmContext, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), context: llmContext } } });
       },
       setLlmContextAuto: (llmContextAuto) => {
         set({ llmContextAuto });
@@ -899,21 +898,21 @@ export const useIde = create<IdeState>()(
       setLlmThinking: (v) => {
         const llmThinking = normalizeThinking(v);
         const cur = get();
-        set({ llmThinking, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), thinking: llmThinking } } });
+        set({ llmThinking, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), thinking: llmThinking } } });
       },
       setLlmCompact: (llmCompact) => {
         const cur = get();
-        set({ llmCompact, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), compact: llmCompact } } });
+        set({ llmCompact, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), compact: llmCompact } } });
       },
       setLlmTemperature: (n) => {
         const llmTemperature = Math.min(2, Math.max(0, Number.isFinite(n) ? n : 0.3));
         const cur = get();
-        set({ llmTemperature, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), temperature: llmTemperature } } });
+        set({ llmTemperature, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), temperature: llmTemperature } } });
       },
       setLlmMaxOut: (n) => {
         const llmMaxOut = Math.min(65536, Math.max(0, Math.round(n) || 0));
         const cur = get();
-        set({ llmMaxOut, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: { ...slotOf(cur), maxOut: llmMaxOut } } });
+        set({ llmMaxOut, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), maxOut: llmMaxOut } } });
       },
       setLlmRetries: (n) => set({ llmRetries: Math.min(8, Math.max(1, Math.round(n))) }),
       setLlmHardStopMin: (n) => set({ llmHardStopMin: Math.min(480, Math.max(0, Math.round(n))) }),
@@ -922,7 +921,7 @@ export const useIde = create<IdeState>()(
         const label = name.trim() || `${providerOf(cur.llmProvider).label} · ${cur.llmModel || "modell"}`;
         const hit = cur.llmProfiles.find((p) => p.name === label);
         const row: LlmProfile = {
-          id: hit?.id ?? `p-${Date.now()}`,
+          id: hit?.id ?? `p-${crypto.randomUUID()}`,
           name: label,
           provider: cur.llmProvider,
           ...slotOf(cur),
@@ -931,7 +930,7 @@ export const useIde = create<IdeState>()(
         const llmProfiles = hit
           ? cur.llmProfiles.map((p) => (p.id === hit.id ? row : p))
           : [...cur.llmProfiles, row];
-        set({ llmProfiles, llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: slotOf(cur) } });
+        set({ llmProfiles, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur) } });
       },
       applyLlmProfile: (id) => {
         const cur = get();
@@ -939,11 +938,13 @@ export const useIde = create<IdeState>()(
         if (!p) return;
         if (!providerOf(cur.llmProvider).needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
         set({
-          llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: slotOf(cur), [p.provider]: p },
+          llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur), [connectionSlot(p.provider, p.authMode)]: p },
           llmProvider: p.provider,
-          llmBaseUrl: p.baseUrl,
-          llmModel: modelForProvider(p.provider, p.model),
+          llmAuthMode: connectionMode(p.provider, p.authMode),
+          llmBaseUrl: p.provider === "codex" || p.provider === "github" ? "" : p.baseUrl,
+          llmModel: modelForProvider(p.provider, p.provider === "github" ? p.model.replace(/^openai\//, "") : p.model),
           llmContext: p.context,
+          llmContextAuto: p.contextAuto ?? false,
           llmThinking: p.thinking,
           llmCompact: p.compact,
           llmTemperature: p.temperature ?? 0.3,
@@ -1953,13 +1954,12 @@ export const useIde = create<IdeState>()(
         return {
           ...current,
           ...p,
-          llmAuthMode: p.llmAuthMode === "abo" ? "abo" : "key",
-          llmModel: modelForProvider(
-            String(p.llmProvider || current.llmProvider),
-            String(p.llmModel || current.llmModel || ""),
-          ),
+          llmAuthMode: connectionMode(String(p.llmProvider || current.llmProvider), String(p.llmAuthMode || "key")),
+          ...(p.llmProvider === "codex" || p.llmProvider === "github" ? { llmBaseUrl: "" } : {}),
+          llmModel: modelForProvider(String(p.llmProvider || current.llmProvider),
+            p.llmProvider === "github" ? String(p.llmModel || "gpt-4.1").replace(/^openai\//, "") : String(p.llmModel || current.llmModel || "")),
           llmSlots: (p.llmSlots as typeof current.llmSlots) ?? {},
-          llmProfiles: Array.isArray(p.llmProfiles) ? p.llmProfiles : [],
+          llmProfiles: Array.isArray(p.llmProfiles) ? (p.llmProfiles as LlmProfile[]).map((profile) => ({ ...profile, authMode: connectionMode(profile.provider, profile.authMode) })) : [],
           runInWindow: typeof p.runInWindow === "boolean" ? p.runInWindow : true,
           runHtml: p.runHtml !== false,
           autoUpdate: p.autoUpdate !== false,

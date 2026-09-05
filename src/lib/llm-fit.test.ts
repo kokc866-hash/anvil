@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fitCloudAbo, isCloudOrAbo } from "./llm-fit.ts";
 
-test("local stays untouched, custom/grok cloud get auto", () => {
+test("local/custom stay untouched, grok/cloud get auto", () => {
   assert.equal(isCloudOrAbo("ollama"), false);
   assert.equal(isCloudOrAbo("lmstudio"), false);
   assert.equal(isCloudOrAbo("brain"), false);
-  assert.equal(isCloudOrAbo("custom"), true);
+  assert.equal(isCloudOrAbo("custom"), false);
   assert.equal(isCloudOrAbo("grok"), true);
   assert.equal(isCloudOrAbo("openrouter"), true);
   assert.equal(isCloudOrAbo("xai"), true);

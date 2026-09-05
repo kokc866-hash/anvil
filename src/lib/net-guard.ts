@@ -8,12 +8,13 @@ export function isPrivateHost(host: string): boolean {
     h.endsWith(".localhost") ||
     h.endsWith(".local") ||
     h.endsWith(".internal") ||
-    h.endsWith(".lan")
+    h.endsWith(".lan") ||
+    h.endsWith(".ts.net")
   ) {
     return true;
   }
   if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true;
-  if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true;
+  if (h.includes(":") && (/^fe[89ab][0-9a-f]:/.test(h) || /^f[cd]/.test(h) || h === "::" || h.startsWith("::ffff:"))) return true;
   const v4mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
   if (v4mapped) return isPrivateHost(v4mapped[1]);
   const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -22,6 +23,7 @@ export function isPrivateHost(host: string): boolean {
   const b = Number(ipv4[2]);
   if (a === 10 || a === 127 || a === 0 || a === 169) return true;
   if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   return false;
 }

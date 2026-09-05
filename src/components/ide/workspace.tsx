@@ -121,7 +121,7 @@ export function Workspace() {
         files: merged,
         openPaths,
         activePath,
-        llmApiKey: keyForProvider(provider) || useIde.getState().llmApiKey,
+        llmApiKey: keyForProvider(provider),
         githubToken: sec.githubToken || useIde.getState().githubToken,
         previewOpen: false,
         agentBusy: false,

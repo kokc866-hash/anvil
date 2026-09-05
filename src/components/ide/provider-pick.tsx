@@ -1,32 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { PROVIDER_GROUPS, providerOf, type LlmProvider, type ProviderId } from "@/lib/providers";
-import { loadSecrets } from "@/lib/secrets";
-import {
-  hasSubNative,
-  scanSubsFromNative,
-  SUB_KIND_META,
-  type SubKind,
-  type SubScanRow,
-} from "@/lib/sub-auth";
+import { hasCliNative, probeCli, CLI_PROVIDERS, type CliKind, type CliStatus } from "@/lib/cli-client";
 import { useT } from "@/lib/i18n";
 
 type Tab = "local" | "cloud" | "abo" | "other";
 
 function tabOf(id: ProviderId, via: "abo" | "key"): Tab {
   const spec = providerOf(id);
+  if (id === "custom") return "other";
   if (spec.kind === "local") return "local";
-  if (id === "codex" || (via === "abo" && spec.needsSub)) return "abo";
+  if (id === "codex" || id === "github" || (via === "abo" && spec.needsSub)) return "abo";
   if (spec.kind === "cloud") return "cloud";
   return "other";
 }
 
 function idsFor(tab: Tab): ProviderId[] {
-  if (tab === "abo") return SUB_KIND_META.map((m) => m.provider as ProviderId);
+  if (tab === "abo") return CLI_PROVIDERS.map((m) => m.provider as ProviderId);
   if (tab === "local") return PROVIDER_GROUPS.find((g) => g.id === "local")?.ids ?? [];
   if (tab === "cloud") {
-    return (PROVIDER_GROUPS.find((g) => g.id === "cloud")?.ids ?? []).filter((id) => id !== "codex");
+    return (PROVIDER_GROUPS.find((g) => g.id === "cloud")?.ids ?? []).filter((id) => id !== "codex" && id !== "github");
   }
   return ["grok", "custom"];
 }
@@ -43,8 +37,8 @@ export function ProviderPick({
   value: LlmProvider;
   via?: "abo" | "key";
   onChange: (id: LlmProvider, via: "abo" | "key") => void;
-  onLoadSub: (kind: SubKind) => void;
-  onLoginSub?: (kind: SubKind) => void;
+  onLoadSub: (kind: CliKind) => void;
+  onLoginSub?: (kind: CliKind) => void;
   status?: string;
   loading?: boolean;
 }) {
@@ -52,19 +46,22 @@ export function ProviderPick({
   const spec = providerOf(value);
   const [tab, setTab] = useState<Tab>(() => tabOf(value, via));
   const [q, setQ] = useState("");
-  const [scan, setScan] = useState<SubScanRow[]>([]);
-  const desktop = hasSubNative();
+  const [scan, setScan] = useState<CliStatus[]>([]);
+  const desktop = hasCliNative();
 
   useEffect(() => {
-    void scanSubsFromNative().then(setScan);
-  }, []);
+    if (!desktop) return;
+    let current = true;
+    void Promise.all(CLI_PROVIDERS.map(async (m) => {
+      try { return await probeCli(m.kind); }
+      catch { return { kind: m.kind, installed: false, authenticated: false, version: "" }; }
+    })).then((rows) => { if (current) setScan(rows); });
+    return () => { current = false; };
+  }, [desktop, loading]);
 
-  useEffect(() => {
-    setTab(tabOf(value, via));
-  }, [value, via]);
+  useEffect(() => { setTab(tabOf(value, via)); }, [value, via]);
 
-  const found = useMemo(() => new Set(scan.filter((s) => s.found).map((s) => s.kind)), [scan]);
-  const secrets = loadSecrets();
+  const found = new Set(scan.filter((s) => s.installed).map((s) => s.kind));
   const ids = idsFor(tab).filter((id) => {
     const s = q.trim().toLowerCase();
     if (!s) return true;
@@ -110,15 +107,13 @@ export function ProviderPick({
         />
         <ul className="max-h-72 overflow-auto">
           {tab === "abo"
-            ? SUB_KIND_META.filter((m) => {
+            ? CLI_PROVIDERS.filter((m) => {
                 const s = q.trim().toLowerCase();
                 if (!s) return true;
                 return m.label.toLowerCase().includes(s) || m.kind.includes(s);
               }).map((m) => {
-                const p = providerOf(m.provider);
                 const on = value === m.provider && via === "abo";
                 const da = found.has(m.kind);
-                const keyed = Boolean(secrets.keys[m.kind]);
                 return (
                   <li
                     key={m.kind}
@@ -135,7 +130,7 @@ export function ProviderPick({
                       <p className="truncate text-sm text-fg">{m.label}</p>
                       <p className="truncate text-[11px] text-subtle">
                         {t("subSignInHint")}
-                        {da || keyed ? ` · ${t("subOnDisk")}` : ""}
+                        {da ? ` · ${t("subOnDisk")}` : ""}
                       </p>
                     </button>
                     <div className="flex w-[5.75rem] shrink-0 flex-col gap-1">
@@ -183,7 +178,7 @@ export function ProviderPick({
           ) : null}
         </ul>
       </div>
-      {status ? <p className="mt-1.5 text-xs text-muted">{status}</p> : null}
+      {status ? <p className="mt-1.5 whitespace-pre-wrap break-words text-xs text-muted">{status}</p> : null}
       {!desktop ? <p className="mt-1 text-xs text-subtle">{t("subDesktop")}</p> : null}
     </div>
   );

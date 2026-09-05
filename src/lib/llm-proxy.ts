@@ -7,13 +7,12 @@ import { parseResponses, parseResponsesSse } from "./responses-parse";
 import { shrinkTools, stripPayload } from "./tool-fallback";
 import { applyCapToPayload, classifyLlmError, sendTools, type ModelCap } from "./model-caps";
 import { isPrivateHost } from "./net-guard";
-import { providerOf, resolveCodexModel } from "./providers";
-import { isClaudeOauth, isGeminiOauth, jwtAccountId, refreshClaudeToken, refreshCodexToken } from "./sub-auth";
-import { copilotBearer, copilotHeaders } from "./llm-headers";
+import { providerOf } from "./providers";
+import { anthropicHeaders } from "./llm-headers";
+import { fetchModels, normalizeBaseUrl } from "./connection";
 
 const CLOUD_HOSTS = new Set([
   "api.openai.com",
-  "chatgpt.com",
   "api.anthropic.com",
   "generativelanguage.googleapis.com",
   "api.groq.com",
@@ -30,10 +29,6 @@ const CLOUD_HOSTS = new Set([
   "router.huggingface.co",
   "api.cerebras.ai",
   "integrate.api.nvidia.com",
-  "models.inference.ai.azure.com",
-  "models.github.ai",
-  "api.githubcopilot.com",
-  "api.individual.githubcopilot.com",
 ]);
 
 function assertUrl(raw: string, providerId: string): URL {
@@ -42,6 +37,7 @@ function assertUrl(raw: string, providerId: string): URL {
   const value = (raw.trim() || fallback).replace(/\/+$/, "");
   if (!value) throw new Error("Keine API-URL.");
   const url = new URL(value.includes("://") ? value : `https://${value}`);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new Error("Ungültige API-URL.");
   if (isPrivateHost(url.hostname)) throw new Error("Lokale URLs laufen im Browser, nicht über den Server.");
   const allowed =
     CLOUD_HOSTS.has(url.hostname) ||
@@ -62,24 +58,11 @@ function withUa(headers: Record<string, string>, ua = "Anvil/1.1"): Record<strin
 function httpFail(status: number, body: string, kind = ""): never {
   const t = String(body || "");
   const html = looksHtml(t);
-  if (kind === "codex" && /not supported when using Codex with a ChatGPT account/i.test(t)) {
-    throw new Error("Modell geht nicht mit ChatGPT-Abo. Nimm gpt-5.6-terra oder gpt-5.6-luna — nicht …-codex.");
-  }
-  if ((status === 401 || status === 403) && kind === "codex") {
-    throw new Error(
-      status === 401
-        ? "ChatGPT-Abo abgelaufen. Magazin → Abo → Anmelden."
-        : "ChatGPT-Abo abgelehnt (403). Nochmal anmelden — nicht die OpenAI-API.",
-    );
-  }
-  if ((status === 401 || status === 403) && kind === "github") {
-    throw new Error("Copilot hat abgelehnt. Terminal: gh auth login, dann Magazin Abo → Copilot → Laden.");
-  }
   if ((status === 401 || status === 403) && kind === "anthropic") {
-    throw new Error("Anthropic hat abgelehnt. API-Key oder Abo neu laden (claude /login).");
+    throw new Error("Anthropic hat den API-Key abgelehnt. Für Claude Code die Abo-Verbindung wählen.");
   }
   if ((status === 401 || status === 403) && kind === "huggingface") {
-    throw new Error("Hugging Face hat abgelehnt. Token braucht Inference, oder huggingface-cli login.");
+    throw new Error("Hugging Face hat abgelehnt. Token braucht Inference-Berechtigung.");
   }
   if ((status === 401 || status === 403) && kind === "google") {
     throw new Error("Gemini hat abgelehnt. API-Key von aistudio.google.com — das Gemini-CLI-Abo geht in Anvil nicht.");
@@ -102,8 +85,6 @@ type ChatInput = {
   temperature?: number;
   maxOut?: number;
   caps?: ModelCap;
-  accountId?: string;
-  refresh?: string;
 };
 
 export const proxyLlm = createServerFn({ method: "POST" })
@@ -112,14 +93,8 @@ export const proxyLlm = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const spec = providerOf(data.provider);
     const key = data.apiKey.trim();
-    if (!key) {
-      if (spec.needsSub) {
-        return { ok: false as const, error: `Abo fehlt für ${spec.label}. Magazin → Abo → Laden. Kein API-Key.` };
-      }
-      if (spec.needsKey) {
-        return { ok: false as const, error: `API-Key für ${spec.label} fehlt.` };
-      }
-    }
+    if (spec.id === "codex" || spec.id === "github") return { ok: false as const, error: "Dieses Abo läuft ausschließlich über die Desktop-CLI." };
+    if (spec.needsKey && !key) return { ok: false as const, error: `API-Key für ${spec.label} fehlt.` };
     try {
       if (data.action === "models") {
         const ids = await listModels(spec.id, data.baseUrl, key);
@@ -146,10 +121,10 @@ export const proxyLlm = createServerFn({ method: "POST" })
       }
       const choice =
         spec.api === "anthropic"
-          ? await anthropicChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, data.refresh)
+          ? await anthropicChat(data.baseUrl, data.model, key, messages, useTools, rt, cap)
           : spec.api === "azure"
             ? await azureChat(data.baseUrl, data.model, key, messages, useTools, rt, cap)
-            : await openaiChat(spec.id, data.baseUrl, data.model, key, messages, useTools, rt, cap, data.accountId, data.refresh);
+            : await openaiChat(spec.id, data.baseUrl, data.model, key, messages, useTools, rt, cap);
       return { ok: true as const, choice };
     } catch (err) {
       return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
@@ -197,6 +172,7 @@ async function postOpenAi(
   const send = () =>
     fetch(endpoint, {
       method: "POST",
+      redirect: "error",
       headers: hdr,
       body: JSON.stringify(payload),
     });
@@ -250,7 +226,7 @@ async function postOpenAi(
     const alt = endpoint.replace(/\/chat\/completions.*$/, "/responses");
     return postResponses(alt, headers, payload, true, kind);
   }
-  httpFail(res.status, body, kind || (/chatgpt\.com/.test(endpoint) ? "codex" : ""));
+  httpFail(res.status, body, kind);
 }
 
 async function postResponses(
@@ -268,6 +244,7 @@ async function postResponses(
   const send = (b: Record<string, unknown>) =>
     fetch(endpoint, {
       method: "POST",
+      redirect: "error",
       headers: withUa({ ...headers, ...(b.stream ? { Accept: "text/event-stream" } : {}) }),
       body: JSON.stringify(b),
     });
@@ -292,7 +269,7 @@ async function postResponses(
       raw = await res.text();
     }
   }
-  if (!res.ok) httpFail(res.status, raw, kind || (/chatgpt\.com/.test(endpoint) ? "codex" : ""));
+  if (!res.ok) httpFail(res.status, raw, kind);
   try {
     return parseResponsesSse(raw);
   } catch {
@@ -309,28 +286,19 @@ async function openaiChat(
   useTools: boolean,
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   cap?: ModelCap,
-  accountId?: string,
-  refresh?: string,
 ): Promise<LlmChoice> {
-  if (providerId === "codex") {
-    return codexChat(model, apiKey, messages, useTools, rt, accountId, refresh);
-  }
-  if (providerId === "google" && isGeminiOauth(apiKey)) {
-    throw new Error("Gemini-CLI-Abo geht in Anvil nicht. API-Key von aistudio.google.com eintragen.");
-  }
   const spec = providerOf(providerId);
-  const url = assertUrl(baseUrl || spec.baseUrl, providerId);
-  const key = providerId === "github" ? await copilotBearer(apiKey) : apiKey;
+  const url = assertUrl(normalizeBaseUrl(baseUrl || spec.baseUrl), providerId);
+  const key = apiKey;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${key || "none"}`,
+    ...(key ? { Authorization: `Bearer ${key}` } : {}),
   };
   if (providerId === "openrouter") {
     headers["HTTP-Referer"] = "https://openrouter.ai";
     headers["X-Title"] = "Anvil";
   }
   if (providerId === "google" && /^AIza/.test(apiKey.trim())) headers["x-goog-api-key"] = apiKey.trim();
-  if (providerId === "github") copilotHeaders(headers);
   const payload: Record<string, unknown> = applyLlmOptions({ model, temperature: 0.3, messages }, rt, { tools: useTools });
   prepChatPayload(payload, rt.context);
 
@@ -348,50 +316,7 @@ async function openaiChat(
     return postOpenAi(endpoint, headers, payload, useTools, true, rt.context, cap, providerId);
   };
 
-  try {
-    return await talk(url);
-  } catch (err) {
-    if (providerId !== "github") throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!/403|401|abgelehnt/.test(msg)) throw err;
-    return talk(new URL("https://api.individual.githubcopilot.com"));
-  }
-}
-
-function codexHeaders(apiKey: string, accountId?: string): Record<string, string> {
-  const acc = accountId || jwtAccountId(apiKey);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-    originator: "codex_cli_rs",
-    "User-Agent": "codex_cli_rs/0.144.0",
-    version: "0.144.0",
-  };
-  if (acc) headers["ChatGPT-Account-ID"] = acc;
-  return headers;
-}
-
-async function codexChat(
-  model: string,
-  apiKey: string,
-  messages: Record<string, unknown>[],
-  useTools: boolean,
-  rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
-  accountId?: string,
-  refresh?: string,
-): Promise<LlmChoice> {
-  const endpoint = "https://chatgpt.com/backend-api/codex/responses";
-  const payload: Record<string, unknown> = applyLlmOptions({ model: resolveCodexModel(model), temperature: 0.3, messages }, { ...rt, provider: "codex", model: resolveCodexModel(model) }, { tools: useTools });
-  prepChatPayload(payload, rt.context);
-  const send = (key: string, acc?: string) => postResponses(endpoint, codexHeaders(key, acc), payload, useTools, "codex");
-  try {
-    return await send(apiKey, accountId);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!refresh || !/401|abgelaufen|abgelehnt \(403\)/i.test(msg)) throw err;
-    const next = await refreshCodexToken(refresh);
-    return send(next.token, next.accountId || accountId);
-  }
+  return talk(url);
 }
 
 async function azureChat(
@@ -409,14 +334,8 @@ async function azureChat(
   prepChatPayload(payload, rt.context);
   const headers = { "Content-Type": "application/json", "api-key": apiKey };
   if (usesResponsesApi({ ...rt, api: "azure" }, useTools)) {
-    const resp = `${url.origin}/openai/v1/responses?api-version=2025-04-01-preview`;
-    try {
-      return await postResponses(resp, headers, { ...payload, model }, useTools, "azure");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/HTTP 404|not found/i.test(msg)) throw err;
-      delete payload.reasoning_effort;
-    }
+    const resp = `${url.origin}/openai/v1/responses`;
+    return postResponses(resp, headers, { ...payload, model }, useTools, "azure");
   }
   return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, "azure");
 }
@@ -429,7 +348,6 @@ async function anthropicChat(
   useTools: boolean,
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   _cap?: ModelCap,
-  refresh?: string,
 ): Promise<LlmChoice> {
   const url = assertUrl(baseUrl || "https://api.anthropic.com", "anthropic");
   const fitted = { messages: [...messages] };
@@ -456,34 +374,18 @@ async function anthropicChat(
       input_schema: t.function.parameters ?? { type: "object", properties: {} },
     }));
   if (tools) body.tools = mapTools(tools);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "text/event-stream",
-    "anthropic-version": "2023-06-01",
-  };
-  if (isClaudeOauth(apiKey)) {
-    headers.Authorization = `Bearer ${apiKey}`;
-    headers["anthropic-beta"] = "oauth-2025-04-20,claude-code-20250219";
-    headers["User-Agent"] = "claude-cli/2.0.27 (external, cli)";
-  } else {
-    headers["x-api-key"] = apiKey;
-  }
+  const headers = anthropicHeaders(apiKey);
   const hdr = withUa(headers);
   const send = (h: Record<string, string>) =>
     fetch(`${url.origin}/v1/messages`, {
       method: "POST",
+      redirect: "error",
       headers: h,
       body: JSON.stringify(body),
     });
   let res = await send(hdr);
   if (!res.ok) {
     let err = await res.text();
-    if ((res.status === 401 || res.status === 403) && refresh && isClaudeOauth(apiKey)) {
-      const next = await refreshClaudeToken(refresh);
-      hdr.Authorization = `Bearer ${next.token}`;
-      res = await send(hdr);
-      if (!res.ok) err = await res.text();
-    }
     if (res.status === 400 && tools === AGENT_TOOLS) {
       tools = CORE_TOOLS;
       body.tools = mapTools(CORE_TOOLS);
@@ -568,51 +470,7 @@ export function toAnthropicMessages(messages: Record<string, unknown>[]): Record
 
 async function listModels(providerId: string, baseUrl: string, apiKey: string): Promise<string[]> {
   const spec = providerOf(providerId);
-  if (spec.api === "azure") return spec.models;
-  if (providerId === "codex") return spec.models;
-  if (providerId === "google" && isGeminiOauth(apiKey)) return spec.models;
-  try {
-    const url = assertUrl(baseUrl || spec.baseUrl, providerId);
-    const endpoint =
-      spec.api === "anthropic"
-        ? `${url.origin}/v1/models`
-        : `${url.toString().replace(/\/+$/, "")}/models`;
-    const headers: Record<string, string> = {};
-    if (spec.api === "anthropic") {
-      headers["anthropic-version"] = "2023-06-01";
-      if (isClaudeOauth(apiKey)) {
-        headers.Authorization = `Bearer ${apiKey}`;
-        headers["anthropic-beta"] = "oauth-2025-04-20";
-      } else {
-        headers["x-api-key"] = apiKey;
-      }
-    } else {
-      const key = providerId === "github" ? await copilotBearer(apiKey) : apiKey;
-      headers.Authorization = `Bearer ${key || "none"}`;
-    }
-    if (providerId === "github") copilotHeaders(headers);
-    if (providerId === "google" && /^AIza/.test(apiKey.trim())) headers["x-goog-api-key"] = apiKey.trim();
-    const res = await fetch(endpoint, { headers: withUa(headers), signal: AbortSignal.timeout(15000) });
-    const text = await res.text();
-    if (!res.ok) {
-      if (spec.models.length) return spec.models;
-      httpFail(res.status, text, providerId);
-    }
-    if (looksHtml(text)) {
-      if (spec.models.length) return spec.models;
-      httpFail(res.status, text, providerId);
-    }
-    const json = JSON.parse(text) as { data?: Record<string, unknown>[]; models?: Record<string, unknown>[] };
-    const rows = json.data ?? json.models ?? [];
-    const ids: string[] = [];
-    for (const m of rows) {
-      const id = String(m.id ?? m.name ?? "").replace(/^models\//, "");
-      if (id) ids.push(id);
-      void import("./model-context").then((c) => c.ingestModelRow(m));
-    }
-    return ids.length ? ids : spec.models;
-  } catch (err) {
-    if (spec.models.length) return spec.models;
-    throw err;
-  }
+  assertUrl(baseUrl || spec.baseUrl, providerId);
+  const result = await fetchModels({ provider: providerId, baseUrl, apiKey }, (url, init) => fetch(url, { ...init, redirect: "error" }));
+  return result.ids;
 }

@@ -44,7 +44,7 @@ export type ProviderSpec = {
   models: string[];
   needsKey: boolean;
   needsUrl: boolean;
-  needsSub?: "codex" | "claude" | "gemini" | "copilot" | "huggingface";
+  needsSub?: "codex" | "claude" | "copilot";
   hint: string;
 };
 
@@ -210,13 +210,13 @@ export const PROVIDERS: ProviderSpec[] = [
     label: "Codex (ChatGPT-Abo)",
     kind: "cloud",
     api: "openai",
-    baseUrl: "https://chatgpt.com/backend-api/codex",
+    baseUrl: "",
     model: "gpt-5.6-terra",
     models: ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"],
     needsKey: false,
     needsUrl: false,
     needsSub: "codex",
-    hint: "ChatGPT Plus/Pro. Magazin → Abo → Anmelden. terra / luna / sol — nicht gpt-*-codex (API).",
+    hint: "ChatGPT-Abo über die installierte Codex CLI. Anmeldung: codex login.",
   },
   {
     id: "anthropic",
@@ -229,7 +229,7 @@ export const PROVIDERS: ProviderSpec[] = [
     needsKey: true,
     needsUrl: false,
     needsSub: "claude",
-    hint: "Abo: claude /login, Magazin → Abo → Laden. Cloud-Tab: API-Key von console.anthropic.com.",
+    hint: "Cloud: Anthropic API-Key. Abo: installierte Claude Code CLI mit claude auth login.",
   },
   {
     id: "google",
@@ -361,8 +361,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: ["meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-Coder-32B-Instruct"],
     needsKey: true,
     needsUrl: false,
-    hint: "Magazin → Abo → Laden (huggingface-cli login). Oder Token mit Inference einfügen.",
-    needsSub: "huggingface",
+    hint: "Cloud/API: Hugging-Face-Token mit Inference-Berechtigung.",
   },
   {
     id: "cerebras",
@@ -390,16 +389,16 @@ export const PROVIDERS: ProviderSpec[] = [
   },
   {
     id: "github",
-    label: "GitHub Copilot",
+    label: "GitHub Copilot CLI",
     kind: "cloud",
     api: "openai",
-    baseUrl: "https://api.githubcopilot.com",
+    baseUrl: "",
     model: "gpt-4.1",
-    models: ["gpt-4.1", "gpt-4o", "claude-sonnet-4", "gemini-2.5-pro"],
-    needsKey: true,
+    models: ["gpt-4.1", "claude-sonnet-4-5"],
+    needsKey: false,
     needsUrl: false,
     needsSub: "copilot",
-    hint: "Abo: gh auth login, Magazin → Abo → Laden. Cloud-Tab: GitHub-Token als API.",
+    hint: "Copilot-Abo über die installierte CLI. Anmeldung: copilot login. GitHub Models ist eingestellt.",
   },
   {
     id: "azure",
@@ -463,35 +462,20 @@ export const PROVIDER_GROUPS: { id: ProviderKind | "other"; label: string; ids: 
 
 const BY_ID = Object.fromEntries(PROVIDERS.map((p) => [p.id, p])) as Record<ProviderId, ProviderSpec>;
 
-/** ChatGPT-Abo (nicht API). gpt-*-codex und 5.4 sind dort tot. */
-const CODEX_CHAT = ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"] as const;
-const CODEX_ALIAS: Record<string, string> = {
-  "gpt-5.6-codex": "gpt-5.6-terra",
-  "gpt-5.4": "gpt-5.6-terra",
-  "gpt-5.4-mini": "gpt-5.6-luna",
-  "gpt-5.3-codex": "gpt-5.6-luna",
-  "gpt-5.2": "gpt-5.6-terra",
-  o3: "gpt-5.6-terra",
-  "o4-mini": "gpt-5.6-luna",
-};
-
-export function resolveCodexModel(id: string): string {
-  const t = String(id || "").trim();
-  if ((CODEX_CHAT as readonly string[]).includes(t)) return t;
-  if (CODEX_ALIAS[t]) return CODEX_ALIAS[t];
-  if (/codex/i.test(t) || /^gpt-5\.[0-4]/i.test(t)) return "gpt-5.6-terra";
-  return t || "gpt-5.6-terra";
+/** Preserve explicitly chosen model and Azure deployment IDs. Catalogs are suggestions. */
+export function modelForProvider(_provider: string, model: string): string {
+  return String(model || "").trim();
 }
 
-/** luna/sol/terra laufen nur im ChatGPT-Abo, nicht auf api.openai.com. */
-export function isCodexExclusive(id: string): boolean {
-  return /gpt-5\.6-(luna|sol|terra)/i.test(String(id || ""));
+export function connectionMode(provider: string, wanted?: string): "abo" | "key" {
+  return (provider === "codex" || provider === "github") || (wanted === "abo" && Boolean(providerOf(provider).needsSub)) ? "abo" : "key";
 }
-
-export function modelForProvider(provider: string, model: string): string {
-  if (provider === "codex") return resolveCodexModel(model);
-  if ((provider === "openai" || provider === "azure") && isCodexExclusive(model)) return "gpt-5.5";
-  return model;
+export function connectionSlot(provider: string, mode?: string): string {
+  return `${provider}:${connectionMode(provider, mode)}`;
+}
+export function connectionDefaults(provider: string, _mode?: string) {
+  const spec = providerOf(provider);
+  return { baseUrl: spec.baseUrl, model: spec.model };
 }
 
 export function providerOf(id: string): ProviderSpec {

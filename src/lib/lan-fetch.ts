@@ -1,174 +1,49 @@
 import { DEFAULT_COMPANION } from "./companion";
 import { loadSecrets } from "./secrets";
 import { useIde } from "@/store/ide";
-import { lanAlts } from "./lan-url";
 import { hardStopMs } from "./abort";
-
-export { lanAlts };
+export { lanAlts } from "./lan-url";
 
 type PipeInfo = { port: number; token: string };
-
-function companionBase(): string {
-  return (useIde.getState().companionUrl || DEFAULT_COMPANION).replace(/\/$/, "");
-}
-
-function token(): string {
-  const s = loadSecrets().companionToken.trim();
-  if (s) return s;
-  if (typeof window === "undefined") return "";
-  return String((window as unknown as { anvilCompanionToken?: string }).anvilCompanionToken || "").trim();
-}
-
 function nativeApi() {
-  if (typeof window === "undefined") return undefined;
-  return (window as unknown as { anvilNative?: { llmPipe?: () => Promise<PipeInfo> } }).anvilNative;
+  return typeof window === "undefined" ? undefined : (window as unknown as { anvilNative?: { llmPipe?: () => Promise<PipeInfo> } }).anvilNative;
+}
+function companionToken(): string {
+  return loadSecrets().companionToken.trim() || (typeof window === "undefined" ? "" : String((window as unknown as { anvilCompanionToken?: string }).anvilCompanionToken || "").trim());
+}
+export function hasLlmTransport(): boolean {
+  return Boolean(nativeApi()?.llmPipe || import.meta.env.DEV || companionToken());
 }
 
-function hdrsOf(init: RequestInit): Record<string, string> {
-  const out: Record<string, string> = {};
-  const raw = init.headers;
-  if (raw && typeof raw === "object" && !Array.isArray(raw) && !(raw instanceof Headers)) {
-    Object.assign(out, raw);
-  } else if (raw instanceof Headers) {
-    raw.forEach((v, k) => {
-      out[k] = v;
+/** Select one transport before sending. Never replay a POST through another proxy. */
+export async function lanFetch(url: string, init: RequestInit = {}, customBase = ""): Promise<Response> {
+  init.signal?.throwIfAborted();
+  const headers = Object.fromEntries(new Headers(init.headers).entries());
+  const native = nativeApi();
+  if (native?.llmPipe) {
+    const info = await native.llmPipe();
+    if (!info?.port || !info.token) throw new Error("Native Modellverbindung nicht bereit. Anvil neu starten.");
+    const response = await fetch(`http://127.0.0.1:${info.port}/pipe`, {
+      ...init, headers: { ...headers, "x-anvil-target": url, "x-anvil-pipe": info.token, ...(customBase ? { "x-anvil-custom-base": customBase } : {}) },
     });
+    if (response.headers.get("x-anvil-pipe-auth") === "invalid") throw new Error("Native Modellverbindung abgelaufen. Anvil neu starten.");
+    if (response.headers.get("x-anvil-lan") !== "1") throw new Error("Native Modellverbindung antwortet nicht korrekt.");
+    return response;
   }
-  return out;
-}
-
-function usable(r: Response | null): r is Response {
-  return Boolean(r) && r!.headers.get("x-anvil-lan") !== "fail" && (r!.ok || r!.status < 500);
-}
-
-function throwIfSig(init: RequestInit, err?: unknown): void {
-  if (!init.signal?.aborted) return;
-  throw err instanceof Error ? err : new DOMException("Aborted", "AbortError");
-}
-
-let pipeInfo: PipeInfo | null = null;
-
-async function pipeOf(): Promise<PipeInfo | null> {
-  if (pipeInfo?.port && pipeInfo?.token) return pipeInfo;
-  const fn = nativeApi()?.llmPipe;
-  if (!fn) return null;
-  try {
-    const info = await fn();
-    if (info?.port && info?.token) {
-      pipeInfo = info;
-      return info;
-    }
-  } catch {
-    /* */
+  if (import.meta.env.DEV) {
+    const response = await fetch("/__lan", { ...init, headers: { ...headers, "x-anvil-target": url, ...(customBase ? { "x-anvil-custom-base": customBase } : {}) } });
+    if (response.headers.get("x-anvil-lan") !== "1") throw new Error("Anvil-Entwicklungsserver unterstützt die Modellverbindung nicht.");
+    return response;
   }
-  return pipeInfo;
-}
-
-/** Electron: Node holt Ollama. Renderer bleibt auf 127.0.0.1. */
-async function viaPipe(url: string, init: RequestInit): Promise<Response | null> {
-  const info = await pipeOf();
-  if (!info) return null;
-  try {
-    const r = await fetch(`http://127.0.0.1:${info.port}/pipe`, {
-      method: init.method || "GET",
-      headers: {
-        "x-anvil-target": url,
-        "x-anvil-pipe": info.token,
-        ...hdrsOf(init),
-      },
-      body: typeof init.body === "string" ? init.body : undefined,
+  const token = companionToken();
+  if (token) {
+    const st = useIde.getState();
+    return fetch(`${(st.companionUrl || DEFAULT_COMPANION).replace(/\/$/, "")}/v1/llm`, {
+      method: "POST", headers: { "content-type": "application/json", "x-anvil-token": token },
+      body: JSON.stringify({ url, customBase, method: init.method || "GET", headers, body: typeof init.body === "string" ? init.body : undefined, timeoutMs: hardStopMs(st.llmHardStopMin) }),
       signal: init.signal,
     });
-    if (r.status === 401) {
-      pipeInfo = null;
-      return null;
-    }
-    if (r.headers.get("x-anvil-lan") !== "1") return null;
-    return r;
-  } catch (err) {
-    throwIfSig(init, err);
-    return null;
   }
-}
-
-async function viaVite(url: string, init: RequestInit): Promise<Response | null> {
-  if (typeof window === "undefined") return null;
-  try {
-    const r = await fetch("/__lan", {
-      method: init.method || "GET",
-      headers: { "x-anvil-target": url, ...hdrsOf(init) },
-      body: typeof init.body === "string" ? init.body : undefined,
-      signal: init.signal,
-    });
-    if (r.headers.get("x-anvil-lan") !== "1") return null;
-    return r;
-  } catch (err) {
-    throwIfSig(init, err);
-    return null;
-  }
-}
-
-async function viaCompanion(url: string, init: RequestInit): Promise<Response | null> {
-  const tok = token();
-  if (!tok) return null;
-  try {
-    const hard = hardStopMs(useIde.getState().llmHardStopMin);
-    const r = await fetch(`${companionBase()}/v1/llm`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-anvil-token": tok },
-      body: JSON.stringify({
-        url,
-        method: init.method || "GET",
-        headers: hdrsOf(init),
-        body: typeof init.body === "string" ? init.body : undefined,
-        timeoutMs: hard,
-      }),
-      signal: init.signal,
-    });
-    if (r.status === 401) throw new Error("Companion-Token fehlt oder falsch. Einstellungen → Companion.");
-    return r;
-  } catch (err) {
-    throwIfSig(init, err);
-    return null;
-  }
-}
-
-async function lanFetchOne(url: string, init: RequestInit = {}): Promise<Response | null> {
-  const pipe = await viaPipe(url, init);
-  if (usable(pipe)) return pipe;
-  const vite = await viaVite(url, init);
-  if (usable(vite)) return vite;
-  const proxied = await viaCompanion(url, init);
-  if (usable(proxied)) return proxied;
-  return pipe || vite || proxied;
-}
-
-export async function lanFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const alts = lanAlts(url);
-  let last: Response | null = null;
-  const errs: string[] = [];
-  for (const u of alts) {
-    try {
-      const r = await lanFetchOne(u, init);
-      if (r && usable(r)) {
-        if (u !== url) {
-          try {
-            const st = useIde.getState();
-            if (/127\.168\./.test(st.llmBaseUrl) && /192\.168\./.test(u)) {
-              st.setLlmBaseUrl(st.llmBaseUrl.replace("127.168.", "192.168."));
-            }
-          } catch {
-            /* */
-          }
-        }
-        return r;
-      }
-      if (r) last = r;
-    } catch (e) {
-      if (init.signal?.aborted) throw e instanceof Error ? e : new DOMException("Aborted", "AbortError");
-      errs.push(`${u}: ${e instanceof Error ? e.message : e}`);
-    }
-  }
-  if (last) return last;
-  throw new Error(errs.join(" · ") || "Keine Verbindung zum Modell.");
+  // Browser-only installations need endpoints which allow the browser's origin.
+  return fetch(url, init);
 }

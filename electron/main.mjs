@@ -9,7 +9,8 @@ import { bindHelperIpc, startHelperHost } from "./helper-host.mjs";
 import { startLlmPipe } from "./llm-pipe.mjs";
 import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
 import { bindHwIpc } from "./hw.mjs";
-import { bindSubIpc } from "./sub.mjs";
+import { bindAccountIpc } from "./account-auth.mjs";
+import { bindCliIpc, stopCliJobs } from "./cli-ipc.mjs";
 import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -443,7 +444,8 @@ if (!gotLock) {
     pipeSrv = await startLlmPipe();
     bindPathsIpc();
     bindHwIpc();
-    bindSubIpc();
+    bindAccountIpc();
+    bindCliIpc((url) => Boolean(url && /^https?:/.test(url) && sameApp(url)));
     bindUpdateIpc();
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());
@@ -490,6 +492,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopCliJobs();
   stopCompanion();
   stopServer();
   stopLocals();

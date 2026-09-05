@@ -32,6 +32,19 @@ export function loadSecrets(): Secrets {
     if (!raw) return { ...EMPTY };
     const j = JSON.parse(raw) as Partial<Secrets>;
     const keys = j.keys && typeof j.keys === "object" ? { ...j.keys } : {};
+    // Legacy model OAuth copies are no longer used. CLI credential stores stay untouched.
+    let migrated = false;
+    const oldTokens = new Set<string>();
+    for (const kind of ["codex", "claude", "copilot", "gemini"]) {
+      for (const suffix of ["", "Account", "Refresh"]) {
+        const key = kind + suffix;
+        if (key in keys) { if (!suffix) oldTokens.add(keys[key]); delete keys[key]; migrated = true; }
+      }
+    }
+    if (oldTokens.has(String(j.llmApiKey || ""))) j.llmApiKey = "";
+    if (migrated) {
+      try { s.setItem(KEY, JSON.stringify({ ...j, keys })); } catch { /* Read-only storage: still discard stale OAuth copies in memory. */ }
+    }
     const vault = Array.isArray(j.vault)
       ? j.vault.filter((x) => x && typeof x === "object" && "name" in x)
       : [];

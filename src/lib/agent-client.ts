@@ -26,14 +26,16 @@ import { fetchWeb } from "./web-fetch";
 import {
   PROVIDER_DEFAULTS,
   providerOf,
-  resolveCodexModel,
   type LlmProvider,
   type ProviderSpec,
 } from "./providers";
 
-import { credsForProvider, isClaudeOauth, jwtAccountId } from "./sub-auth";
-import { lanFetch } from "./lan-fetch";
-import { anthropicHeaders, copilotBearer, codexPipeHeaders, pipeHeaders, responsesNative } from "./llm-headers";
+import { keyForProvider } from "./secrets";
+import { cliKindFor, completeViaCli } from "./cli-client";
+import { fetchModels, normalizeBaseUrl } from "./connection";
+export { normalizeBaseUrl } from "./connection";
+import { lanFetch, hasLlmTransport } from "./lan-fetch";
+import { anthropicHeaders, pipeHeaders, responsesNative } from "./llm-headers";
 import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, surfaceLabel, surfacePrompt, toolsAllowed, type SurfaceSnap } from "./surface";
@@ -48,15 +50,8 @@ import type { SessionJournal } from "./session";
 export type { LlmProvider };
 export { PROVIDER_DEFAULTS, providerOf };
 
-export function normalizeBaseUrl(url: string): string {
-  let u = url.trim().replace(/\/+$/, "");
-  if (!u) return u;
-  if (!/\/v1$/i.test(u) && !/\/v1\//i.test(u) && !/\/openai$/i.test(u)) u += "/v1";
-  return u;
-}
-
 function isBrowserTarget(spec: ProviderSpec, baseUrl: string): boolean {
-  if (spec.kind === "local") return true;
+  if (spec.kind === "local" || spec.id === "custom") return true;
   if (spec.id === "grok") return false;
   const raw = (baseUrl || spec.baseUrl).trim();
   try {
@@ -137,72 +132,26 @@ export async function listModels(opts: {
   provider: LlmProvider | string;
   baseUrl: string;
   apiKey: string;
+  signal?: AbortSignal;
 }): Promise<string[]> {
   const spec = providerOf(opts.provider);
-  const mode = useIde.getState().llmAuthMode;
-  const apiKey = (opts.apiKey || credsForProvider(spec.id, mode).token).trim();
   if (spec.id === "grok") return spec.models;
   if (spec.id === "brain") {
     const { BRAIN_MODELS } = await import("./brain/models");
     return BRAIN_MODELS.map((m) => m.id);
   }
-  if (isBrowserTarget(spec, opts.baseUrl)) {
+  if (isBrowserTarget(spec, opts.baseUrl) || hasLlmTransport()) {
     const base = normalizeBaseUrl(opts.baseUrl || spec.baseUrl);
-    const headers: Record<string, string> = {};
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-    const fail = (why: string) => {
-      throw new Error(`${spec.label} unter ${base} — ${why}`);
-    };
-    try {
-      const res = await lanFetch(`${base}/models`, { headers });
-      if (res.ok) {
-        const json = (await res.json()) as { data?: Record<string, unknown>[] };
-        const ids: string[] = [];
-        for (const m of json.data ?? []) {
-          const id = String(m.id ?? "");
-          if (id) ids.push(id);
-          void import("./model-context").then((c) => c.ingestModelRow(m));
-        }
-        if (ids.length) return ids;
-      }
-      if (spec.id === "ollama" || /11434/.test(base)) {
-        const root = base.replace(/\/v1$/i, "");
-        const tags = await lanFetch(`${root}/api/tags`, { headers });
-        if (tags.ok) {
-          const json = (await tags.json()) as { models?: { name?: string }[] };
-          const ids = (json.models ?? []).map((m) => m.name).filter(Boolean) as string[];
-          if (ids.length) return ids;
-        }
-      }
-      if (!res.ok) {
-        let why = `HTTP ${res.status}`;
-        try {
-          const t = await res.clone().text();
-          const j = JSON.parse(t) as { error?: string };
-          if (j.error) why = String(j.error);
-        } catch {
-          /* */
-        }
-        fail(why);
-      }
-      return spec.models;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Keine Verbindung.";
-      if (/unter /.test(msg)) throw err instanceof Error ? err : new Error(msg);
-      fail(msg);
-    }
+    const result = await fetchModels(opts, (url, init) => lanFetch(url, init, spec.id === "custom" ? base : ""));
+    opts.signal?.throwIfAborted();
+    const context = await import("./model-context");
+    for (const row of result.rows) context.ingestModelRow(row);
+    return result.ids;
   }
-  const r = await proxyLlm({
-    data: {
-      action: "models",
-      provider: spec.id,
-      baseUrl: opts.baseUrl || spec.baseUrl,
-      model: "",
-      apiKey,
-    },
-  });
+  const r = await proxyLlm({ data: { action: "models", provider: spec.id, baseUrl: opts.baseUrl || spec.baseUrl, model: "", apiKey: opts.apiKey }, signal: opts.signal });
+  opts.signal?.throwIfAborted();
   if (!r.ok) throw new Error(r.error || "Modelle fehlgeschlagen");
-  return r.models ?? spec.models;
+  return r.models ?? [];
 }
 
 export async function chatWithProvider(opts: {
@@ -249,7 +198,7 @@ export async function chatWithProvider(opts: {
     ): Promise<LlmChoice> => {
       throwIfAborted();
       const stop = cloudStopMs(useIde.getState().llmHardStopMin);
-      const key = (opts.apiKey || credsForProvider("xai", useIde.getState().llmAuthMode).token).trim();
+      const key = (opts.apiKey || keyForProvider("xai")).trim();
       if (key) {
         try {
           const payload = applyLlmOptions(
@@ -323,11 +272,14 @@ export async function chatWithProvider(opts: {
   }
   const model = opts.model.trim() || spec.model;
   if (!model) return { ok: false, reply: "Bitte ein Modell wählen.", error: "no model" };
-  if (spec.needsKey && !opts.apiKey.trim()) {
+  const cliKind = cliKindFor(spec.id, useIde.getState().llmAuthMode);
+  if (!cliKind && spec.needsKey && !opts.apiKey.trim()) {
     return { ok: false, reply: `API-Key für ${spec.label} unter Einstellungen eintragen.`, error: "no key" };
   }
 
-  const complete = isBrowserTarget(spec, opts.baseUrl)
+  const complete = cliKind
+    ? (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => completeViaCli(cliKind, model, messages, useTools ? toolsForCall(opts.observeOnly) : [], hardStopMs(useIde.getState().llmHardStopMin), onDelta)
+    : isBrowserTarget(spec, opts.baseUrl)
     ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly)
     : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly);
 
@@ -699,8 +651,9 @@ function makeLocalComplete(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "text/event-stream",
-    Authorization: `Bearer ${apiKey.trim() || "local"}`,
+    ...(apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}),
   };
+  const localFetch = (url: string, init: RequestInit) => lanFetch(url, init, spec.id === "custom" ? normalizeBaseUrl(baseUrl || spec.baseUrl) : "");
   return async (
     messages: Record<string, unknown>[],
     useTools: boolean | "required",
@@ -731,7 +684,6 @@ function makeLocalComplete(
     }
     applyCapToPayload(payload, cap0, Boolean(tools));
     let last: unknown;
-    let swapped = false;
     let stripped = false;
     let current = model;
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
@@ -749,7 +701,7 @@ function makeLocalComplete(
             `POST ${base}/chat/completions model=${current} think=${String(payload.think)} tools=${Array.isArray(payload.tools) ? (payload.tools as unknown[]).length : 0} ctx=${wireCtx} stream=${payload.stream ? 1 : 0}`,
           ),
         );
-        const res = await lanFetch(`${base}/chat/completions`, {
+        const res = await localFetch(`${base}/chat/completions`, {
           method: "POST",
           headers,
           body: JSON.stringify(payload),
@@ -757,21 +709,6 @@ function makeLocalComplete(
         });
         if (!res.ok) {
           const body = await res.text();
-          if (!swapped && /404|not found|unknown model|does not exist|model .* not/i.test(`${res.status} ${body}`)) {
-            swapped = true;
-            try {
-              const ids = await listModels({ provider: spec.id, baseUrl, apiKey });
-              const next = pickListedModel(ids, current);
-              if (next && next !== current) {
-                useIde.getState().setLlmModel(next);
-                current = next;
-                last = new Error(`Modell ${model} fehlt, nehme ${next}`);
-                continue;
-              }
-            } catch {
-              /* Liste ging nicht */
-            }
-          }
           if (isVramError(body) && attempt < tries && wireCtx > 4096) {
             wireCtx = shrinkLocalCtx(wireCtx);
             setWireCtx(payload, wireCtx);
@@ -893,8 +830,8 @@ function makeProxyComplete(
   observeOnly = false,
 ) {
   return async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void): Promise<LlmChoice> => {
-    const creds = credsForProvider(spec.id, useIde.getState().llmAuthMode);
-    let key = apiKey.trim() || creds.token;
+    const key = apiKey.trim();
+    const nativeHttp = hasLlmTransport();
     bindCapTarget(spec.id, model);
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
     let last: unknown;
@@ -904,49 +841,16 @@ function makeProxyComplete(
     for (let attempt = 1; attempt <= tries; attempt++) {
       throwIfAborted();
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
-      if (spec.id === "github") {
-        try {
-          key = await copilotBearer(key);
-        } catch (err) {
-          last = err;
-          if (attempt >= tries) throw err;
-          continue;
-        }
-      }
       const cap = getCap(spec.id, model);
       const wantTools = sendTools(cap, Boolean(useTools));
       const think = wantTools && cap.noThinkWithTools ? "off" : thinking;
       const rt = { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: useIde.getState().llmTemperature, maxOut: useIde.getState().llmMaxOut };
       const hdrs = pipeHeaders(spec.id, key);
       const needResponses = responsesNative(spec.id) && (Boolean(cap.responsesApi) || usesResponsesApi(rt, wantTools));
-      const pipeOk = spec.api === "openai" && spec.id !== "codex" && spec.id !== "azure" && Boolean(base);
+      const pipeOk = nativeHttp && spec.api === "openai" && spec.id !== "codex" && spec.id !== "azure" && Boolean(base);
       const pipeChat = pipeOk && !needResponses;
       try {
-        if (spec.id === "codex") {
-          const st = useIde.getState();
-          const mid = resolveCodexModel(model);
-          const chatPayload: Record<string, unknown> = applyLlmOptions(
-            { model: mid, temperature: st.llmTemperature, messages },
-            { provider: "codex", model: mid, api: "openai", context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
-            { tools: wantTools },
-          );
-          prepChatPayload(chatPayload, context);
-          const body = responsesBody(chatPayload, "codex");
-          body.stream = true;
-          if (wantTools) {
-            body.tools = toResponsesTools(toolsForCall(observeOnly));
-            body.tool_choice = "auto";
-          }
-          const acc = creds.accountId || jwtAccountId(key);
-          const res = await lanFetch("https://chatgpt.com/backend-api/codex/responses", {
-            method: "POST",
-            headers: codexPipeHeaders(key, acc),
-            body: JSON.stringify(body),
-            signal: withAgentTimeout(stop),
-          });
-          if (res.ok) return await readSseResponses(res, onDelta);
-          last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
-        } else if (spec.api === "anthropic") {
+        if (nativeHttp && spec.api === "anthropic") {
           const st = useIde.getState();
           const fitted = { messages: [...messages] };
           prepChatPayload(fitted, context);
@@ -971,9 +875,9 @@ function makeProxyComplete(
             }));
           }
           const sendAnt = () =>
-            lanFetch("https://api.anthropic.com/v1/messages", {
+            lanFetch(`${base}/messages`, {
               method: "POST",
-              headers: anthropicHeaders(key, isClaudeOauth(key)),
+              headers: anthropicHeaders(key),
               body: JSON.stringify(body),
               signal: withAgentTimeout(stop),
             });
@@ -998,7 +902,7 @@ function makeProxyComplete(
           }
           if (res.ok) return await readSseAnthropic(res, onDelta);
           if (!last) last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
-        } else if (spec.id === "azure") {
+        } else if (nativeHttp && spec.id === "azure") {
           const raw = (baseUrl || spec.baseUrl).trim();
           const host = new URL(raw.includes("://") ? raw : `https://${raw}`);
           const st = useIde.getState();
@@ -1015,14 +919,14 @@ function makeProxyComplete(
               body.tools = toResponsesTools(toolsForCall(observeOnly));
               body.tool_choice = "auto";
             }
-            const res = await lanFetch(`${host.origin}/openai/v1/responses?api-version=2025-04-01-preview`, {
+            const res = await lanFetch(`${host.origin}/openai/v1/responses`, {
               method: "POST",
               headers: { ...hdrs, Accept: "text/event-stream" },
               body: JSON.stringify(body),
               signal: withAgentTimeout(stop),
             });
             if (res.ok) return await readSseResponses(res, onDelta);
-            last = new Error(`HTTP ${res.status}`);
+            throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
           }
           const payload: Record<string, unknown> = applyLlmOptions(
             { temperature: st.llmTemperature, messages, stream: true },
@@ -1149,6 +1053,7 @@ function makeProxyComplete(
           }
           last = new Error(`HTTP ${res.status}: ${body.slice(0, 280)}`);
         }
+        if (nativeHttp) throw last instanceof Error ? last : new Error("Keine Antwort vom Modell.");
         const r = await raceAbort(
           proxyLlm({
             data: {
@@ -1164,8 +1069,6 @@ function makeProxyComplete(
               temperature: useIde.getState().llmTemperature,
               maxOut: useIde.getState().llmMaxOut,
               caps: cap,
-              accountId: creds.accountId,
-              refresh: creds.refresh,
             },
           }),
           stop,
@@ -1225,6 +1128,12 @@ export async function completeLocal(opts: {
       ],
     });
   }
+  const cli = cliKindFor(spec.id, useIde.getState().llmAuthMode);
+  if (cli) {
+    if (opts.images?.length) throw new Error("Bilder werden über die Abo-CLI noch nicht übertragen.");
+    const choice = await completeViaCli(cli, model, [{ role: "user", content: opts.prompt }], [], hardStopMs(useIde.getState().llmHardStopMin));
+    return choice.content?.trim() || "";
+  }
   if (isBrowserTarget(spec, opts.baseUrl)) {
     const base = normalizeBaseUrl(opts.baseUrl || spec.baseUrl);
     if (!base || !model) throw new Error("URL und Modell setzen.");
@@ -1250,11 +1159,11 @@ export async function completeLocal(opts: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${opts.apiKey.trim() || "local"}`,
+        ...(opts.apiKey.trim() ? { Authorization: `Bearer ${opts.apiKey.trim()}` } : {}),
       },
       body: JSON.stringify(payload),
       signal: withAgentTimeout(0),
-    });
+    }, spec.id === "custom" ? base : "");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = (await res.json()) as { choices: { message: { content?: string } }[] };
     const text = json.choices[0]?.message?.content?.trim();
@@ -1267,7 +1176,7 @@ export async function completeLocal(opts: {
       provider: spec.id,
       baseUrl: opts.baseUrl || spec.baseUrl,
       model,
-      apiKey: opts.apiKey.trim() || credsForProvider(spec.id, useIde.getState().llmAuthMode).token,
+      apiKey: opts.apiKey.trim(),
       prompt: opts.prompt,
     },
   });

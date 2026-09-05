@@ -2,16 +2,61 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - package.json
+      - src/lib/version.ts
+      - anleitungen/releases/**
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: anvil-release
+  cancel-in-progress: false
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/github-script@v8
+        id: release
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid release version');
+            const source = fs.readFileSync('src/lib/version.ts', 'utf8');
+            if (!source.includes(`ANVIL_VERSION = "${version}"`)) throw new Error('App version differs from package.json');
+            const tag = `v${version}`;
+            if (context.ref.startsWith('refs/tags/') && context.ref !== `refs/tags/${tag}`) throw new Error('Tag differs from app version');
+            if (!fs.existsSync(`anleitungen/releases/${tag}.md`)) throw new Error('Release notes missing');
+            core.setOutput('version', version);
+            core.setOutput('tag', tag);
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+              if (!data.draft) {
+                core.notice(`${tag} is already published; keeping existing downloads.`);
+                core.setOutput('publish', 'false');
+                return;
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            core.setOutput('publish', 'true');
+
+  verify:
+    needs: metadata
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -20,6 +65,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run typecheck
+
+  windows:
+    needs: [metadata, verify]
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:connections
       - run: npm run build
         env:
           ANVIL_ELECTRON_BUILD: "1"
@@ -29,19 +90,14 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.3.11' }}
-          name: Anvil 1.3.11
-          generate_release_notes: true
+          tag_name: ${{ needs.metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Anvil ${{ needs.metadata.outputs.version }}
+          body_path: anleitungen/releases/${{ needs.metadata.outputs.tag }}.md
+          fail_on_unmatched_files: true
+          make_latest: true
           files: |
             dist-win/*.exe
             dist-win/*.zip
-          body: |
-            **Anvil 1.3.11** (2026-09-05)
-
-            1.3.10 hat nach 10 Minuten ohne Text den lokalen Job gekillt. Das ist raus. Slider 0 = kein Limit, auch bis zum ersten Token. Think bleibt an. Cloud/Abo unverändert.
-
-            ZIP ist kein Portable-Exe. Ordner wählen, `Anvil.exe` starten.
-
-            Anleitungen im Repo unter `anleitungen/`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

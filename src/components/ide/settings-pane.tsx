@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/cn";
@@ -64,7 +64,8 @@ import { makePack, pullDrive, pullGist, pushDrive, pushGist } from "@/lib/accoun
 import { checkAppUpdate, setupAppUpdate, zipAppUpdate } from "@/lib/app-update";
 import { capLabel, getCap, resetCap } from "@/lib/model-caps";
 import { appLogOn, appLogLines, clearAppLog, copyAppLog, exportAppLog, setAppLogOn, subscribeAppLog } from "@/lib/app-log";
-import { loadSubFromNative, loginSubFromNative, credsForProvider, saveAbo, SUB_KIND_META, type SubKind } from "@/lib/sub-auth";
+import { loadAccountFromNative, loginAccountFromNative } from "@/lib/account-auth";
+import { cliKindFor, probeCli, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
 import { ProviderPick } from "./provider-pick";
 import { appLog } from "@/lib/app-log";
 
@@ -298,7 +299,6 @@ function AgentSection({ q }: { q: string }) {
   const planWho = useIde((s) => s.planWho);
   const learnOn = useLearn((s) => s.on);
   const setLlmProvider = useIde((s) => s.setLlmProvider);
-  const setLlmAuthMode = useIde((s) => s.setLlmAuthMode);
   const setLlmBaseUrl = useIde((s) => s.setLlmBaseUrl);
   const setLlmModel = useIde((s) => s.setLlmModel);
   const setLlmApiKey = useIde((s) => s.setLlmApiKey);
@@ -334,63 +334,72 @@ function AgentSection({ q }: { q: string }) {
   const [profileName, setProfileName] = useState("");
   const [subMsg, setSubMsg] = useState("");
   const spec = providerOf(llmProvider);
-  const creds = credsForProvider(llmProvider, llmAuthMode);
-  const aboOn = creds.via === "abo";
+  const aboKind = cliKindFor(llmProvider, llmAuthMode);
+  const aboOn = Boolean(aboKind);
+  const probeController = useRef<AbortController | null>(null);
+  const loginController = useRef<AbortController | null>(null);
+  const [subBusy, setSubBusy] = useState(false);
 
   async function probeLocal(silent = false) {
-    const url = llmBaseUrl || spec.baseUrl;
-    if (!silent) setProbe(`Prüfe ${url || spec.label} …`);
+    probeController.current?.abort();
+    const controller = new AbortController();
+    probeController.current = controller;
+    const snapshot = useIde.getState();
+    const current = () => {
+      const now = useIde.getState();
+      return !controller.signal.aborted && now.llmProvider === snapshot.llmProvider && now.llmAuthMode === snapshot.llmAuthMode && now.llmBaseUrl === snapshot.llmBaseUrl && now.llmApiKey === snapshot.llmApiKey;
+    };
+    const kind = cliKindFor(snapshot.llmProvider, snapshot.llmAuthMode);
+    if (!silent) setProbe(`Prüfe ${kind ? `${kind} CLI` : snapshot.llmBaseUrl || spec.label} …`);
     setModelsBusy(true);
     try {
-      const ids = await listModels({
-        provider: llmProvider,
-        baseUrl: llmBaseUrl,
-        apiKey: creds.token || llmApiKey,
-      });
+      if (kind) {
+        const status = await probeCli(kind, controller.signal);
+        if (current()) { setProbe(cliStatusText(status)); setModels([]); }
+        return;
+      }
+      const ids = await listModels({ provider: snapshot.llmProvider, baseUrl: snapshot.llmBaseUrl, apiKey: snapshot.llmApiKey, signal: controller.signal });
+      if (!current()) return;
       setModels(ids);
-      if (!llmModel && ids[0]) setLlmModel(ids[0]);
-      if (ids.length && llmModel && !ids.includes(llmModel)) setLlmModel(ids[0]);
-      setProbe(ids.length ? `${ids.length} Modelle` : `Verbunden, keine Modelle`);
-      const note = await import("@/lib/model-context").then((m) => m.applyCloudContext());
-      if (note) setProbe((p) => `${p} · Kontext ${note}`);
+      // Catalogs can be incomplete. Never replace a model or deployment chosen by the user.
+      if (!useIde.getState().llmModel && ids[0] && snapshot.llmProvider !== "azure") setLlmModel(ids[0]);
+      setProbe(snapshot.llmProvider === "azure" ? "Azure-Zugang geprüft; Deployment wird beim Senden geprüft" : ids.length ? `Verbunden · ${ids.length} Modelle` : "Erreichbar · Modellliste leer");
     } catch (err) {
-      if (!silent) setModels([]);
-      setProbe(err instanceof Error ? err.message : `Keine Verbindung`);
-    } finally {
-      setModelsBusy(false);
-    }
+      if (!current()) return;
+      setModels([]);
+      setProbe(err instanceof Error ? err.message : "Keine Verbindung");
+    } finally { if (current()) setModelsBusy(false); }
   }
 
   useEffect(() => {
-    if (llmProvider === "grok") {
-      setModels([]);
-      return;
-    }
-    if (llmAuthMode === "key" && spec.needsKey && !llmApiKey.trim() && !creds.token) return;
-    if (llmAuthMode === "abo" && spec.needsSub && !creds.token) return;
-    const t = window.setTimeout(() => void probeLocal(true), 400);
-    return () => window.clearTimeout(t);
+    probeController.current?.abort();
+    setProbe(""); setModels([]); setModelsBusy(false); setSubMsg("");
+    if (llmProvider === "grok") return;
+    if (!aboOn && spec.needsKey && !llmApiKey.trim()) return;
+    const timer = window.setTimeout(() => void probeLocal(true), 400);
+    return () => { window.clearTimeout(timer); probeController.current?.abort(); };
+    // Each request reads a fresh store snapshot and rejects stale results.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [llmProvider, llmBaseUrl, llmApiKey]);
+  }, [llmProvider, llmBaseUrl, llmApiKey, llmAuthMode]);
 
-  function takeSub(kind: SubKind, how: "load" | "login") {
-    const meta = SUB_KIND_META.find((m) => m.kind === kind);
-    if (meta) {
-      setLlmAuthMode("abo");
-      setLlmProvider(meta.provider as LlmProvider);
-    }
-    const run = how === "login" ? loginSubFromNative : loadSubFromNative;
-    if (how === "login") setSubMsg(`${t("subSignIn")}…`);
-    void run(kind).then((r) => {
-      if (!r.ok) {
-        setSubMsg(r.error);
-        return;
-      }
-      saveAbo(kind, r);
-      setSubMsg(`${t("subOk")}${r.email ? ` · ${r.email}` : ""}`);
-      appLog("sub", `${kind} ${r.email || r.preview}`);
-      void probeLocal(true);
-    });
+  useEffect(() => () => { loginController.current?.abort(); }, []);
+
+  async function takeSub(kind: CliKind, how: "load" | "login") {
+    loginController.current?.abort();
+    const controller = new AbortController();
+    loginController.current = controller;
+    const meta = CLI_PROVIDERS.find((m) => m.kind === kind)!;
+    setLlmProvider(meta.provider as LlmProvider, "abo");
+    const current = () => !controller.signal.aborted && cliKindFor(useIde.getState().llmProvider, useIde.getState().llmAuthMode) === kind;
+    setSubBusy(true);
+    setSubMsg(how === "login" ? `${meta.cmd} …` : "CLI prüfen …");
+    try {
+      const status = how === "login"
+        ? await loginCli(kind, controller.signal, (text) => { if (current()) setSubMsg((prev) => (prev + text).slice(-4000)); })
+        : await probeCli(kind, controller.signal);
+      if (current()) { setSubMsg(cliStatusText(status)); setProbe(cliStatusText(status)); }
+    } catch (err) { if (current()) setSubMsg(err instanceof Error ? err.message : "CLI-Anmeldung fehlgeschlagen."); }
+    finally { if (loginController.current === controller) setSubBusy(false); }
   }
 
   return (
@@ -401,10 +410,12 @@ function AgentSection({ q }: { q: string }) {
         <ProviderPick
           value={llmProvider}
           via={llmAuthMode}
-          status={subMsg || (aboOn ? t("subOk") : undefined)}
+          status={subMsg}
+          loading={subBusy}
           onChange={(id, via) => {
-            setLlmAuthMode(via);
-            setLlmProvider(id);
+            loginController.current?.abort();
+            setSubBusy(false);
+            setLlmProvider(id, via);
             setProbe("");
             setModels([]);
             setSubMsg("");
@@ -412,8 +423,9 @@ function AgentSection({ q }: { q: string }) {
           onLoadSub={(k) => takeSub(k, "load")}
           onLoginSub={(k) => takeSub(k, "login")}
         />
-        <p className="pb-2 text-xs text-muted text-pretty">{spec.hint}</p>
-        {spec.needsUrl ? (
+        {subBusy ? <Button className="mb-2 h-7 text-xs" onClick={() => { loginController.current?.abort(); setSubBusy(false); setSubMsg("Anmeldung abgebrochen."); }}>Anmeldung abbrechen</Button> : null}
+        <p className="pb-2 text-xs text-muted text-pretty">{aboKind ? `Nutzt die installierte ${aboKind} CLI und deren Abo-Anmeldung.` : spec.hint}</p>
+        {spec.needsUrl && !aboOn ? (
           <Field
             label={spec.id === "azure" ? "Resource-URL" : "API-URL"}
             value={llmBaseUrl}
@@ -435,7 +447,7 @@ function AgentSection({ q }: { q: string }) {
             />
           )
         ) : null}
-        {spec.id !== "grok" && llmAuthMode === "key" && (spec.needsKey || spec.kind === "local") ? (
+        {spec.id !== "grok" && !aboOn ? (
           <Field
             label={spec.needsKey ? "API-Key" : "API-Key (optional)"}
             value={llmApiKey}
@@ -445,10 +457,9 @@ function AgentSection({ q }: { q: string }) {
           />
         ) : null}
         {aboOn ? <p className="py-1 text-xs text-muted">{t("subNoKey")}</p> : null}
-        {llmAuthMode === "abo" && spec.needsSub && !aboOn ? <p className="py-1 text-xs text-subtle">{t("subNeed")}</p> : null}
         {spec.id !== "grok" ? (
           <div className="flex items-center gap-2 py-1">
-            <Button className="h-8" onClick={() => void probeLocal()}>
+            <Button className="h-8" disabled={modelsBusy || subBusy} onClick={() => void probeLocal()}>
               Verbindung prüfen
             </Button>
             {probe ? <span className="text-xs text-muted">{probe}</span> : null}
@@ -456,7 +467,7 @@ function AgentSection({ q }: { q: string }) {
         ) : null}
         <div className="mb-2 mt-2 rounded-md border border-border px-2 py-2">
           <p className="text-xs text-muted">Profil</p>
-          <p className="mb-1 text-[11px] text-subtle">URL, Modell, Context merken. Nicht das Abo.</p>
+          <p className="mb-1 text-[11px] text-subtle">Anbieter, API/Abo, URL, Modell und Kontext speichern. Zugangsdaten bleiben separat.</p>
           {llmProfiles.length ? (
             <ul className="mb-1 space-y-0.5">
               {llmProfiles.map((p) => (
@@ -578,6 +589,7 @@ function AgentSection({ q }: { q: string }) {
           </div>
         </Row>
       </Vis>
+      {!aboOn ? <>
       <Vis q={q} label="Thinking Reasoning Denken low mid high">
         <Row
           label="Thinking"
@@ -622,6 +634,7 @@ function AgentSection({ q }: { q: string }) {
           format={(n) => (n <= 0 ? "Auto" : String(n))}
         />
       </Vis>
+      </> : <p className="py-2 text-xs text-muted">Thinking, Temperatur und Antwortlimit werden von der CLI gesteuert.</p>}
       <Vis q={q} label="Modell Format Tools 400">
         <CapRow provider={llmProvider} model={llmModel} />
       </Vis>
@@ -1965,7 +1978,7 @@ function DataSection({ q }: { q: string }) {
   async function sign(kind: "copilot" | "google") {
     setBusy(true);
     try {
-      const r = await loginSubFromNative(kind);
+      const r = await loginAccountFromNative(kind === "copilot" ? "github" : "google");
       if (!r.ok) {
         setNotice(r.error);
         return;
@@ -1983,11 +1996,11 @@ function DataSection({ q }: { q: string }) {
   }
 
   function gistToken() {
-    return useIde.getState().githubToken.trim() || credsForProvider("github").token;
+    return useIde.getState().githubToken.trim();
   }
 
   async function googleToken() {
-    const r = await loadSubFromNative("google");
+    const r = await loadAccountFromNative("google");
     if (!r.ok) throw new Error(r.error);
     if (!r.token) throw new Error("Kein Google-Token");
     return r.token;

@@ -11,7 +11,7 @@ test("isLanHost", () => {
 test("cloud llm hosts for electron pipe", () => {
   assert.equal(isCloudLlmHost("api.x.ai"), true);
   assert.equal(isCloudLlmHost("api.openai.com"), true);
-  assert.equal(isCloudLlmHost("chatgpt.com"), true);
+  assert.equal(isCloudLlmHost("chatgpt.com"), false);
   assert.equal(isCloudLlmHost("8.8.8.8"), false);
   assert.equal(isLlmTargetHost("api.x.ai"), true);
   assert.equal(isLlmTargetHost("192.168.178.41"), true);

@@ -225,7 +225,7 @@ Bilder: Büroklammer oder Einfügen. Vision-fähiges Modell vorausgesetzt.
 
 Ollama: `num_ctx` = Slider, `keep_alive` 30m. Kein separates Generate-Warmup (das blockiert den Chat). Bei VRAM/OOM halbiert Anvil `num_ctx` und sendet erneut.
 
-Cloud (OpenAI, xAI, …): Electron-Pipe holt den Strom direkt — Tokens live, nicht erst nach dem ganzen JSON. GPT-5/Codex: Responses-API mit `input` (nicht `messages`). 400 `param: input` darf das Feld nicht löschen. Ohne hartes Zeitlimit bricht Anvil nach 3 Min ab.
+Cloud-APIs werden über die native Modellleitung, den Companion oder den Server angesprochen. Abo-Verbindungen starten die installierte Codex-, Claude-Code- oder Copilot-CLI mit deren eigener Anmeldung. Anvil führt angeforderte Werkzeuge weiterhin selbst aus. Details und Einrichtung: [Verbindungen](05-verbindungen.md).
 
 Chip **aktiv**, solange die Runde läuft. Abbrechen: Quadrat neben dem Feld.
 

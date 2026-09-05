@@ -1,26 +1,57 @@
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
+
+export const LLM_HEADERS = ["content-type", "accept", "authorization", "x-api-key", "api-key", "anthropic-version", "anthropic-beta", "openai-beta", "openai-organization", "openai-project", "x-goog-api-key", "http-referer", "x-title"];
+export function llmHeaders(raw) {
+  const out = {};
+  for (const [key, value] of Object.entries(raw || {})) {
+    if (LLM_HEADERS.includes(key.toLowerCase()) && typeof value === "string") out[key] = value;
+  }
+  return out;
+}
+
+function blockedLlmHost(host) {
+  const h = String(host).toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  return h === "fd00:ec2::254" || h === "metadata.google.internal" || h === "metadata" || h === "0.0.0.0" || h === "::" || /^169\.254\./.test(h) || /^fe[89ab][0-9a-f]:/i.test(h) || /^::ffff:/i.test(h);
+}
+
+/** A user-configured Custom base grants only its own origin and path prefix. */
+export function assertLlmTarget(raw, customBase = "") {
+  const url = new URL(raw);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash || blockedLlmHost(url.hostname)) throw new Error("Ungültiges Modellziel.");
+  if (customBase) {
+    const base = new URL(customBase);
+    const path = base.pathname.replace(/\/+$/, "");
+    if (base.username || base.password || base.search || base.hash || url.origin !== base.origin || !(url.pathname === path || url.pathname.startsWith(path + "/"))) throw new Error("Custom-Ziel liegt außerhalb der konfigurierten API-URL.");
+    return url;
+  }
+  if (!isLlmTargetHost(url.hostname)) throw new Error("Eigenen Endpunkt unter Custom konfigurieren.");
+  return url;
+}
 
 export function isLanHost(host) {
   const h = String(host || "")
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
-  if (h === "169.254.169.254") return false;
-  if (h === "localhost" || h === "0.0.0.0" || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".internal")) return true;
+  if (blockedLlmHost(h)) return false;
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".internal") || h.endsWith(".ts.net")) return true;
   if (h === "::1" || h === "127.0.0.1") return true;
+  if (isIP(h) === 6 && /^f[cd]/.test(h)) return true;
   const p = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!p) return false;
   const a = Number(p[1]);
   const b = Number(p[2]);
+  if (p.slice(1).some((v) => Number(v) > 255)) return false;
   if (a === 10 || a === 127) return true;
   if (a === 192 && b === 168) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
   return false;
 }
 
 const CLOUD_LLM = new Set([
   "api.openai.com",
-  "chatgpt.com",
   "api.anthropic.com",
   "generativelanguage.googleapis.com",
   "api.groq.com",
@@ -37,10 +68,6 @@ const CLOUD_LLM = new Set([
   "router.huggingface.co",
   "api.cerebras.ai",
   "integrate.api.nvidia.com",
-  "models.inference.ai.azure.com",
-  "models.github.ai",
-  "api.githubcopilot.com",
-  "api.individual.githubcopilot.com",
 ]);
 
 export function isCloudLlmHost(host) {

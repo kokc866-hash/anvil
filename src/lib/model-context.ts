@@ -194,7 +194,7 @@ const LOCAL = new Set([
 ]);
 
 export function wantsAutoContext(provider: string): boolean {
-  return !LOCAL.has(provider);
+  return provider !== "custom" && !LOCAL.has(provider);
 }
 
 export function anvilContext(n: number): number {
@@ -276,10 +276,11 @@ export async function resolveModelContext(model: string, provider: string): Prom
 export async function applyCloudContext(): Promise<string | null> {
   const { useIde } = await import("@/store/ide");
   const st = useIde.getState();
-  if (!wantsAutoContext(st.llmProvider)) return null;
-  if (!st.llmContextAuto) st.setLlmContextAuto(true);
+  if (!wantsAutoContext(st.llmProvider) || !st.llmContextAuto) return null;
   const hit = await resolveModelContext(st.llmModel, st.llmProvider);
   if (!hit) return null;
+  const now = useIde.getState();
+  if (now.llmProvider !== st.llmProvider || now.llmAuthMode !== st.llmAuthMode || now.llmModel !== st.llmModel || now.llmBaseUrl !== st.llmBaseUrl) return null;
   const n = anvilContext(hit.n);
   if (n !== st.llmContext) st.setLlmContext(n);
   return ctxLabel(hit);

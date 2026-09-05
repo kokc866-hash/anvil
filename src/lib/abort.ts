@@ -255,6 +255,7 @@ export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {
 }
 
 export function withAgentTimeout(ms: number): AbortSignal {
+  if (ms <= 0) return ctrl.signal;
   const c = new AbortController();
   const fire = (reason: unknown) => {
     if (c.signal.aborted) return;

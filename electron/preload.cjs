@@ -42,9 +42,17 @@ contextBridge.exposeInMainWorld("anvilNative", {
   pathsWrite: (name, text) => ipcRenderer.invoke("paths-write", name, text),
   pathsRead: (name) => ipcRenderer.invoke("paths-read", name),
   workspacePick: () => ipcRenderer.invoke("workspace-pick"),
-  subLoad: (kind) => ipcRenderer.invoke("sub-load", kind),
-  subLogin: (kind) => ipcRenderer.invoke("sub-login", kind),
-  subScan: () => ipcRenderer.invoke("sub-scan"),
+  accountLoad: (kind) => ipcRenderer.invoke("account-load", kind),
+  accountLogin: (kind) => ipcRenderer.invoke("account-login", kind),
+  cliProbe: (request) => ipcRenderer.invoke("cli-probe", request),
+  cliLogin: (request) => ipcRenderer.invoke("cli-login", request),
+  cliRun: (request) => ipcRenderer.invoke("cli-run", request),
+  cliCancel: (id) => ipcRenderer.invoke("cli-cancel", id),
+  onCliEvent: (id, fn) => {
+    const wrap = (_e, p) => { if (p?.id === id) fn(p); };
+    ipcRenderer.on("cli-event", wrap);
+    return () => ipcRenderer.removeListener("cli-event", wrap);
+  },
   clipboardRead: () => ipcRenderer.invoke("clipboard-read"),
   companionEnsure: () => ipcRenderer.invoke("companion-ensure"),
   companionRelease: (keep) => ipcRenderer.invoke("companion-release", keep),

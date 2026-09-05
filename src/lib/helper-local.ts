@@ -29,8 +29,6 @@ type Native = {
   hwMachine?: () => Promise<{ cores: number; ramGb: number; freeGb: number; vendor?: string; gpu?: string; arch?: string }>;
   llmPipe?: () => Promise<{ port: number; token: string }>;
   companionToken?: () => Promise<string>;
-  subLoad?: (kind: string) => Promise<{ ok: boolean; token?: string; email?: string; preview?: string; error?: string }>;
-  subLogin?: (kind: string) => Promise<{ ok: boolean; token?: string; email?: string; preview?: string; error?: string }>;
   updateCheck?: () => Promise<{
     ok: boolean;
     newer?: boolean;
