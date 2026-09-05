@@ -16,6 +16,7 @@ import { handleOnce, onSync } from "./ipc.mjs";
 import { isAbortNoise } from "../scripts/llm-agent.mjs";
 import { nodeCommand, withNodeEnv } from "./node-cmd.mjs";
 import { serverLaunch } from "./ui-boot.mjs";
+import { sweepAnvilTemp } from "../companion/tmp.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.ANVIL_PORT || 8080);
@@ -41,6 +42,12 @@ try {
 }
 app.commandLine.appendSwitch("gpu-program-cache-size-kb", "65536");
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
+
+try {
+  sweepAnvilTemp({ keep: 0, maxAgeMs: 0, toolchain: true });
+} catch {
+  /* */
+}
 
 function hushMain(err) {
   return isAbortNoise(err);

@@ -11,6 +11,19 @@ export function isAnvilTempName(name, { toolchain = false } = {}) {
   return toolchain && n.startsWith("anvil-tc-");
 }
 
+/** NSIS/portable leftover: %TEMP%\nsn408A.tmp */
+export function isNsisTmpName(name) {
+  return /^ns[no][0-9A-Fa-f]+\.tmp$/i.test(String(name || ""));
+}
+
+export function nsisTmpIsAnvil(dir) {
+  try {
+    return existsSync(path.join(dir, "app", "Anvil.exe"));
+  } catch {
+    return false;
+  }
+}
+
 export function rmDir(dir) {
   try {
     rmSync(dir, { recursive: true, force: true });
@@ -47,27 +60,28 @@ export function sweepAnvilTemp(opts = {}) {
   const hits = [];
   for (const e of ents) {
     if (!e.isDirectory()) continue;
-    const tc = e.name.startsWith("anvil-tc-");
-    if (tc && !toolchain) continue;
-    if (!isAnvilTempName(e.name, { toolchain: tc })) continue;
     const full = path.join(root, e.name);
+    const tc = e.name.startsWith("anvil-tc-");
+    const nsis = isNsisTmpName(e.name) && nsisTmpIsAnvil(full);
+    if (tc && !toolchain) continue;
+    if (!nsis && !isAnvilTempName(e.name, { toolchain: tc })) continue;
     let mtime = now;
     try {
       mtime = statSync(full).mtimeMs;
     } catch {
       continue;
     }
-    hits.push({ full, age: now - mtime, tc });
+    hits.push({ full, age: now - mtime, tc, nsis });
   }
   hits.sort((a, b) => a.age - b.age);
   let removed = 0;
   let kept = 0;
   for (const h of hits) {
-    const limit = h.tc ? toolchainAge : maxAgeMs;
+    const limit = h.tc ? toolchainAge : h.nsis ? Math.max(maxAgeMs, 10 * 60 * 1000) : maxAgeMs;
     const stale = h.age >= limit;
-    const overflow = !h.tc && kept >= keep;
+    const overflow = !h.tc && !h.nsis && kept >= keep;
     if (!stale && !overflow) {
-      if (!h.tc) kept += 1;
+      if (!h.tc && !h.nsis) kept += 1;
       continue;
     }
     if (rmDir(h.full)) removed += 1;

@@ -44,4 +44,23 @@ describe("anvil temp sweep", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("drops portable NSIS leftover with Anvil.exe", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "anvil-sweep-"));
+    try {
+      const junk = path.join(root, "nsn408A.tmp");
+      mkdirSync(path.join(junk, "app"), { recursive: true });
+      writeFileSync(path.join(junk, "app", "Anvil.exe"), "x");
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      utimesSync(junk, old, old);
+      const other = path.join(root, "nsn1111.tmp");
+      mkdirSync(other);
+      writeFileSync(path.join(other, "WinShell.dll"), "x");
+      assert.equal(sweepAnvilTemp({ root, keep: 0, maxAgeMs: 0 }), 1);
+      assert.equal(existsSync(junk), false);
+      assert.equal(existsSync(other), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

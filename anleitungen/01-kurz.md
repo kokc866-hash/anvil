@@ -1,10 +1,10 @@
-# Anvil 1.2.4 — Kurz
+# Anvil 1.2.5 — Kurz
 
 Lokale IDE: Dateien, Agent, Run. Eigenes Fenster, kein Browser.
 
 ## Start
 
-**Installer (Windows):** [Releases](https://github.com/kokc866-hash/anvil/releases) → Setup-exe oder portable. UI ist eingebaut, **kein** Node.js, **kein** Vite auf dem PC.
+**Installer (Windows):** [Releases](https://github.com/kokc866-hash/anvil/releases) → **Setup** oder **ZIP** (nach I:\ entpacken, `Anvil.exe`). Kein Node.js, kein Vite. Portable-exe nicht mehr — die hat `C:\Temp` vollgeschrieben.
 
 Oder aus dem Ordner:
 
