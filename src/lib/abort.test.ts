@@ -95,6 +95,7 @@ describe("abort", () => {
     assert.equal(shouldRetryLocalLlm(new Error("Leerer Stream — Modell hat abgebrochen")), false);
     assert.equal(shouldRetryLocalLlm(new Error("Failed to fetch")), true);
     assert.equal(shouldRetryLocalLlm(new Error("ECONNRESET")), true);
-    assert.equal(shouldRetryLocalLlm(new Error("HTTP 502")), true);
+    assert.equal(shouldRetryLocalLlm(new Error("HTTP 500")), false);
+    assert.equal(shouldRetryLocalLlm(new Error("HTTP 502")), false);
   });
 });
