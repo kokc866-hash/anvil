@@ -36,29 +36,14 @@ export const RUN_ALLOW = new Set([
   "pytest",
 ]);
 
-const LLM_HDR = /^(content-type|accept|authorization|x-api-key|openai-beta|openai-organization)$/i;
+import { isLanHost } from "../scripts/llm-agent.mjs";
+export { isLanHost, llmHeaders } from "../scripts/llm-agent.mjs";
 
 export function isLoopbackHost(host) {
   const h = String(host || "")
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
   return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0:0:0:0:0:0:0:1";
-}
-
-export function isLanHost(host) {
-  const h = String(host || "")
-    .toLowerCase()
-    .replace(/^\[|\]$/g, "");
-  if (h === "169.254.169.254" || h === "0.0.0.0" || h === "::" || h === "metadata.google.internal") return false;
-  if (isLoopbackHost(h)) return true;
-  if (h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".internal")) return true;
-  const p = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!p) return false;
-  const a = Number(p[1]);
-  const b = Number(p[2]);
-  if (a === 10 || a === 127 || (a === 192 && b === 168)) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  return false;
 }
 
 export function allowCorsOrigin(origin) {
@@ -97,17 +82,6 @@ export function tokenOk(got, expect) {
   a.copy(pa);
   b.copy(pb);
   return a.length === b.length && timingSafeEqual(pa, pb);
-}
-
-export function llmHeaders(raw) {
-  const out = {};
-  if (!raw || typeof raw !== "object") return out;
-  for (const [k, v] of Object.entries(raw)) {
-    if (!LLM_HDR.test(k)) continue;
-    if (v == null) continue;
-    out[k] = String(v);
-  }
-  return out;
 }
 
 export function blockedCwd(resolved) {

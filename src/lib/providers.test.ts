@@ -1,21 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isCodexExclusive, modelForProvider } from "./providers.ts";
+import { modelForProvider, connectionMode, connectionSlot, connectionDefaults } from "./providers.ts";
 
-test("luna/sol/terra are Codex-only", () => {
-  assert.equal(isCodexExclusive("gpt-5.6-terra"), true);
-  assert.equal(isCodexExclusive("gpt-5.6-luna"), true);
-  assert.equal(isCodexExclusive("gpt-5.6-sol"), true);
-  assert.equal(isCodexExclusive("gpt-5.5"), false);
+test("selected models and Azure deployments are never silently remapped", () => {
+  for (const provider of ["codex", "openai", "azure", "custom"]) {
+    for (const model of ["gpt-5.4", "gpt-5.6-terra", "my-deployment", "future-model"]) assert.equal(modelForProvider(provider, model), model);
+  }
 });
-
-test("openai remaps Codex ids to gpt-5.5", () => {
-  assert.equal(modelForProvider("openai", "gpt-5.6-terra"), "gpt-5.5");
-  assert.equal(modelForProvider("azure", "gpt-5.6-luna"), "gpt-5.5");
-  assert.equal(modelForProvider("openai", "gpt-5.5"), "gpt-5.5");
-});
-
-test("codex keeps exclusive ids", () => {
-  assert.equal(modelForProvider("codex", "gpt-5.6-terra"), "gpt-5.6-terra");
-  assert.equal(modelForProvider("codex", "gpt-5.4"), "gpt-5.6-terra");
+test("subscription is explicit, Codex always uses CLI, API and CLI slots are distinct", () => {
+  assert.equal(connectionMode("codex", "key"), "abo");
+  assert.equal(connectionMode("anthropic"), "key");
+  assert.equal(connectionMode("anthropic", "abo"), "abo");
+  assert.equal(connectionMode("custom", "abo"), "key");
+  assert.equal(connectionMode("huggingface", "abo"), "key");
+  assert.notEqual(connectionSlot("anthropic", "abo"), connectionSlot("anthropic", "key"));
+  assert.equal(connectionMode("github", "key"), "abo");
+  assert.equal(connectionDefaults("github", "key").baseUrl, "");
+  assert.equal(connectionDefaults("github", "abo").baseUrl, "");
 });

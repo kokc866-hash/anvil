@@ -58,7 +58,7 @@ test("cloud yes, ollama no", () => {
   assert.equal(wantsAutoContext("google"), true);
   assert.equal(wantsAutoContext("openrouter"), true);
   assert.equal(wantsAutoContext("xai"), true);
-  assert.equal(wantsAutoContext("custom"), true);
+  assert.equal(wantsAutoContext("custom"), false);
   assert.equal(wantsAutoContext("grok"), true);
   assert.equal(wantsAutoContext("ollama"), false);
 });

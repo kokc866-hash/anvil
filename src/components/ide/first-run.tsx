@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { diskSupported, pickFolder } from "@/lib/disk";
 import { CompanionSetup } from "./companion-setup";
@@ -9,7 +9,7 @@ import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { AnvilMark } from "./anvil-mark";
 import { ANVIL_VERSION } from "@/lib/version";
-import { credsForProvider } from "@/lib/sub-auth";
+import { cliKindFor, probeCli, cliStatusText } from "@/lib/cli-client";
 
 type Ping = "idle" | "ok" | "bad";
 
@@ -21,6 +21,9 @@ export function FirstRun() {
   const url = useIde((s) => s.llmBaseUrl);
   const model = useIde((s) => s.llmModel);
   const apiKey = useIde((s) => s.llmApiKey);
+  const authMode = useIde((s) => s.llmAuthMode);
+  const cli = cliKindFor(provider, authMode);
+  const request = useRef<AbortController | null>(null);
   const setLlmProvider = useIde((s) => s.setLlmProvider);
   const setLlmBaseUrl = useIde((s) => s.setLlmBaseUrl);
   const setLlmModel = useIde((s) => s.setLlmModel);
@@ -47,26 +50,38 @@ export function FirstRun() {
   }, [done]);
 
   useEffect(() => {
-    if (provider === "grok") return;
-    if (spec.needsKey && !apiKey.trim() && !credsForProvider(provider).token) return;
-    if (spec.needsSub && !apiKey.trim() && !credsForProvider(provider).token) return;
-    const tmr = window.setTimeout(() => void checkModel(), 400);
-    return () => window.clearTimeout(tmr);
+    request.current?.abort();
+    setProbe("idle"); setProbeMsg(""); setModels([]);
+    if (done || provider === "grok" || (!cli && spec.needsKey && !apiKey.trim())) return;
+    const timer = window.setTimeout(() => void checkModel(), 400);
+    return () => { window.clearTimeout(timer); request.current?.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, url, apiKey]);
+  }, [done, provider, url, apiKey, authMode]);
 
   async function checkModel() {
-    setProbe("idle");
-    setProbeMsg(t("setupCheck") + "…");
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const snapshot = useIde.getState();
+    const current = () => {
+      const now = useIde.getState();
+      return !controller.signal.aborted && now.llmProvider === snapshot.llmProvider && now.llmAuthMode === snapshot.llmAuthMode && now.llmBaseUrl === snapshot.llmBaseUrl && now.llmApiKey === snapshot.llmApiKey;
+    };
+    setProbe("idle"); setProbeMsg(t("setupCheck") + "…");
     try {
-      const ids = await listModels({ provider, baseUrl: url, apiKey });
-      setModels(ids);
-      setProbe("ok");
-      setProbeMsg(ids.length ? `${ids.length} ${t("setupModels")}` : t("setupModelOk"));
-      if (ids.length && !model) setLlmModel(ids[0]);
+      if (cli) {
+        const status = await probeCli(cli, controller.signal);
+        if (current()) { setProbe(status.authenticated === false ? "bad" : "ok"); setProbeMsg(cliStatusText(status)); }
+        return;
+      }
+      const ids = await listModels({ provider, baseUrl: url, apiKey, signal: controller.signal });
+      if (!current()) return;
+      setModels(ids); setProbe("ok");
+      setProbeMsg(provider === "azure" ? "Azure-Zugang geprüft; Deployment wird beim Senden geprüft" : ids.length ? `${ids.length} ${t("setupModels")}` : "Erreichbar · Modellliste leer");
+      if (ids.length && !useIde.getState().llmModel && provider !== "azure") setLlmModel(ids[0]);
     } catch (err) {
-      setModels([]);
-      setProbe("bad");
+      if (!current()) return;
+      setModels([]); setProbe("bad");
       setProbeMsg(err instanceof Error ? err.message : t("setupModelBad"));
     }
   }
@@ -164,7 +179,7 @@ export function FirstRun() {
                 />
               </label>
             ) : null}
-            {spec.needsKey && credsForProvider(provider).via !== "abo" ? (
+            {!cli && provider !== "grok" ? (
               <label className="mt-2 block">
                 <span className="text-[11px] text-muted">{t("setupKey")}</span>
                 <input

@@ -1,4 +1,10 @@
-import { isLanHost, llmUpstream, noTimeout, openLlmPipe } from "./llm-agent.mjs";
+import { assertLlmTarget, llmHeaders, llmUpstream, noTimeout, openLlmPipe } from "./llm-agent.mjs";
+
+function sameOrigin(req) {
+  try {
+    return req.headers["sec-fetch-site"] !== "cross-site" && (!req.headers.origin || new URL(req.headers.origin).host === req.headers.host);
+  } catch { return false; }
+}
 
 function readReq(req) {
   return new Promise((resolve, reject) => {
@@ -25,6 +31,10 @@ export function lanLlmPlugin() {
           return;
         }
         res.setHeader("x-anvil-lan", "1");
+        // This dev-only endpoint accepts same-origin renderer requests.
+        if (!sameOrigin(req)) {
+          res.statusCode = 403; res.end("origin"); return;
+        }
         if ((req.method ?? "GET") === "OPTIONS") {
           res.statusCode = 204;
           res.end();
@@ -34,13 +44,9 @@ export function lanLlmPlugin() {
         try {
           req.socket?.setTimeout(0);
           res.setTimeout?.(0);
-          const u = new URL(target);
-          if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("nur http(s)");
-          if (!isLanHost(u.hostname)) throw new Error("nur LAN/localhost");
+          const u = assertLlmTarget(target, String(req.headers["x-anvil-custom-base"] || ""));
           const method = (req.method ?? "GET").toUpperCase();
-          const headers = {};
-          if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"];
-          if (req.headers.authorization) headers.authorization = req.headers.authorization;
+          const headers = llmHeaders(req.headers);
           const buf = method === "GET" || method === "HEAD" ? undefined : await readReq(req);
           const ac = new AbortController();
           const stop = () => {
