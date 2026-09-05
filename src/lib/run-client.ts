@@ -318,6 +318,9 @@ export async function runFile(
     return done({ ok: false, stdout: "", stderr: `Datei nicht gefunden: ${path}` });
   }
   if (lang === "html") {
+    if (!useIde.getState().runHtml) {
+      return done({ ok: false, stdout: "", stderr: "HTML-Run aus (Einstellungen → Ausgabe)." });
+    }
     return done({ ok: true, stdout: "Vorschau.", stderr: "", html: withEngine(code, useIde.getState().inputMap), stage: { kind: "html" } });
   }
   if (lang === "python") {
@@ -329,7 +332,7 @@ export async function runFile(
   if (lang === "javascript" || lang === "typescript") {
     const src = lang === "typescript" ? stripTs(code) : code;
     const testing = Boolean(opts?.asTest) || isTestFile(path);
-    if (!testing) {
+    if (!testing && useIde.getState().runHtml) {
       const host = isEsm(src) ? htmlHost(path, files) : undefined;
       if (host && host !== path) {
         const page = files[host];

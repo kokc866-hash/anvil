@@ -8,6 +8,8 @@ import { parentDir, cleanPath } from "./fs";
 import type { InputMap } from "./input-map";
 import type { RunResult } from "@/store/ide";
 
+export const HTML_RUN_OFF = "HTML-Run aus (Einstellungen → Ausgabe).";
+
 export type PreviewView =
   | { kind: "iframe"; srcDoc: string; live: boolean; label: string }
   | { kind: "md"; html: string }
@@ -123,6 +125,7 @@ export function previewFor(
   files: Record<string, string>,
   last: RunResult | undefined,
   inputMap: InputMap,
+  allowHtml = true,
 ): PreviewView {
   const lang: LangId = langFromPath(path);
 
@@ -135,6 +138,7 @@ export function previewFor(
   }
 
   if (lang === "css") {
+    if (!allowHtml) return { kind: "empty", hint: HTML_RUN_OFF };
     const page = Object.keys(files).find((p) => p.endsWith(".html") || p.endsWith(".htm"));
     let html = page ? files[page] : cssDemo(src);
     if (page) {
@@ -147,6 +151,7 @@ export function previewFor(
   }
 
   if (lang === "html") {
+    if (!allowHtml) return { kind: "empty", hint: HTML_RUN_OFF };
     return {
       kind: "iframe",
       srcDoc: withEngine(inlineHtmlAssets(rewriteRefMedia(src, files), files, path), inputMap),
@@ -167,6 +172,19 @@ export function previewFor(
   }
 
   if (lang === "javascript" || lang === "typescript") {
+    if (!allowHtml) {
+      if (last) {
+        return {
+          kind: "console",
+          ok: last.ok,
+          stdout: last.stdout,
+          stderr: last.stderr,
+          duration: last.duration,
+          label: last.label,
+        };
+      }
+      return { kind: "empty", hint: HTML_RUN_OFF };
+    }
     const page = Object.keys(files).find(
       (p) => /\.html?$/i.test(p) && files[p].includes(path.split("/").pop() ?? "\0"),
     );

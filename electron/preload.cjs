@@ -49,4 +49,8 @@ contextBridge.exposeInMainWorld("anvilNative", {
   companionEnsure: () => ipcRenderer.invoke("companion-ensure"),
   companionRelease: (keep) => ipcRenderer.invoke("companion-release", keep),
   hwMachine: () => ipcRenderer.invoke("hw-machine"),
+  updateCheck: () => ipcRenderer.invoke("update-check"),
+  updateZip: () => ipcRenderer.invoke("update-zip"),
+  updateSetup: () => ipcRenderer.invoke("update-setup"),
+  updateOpen: (url) => ipcRenderer.invoke("update-open", url),
 });

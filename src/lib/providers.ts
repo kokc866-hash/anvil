@@ -200,7 +200,7 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "openai",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4.1-mini",
-    models: ["gpt-6-astra", "gpt-5.5", "gpt-5.6-terra", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "o3", "o4-mini"],
+    models: ["gpt-6-astra", "gpt-5.5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "o3", "o4-mini"],
     needsKey: true,
     needsUrl: false,
     hint: "API-Key von platform.openai.com",
@@ -481,6 +481,17 @@ export function resolveCodexModel(id: string): string {
   if (CODEX_ALIAS[t]) return CODEX_ALIAS[t];
   if (/codex/i.test(t) || /^gpt-5\.[0-4]/i.test(t)) return "gpt-5.6-terra";
   return t || "gpt-5.6-terra";
+}
+
+/** luna/sol/terra laufen nur im ChatGPT-Abo, nicht auf api.openai.com. */
+export function isCodexExclusive(id: string): boolean {
+  return /gpt-5\.6-(luna|sol|terra)/i.test(String(id || ""));
+}
+
+export function modelForProvider(provider: string, model: string): string {
+  if (provider === "codex") return resolveCodexModel(model);
+  if ((provider === "openai" || provider === "azure") && isCodexExclusive(model)) return "gpt-5.5";
+  return model;
 }
 
 export function providerOf(id: string): ProviderSpec {

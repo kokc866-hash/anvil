@@ -572,9 +572,11 @@ function clientTools(opts: {
         stage: r.stage,
       });
       if (r.graphical || /\.html?$/i.test(path)) {
-        const { openRunWindow } = await import("./run-window");
-        openRunWindow({ agent: true });
-        st.setPreviewOpen(false);
+        if (st.runHtml) {
+          const { openRunWindow } = await import("./run-window");
+          openRunWindow({ agent: true });
+          st.setPreviewOpen(false);
+        }
       } else if (r.stage?.kind === "window" || r.stage?.kind === "log" || st.openOutputOnRun) {
         st.revealOutput();
         if (r.stage?.kind === "window" || r.stage?.kind === "log") st.setPreviewOpen(false);
@@ -585,7 +587,9 @@ function clientTools(opts: {
     play: async (keys: string[], hold?: number) => {
       const { playLoop } = await import("./run-loop");
       const { useIde } = await import("@/store/ide");
-      if (!useIde.getState().graphLoop) return { ok: false, error: "Graph-Schleife aus" };
+      const st = useIde.getState();
+      if (!st.runHtml) return { ok: false, error: "HTML-Run aus (Einstellungen → Ausgabe)." };
+      if (!st.graphLoop) return { ok: false, error: "Graph-Schleife aus" };
       const shot = await playLoop(keys, hold);
       return { ok: Boolean(shot.image) || keys.length > 0, keys, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
@@ -606,6 +610,7 @@ function clientTools(opts: {
           note: "Bühne: natives Fenster. Kein HTML-Frame.",
         };
       }
+      if (!st.runHtml) return { ok: false, error: "HTML-Run aus (Einstellungen → Ausgabe)." };
       const htmlPath =
         (st.runPath && /\.html?$/i.test(st.runPath) ? st.runPath : "") ||
         (st.activePath && /\.html?$/i.test(st.activePath) ? st.activePath : "") ||
@@ -634,7 +639,7 @@ function clientTools(opts: {
       const src = path ? st.files[path] : "";
       let html = src;
       if (path && src) {
-        const view = previewFor(path, src, st.files, st.output.at(-1), st.inputMap);
+        const view = previewFor(path, src, st.files, st.output.at(-1), st.inputMap, st.runHtml);
         if (view.kind === "iframe") html = view.srcDoc;
       }
       const shot = await Promise.race([

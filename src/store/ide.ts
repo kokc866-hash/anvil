@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
 import { langFromPath } from "@/lib/languages";
-import { providerOf, resolveCodexModel, type LlmProvider } from "@/lib/providers";
+import { modelForProvider, providerOf, type LlmProvider } from "@/lib/providers";
 import { ancestorDirs, autoCollapsePaths, cleanPath, dropRecord, dupPath, isInside, joinPath, parentDir, remapList, remapPath, remapRecord } from "@/lib/fs";
 import { DEFAULT_INPUT_MAP, normalizeInputMap, type InputMap } from "@/lib/input-map";
 import { KEY_DEFAULTS, normalizeKeyMap, type Chord, type KeyId } from "@/lib/keymap";
@@ -312,6 +312,8 @@ type IdeState = {
   showStatusBar: boolean;
   openOutputOnRun: boolean;
   runInWindow: boolean;
+  runHtml: boolean;
+  autoUpdate: boolean;
   splitMode: SplitMode;
   llmProvider: LlmProvider;
   llmAuthMode: "abo" | "key";
@@ -441,6 +443,8 @@ type IdeState = {
   setShowStatusBar: (v: boolean) => void;
   setOpenOutputOnRun: (v: boolean) => void;
   setRunInWindow: (v: boolean) => void;
+  setRunHtml: (v: boolean) => void;
+  setAutoUpdate: (v: boolean) => void;
   setRunPopout: (v: boolean) => void;
   setRunPath: (path: string | null) => void;
   setSplitMode: (v: SplitMode) => void;
@@ -680,6 +684,8 @@ export const useIde = create<IdeState>()(
       showStatusBar: true,
       openOutputOnRun: true,
       runInWindow: true,
+      runHtml: true,
+      autoUpdate: true,
       splitMode: "auto",
       llmProvider: "ollama",
       llmAuthMode: "key",
@@ -814,6 +820,8 @@ export const useIde = create<IdeState>()(
       setShowStatusBar: (showStatusBar) => set({ showStatusBar }),
       setOpenOutputOnRun: (openOutputOnRun) => set({ openOutputOnRun }),
       setRunInWindow: (runInWindow) => set({ runInWindow }),
+      setRunHtml: (runHtml) => set({ runHtml }),
+      setAutoUpdate: (autoUpdate) => set({ autoUpdate }),
       setRunPopout: (runPopout) => set({ runPopout }),
       setRunPath: (runPath) => set({ runPath: runPath || null }),
       setSplitMode: (splitMode) => set({ splitMode }),
@@ -831,7 +839,7 @@ export const useIde = create<IdeState>()(
           const savedIsDefault = !url || url === d.baseUrl || /127\.0\.0\.1/.test(url);
           if (savedIsDefault) url = curUrl;
         }
-        const model = d.id === "codex" ? resolveCodexModel(saved?.model || d.model) : saved?.model || d.model;
+        const model = modelForProvider(d.id, saved?.model || d.model);
         const fit = fitCloudAbo(d.id, model);
         set({
           llmSlots: slots,
@@ -866,7 +874,7 @@ export const useIde = create<IdeState>()(
       },
       setLlmModel: (llmModel) => {
         const cur = get();
-        const next = cur.llmProvider === "codex" ? resolveCodexModel(llmModel) : llmModel;
+        const next = modelForProvider(cur.llmProvider, llmModel);
         const fit = fitCloudAbo(cur.llmProvider, next);
         set({
           llmModel: next,
@@ -934,7 +942,7 @@ export const useIde = create<IdeState>()(
           llmSlots: { ...(cur.llmSlots ?? {}), [cur.llmProvider]: slotOf(cur), [p.provider]: p },
           llmProvider: p.provider,
           llmBaseUrl: p.baseUrl,
-          llmModel: p.provider === "codex" ? resolveCodexModel(p.model) : p.model,
+          llmModel: modelForProvider(p.provider, p.model),
           llmContext: p.context,
           llmThinking: p.thinking,
           llmCompact: p.compact,
@@ -1898,6 +1906,8 @@ export const useIde = create<IdeState>()(
           showStatusBar: true,
           openOutputOnRun: true,
           runInWindow: true,
+          runHtml: true,
+          autoUpdate: true,
           splitMode: "auto",
           outputDock: "bottom",
           trailWidth: 300,
@@ -1944,15 +1954,15 @@ export const useIde = create<IdeState>()(
           ...current,
           ...p,
           llmAuthMode: p.llmAuthMode === "abo" ? "abo" : "key",
-          llmModel:
-            String(p.llmProvider || current.llmProvider) === "codex"
-              ? resolveCodexModel(String(p.llmModel || current.llmModel || ""))
-              : typeof p.llmModel === "string"
-                ? p.llmModel
-                : current.llmModel,
+          llmModel: modelForProvider(
+            String(p.llmProvider || current.llmProvider),
+            String(p.llmModel || current.llmModel || ""),
+          ),
           llmSlots: (p.llmSlots as typeof current.llmSlots) ?? {},
           llmProfiles: Array.isArray(p.llmProfiles) ? p.llmProfiles : [],
           runInWindow: typeof p.runInWindow === "boolean" ? p.runInWindow : true,
+          runHtml: p.runHtml !== false,
+          autoUpdate: p.autoUpdate !== false,
           planWho: normalizePlanWho(p.planWho),
           engineLoop: p.engineLoop === true,
           locale: p.locale === "en" || p.locale === "de" ? p.locale : current.locale,
@@ -2038,6 +2048,8 @@ export const useIde = create<IdeState>()(
         showStatusBar: s.showStatusBar,
         openOutputOnRun: s.openOutputOnRun,
         runInWindow: s.runInWindow,
+        runHtml: s.runHtml,
+        autoUpdate: s.autoUpdate,
         splitMode: s.splitMode,
         llmProvider: s.llmProvider,
         llmAuthMode: s.llmAuthMode,

@@ -133,7 +133,7 @@ export type SubLoadOk = {
 
 export type SubLoadErr = { ok: false; error: string };
 
-export type SubKind = "codex" | "claude" | "gemini" | "copilot" | "huggingface";
+export type SubKind = "codex" | "claude" | "gemini" | "copilot" | "huggingface" | "google";
 
 export const SUB_KIND_META: { kind: SubKind; provider: string; cmd: string; label: string }[] = [
   { kind: "codex", provider: "codex", cmd: "codex login", label: "Codex" },

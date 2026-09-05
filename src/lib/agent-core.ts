@@ -115,7 +115,7 @@ export const AGENT_TOOLS = [
     from: { type: "string" },
     to: { type: "string" },
   }, ["from", "to"]),
-  tool("run_file", "Run a workspace file and return the output. HTML/Python/JS execute. Go/Rust/C/C++/Java/C#/PHP/Ruby: compile then run — the result has Compile and Run. After write/edit always run. On failure: patch and run again (max 3).", {
+  tool("run_file", "Run a workspace file and return the output. HTML/Python/JS execute (HTML can be turned off in Settings → Output). Go/Rust/C/C++/Java/C#/PHP/Ruby: compile then run — the result has Compile and Run. After write/edit always run. On failure: patch and run again (max 3).", {
     path: { type: "string" },
   }, ["path"]),
   tool("see_run", "HTML: snapshot the preview. Native/CLI: last Compile/Run log or open OS window — never a fake iframe for .exe.", {}),

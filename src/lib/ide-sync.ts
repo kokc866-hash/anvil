@@ -32,6 +32,7 @@ export function startIdeSync() {
       runPath: s.runPath,
       theme: s.theme,
       inputMap: s.inputMap,
+      runHtml: s.runHtml,
     };
   }
 
@@ -53,7 +54,8 @@ export function startIdeSync() {
       s.activePath === prev.activePath &&
       s.runPath === prev.runPath &&
       s.theme === prev.theme &&
-      s.inputMap === prev.inputMap
+      s.inputMap === prev.inputMap &&
+      s.runHtml === prev.runHtml
     ) {
       return;
     }
@@ -71,6 +73,7 @@ export function startIdeSync() {
       runPath?: string | null;
       theme?: ReturnType<typeof useIde.getState>["theme"];
       inputMap?: ReturnType<typeof useIde.getState>["inputMap"];
+      runHtml?: boolean;
     } | null;
     if (!d || typeof d !== "object") return;
     if (d.want === 1) {
@@ -88,6 +91,7 @@ export function startIdeSync() {
       runPath: typeof d.runPath === "string" ? d.runPath : d.runPath === null ? null : cur.runPath,
       theme: d.theme ?? cur.theme,
       inputMap: d.inputMap ?? cur.inputMap,
+      runHtml: typeof d.runHtml === "boolean" ? d.runHtml : cur.runHtml,
     });
     echo = false;
   };

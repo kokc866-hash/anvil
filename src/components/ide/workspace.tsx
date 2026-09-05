@@ -192,6 +192,7 @@ export function Workspace() {
       });
       stopSync = startIdeSync();
       void import("@/lib/model-context").then((m) => m.applyCloudContext());
+      void import("@/lib/app-update").then((u) => u.bootUpdateCheck());
     });
     return () => stopSync?.();
   }, []);

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Play, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { langFromPath } from "@/lib/languages";
 import { previewFor } from "@/lib/preview-doc";
 import { cn } from "@/lib/cn";
 import { runFile } from "@/lib/run-client";
@@ -21,10 +20,10 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
   const running = useIde((s) => s.running);
   const setPreviewOpen = useIde((s) => s.setPreviewOpen);
   const inputMap = useIde((s) => s.inputMap);
-  const lang = path ? langFromPath(path) : "plaintext";
+  const runHtml = useIde((s) => s.runHtml);
   const view = useMemo(
-    () => (path ? previewFor(path, src, files, last, inputMap) : null),
-    [path, src, files, last, inputMap],
+    () => (path ? previewFor(path, src, files, last, inputMap, runHtml) : null),
+    [path, src, files, last, inputMap, runHtml],
   );
 
   return (

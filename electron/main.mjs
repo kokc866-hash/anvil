@@ -10,6 +10,7 @@ import { startLlmPipe } from "./llm-pipe.mjs";
 import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
 import { bindHwIpc } from "./hw.mjs";
 import { bindSubIpc } from "./sub.mjs";
+import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
 import { handleOnce, onSync } from "./ipc.mjs";
@@ -419,11 +420,16 @@ if (!gotLock) {
       /* */
     }
     const allowNet = (_wc, perm, cb) => {
-      if (perm === "local-network-access" || perm === "media" || perm === "clipboard-sanitized-write" || perm === "clipboard-read") {
+      if (
+        perm === "local-network-access" ||
+        perm === "media" ||
+        perm === "clipboard-sanitized-write" ||
+        perm === "clipboard-read"
+      ) {
         cb(true);
         return;
       }
-      cb(true);
+      cb(false);
     };
     session.defaultSession.setPermissionRequestHandler(allowNet);
     try {
@@ -444,6 +450,7 @@ if (!gotLock) {
     bindPathsIpc();
     bindHwIpc();
     bindSubIpc();
+    bindUpdateIpc();
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());
     handleOnce("companion-ensure", () => ensureCompanion());

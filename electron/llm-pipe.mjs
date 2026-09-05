@@ -28,10 +28,28 @@ function fwdHeaders(req) {
   return out;
 }
 
+function pipeCorsOrigin(origin) {
+  const raw = String(origin || "").trim();
+  if (!raw) return "http://127.0.0.1:8080";
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    const h = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (h === "127.0.0.1" || h === "localhost" || h === "::1") return u.origin;
+  } catch {
+    /* */
+  }
+  return "";
+}
+
+export { pipeCorsOrigin };
+
 export async function startLlmPipe() {
   const token = randomBytes(16).toString("hex");
   const server = createServer(async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const allow = pipeCorsOrigin(req.headers.origin);
+    if (allow) res.setHeader("Access-Control-Allow-Origin", allow);
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, x-anvil-target, x-anvil-pipe");
     res.setHeader("x-anvil-lan", "1");

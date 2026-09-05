@@ -60,6 +60,8 @@ import { applyLang, useT, type Locale } from "@/lib/i18n";
 import { confirmApp } from "@/lib/confirm";
 import { chordFromEvent, chordOwner, formatChord, KEY_DEFAULTS, KEY_GROUPS, KEY_LABEL, type KeyId } from "@/lib/keymap";
 import { applySettingsPack, exportSettingsPack, resetAllSettings } from "@/lib/settings-io";
+import { makePack, pullDrive, pullGist, pushDrive, pushGist } from "@/lib/account-sync";
+import { checkAppUpdate, setupAppUpdate, zipAppUpdate } from "@/lib/app-update";
 import { capLabel, getCap, resetCap } from "@/lib/model-caps";
 import { appLogOn, appLogLines, clearAppLog, copyAppLog, exportAppLog, setAppLogOn, subscribeAppLog } from "@/lib/app-log";
 import { loadSubFromNative, loginSubFromNative, credsForProvider, saveAbo, SUB_KIND_META, type SubKind } from "@/lib/sub-auth";
@@ -1404,9 +1406,11 @@ function OutputSection({ q }: { q: string }) {
   const outputDock = useIde((s) => s.outputDock);
   const openOutputOnRun = useIde((s) => s.openOutputOnRun);
   const runInWindow = useIde((s) => s.runInWindow);
+  const runHtml = useIde((s) => s.runHtml);
   const setOutputDock = useIde((s) => s.setOutputDock);
   const setOpenOutputOnRun = useIde((s) => s.setOpenOutputOnRun);
   const setRunInWindow = useIde((s) => s.setRunInWindow);
+  const setRunHtml = useIde((s) => s.setRunHtml);
   const t = useT();
 
   return (
@@ -1432,6 +1436,11 @@ function OutputSection({ q }: { q: string }) {
       <Vis q={q} label="Run eigenes Fenster Popup Spiel">
         <Row label={t("runInWindow")} hint={t("runInWindowHint")}>
           <Toggle on={runInWindow} onChange={setRunInWindow} />
+        </Row>
+      </Vis>
+      <Vis q={q} label="HTML ausführen Vorschau Agent iframe">
+        <Row label={t("runHtml")} hint={t("runHtmlHint")}>
+          <Toggle on={runHtml} onChange={setRunHtml} />
         </Row>
       </Vis>
     </section>
@@ -1919,6 +1928,108 @@ function DataSection({ q }: { q: string }) {
   const resetWorkspace = useIde((s) => s.resetWorkspace);
   const setLlmApiKey = useIde((s) => s.setLlmApiKey);
   const setNotice = useIde((s) => s.setNotice);
+  const autoUpdate = useIde((s) => s.autoUpdate);
+  const setAutoUpdate = useIde((s) => s.setAutoUpdate);
+  const setGithubToken = useIde((s) => s.setGithubToken);
+  const t = useT();
+  const [upd, setUpd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [gh, setGh] = useState("");
+  const [go, setGo] = useState("");
+
+  async function runUpdate(kind: "check" | "zip" | "setup") {
+    setBusy(true);
+    try {
+      const r = kind === "check" ? await checkAppUpdate() : kind === "zip" ? await zipAppUpdate() : await setupAppUpdate();
+      if (r.canceled) return;
+      if (!r.ok) {
+        const msg = r.error || "fehlgeschlagen";
+        setUpd(msg);
+        setNotice(msg);
+        return;
+      }
+      if (kind === "check") {
+        const msg = r.newer ? t("updateReady", { v: r.latest || "" }) : t("updateCurrent", { v: r.current || r.latest || "" });
+        setUpd(r.notes ? `${msg}\n${r.notes.slice(0, 280)}` : msg);
+        setNotice(msg);
+        return;
+      }
+      const msg = r.dir || r.path || "ok";
+      setUpd(msg);
+      setNotice(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sign(kind: "copilot" | "google") {
+    setBusy(true);
+    try {
+      const r = await loginSubFromNative(kind);
+      if (!r.ok) {
+        setNotice(r.error);
+        return;
+      }
+      if (kind === "copilot" && r.token) {
+        setGithubToken(r.token);
+        setGh(r.email || r.preview || "GitHub");
+      } else {
+        setGo(r.email || r.preview || "Google");
+      }
+      setNotice("Angemeldet");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function gistToken() {
+    return useIde.getState().githubToken.trim() || credsForProvider("github").token;
+  }
+
+  async function googleToken() {
+    const r = await loadSubFromNative("google");
+    if (!r.ok) throw new Error(r.error);
+    if (!r.token) throw new Error("Kein Google-Token");
+    return r.token;
+  }
+
+  async function sync(where: "gist" | "drive", dir: "push" | "pull") {
+    setBusy(true);
+    try {
+      if (where === "gist") {
+        const token = gistToken();
+        if (!token) throw new Error("GitHub anmelden oder Token eintragen");
+        if (dir === "push") {
+          const { id } = await pushGist(token, makePack(exportSettingsPack()));
+          setNotice(`Gist ${id.slice(0, 8)}`);
+        } else {
+          const pack = await pullGist(token);
+          if (!pack) throw new Error("Kein Gist");
+          applySettingsPack(pack.settings);
+          const loc = useIde.getState().locale;
+          applyLang(loc === "en" || loc === "de" ? loc : "de");
+          setNotice("Gist geladen");
+        }
+        return;
+      }
+      const token = await googleToken();
+      if (dir === "push") {
+        await pushDrive(token, makePack(exportSettingsPack()));
+        setNotice("Drive gespeichert");
+      } else {
+        const pack = await pullDrive(token);
+        if (!pack) throw new Error("Nichts in Drive");
+        applySettingsPack(pack.settings);
+        const loc = useIde.getState().locale;
+        applyLang(loc === "en" || loc === "de" ? loc : "de");
+        setNotice("Drive geladen");
+      }
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Sync fehlgeschlagen");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function exportSettings() {
     const blob = new Blob([JSON.stringify(exportSettingsPack(), null, 2)], { type: "application/json" });
@@ -1954,7 +2065,56 @@ function DataSection({ q }: { q: string }) {
   return (
     <section>
       <Head>Daten</Head>
-      <p className="py-2 font-mono text-[11px] text-muted">Anvil {ANVIL_VERSION} · {ANVIL_BUILD}</p>
+      <p className="py-2 font-mono text-[11px] text-muted">
+        Anvil {ANVIL_VERSION} · {ANVIL_BUILD}
+      </p>
+      <Vis q={q} label="Update prüfen ZIP Setup GitHub Release Patch Electron">
+        <Head>{t("checkUpdate")}</Head>
+        <Row label={t("autoUpdate")} hint={t("autoUpdateHint")}>
+          <Toggle on={autoUpdate} onChange={setAutoUpdate} />
+        </Row>
+        <div className="flex flex-wrap gap-2 py-2">
+          <Button className="h-8" disabled={busy} onClick={() => void runUpdate("check")}>
+            {t("updateNow")}
+          </Button>
+          <Button className="h-8" disabled={busy} onClick={() => void runUpdate("zip")}>
+            {t("updateZip")}
+          </Button>
+          <Button className="h-8" disabled={busy} onClick={() => void runUpdate("setup")}>
+            {t("updateSetup")}
+          </Button>
+        </div>
+        {upd ? <p className="whitespace-pre-wrap pb-2 font-mono text-[11px] text-muted">{upd}</p> : null}
+      </Vis>
+      <Vis q={q} label="Konto Sync GitHub Gist Google Drive anmelden">
+        <Head>{t("konto")}</Head>
+        <p className="pb-1 text-xs text-muted">{t("kontoGithubHint")}</p>
+        <div className="flex flex-wrap gap-2 py-2">
+          <Button className="h-8" disabled={busy} onClick={() => void sign("copilot")}>
+            {t("githubSignIn")}
+          </Button>
+          <Button className="h-8" disabled={busy} onClick={() => void sync("gist", "push")}>
+            {t("syncPush")}
+          </Button>
+          <Button className="h-8" disabled={busy} onClick={() => void sync("gist", "pull")}>
+            {t("syncPull")}
+          </Button>
+        </div>
+        {gh ? <p className="pb-2 font-mono text-[11px] text-muted">{gh}</p> : null}
+        <p className="pt-1 text-xs text-muted">{t("kontoGoogleHint")}</p>
+        <div className="flex flex-wrap gap-2 py-2">
+          <Button className="h-8" disabled={busy} onClick={() => void sign("google")}>
+            {t("googleSignIn")}
+          </Button>
+          <Button className="h-8" disabled={busy} onClick={() => void sync("drive", "push")}>
+            {t("syncPush")}
+          </Button>
+          <Button className="h-8" disabled={busy} onClick={() => void sync("drive", "pull")}>
+            {t("syncPull")}
+          </Button>
+        </div>
+        {go ? <p className="pb-2 font-mono text-[11px] text-muted">{go}</p> : null}
+      </Vis>
       <VaultFields />
       <Vis q={q} label="Einstellungen exportieren importieren">
         <div className="flex flex-wrap gap-2 py-3">

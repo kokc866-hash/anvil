@@ -13,6 +13,7 @@ export function bindChildWindows({ root, port, preload, icon }) {
       old.focus();
       return old.id;
     }
+    const isolated = key === "run";
     const child = new BrowserWindow({
       width: Math.max(480, Number(opts.w) || (key === "run" ? 960 : 780)),
       height: Math.max(360, Number(opts.h) || (key === "run" ? 640 : 520)),
@@ -27,8 +28,8 @@ export function bindChildWindows({ root, port, preload, icon }) {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        partition: "persist:anvil",
-        preload,
+        partition: isolated ? "temp:anvil-run" : "persist:anvil",
+        ...(isolated ? {} : { preload }),
       },
     });
     child.setMenuBarVisibility(false);

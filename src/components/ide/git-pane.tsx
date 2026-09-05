@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CtxMenu } from "@/components/ide/ctx-menu";
 import { stripZipRoot, unzipFiles } from "@/lib/archive";
-import { companionGit, companionInstall, companionTree, type GitStatus } from "@/lib/companion";
+import { companionGit, companionInstall, companionTree, companionWorkspace, type GitStatus } from "@/lib/companion";
 import { holdCompanion, releaseCompanion } from "@/lib/companion-life";
 import { cloneGithub, pushGithub } from "@/lib/github";
 import { overlayDiskTree } from "@/lib/ws-skip";
-import { openOsWorkspace } from "@/lib/workspace-open";
+import { openOsWorkspace, writeTreeToDisk } from "@/lib/workspace-open";
+import { nativeHelper } from "@/lib/helper-local";
 import { useIde } from "@/store/ide";
 
 function applyTreeKeep(files?: Record<string, string>, dirs?: string[]) {
@@ -96,6 +97,42 @@ export function GitPane() {
     }
   }
 
+  async function cloneZipIntoFolder() {
+    if (!githubRepo.trim()) return;
+    setBusy(true);
+    try {
+      const dest = await nativeHelper()?.workspacePick?.();
+      if (!dest) {
+        setNotice("Ordner für ZIP wählen");
+        return;
+      }
+      await holdCompanion();
+      const w = await companionWorkspace(dest);
+      if (!w.ok) {
+        setNotice(w.error || "Ordner nicht gesetzt");
+        return;
+      }
+      const cwd = w.cwd || dest;
+      const r = await cloneGithub({ data: { url: githubRepo, token: githubToken } });
+      const raw = atob(r.zipB64);
+      const buf = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+      const pack = stripZipRoot(await unzipFiles(buf.buffer));
+      const n = await writeTreeToDisk(pack, cwd);
+      useIde.getState().setWorkspaceCwd(cwd);
+      applyFiles(pack);
+      const first = Object.keys(pack).sort()[0];
+      if (first) openFile(first);
+      setNotice(n ? `${n} Dateien nach ${cwd}` : `${Object.keys(pack).length} Dateien im Speicher (Schreiben nach ${cwd} fehlgeschlagen)`);
+      await refreshLive(cwd);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "ZIP fehlgeschlagen");
+    } finally {
+      if (!useIde.getState().companionKeep) await releaseCompanion();
+      setBusy(false);
+    }
+  }
+
   async function cloneRepo() {
     if (!githubRepo.trim()) return;
     setBusy(true);
@@ -124,15 +161,29 @@ export function GitPane() {
         setNotice(inst.ok ? "Git geholt. Clone nochmal." : g.error);
         return;
       }
+      const dest = await nativeHelper()?.workspacePick?.();
+      if (!dest) {
+        setNotice("Ordner für ZIP wählen");
+        return;
+      }
+      const w = await companionWorkspace(dest);
+      if (!w.ok) {
+        setNotice(w.error || "Ordner nicht gesetzt");
+        return;
+      }
+      cwd = w.cwd || dest;
       const r = await cloneGithub({ data: { url: githubRepo, token: githubToken } });
       const raw = atob(r.zipB64);
       const buf = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
       const pack = stripZipRoot(await unzipFiles(buf.buffer));
+      const n = await writeTreeToDisk(pack, cwd);
+      useIde.getState().setWorkspaceCwd(cwd);
       applyFiles(pack);
       const first = Object.keys(pack).sort()[0];
       if (first) openFile(first);
-      setNotice(`${Object.keys(pack).length} Dateien von GitHub (Zip)`);
+      setNotice(n ? `${n} Dateien von GitHub (ZIP) → ${cwd}` : `${Object.keys(pack).length} Dateien im Speicher (ZIP-Schreiben fehlgeschlagen)`);
+      await refreshLive(cwd);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Clone fehlgeschlagen");
     } finally {
@@ -545,6 +596,9 @@ export function GitPane() {
             <div className="flex gap-1">
               <Button className="h-8 flex-1 text-xs" disabled={busy || !githubRepo.trim()} onClick={() => void cloneRepo()}>
                 Clone
+              </Button>
+              <Button className="h-8 flex-1 text-xs" disabled={busy || !githubRepo.trim()} onClick={() => void cloneZipIntoFolder()}>
+                ZIP in Ordner
               </Button>
               <Button className="h-8 flex-1 text-xs" variant="primary" disabled={busy} onClick={() => void pushRepo()}>
                 Push

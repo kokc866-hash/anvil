@@ -1,4 +1,4 @@
-# Anvil 1.2.9 — Handbuch
+# Anvil 1.3.0 — Handbuch
 
 Ausführlich, mit Vorschau der Fenster. Kurzfassung: `01-kurz.md`. Abläufe: `03-workflow.md`. Stand: 05.09.2026.
 
@@ -263,7 +263,7 @@ Zwei getrennte Dinge:
 └───────────────────┘     └──────────────────────┘
 ```
 
-HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**. Titel **Run · datei.html** — nicht „Keine Datei“, wenn HTML im Workspace liegt. Anvil schickt `runPath` ins Kindfenster.
+HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**. Beliebiges HTML (auch vom Agenten) läuft, solange **HTML ausführen** an ist — dort auch ausstellbar. Titel **Run · datei.html** — nicht „Keine Datei“, wenn HTML im Workspace liegt. Anvil schickt `runPath` ins Kindfenster.
 
 Konsole docken: unten oder Seite, oder Knopf **Eigenes Fenster**.
 
@@ -306,11 +306,11 @@ Zahnrad oder Suche oben in den Einstellungen.
 | **Intern** | Fehlerbuch, Auto-heilen, Soft-/Hard-Reload, Werksreset |
 | **Editor** | Sprache, Thema, Schrift, Einzug, Vorschläge, Live-Run |
 | **Layout** | Presets, Anordnung, Statusleiste, Animation (Voll / Reduziert / Aus) |
-| **Ausgabe** | Konsole docken, beim Run öffnen, Run im Fenster |
+| **Ausgabe** | Konsole docken, beim Run öffnen, Run im Fenster, HTML ausführen |
 | **Speicher** | Browser oder Ordner, Auto-Save, Backup |
 | **Eingabe** | Tasten/Pad für HTML-Run |
 | **Tasten** | Übersicht und umbelegen |
-| **Daten** | Tresor, Export/Import, Reset, Versionszeile |
+| **Daten** | Update (GitHub ZIP/Setup), Konto (Gist/Drive), Tresor, Export/Import, Reset |
 
 Jeder Anbieter merkt sich URL, Modell, Context und Key. **Profil speichern** für benannte Stände (z. B. „Ollama LAN“, „OpenRouter“).
 
@@ -411,3 +411,5 @@ Der Agent liest immer, wenn vorhanden:
 - **Workspace zurücksetzen** — Dateien und Chat
 - **Werksreset** (Intern) — alles inkl. Speicher, mit Nachfrage
 - Export/Import unter Daten: JSON der IDE-Einstellungen, ohne Secrets
+- **Konto:** GitHub-Gist oder Google Drive (App-Daten) lädt dieselben Einstellungen auf einem anderen Rechner. Keine Keys.
+- **Update:** Daten → prüfen / ZIP in Ordner / Setup. ZIP ist kein Portable-Exe.

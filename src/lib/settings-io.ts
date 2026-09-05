@@ -40,6 +40,8 @@ const IDE_KEYS = [
   "showStatusBar",
   "openOutputOnRun",
   "runInWindow",
+  "runHtml",
+  "autoUpdate",
   "splitMode",
   "outputDock",
   "trailWidth",

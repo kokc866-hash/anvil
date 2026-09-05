@@ -28,8 +28,13 @@ export function FirstRun() {
   const [probe, setProbe] = useState<Ping>("idle");
   const [probeMsg, setProbeMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const spec = providerOf(provider);
   const groups = PROVIDER_GROUPS.filter((g) => g.ids.some((id) => id !== "brain"));
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (done) return;
@@ -83,7 +88,7 @@ export function FirstRun() {
     }
   }
 
-  if (done) return null;
+  if (!mounted || done) return null;
 
   return (
     <div className="ui-overlay absolute inset-0 z-40 flex items-center justify-center bg-bg/80 p-6">
