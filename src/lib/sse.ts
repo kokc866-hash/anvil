@@ -356,3 +356,172 @@ export async function readSseResponses(
   }
   return choice;
 }
+
+export async function readSseAnthropic(
+  res: Response,
+  onDelta?: (text: string, kind?: "text" | "think") => void,
+): Promise<LlmChoice> {
+  if (!res.body) throw new Error("Keine Stream-Antwort.");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let content = "";
+  let reasoning = "";
+  const tools = new Map<string, { id: string; name: string; args: string }>();
+  let blockId = "";
+  let blockKind = "";
+  let sawStop = false;
+  let promptTok = 0;
+  let completionTok = 0;
+  let errMsg = "";
+
+  const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
+    new Promise((resolve, reject) => {
+      const wait = sawStop ? AFTER_STOP_MS : stallWait();
+      const t =
+        wait > 0
+          ? setTimeout(() => {
+              if (sawStop) {
+                resolve({ done: true });
+                return;
+              }
+              reject(new StreamStallError("Kein Token — Verbindung weg. Nochmal senden."));
+            }, wait)
+          : 0;
+      reader
+        .read()
+        .then((r) => {
+          if (t) clearTimeout(t);
+          resolve(r);
+        })
+        .catch((e) => {
+          if (t) clearTimeout(t);
+          reject(e);
+        });
+    });
+
+  try {
+    while (true) {
+      const { value, done } = await readChunk();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t || t.startsWith("event:") || t.startsWith(":")) {
+          if (t.startsWith(":")) agentBeat();
+          continue;
+        }
+        if (!t.startsWith("data:")) continue;
+        const data = t.slice(5).trim();
+        if (!data || data === "[DONE]") {
+          if (data === "[DONE]") sawStop = true;
+          continue;
+        }
+        let j: Record<string, unknown>;
+        try {
+          j = JSON.parse(data) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const type = String(j.type ?? "");
+        if (type === "error") {
+          const e = j.error;
+          errMsg =
+            typeof e === "string"
+              ? e
+              : e && typeof e === "object" && "message" in e
+                ? String((e as { message?: string }).message ?? "")
+                : String(j.message ?? "Anthropic-Fehler");
+          sawStop = true;
+          continue;
+        }
+        if (type === "content_block_start") {
+          const block = (j.content_block && typeof j.content_block === "object" ? j.content_block : {}) as {
+            type?: string;
+            id?: string;
+            name?: string;
+          };
+          blockKind = String(block.type ?? "");
+          blockId = String(block.id ?? j.index ?? "");
+          if (blockKind === "tool_use" && block.name) {
+            const id = String(block.id ?? `call_${tools.size}`);
+            tools.set(id, { id, name: String(block.name), args: "" });
+            blockId = id;
+          }
+          agentBeat();
+        }
+        if (type === "content_block_delta") {
+          const delta = (j.delta && typeof j.delta === "object" ? j.delta : {}) as {
+            type?: string;
+            text?: string;
+            thinking?: string;
+            partial_json?: string;
+          };
+          const dt = String(delta.type ?? "");
+          if (dt === "text_delta" || blockKind === "text") {
+            const s = String(delta.text ?? "");
+            if (s) {
+              content += s;
+              onDelta?.(s, "text");
+              applyLiveText(content);
+            }
+          } else if (dt === "thinking_delta" || blockKind === "thinking") {
+            const s = String(delta.thinking ?? delta.text ?? "");
+            if (s) {
+              reasoning += s;
+              onDelta?.(s, "think");
+            }
+          } else if (dt === "input_json_delta") {
+            const id = blockId || [...tools.keys()].at(-1) || "call";
+            const cur = tools.get(id) ?? { id, name: "", args: "" };
+            cur.args += String(delta.partial_json ?? "");
+            tools.set(id, cur);
+            if (cur.name && cur.args) applyLiveDraft(cur.name, cur.args);
+          }
+          agentBeat();
+        }
+        if (type === "message_delta") {
+          const usage = (j.usage && typeof j.usage === "object" ? j.usage : null) as
+            | { input_tokens?: number; output_tokens?: number }
+            | null;
+          if (usage) {
+            promptTok = usage.input_tokens ?? promptTok;
+            completionTok = usage.output_tokens ?? completionTok;
+          }
+          const delta = (j.delta && typeof j.delta === "object" ? j.delta : {}) as { stop_reason?: string };
+          if (delta.stop_reason) sawStop = true;
+        }
+        if (type === "message_stop") sawStop = true;
+      }
+      if (sawStop) break;
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* */
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      /* */
+    }
+  }
+  if (errMsg) throw new Error(errMsg);
+  const tool_calls: ToolCall[] = [...tools.values()]
+    .filter((t) => t.name)
+    .map((t) => asToolCall(t.id, t.name, t.args || "{}"));
+  if (!content && !reasoning && !tool_calls.length && !sawStop) {
+    throw new StreamStallError("Leerer Stream — Modell hat abgebrochen (oft kalt oder Context zu groß).");
+  }
+  return {
+    role: "assistant",
+    content: content || null,
+    reasoning: reasoning || undefined,
+    tool_calls: tool_calls.length ? tool_calls : undefined,
+    usage: promptTok || completionTok ? { prompt: promptTok, completion: completionTok } : undefined,
+  };
+}
+

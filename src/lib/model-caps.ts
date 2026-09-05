@@ -66,7 +66,9 @@ function save() {
 function seed(provider: string, model: string): Partial<ModelCap> {
   const m = model || "";
   if (provider === "codex") return { noThinkWithTools: true };
-  if (/gpt-5|gpt-6|o1|o3|o4|codex/i.test(m)) return { responsesApi: true };
+  if ((provider === "openai" || provider === "azure") && /gpt-5|gpt-6|o1|o3|o4|codex/i.test(m)) {
+    return { responsesApi: true };
+  }
   if (provider === "llamacpp" || provider === "ollama") return {};
   return {};
 }

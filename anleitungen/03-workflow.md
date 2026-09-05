@@ -1,4 +1,4 @@
-# Anvil 1.2.8 — Workflows
+# Anvil 1.2.9 — Workflows
 
 Schritt für Schritt. Fenster erklärt: `02-handbuch.md`. Stand: 05.09.2026.
 

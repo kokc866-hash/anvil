@@ -14,6 +14,10 @@ test("gpt-5 seeds responsesApi", () => {
   resetCap("openai", "gpt-5.6");
   const c = getCap("openai", "gpt-5.6");
   assert.equal(c.responsesApi, true);
+  resetCap("openrouter", "openai/gpt-5.5");
+  assert.equal(getCap("openrouter", "openai/gpt-5.5").responsesApi, false);
+  resetCap("xai", "grok-4.5");
+  assert.equal(getCap("xai", "grok-4.5").responsesApi, false);
 });
 
 test("classify thinking+tools 400", () => {

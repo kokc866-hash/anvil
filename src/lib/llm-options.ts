@@ -155,12 +155,11 @@ export function applyLlmOptions(
   return payload;
 }
 
-/** GPT-5/o + Tools + Thinking: Chat Completions lehnt effort ab → Responses-API. */
+/** Nur OpenAI- und Azure-Host. OpenRouter/Groq/xAI: Chat Completions. */
 export function usesResponsesApi(rt: LlmRuntime, tools: boolean): boolean {
+  if (rt.provider !== "openai" && rt.provider !== "azure") return false;
   if (!tools) return false;
   if (!wantsThinking(rt)) return false;
-  if (rt.api === "anthropic" || rt.provider === "anthropic") return false;
-  if (rt.provider === "codex" || rt.provider === "github") return false;
   return /gpt-5|gpt-6|o1|o3|o4|codex/i.test(rt.model);
 }
 

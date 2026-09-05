@@ -20,18 +20,20 @@ import { applyLlmOptions, patchResponses400, responsesBody, toResponsesTools, us
 import { parseResponsesSse } from "./responses-parse";
 import { fitMessages, isContextError, isVramError, prepChatPayload, shrinkLocalCtx, type CompactMode } from "./compact";
 import { isPrivateHost } from "./net-guard";
-import { proxyLlm } from "./llm-proxy";
-import { readSseChat, readSseResponses, StreamStallError } from "./sse";
+import { proxyLlm, toAnthropicMessages } from "./llm-proxy";
+import { readSseChat, readSseResponses, readSseAnthropic, StreamStallError } from "./sse";
 import { fetchWeb } from "./web-fetch";
 import {
   PROVIDER_DEFAULTS,
   providerOf,
+  resolveCodexModel,
   type LlmProvider,
   type ProviderSpec,
 } from "./providers";
 
-import { credsForProvider } from "./sub-auth";
+import { credsForProvider, isClaudeOauth, jwtAccountId } from "./sub-auth";
 import { lanFetch } from "./lan-fetch";
+import { anthropicHeaders, copilotBearer, codexPipeHeaders, pipeHeaders, responsesNative } from "./llm-headers";
 import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs } from "./abort";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, surfaceLabel, surfacePrompt, toolsAllowed, type SurfaceSnap } from "./surface";
@@ -884,7 +886,7 @@ function makeProxyComplete(
 ) {
   return async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void): Promise<LlmChoice> => {
     const creds = credsForProvider(spec.id, useIde.getState().llmAuthMode);
-    const key = apiKey.trim() || creds.token;
+    let key = apiKey.trim() || creds.token;
     bindCapTarget(spec.id, model);
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
     let last: unknown;
@@ -894,19 +896,128 @@ function makeProxyComplete(
     for (let attempt = 1; attempt <= tries; attempt++) {
       throwIfAborted();
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
+      if (spec.id === "github") {
+        try {
+          key = await copilotBearer(key);
+        } catch (err) {
+          last = err;
+          if (attempt >= tries) throw err;
+          continue;
+        }
+      }
       const cap = getCap(spec.id, model);
       const wantTools = sendTools(cap, Boolean(useTools));
       const think = wantTools && cap.noThinkWithTools ? "off" : thinking;
       const rt = { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: useIde.getState().llmTemperature, maxOut: useIde.getState().llmMaxOut };
-      const pipeOk =
-        spec.api === "openai" &&
-        spec.id !== "codex" &&
-        spec.id !== "azure" &&
-        spec.id !== "github" &&
-        Boolean(base);
-      const needResponses = Boolean(cap.responsesApi) || usesResponsesApi(rt, wantTools);
+      const hdrs = pipeHeaders(spec.id, key);
+      const needResponses = responsesNative(spec.id) && (Boolean(cap.responsesApi) || usesResponsesApi(rt, wantTools));
+      const pipeOk = spec.api === "openai" && spec.id !== "codex" && spec.id !== "azure" && Boolean(base);
       const pipeChat = pipeOk && !needResponses;
       try {
+        if (spec.id === "codex") {
+          const st = useIde.getState();
+          const mid = resolveCodexModel(model);
+          const chatPayload: Record<string, unknown> = applyLlmOptions(
+            { model: mid, temperature: st.llmTemperature, messages },
+            { provider: "codex", model: mid, api: "openai", context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
+            { tools: wantTools },
+          );
+          prepChatPayload(chatPayload, context);
+          const body = responsesBody(chatPayload, "codex");
+          body.stream = true;
+          if (wantTools) {
+            body.tools = toResponsesTools(toolsForCall(observeOnly));
+            body.tool_choice = "auto";
+          }
+          const acc = creds.accountId || jwtAccountId(key);
+          const res = await lanFetch("https://chatgpt.com/backend-api/codex/responses", {
+            method: "POST",
+            headers: codexPipeHeaders(key, acc),
+            body: JSON.stringify(body),
+            signal: withAgentTimeout(stop),
+          });
+          if (res.ok) return await readSseResponses(res, onDelta);
+          last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
+        } else if (spec.api === "anthropic") {
+          const st = useIde.getState();
+          const fitted = { messages: [...messages] };
+          prepChatPayload(fitted, context);
+          const packed = fitted.messages as Record<string, unknown>[];
+          const system = packed.filter((m) => m.role === "system").map((m) => String(m.content ?? "")).join("\n\n");
+          const body: Record<string, unknown> = applyLlmOptions(
+            {
+              model,
+              temperature: st.llmTemperature,
+              system: system || undefined,
+              messages: toAnthropicMessages(packed.filter((m) => m.role !== "system")),
+              stream: true,
+            },
+            { ...rt, api: "anthropic" },
+          );
+          body.stream = true;
+          if (wantTools) {
+            body.tools = toolsForCall(observeOnly).map((t) => ({
+              name: t.function.name,
+              description: t.function.description,
+              input_schema: t.function.parameters ?? { type: "object", properties: {} },
+            }));
+          }
+          const res = await lanFetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: anthropicHeaders(key, isClaudeOauth(key)),
+            body: JSON.stringify(body),
+            signal: withAgentTimeout(stop),
+          });
+          if (res.ok) return await readSseAnthropic(res, onDelta);
+          last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
+        } else if (spec.id === "azure") {
+          const raw = (baseUrl || spec.baseUrl).trim();
+          const host = new URL(raw.includes("://") ? raw : `https://${raw}`);
+          const st = useIde.getState();
+          if (needResponses) {
+            const chatPayload: Record<string, unknown> = applyLlmOptions(
+              { model, temperature: st.llmTemperature, messages },
+              { ...rt, api: "azure" },
+              { tools: wantTools },
+            );
+            prepChatPayload(chatPayload, context);
+            const body = responsesBody(chatPayload, "azure");
+            body.stream = true;
+            if (wantTools) {
+              body.tools = toResponsesTools(toolsForCall(observeOnly));
+              body.tool_choice = "auto";
+            }
+            const res = await lanFetch(`${host.origin}/openai/v1/responses?api-version=2025-04-01-preview`, {
+              method: "POST",
+              headers: { ...hdrs, Accept: "text/event-stream" },
+              body: JSON.stringify(body),
+              signal: withAgentTimeout(stop),
+            });
+            if (res.ok) return await readSseResponses(res, onDelta);
+            last = new Error(`HTTP ${res.status}`);
+          }
+          const payload: Record<string, unknown> = applyLlmOptions(
+            { temperature: st.llmTemperature, messages, stream: true },
+            { ...rt, api: "azure" },
+            { tools: wantTools },
+          );
+          if (wantTools) {
+            payload.tools = toolsForCall(observeOnly);
+            payload.tool_choice = "auto";
+          }
+          prepChatPayload(payload, context);
+          const res = await lanFetch(
+            `${host.origin}/openai/deployments/${encodeURIComponent(model)}/chat/completions?api-version=2024-10-21`,
+            {
+              method: "POST",
+              headers: hdrs,
+              body: JSON.stringify(payload),
+              signal: withAgentTimeout(stop),
+            },
+          );
+          if (res.ok) return await readSseChat(res, onDelta);
+          last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
+        }
         if (pipeOk && needResponses) {
           const st = useIde.getState();
           const chatPayload: Record<string, unknown> = applyLlmOptions(
@@ -923,11 +1034,7 @@ function makeProxyComplete(
           }
           let res = await lanFetch(`${base}/responses`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "text/event-stream",
-              Authorization: `Bearer ${key}`,
-            },
+            headers: { ...hdrs, Accept: "text/event-stream" },
             body: JSON.stringify(body),
             signal: withAgentTimeout(stop),
           });
@@ -936,11 +1043,7 @@ function makeProxyComplete(
             if (res.status === 400 && patchResponses400(body, errText)) {
               res = await lanFetch(`${base}/responses`, {
                 method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Accept: "text/event-stream",
-                  Authorization: `Bearer ${key}`,
-                },
+                headers: { ...hdrs, Accept: "text/event-stream" },
                 body: JSON.stringify(body),
                 signal: withAgentTimeout(stop),
               });
@@ -992,10 +1095,7 @@ function makeProxyComplete(
           prepChatPayload(payload, context);
           const res = await lanFetch(`${base}/chat/completions`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${key}`,
-            },
+            headers: hdrs,
             body: JSON.stringify(payload),
             signal: withAgentTimeout(stop),
           });

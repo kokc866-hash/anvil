@@ -225,7 +225,7 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "anthropic",
     baseUrl: "https://api.anthropic.com",
     model: "claude-sonnet-4-5",
-    models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-3-5-haiku-latest"],
+    models: ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
     needsKey: true,
     needsUrl: false,
     needsSub: "claude",
@@ -238,7 +238,7 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "openai",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-2.5-flash",
-    models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+    models: ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
     needsKey: true,
     needsUrl: false,
     hint: "API-Key von aistudio.google.com. Gemini-CLI-Abo geht in Anvil nicht.",
@@ -310,7 +310,7 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "openai",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "openrouter/auto",
-    models: ["openrouter/auto", "anthropic/claude-sonnet-4.5", "openai/gpt-4.1-mini", "google/gemini-2.5-flash"],
+    models: ["openrouter/auto", "openai/gpt-6-astra", "anthropic/claude-sonnet-5", "google/gemini-2.5-flash"],
     needsKey: true,
     needsUrl: false,
     hint: "Ein Key, viele Modelle. openrouter.ai",
@@ -321,8 +321,8 @@ export const PROVIDERS: ProviderSpec[] = [
     kind: "cloud",
     api: "openai",
     baseUrl: "https://api.x.ai/v1",
-    model: "grok-3",
-    models: ["grok-3", "grok-3-mini", "grok-2"],
+    model: "grok-4.5",
+    models: ["grok-4.5", "grok-4", "grok-3", "grok-3-mini"],
     needsKey: true,
     needsUrl: false,
     hint: "Eigener xAI-Key (console.x.ai).",
@@ -464,7 +464,7 @@ export const PROVIDER_GROUPS: { id: ProviderKind | "other"; label: string; ids: 
 const BY_ID = Object.fromEntries(PROVIDERS.map((p) => [p.id, p])) as Record<ProviderId, ProviderSpec>;
 
 /** ChatGPT-Abo (nicht API). gpt-*-codex und 5.4 sind dort tot. */
-const CODEX_CHAT = ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"] as const;
+const CODEX_CHAT = ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"] as const;
 const CODEX_ALIAS: Record<string, string> = {
   "gpt-5.6-codex": "gpt-5.6-terra",
   "gpt-5.4": "gpt-5.6-terra",

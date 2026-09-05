@@ -173,6 +173,9 @@ test("provider wire: gpt-5 tools+think uses responses, grok/ollama/claude do not
   const gpt = { provider: "openai", model: "gpt-5.6-luna", api: "openai" as const, context: 32768, thinking: "high" as const };
   assert.equal(usesResponsesApi(gpt, true), true);
   assert.equal(usesResponsesApi({ ...gpt, provider: "codex" }, true), false);
+  assert.equal(usesResponsesApi({ ...gpt, provider: "openrouter", model: "openai/gpt-5.5" }, true), false);
+  assert.equal(usesResponsesApi({ ...gpt, provider: "github", model: "gpt-5.5" }, true), false);
+  assert.equal(usesResponsesApi({ ...gpt, provider: "azure" }, true), true);
   assert.equal(usesResponsesApi({ provider: "xai", model: "grok-4.5", api: "openai", context: 131072, thinking: "high" }, true), false);
   assert.equal(usesResponsesApi({ provider: "ollama", model: "qwen3.8:27b", api: "openai", context: 32768, thinking: "low" }, true), false);
   assert.equal(usesResponsesApi({ provider: "anthropic", model: "claude-sonnet-4-5", api: "anthropic", context: 200000, thinking: "high" }, true), false);

@@ -9,6 +9,7 @@ import { applyCapToPayload, classifyLlmError, sendTools, type ModelCap } from ".
 import { isPrivateHost } from "./net-guard";
 import { providerOf, resolveCodexModel } from "./providers";
 import { isClaudeOauth, isGeminiOauth, jwtAccountId, refreshClaudeToken, refreshCodexToken } from "./sub-auth";
+import { copilotBearer, copilotHeaders } from "./llm-headers";
 
 const CLOUD_HOSTS = new Set([
   "api.openai.com",
@@ -301,40 +302,6 @@ async function postResponses(
   }
 }
 
-async function copilotBearer(apiKey: string): Promise<string> {
-  const k = apiKey.trim();
-  if (/^tid=/.test(k) || /;exp=/.test(k)) return k;
-  if (!/^(gho_|ghu_|ghp_)/.test(k)) return k;
-  const res = await fetch("https://api.github.com/copilot_internal/v2/token", {
-    headers: withUa({
-      Authorization: `token ${k}`,
-      "Editor-Version": "vscode/1.103.0",
-      "Editor-Plugin-Version": "copilot-chat/0.30.0",
-      "User-Agent": "GitHubCopilotChat/0.30.0",
-    }),
-    signal: AbortSignal.timeout(12000),
-  });
-  const text = await res.text();
-  if (!res.ok) httpFail(res.status, text, "github");
-  let j: { token?: string };
-  try {
-    j = JSON.parse(text) as { token?: string };
-  } catch {
-    httpFail(res.status, text, "github");
-  }
-  const tok = String(j.token || "").trim();
-  if (!tok) throw new Error("Copilot-Token leer. gh auth login, Copilot-Abo prüfen.");
-  return tok;
-}
-
-function copilotHeaders(headers: Record<string, string>) {
-  headers["Editor-Version"] = "vscode/1.103.0";
-  headers["Editor-Plugin-Version"] = "copilot-chat/0.30.0";
-  headers["Copilot-Integration-Id"] = "vscode-chat";
-  headers["Openai-Intent"] = "conversation-panel";
-  headers["User-Agent"] = "GitHubCopilotChat/0.30.0";
-}
-
 async function openaiChat(
   providerId: string,
   baseUrl: string,
@@ -561,7 +528,7 @@ async function anthropicChat(
   };
 }
 
-function toAnthropicMessages(messages: Record<string, unknown>[]): Record<string, unknown>[] {
+export function toAnthropicMessages(messages: Record<string, unknown>[]): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   for (const m of messages) {
     const role = String(m.role ?? "");
