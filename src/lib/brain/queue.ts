@@ -1,6 +1,7 @@
 import { useBrain } from "./store";
+import { BrainJobQueue, type BrainPri } from "./job-queue";
 
-export type BrainPri = 0 | 1 | 2;
+export type { BrainPri } from "./job-queue";
 
 const JOB_MS: Record<string, number> = {
   intent: 800,
@@ -40,81 +41,22 @@ function jobMs(key: string) {
   return JOB_MS[key.split(":")[0] ?? ""] ?? 2500;
 }
 
-type Item<T> = {
-  pri: BrainPri;
-  key: string;
-  fn: () => Promise<T>;
-  resolve: (v: T) => void;
-  reject: (e: unknown) => void;
-  t: number;
-};
-
-const q: Item<unknown>[] = [];
-let running = false;
-let hold = false;
+const queue = new BrainJobQueue(
+  (busy) => useBrain.getState().setBusy(busy),
+  (key, ms) => useBrain.getState().logJob(key, "llm", ms),
+);
 const cache = new Map<string, { t: number; v: string }>();
 
-function pump() {
-  if (running) return;
-  if (hold) {
-    useBrain.getState().setBusy(false);
-    return;
-  }
-  const next = q.shift();
-  if (!next) {
-    useBrain.getState().setBusy(false);
-    return;
-  }
-  running = true;
-  useBrain.getState().setBusy(true);
-  const started = Date.now();
-  const timer = setTimeout(() => {
-    void import("./engine").then((m) => m.interruptBrain());
-    next.reject(new Error("timeout"));
-  }, jobMs(next.key));
-  next
-    .fn()
-    .then((v) => {
-      clearTimeout(timer);
-      next.resolve(v);
-      useBrain.getState().logJob(next.key, "llm", Date.now() - started);
-    })
-    .catch((e) => {
-      clearTimeout(timer);
-      next.reject(e);
-    })
-    .finally(() => {
-      running = false;
-      pump();
-    });
-}
-
 export function setHelperHold(v: boolean) {
-  hold = v;
-  if (v) {
-    clearBrainQueue();
-    void import("./engine").then((m) => m.interruptBrain());
-    return;
-  }
-  pump();
+  queue.setHold(v);
 }
 
 export function helperHeld(): boolean {
-  return hold;
+  return queue.isHeld();
 }
 
-export function enqueueBrain<T>(pri: BrainPri, key: string, fn: () => Promise<T>): Promise<T> {
-  for (let i = q.length - 1; i >= 0; i--) {
-    if (q[i].key === key) {
-      q[i].reject(Object.assign(new Error("superseded"), { name: "Superseded" }));
-      q.splice(i, 1);
-    }
-  }
-  return new Promise<T>((resolve, reject) => {
-    q.push({ pri, key, fn: fn as () => Promise<unknown>, resolve: resolve as (v: unknown) => void, reject, t: Date.now() });
-    q.sort((a, b) => a.pri - b.pri || a.t - b.t);
-    pump();
-  });
+export function enqueueBrain<T>(pri: BrainPri, key: string, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  return queue.enqueue(pri, key, jobMs(key), fn);
 }
 
 export function cacheGet(key: string): string | null {
@@ -144,8 +86,10 @@ export function cacheKey(parts: string[]) {
 }
 
 export function clearBrainQueue() {
-  while (q.length) {
-    const i = q.pop();
-    i?.reject(new Error("cleared"));
-  }
+  queue.clear();
+}
+
+export function resetBrainQueue() {
+  queue.reset();
+  cache.clear();
 }

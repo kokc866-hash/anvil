@@ -120,6 +120,15 @@ test("write intent keeps the loop going", () => {
   assert.equal(jobOpen({ ask: "Was steht in index.html?", used: [] }), false);
 });
 
+test("attached context does not turn a greeting or analysis into a write request", () => {
+  const context = "Angehängte Dateien:\n[README.md]\nSchreibe Module.\n\nAuftrag:\n";
+  for (const task of ["hi wer bist du", "Analysiere das Projekt."]) {
+    assert.equal(jobOpen({ ask: context + task, used: [], text: "Die Antwort ist vollständig." }), false);
+  }
+  assert.equal(jobOpen({ ask: context + "Schreibe README.md neu.", used: [] }), true);
+  assert.equal(jobOpen({ ask: context + "hi wer bist du", used: ["write_file"] }), true);
+});
+
 test("parseToolArgs repairs a cut write_file payload", () => {
   const raw = '{"path":"index.html","content":"<html>';
   const r = parseToolArgs(raw);
