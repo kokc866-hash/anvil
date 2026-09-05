@@ -515,8 +515,8 @@ function AgentSection({ q }: { q: string }) {
           label="Context-Länge"
           hint={
             llmContextAuto
-              ? "Cloud/Abo: beim Wechsel Auto aus Katalog. Lokal: num_ctx."
-              : "Fenster für das Modell. Cloud/Abo besser Auto. Ollama: num_ctx."
+              ? "Cloud/API/Abo: Auto aus Katalog (Fenster des Modells). Lokal: num_ctx."
+              : "Fenster für das Modell. Cloud/API besser Auto."
           }
         >
           <div className="flex flex-col items-end gap-1">
@@ -533,8 +533,13 @@ function AgentSection({ q }: { q: string }) {
               </button>
             </label>
             <Seg<string>
-              value={ctxCustom || !ctxChip ? "custom" : String(ctxChip)}
+              value={llmContextAuto ? "auto" : ctxCustom || !ctxChip ? "custom" : String(ctxChip)}
               onChange={(v) => {
+                if (v === "auto") {
+                  setLlmContextAuto(true);
+                  setCtxCustom(false);
+                  return;
+                }
                 setLlmContextAuto(false);
                 if (v === "custom") {
                   setCtxCustom(true);
@@ -544,6 +549,7 @@ function AgentSection({ q }: { q: string }) {
                 setLlmContext(Number(v));
               }}
               options={[
+                { id: "auto", label: "Auto" },
                 ...CONTEXT_SIZES.map((n) => ({
                   id: String(n),
                   label: formatContext(n),

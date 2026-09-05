@@ -6,26 +6,46 @@ export type CtxHit = { n: number; source: CtxSource };
 
 const cache = new Map<string, CtxHit>();
 
-/** Längere Keys zuerst. Werte = offizielles Kontextfenster. Anvil klemmt auf 256k. */
+/** Längere Keys zuerst (gpt-5.5 vor gpt-5). Nur exakt oder `id-…`, kein includes. */
 const TABLE: [string, number][] = [
-  ["gpt-4.1", 1_047_576],
-  ["gpt-4-turbo", 128_000],
-  ["gpt-4o-mini", 128_000],
-  ["gpt-4o", 128_000],
+  ["gpt-6-astra-pro", 1_050_000],
+  ["gpt-6-astra", 1_050_000],
+  ["gpt-6", 1_050_000],
   ["gpt-5.6-luna", 1_048_576],
   ["gpt-5.6-terra", 1_048_576],
   ["gpt-5.6-sol", 1_048_576],
   ["gpt-5.6", 1_048_576],
-  ["gpt-5.4", 256_000],
+  ["gpt-5.5-pro", 1_048_576],
+  ["gpt-5.5", 1_048_576],
+  ["gpt-5.4", 1_048_576],
   ["gpt-5.2", 256_000],
   ["gpt-5", 256_000],
+  ["gpt-4.1", 1_047_576],
+  ["gpt-4-turbo", 128_000],
+  ["gpt-4o-mini", 128_000],
+  ["gpt-4o", 128_000],
   ["o4-mini", 200_000],
   ["o3-mini", 200_000],
   ["o1-mini", 128_000],
   ["o3", 200_000],
   ["o1", 200_000],
+  ["claude-fable-5.1", 1_000_000],
+  ["claude-fable-5", 1_000_000],
+  ["claude-fable", 1_000_000],
+  ["claude-opus-5", 1_000_000],
+  ["claude-opus-4-8", 1_000_000],
+  ["claude-opus-4.8", 1_000_000],
+  ["claude-opus-4-7", 1_000_000],
+  ["claude-opus-4-6", 1_000_000],
+  ["claude-opus-4-5", 200_000],
+  ["claude-opus-4-1", 200_000],
   ["claude-opus-4", 200_000],
+  ["claude-sonnet-5", 1_000_000],
+  ["claude-sonnet-4-6", 1_000_000],
+  ["claude-sonnet-4-5", 200_000],
   ["claude-sonnet-4", 200_000],
+  ["claude-haiku-4-5", 200_000],
+  ["claude-haiku-4.5", 200_000],
   ["claude-3-7", 200_000],
   ["claude-3-5", 200_000],
   ["claude-3-opus", 200_000],
@@ -34,12 +54,17 @@ const TABLE: [string, number][] = [
   ["claude-opus", 200_000],
   ["claude-sonnet", 200_000],
   ["claude-haiku", 200_000],
+  ["gemini-3.8", 1_048_576],
+  ["gemini-3.5", 1_048_576],
+  ["gemini-3.1", 1_048_576],
+  ["gemini-3", 1_048_576],
   ["gemini-2.5-pro", 1_048_576],
   ["gemini-2.5-flash", 1_048_576],
   ["gemini-2.0-flash", 1_048_576],
   ["gemini-1.5-pro", 2_097_152],
   ["gemini-1.5-flash", 1_048_576],
   ["gemini-pro", 32_768],
+  ["grok-4.5", 500_000],
   ["grok-4", 256_000],
   ["grok-3", 131_072],
   ["grok-2", 131_072],
@@ -67,21 +92,58 @@ const TABLE: [string, number][] = [
   ["sonar", 127_000],
 ];
 
+const RANKED = [...TABLE].sort((a, b) => b[0].length - a[0].length);
+
+export function modelKey(model: string): string {
+  return String(model || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^models\//, "")
+    .replace(/:latest$/, "");
+}
+
+/** `gpt-5` darf `gpt-5.5-pro` nicht treffen — nur gleich oder `id-suffix`. */
+export function modelMatchesId(model: string, id: string): boolean {
+  const needle = String(id || "").toLowerCase();
+  if (!needle) return false;
+  const k = modelKey(model);
+  const tail = k.split("/").pop() || k;
+  for (const hay of [k, tail]) {
+    if (hay === needle) return true;
+    if (hay.startsWith(`${needle}-`)) return true;
+  }
+  return false;
+}
+
 function keyOf(model: string): string {
-  return model.trim().toLowerCase().replace(/^models\//, "");
+  return modelKey(model);
+}
+
+function guessFromName(model: string): number {
+  const tail = modelKey(model).split("/").pop() || "";
+  const m = tail.match(/(?:^|[-_])(\d{4,8})$/);
+  if (!m) return 0;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n >= CONTEXT_MIN && n <= CONTEXT_MAX ? n : 0;
 }
 
 export function lookupKnown(model: string): CtxHit | null {
   const k = keyOf(model);
+  if (!k) return null;
   const cached = cache.get(k) || cache.get(k.split("/").pop() || k);
   if (cached) return cached;
-  const tail = k.split("/").pop() || k;
-  for (const [id, n] of TABLE) {
-    if (k === id || tail === id || k.includes(id) || tail.startsWith(id)) {
+  for (const [id, n] of RANKED) {
+    if (modelMatchesId(k, id)) {
       const hit: CtxHit = { n, source: "katalog" };
       cache.set(k, hit);
       return hit;
     }
+  }
+  const named = guessFromName(k);
+  if (named) {
+    const hit: CtxHit = { n: named, source: "katalog" };
+    cache.set(k, hit);
+    return hit;
   }
   return null;
 }
@@ -100,13 +162,15 @@ export function rememberContext(model: string, n: number, source: CtxSource): Ct
 export function ingestModelRow(row: Record<string, unknown>): void {
   const id = String(row.id ?? row.name ?? "");
   if (!id) return;
+  const arch = row.architecture as { n_ctx?: unknown } | undefined;
   const n =
     num(row.context_length) ||
-    num(row.max_model_len) ||
     num(row.context_window) ||
-    num(row.max_tokens) ||
+    num(row.max_model_len) ||
+    num(row.max_input_tokens) ||
     num((row.limit as { context?: unknown } | undefined)?.context) ||
-    num((row.meta as { n_ctx_train?: unknown } | undefined)?.n_ctx_train);
+    num((row.meta as { n_ctx_train?: unknown } | undefined)?.n_ctx_train) ||
+    num(arch?.n_ctx);
   if (n) rememberContext(id, n, "api");
 }
 
@@ -154,7 +218,7 @@ async function loadRemoteCatalog(): Promise<void> {
       const r = await fetchWeb({ data: { url: "https://openrouter.ai/api/v1/models" } });
       if (!r.ok) return;
       const j = JSON.parse(r.text) as { data?: Record<string, unknown>[] };
-      for (const row of j.data ?? []) ingestModelRow({ ...row, context_length: row.context_length });
+      for (const row of j.data ?? []) ingestModelRow(row);
     } catch {
       remote = null;
     }
@@ -198,13 +262,11 @@ export async function resolveModelContext(model: string, provider: string): Prom
   if (after) return { ...after, source: after.source === "katalog" ? "katalog" : "web" };
   try {
     const { fetchWeb } = await import("./web-fetch");
-    const q = encodeURIComponent(`${model} context window tokens`);
-    const r = await fetchWeb({ data: { url: `https://openrouter.ai/api/v1/models` } });
+    const r = await fetchWeb({ data: { url: "https://openrouter.ai/api/v1/models" } });
     if (r.ok) {
       const guessed = await helperGuess(model, r.text);
       if (guessed) return guessed;
     }
-    void q;
   } catch {
     /* */
   }

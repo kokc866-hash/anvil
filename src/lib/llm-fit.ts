@@ -10,11 +10,11 @@ export type CloudAboFit = {
   llmMaxOut: number;
 };
 
-/** Nur Cloud-API und Abo. Lokal, Custom, Anvil-Grok bleiben unangetastet. */
+/** Nur Cloud-API und Abo. Lokal und Helfer bleiben unangetastet. */
 export function isCloudOrAbo(provider: string): boolean {
-  if (provider === "custom" || provider === "grok" || provider === "brain") return false;
+  if (provider === "brain") return false;
   const d = providerOf(provider);
-  return d.kind === "cloud" || Boolean(d.needsSub);
+  return d.kind !== "local";
 }
 
 /** Passende sichere Werte für diesen Anbieter/dieses Modell — Kontext Auto, Denken Auto, kein starres maxOut. */
@@ -24,7 +24,7 @@ export function fitCloudAbo(provider: string, model: string): CloudAboFit | null
   const abo = Boolean(providerOf(provider).needsSub) || provider === "codex";
   return {
     llmContextAuto: true,
-    llmContext: hit ? anvilContext(hit.n) : 128_000,
+    llmContext: hit ? anvilContext(hit.n) : 1_048_576,
     llmThinking: "auto",
     llmTemperature: abo ? 1 : 0.3,
     llmMaxOut: 0,
