@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { promisify } from "node:util";
 import {
   APP_ENV_REL_PATH,
@@ -16,7 +16,6 @@ import {
 } from "./with-app-env.mjs";
 
 const execFileAsync = promisify(execFile);
-const WRAPPER = join(projectRoot(), "scripts/with-app-env.mjs");
 const PRINT_FLAG = "process.stdout.write(String(process.env.VITE_AUTH_ENABLED));";
 
 function makeWorkspace(appEnvJson) {
@@ -27,6 +26,14 @@ function makeWorkspace(appEnvJson) {
   }
   return root;
 }
+
+// Exercise the real wrapper in a configured checkout. Anvil does not ship the
+// App Builder's private .grok directory and tests must not depend on it.
+const CONFIGURED_ROOT = makeWorkspace('{"VITE_AUTH_ENABLED":"false"}');
+mkdirSync(join(CONFIGURED_ROOT, "scripts"));
+const WRAPPER = join(CONFIGURED_ROOT, "scripts/with-app-env.mjs");
+copyFileSync(join(projectRoot(), "scripts/with-app-env.mjs"), WRAPPER);
+after(() => rmSync(CONFIGURED_ROOT, { recursive: true, force: true }));
 
 test("keeps VITE_-prefixed string entries", () => {
   assert.deepEqual(parseAppEnv('{"VITE_AUTH_ENABLED":"false"}'), {
@@ -61,8 +68,8 @@ test("an explicit process-env override wins over the file", () => {
   assert.equal(merged.PATH, "/usr/bin");
 });
 
-test("the template ships auth off", () => {
-  assert.deepEqual(readAppEnv(projectRoot()), { VITE_AUTH_ENABLED: "false" });
+test("a configured checkout supplies the auth flag", () => {
+  assert.deepEqual(readAppEnv(CONFIGURED_ROOT), { VITE_AUTH_ENABLED: "false" });
 });
 
 test("vite loadEnv resolves the wrapped value", () => {
@@ -119,7 +126,7 @@ test("the CLI still runs when invoked through a symlinked path", async () => {
   // node realpaths import.meta.url but not process.argv[1], so a raw comparison
   // turns the wrapper into a no-op that exits 0 without starting anything.
   const link = join(mkdtempSync(join(tmpdir(), "app-env-link-")), "scripts");
-  symlinkSync(join(projectRoot(), "scripts"), link);
+  symlinkSync(join(CONFIGURED_ROOT, "scripts"), link, "junction");
   const { stdout } = await execFileAsync(process.execPath, [
     join(link, "with-app-env.mjs"),
     process.execPath,
