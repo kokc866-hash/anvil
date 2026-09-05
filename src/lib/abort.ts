@@ -160,10 +160,58 @@ export function isLocalLlm(provider: string): boolean {
   return LOCAL_LLM.has(String(provider || "").toLowerCase());
 }
 
+function privateUrlHost(baseUrl: string): boolean {
+  const raw = String(baseUrl || "").trim();
+  if (!raw) return true;
+  try {
+    const u = new URL(raw.includes("://") ? raw : `http://${raw}`);
+    const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (
+      h === "localhost" ||
+      h === "0.0.0.0" ||
+      h.endsWith(".localhost") ||
+      h.endsWith(".local") ||
+      h.endsWith(".internal") ||
+      h.endsWith(".lan")
+    ) {
+      return true;
+    }
+    if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true;
+    const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!ipv4) return false;
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Local runtimes always. Custom only on LAN/private URL — public custom uses cloud stall. */
+export function localSseStall(provider: string, baseUrl = ""): boolean {
+  const p = String(provider || "").toLowerCase();
+  if (!isLocalLlm(p)) return false;
+  if (p === "custom") return privateUrlHost(baseUrl);
+  return true;
+}
+
 export function streamIdleMs(gotEvent: boolean, hardMin = 0, local = false): number {
   const hard = hardStopMs(hardMin);
   const cap = gotEvent ? (local ? SSE_IDLE_LOCAL_MS : SSE_IDLE_MS) : local ? SSE_FIRST_LOCAL_MS : SSE_FIRST_MS;
   return hard > 0 ? Math.min(hard, cap) : cap;
+}
+
+/** Local complete: never retry a dead/empty stream — that aborts Ollama's in-flight load. */
+export function shouldRetryLocalLlm(err: unknown): boolean {
+  if (!err) return false;
+  const name = err instanceof Error ? err.name : "";
+  const msg = err instanceof Error ? err.message : String(err);
+  if (name === "StreamStallError") return false;
+  if (/Leere Antwort|Leerer Stream|Kein Token/i.test(msg)) return false;
+  return /Failed to fetch|network|ECONNRESET|hang|unload|HTTP 500|HTTP 502|HTTP 503/i.test(msg);
 }
 
 export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {

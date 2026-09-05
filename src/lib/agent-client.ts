@@ -34,7 +34,7 @@ import {
 import { credsForProvider, isClaudeOauth, jwtAccountId } from "./sub-auth";
 import { lanFetch } from "./lan-fetch";
 import { anthropicHeaders, copilotBearer, codexPipeHeaders, pipeHeaders, responsesNative } from "./llm-headers";
-import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs } from "./abort";
+import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, surfaceLabel, surfacePrompt, toolsAllowed, type SurfaceSnap } from "./surface";
 import {
@@ -842,10 +842,8 @@ function makeLocalComplete(
         }
         if (onDelta && (res.headers.get("content-type")?.includes("text/event-stream") || payload.stream)) {
           const choice = await readSseChat(res, onDelta);
-          if (!choice.content && !choice.reasoning && !choice.tool_calls?.length && attempt < tries) {
-            last = new StreamStallError("Leere Antwort");
-            await new Promise((r) => setTimeout(r, 700 * attempt));
-            continue;
+          if (!choice.content && !choice.reasoning && !choice.tool_calls?.length) {
+            throw new StreamStallError("Leere Antwort");
           }
           return choice;
         }
@@ -868,10 +866,7 @@ function makeLocalComplete(
         if (agentAborted() || agentGen() !== gen) {
           throw new AgentAbortError(explainAbort(err));
         }
-        const msg = err instanceof Error ? err.message : String(err);
-        const retry =
-          err instanceof StreamStallError ||
-          /Failed to fetch|network|ECONNRESET|leer|hang|unload|500|502/i.test(msg);
+        const retry = shouldRetryLocalLlm(err);
         if (!retry || attempt >= tries) throw err;
         await new Promise((r) => setTimeout(r, 800 * attempt));
       }

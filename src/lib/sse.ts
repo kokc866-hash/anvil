@@ -1,6 +1,6 @@
 import type { LlmChoice, ToolCall } from "./agent-core";
 import { asToolCall } from "./agent-core";
-import { agentBeat, isLocalLlm, streamIdleMs } from "./abort";
+import { agentBeat, localSseStall, streamIdleMs } from "./abort";
 import { useIde } from "@/store/ide";
 import { isToolTemplateEcho } from "./agent-parse";
 import { applyLiveDraft, applyLiveText } from "./live-write";
@@ -21,7 +21,7 @@ function thinkOff(): boolean {
 function stallWait(gotEvent: boolean): number {
   try {
     const st = useIde.getState();
-    return streamIdleMs(gotEvent, st.llmHardStopMin ?? 0, isLocalLlm(st.llmProvider));
+    return streamIdleMs(gotEvent, st.llmHardStopMin ?? 0, localSseStall(st.llmProvider, st.llmBaseUrl));
   } catch {
     return streamIdleMs(gotEvent, 0, false);
   }
