@@ -58,7 +58,10 @@ export function spawnRun(file, args, cwd, timeoutMs, env, opts = {}) {
     const cancel = () => { aborted = true; terminate(); };
     if (opts.signal?.aborted) { aborted = true; finish(result(null, null)); return; }
     try {
-      child = spawn(file, args, { cwd, shell: false, env, windowsHide: !opts.show, detached: process.platform !== "win32" || Boolean(opts.detach), stdio: ["pipe", "pipe", "pipe"] });
+      // On Windows Node's detached flag means DETACHED_PROCESS, not a new console.
+      // PowerShell can exit before executing its script in that mode (nodejs/node#51018).
+      // The background lifecycle below keeps the host alive without that OS flag.
+      child = spawn(file, args, { cwd, shell: false, env, windowsHide: !opts.show, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
     } catch (error) { finish(result(null, null, `Start fehlgeschlagen: ${error.message}`)); return; }
     child.once("spawn", () => opts.onStart?.(child.pid));
     child.stdout?.on("data", (data) => append("stdout", data.toString("utf8")));
