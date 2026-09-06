@@ -61,8 +61,9 @@ try {
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--disable-gpu"],
   });
 
-  async function openChat(provider, mode = "agent") {
+  async function openChat(provider, mode = "agent", pauseHelper = false) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    if (pauseHelper) await page.clock.install();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     // Keep OpenAI's real provider/URL/Responses serializer, intercept only the
@@ -110,6 +111,11 @@ try {
     await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
     await page.locator("#anvil-chat").waitFor();
     if (!production) {
+      if (pauseHelper) {
+        // Keep preparation pending while Playwright locates Stop; its click must
+        // happen before the helper deadline, independently of CI rendering speed.
+        await page.clock.pauseAt(Date.now() + 1000);
+      }
       await page.evaluate(async () => {
         const { useBrain } = await import("/src/lib/brain/store.ts");
         const { brainGenerate } = await import("/src/lib/brain/engine.ts");
@@ -164,10 +170,11 @@ try {
   }
 
   if (!production) {
-    const { page, errors } = await openChat("ollama");
+    const { page, errors } = await openChat("ollama", "agent", true);
     const before = requests.length;
     await send(page, "analysiere bitte das gesamte Projekt");
-    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).dispatchEvent("click");
+    await page.clock.resume();
     await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy);
     await page.waitForFunction(() => !window.fixtureBrain.getState().busy);
     assert.equal(requests.length, before, "stopped preparation must not call the model");

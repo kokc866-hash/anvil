@@ -67,7 +67,8 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:chat-send
+      - name: Chat send, Stop and retry
+        run: npm run test:chat-send
 
   windows:
     needs: [metadata, verify]
