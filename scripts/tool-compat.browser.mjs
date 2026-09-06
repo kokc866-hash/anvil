@@ -68,9 +68,11 @@ try {
       const baseUrl = provider === "openai" ? "https://api.openai.com/v1" : provider === "anthropic" ? "https://api.anthropic.com/v1" : cfg.base;
       resetCap(provider, name, baseUrl);
       store.setState({ llmProvider: provider, llmModel: name, llmBaseUrl: baseUrl, llmAuthMode: "key", llmToolModes: { [toolTargetKey(provider, name, baseUrl)]: mode }, llmThinking: "low", llmRetries: 3, llmContext: 8192, llmContextAuto: false, llmApiKey: "fixture", activeSurfaceId: extra.surface || "anvil", surfaceMode: "exclusive", mcpServers: [], files: { "a.txt": "old" }, openPaths: [], activePath: null, graphLoop: false, runLoop: false, testLoop: false, engineLoop: false });
+      const learningKey = toolTargetKey(provider, name, baseUrl);
+      if (extra.learningMode) store.getState().updateToolLearning(learningKey, (s) => ({ ...s, mode: extra.learningMode }));
       const events = []; const tools = [];
       const result = await chatWithProvider({ provider, baseUrl, model: name, apiKey: "fixture", messages: [{ role: "user", content: task }], files: [{ path: "a.txt", content: "old" }], context: 8192, thinking: "low", maxRounds: 8, graphLoop: false, runLoop: false, testLoop: false, afterWrite: "none", observeOnly: extra.ask || false, onWorkspace: (event) => { events.push(event); }, onTool: (event) => tools.push(event), onDelta: () => {} });
-      return { result, events, tools, cap: getCap(provider, name, baseUrl) };
+      return { result, events, tools, cap: getCap(provider, name, baseUrl), learning: store.getState().llmToolLearning[learningKey] };
     }, { cfg, name, mode, task, extra });
     assert.equal(replies.length, 0, `${name}: expected replies consumed`);
     return result;
@@ -121,6 +123,32 @@ try {
   assert.equal(requests.length, 3); assert.equal(requests[1].body.tools, undefined); assert.equal(r.cap.tools, "text"); assert.equal(r.tools[0].name, "read_file");
   console.log("PASS explicit unsupported-tools error learns endpoint-scoped text transport");
 
+  const alias = (tool, args) => ({ content: JSON.stringify({ tool, ...args }) });
+  for (let job = 1; job <= 2; job++) {
+    r = await run("dialect", "text", "Lies a.txt", [alias("read", { file: "a.txt" }), done]);
+    assert.equal(r.tools[0].name, "read_file"); assert.equal(requests.length, 2);
+    assert.equal(r.learning.rules[0].successes, job);
+    assert.equal(r.learning.rules[0].status, job === 2 ? "learned" : "observed");
+    assert.ok(!JSON.stringify(r.learning).includes("a.txt"));
+    assert.match(JSON.stringify(requests[1].body.messages), /Tool result/);
+  }
+  r = await run("native-dialect", "standard", "Lies a.txt", [native("readFile", { file: "a.txt" }), done], { learningMode: "auto" });
+  assert.equal(r.tools[0].name, "read_file"); assert.equal(r.learning.rules[0].successes, 1);
+  assert.equal(requests[1].body.messages.find((m) => m.role === "tool").tool_name, "read_file");
+  r = await run("read-only-dialect", "text", "Schreibe a.txt", [alias("write", { file: "a.txt", text: "bad" })], { ask: true });
+  assert.equal(r.events.length, 0); assert.equal(r.result.ok, false); assert.equal(r.learning.rules[0].successes, 0);
+  r = await run("surface-dialect", "text", "Schreibe a.txt", [alias("write", { file: "a.txt", text: "bad" })], { surface: "external" });
+  assert.equal(r.events.length, 0); assert.equal(r.result.ok, false);
+  r = await run("ambiguous-dialect", "text", "Schreibe a.txt", [alias("save", { file: "a.txt", text: "private-canary" })]);
+  assert.equal(r.events.length, 0); assert.equal(r.result.ok, false); assert.equal(r.learning.rules[0].review, true);
+  assert.ok(!JSON.stringify(r.learning).includes("private-canary"));
+  r = await run("failed-dialect", "text", "Lies missing.txt", [alias("read", { file: "missing.txt" }), done]);
+  assert.equal(r.learning.rules[0].successes, 0); assert.equal(r.learning.rules[0].failures, 1);
+  r = await run("replay-dialect", "compact", "Schreibe a.txt und kompiliere das Projekt", [native("write_file", { path: "a.txt", content: "new" }), { content: "Keine Tools verfügbar" }, alias("write", { file: "a.txt", text: "new" }), done]);
+  assert.equal(r.events.filter((e) => e.op === "write" && e.path === "a.txt").length, 1);
+  assert.equal(r.learning.rules[0].successes, 0);
+  console.log("PASS learned text/native aliases share history and executor; no probes, permission bypass or replay learning");
+
   // Exercise the real Responses and Anthropic conversion paths at the external boundary.
   await page.route("**/pipe", async (route) => {
     const req = route.request();
@@ -139,6 +167,12 @@ try {
     assert.equal(r.tools[0].name, "read_file"); assert.equal(requests[0].body.tools, undefined); assert.match(JSON.stringify(requests[0].body), /Tool transport for this request/);
   }
   console.log("PASS text tools reach both Cloud protocol converters without native schemas");
+  for (const provider of ["openai", "anthropic"]) {
+    r = await run(provider === "openai" ? "gpt-5-dialect" : "claude-dialect", "text", "Lies a.txt", [alias("read", { file: "a.txt" }), done], { provider });
+    assert.equal(r.tools[0].name, "read_file"); assert.equal(r.learning.rules[0].successes, 1);
+    assert.equal(requests.length, 2); assert.equal(requests[0].body.tools, undefined);
+  }
+  console.log("PASS learned calls also reach both Cloud converters through the same executor");
 
   const settings = await page.evaluate(async (cfg) => {
     const { toolTargetKey } = await import("/src/lib/tool-compat.ts");
@@ -180,6 +214,30 @@ try {
     beginAgent(); return { stopped, writes };
   });
   assert.deepEqual(canceled, { stopped: true, writes: 0 });
+  const late = await page.evaluate(async () => {
+    const { runAgentLoop } = await import("/src/lib/agent-core.ts");
+    const { ToolLearningSession, changeToolRule } = await import("/src/lib/tool-learning.ts");
+    const { beginAgent, abortAgent } = await import("/src/lib/abort.ts");
+    const outcomes = [];
+    for (const action of ["stop", "disable", "delete", "ask", "surface"]) {
+      beginAgent(); let writes = 0; let rounds = 0; let state = { mode: "auto", rules: [] };
+      const toolLearning = new ToolLearningSession({ get: () => state, update: (fn) => { state = fn(state); }, contract: () => ({ transport: "text", names: ["write_file"] }), compatibility: "text" });
+      try {
+        await runAgentLoop({ messages: [{ role: "user", content: "Schreibe a.txt" }], files: [], runLoop: false, graphLoop: false, observeOnly: action === "ask", surfaceId: action === "surface" ? "external" : "anvil" }, async () => (++rounds === 1
+          ? { content: '{"tool":"write","file":"a.txt","text":"late"}', toolContract: { transport: "text", names: ["write_file"] } }
+          : { content: "Fertig.", toolContract: { transport: "text", names: [] } }), {
+          toolLearning, onWorkspace: () => { writes++; }, onToolStart: () => {
+            if (action === "stop") abortAgent("Fixture Stop");
+            if (action === "delete" || action === "disable") state = changeToolRule(state, state.rules[0].id, action === "delete" ? "delete" : "toggle");
+          },
+        });
+      } catch (e) { if (action !== "stop") throw e; }
+      outcomes.push({ action, writes, learned: state.rules.some((r) => r.successes > 0) });
+    }
+    beginAgent(); return outcomes;
+  });
+  for (const result of late) { assert.equal(result.writes, 0, result.action); assert.equal(result.learned, false, result.action); }
+  console.log("PASS Stop, disable and deletion at execution time; Ask and surface checks still apply to translated calls");
   assert.deepEqual(errors, []);
   console.log("PASS settings UI, incomplete URLs, profile/export/reload persistence and Stop before execution");
 } catch (error) {

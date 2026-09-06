@@ -4,6 +4,7 @@ import { LEARN_DEFAULTS, useLearn } from "@/lib/learn";
 import { normalizeKeyMap } from "@/lib/keymap";
 import { normalizeInputMap } from "@/lib/input-map";
 import { useIde } from "@/store/ide";
+import { sanitizeToolLearning } from "./tool-learning";
 
 const IDE_KEYS = [
   "theme",
@@ -75,6 +76,7 @@ const IDE_KEYS = [
   "keyMap",
   "llmProfiles",
   "llmToolModes",
+  "llmToolLearning",
 ] as const;
 
 export function exportSettingsPack(): Record<string, unknown> {
@@ -120,6 +122,7 @@ export function applySettingsPack(data: Record<string, unknown>): void {
   }
   if (patch.inputMap) patch.inputMap = normalizeInputMap(patch.inputMap);
   if (patch.keyMap) patch.keyMap = normalizeKeyMap(patch.keyMap);
+  if ("llmToolLearning" in patch) patch.llmToolLearning = sanitizeToolLearning(patch.llmToolLearning, true);
   useIde.setState(patch as Partial<ReturnType<typeof useIde.getState>>);
   const brain = data.brain as Record<string, unknown> | undefined;
   if (brain && typeof brain === "object") {

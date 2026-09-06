@@ -66,6 +66,7 @@ const LLM_KEYS = [
   "llmSlots",
   "llmProfiles",
   "llmToolModes",
+  "llmToolLearning",
 ] as const;
 
 function snapLlm(state: Slice) {

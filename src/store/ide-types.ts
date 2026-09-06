@@ -1,4 +1,5 @@
 import type { ToolCompatibility } from "@/lib/tool-compat";
+import type { ToolLearning, ToolLearningState } from "@/lib/tool-learning";
 import { type LlmProvider } from "@/lib/providers";
 
 import { type InputMap } from "@/lib/input-map";
@@ -235,6 +236,7 @@ export type IdeState = {
   llmSlots: Record<string, LlmSlot>;
   llmProfiles: LlmProfile[];
   llmToolModes: Record<string, ToolCompatibility>;
+  llmToolLearning: ToolLearningState;
   sessionTokens: { prompt: number; completion: number };
   sessionJournal: SessionJournal;
   sidebar: SidebarId;
@@ -358,6 +360,7 @@ export type IdeState = {
   setLlmBaseUrl: (v: string) => void;
   setLlmModel: (v: string) => void;
   setLlmToolMode: (mode: ToolCompatibility) => void;
+  updateToolLearning: (key: string, update: (state: ToolLearning) => ToolLearning) => void;
   setLlmApiKey: (v: string) => void;
   setLlmContext: (n: number) => void;
   setLlmContextAuto: (v: boolean) => void;
@@ -473,7 +476,7 @@ export type IdeState = {
   addChat: (msg: Omit<ChatMsg, "id">) => void;
   startAssistant: (opts?: { voice?: ChatVoice }) => void;
   appendAssistant: (s: string) => void;
-  finalizeAssistant: (reply: string, tools?: string[]) => void;
+  finalizeAssistant: (reply: string, tools?: string[], options?: { replace?: boolean }) => void;
   setDiskName: (v: string) => void;
   setWorkspaceCwd: (v: string) => void;
   setSetupDone: (v: boolean) => void;

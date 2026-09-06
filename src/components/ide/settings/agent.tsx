@@ -1,4 +1,5 @@
 import { toolTargetKey, toolCompatibility, type ToolCompatibility } from "@/lib/tool-compat";
+import { ToolLearningRow } from "./tool-learning";
 import { SecretStorageStatus } from "./secret-storage-status";
 import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -466,8 +467,9 @@ export function AgentSection({ q }: { q: string }) {
         <p className="py-2 text-xs text-muted">Thinking, Temperatur und Antwortlimit werden von der CLI gesteuert.</p>
       )}
       {!aboOn && llmProvider !== "grok" && llmProvider !== "brain" ? (
-        <Vis q={q} label="Modell Format Tools Werkzeuge Kompatibilität kompakt Text 400">
+        <Vis q={q} label="Modell Format Tools Werkzeuge Kompatibilität kompakt Text 400 Lernen gelernt Zuordnung learning">
           <ToolModeRow provider={llmProvider} model={llmModel} baseUrl={llmBaseUrl} />
+          <ToolLearningRow provider={llmProvider} model={llmModel} baseUrl={llmBaseUrl} />
           <CapRow provider={llmProvider} model={llmModel} baseUrl={llmBaseUrl} />
         </Vis>
       ) : null}

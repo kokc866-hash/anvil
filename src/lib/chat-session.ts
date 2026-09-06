@@ -364,7 +364,7 @@ export async function sendChat(
         }
       }
       if (my !== agentGen()) return;
-      finalizeAssistant(reply);
+      finalizeAssistant(reply, undefined, { replace: useRequestState.getState().phase === "error" });
       addSessionTokens(promptTok, estimateTokens(reply));
       void brainDistill(work, reply);
       {
@@ -587,7 +587,7 @@ export async function sendChat(
       const cur = useIde.getState().agentJob;
       if (cur) useIde.getState().setAgentJob({ ...cur, status: "ask", ask: result.ask });
     }
-    finalizeAssistant(result.reply, result.tools);
+    finalizeAssistant(result.reply, result.tools, { replace: !result.ok });
     if (result.ok) {
       void import("@/lib/intern").then((m) => m.resolveKind("agent"));
       void import("@/lib/problems").then((m) => m.refreshProblems());

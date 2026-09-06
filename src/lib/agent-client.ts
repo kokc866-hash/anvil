@@ -1,4 +1,5 @@
 import { ToolSession, toolTargetKey, toolCompatibility } from "./tool-compat";
+import { ToolLearningSession } from "./tool-learning";
 import { grokRound } from "./agent";
 import {
   pickAgentTools,
@@ -254,10 +255,16 @@ export async function chatWithProvider(opts: {
     return { ok: false, reply: `API-Key für ${spec.label} unter Einstellungen eintragen.`, error: "no key" };
   }
 
+  const learningKey = cliKind ? "" : toolTargetKey(spec.id, model, normalizeBaseUrl(opts.baseUrl || spec.baseUrl));
   const toolSession = cliKind ? undefined : new ToolSession(
-    toolCompatibility(useIde.getState().llmToolModes[toolTargetKey(spec.id, model, normalizeBaseUrl(opts.baseUrl || spec.baseUrl))]),
+    toolCompatibility(useIde.getState().llmToolModes[learningKey]),
     opts.messages.filter((m) => m.role === "user").at(-1)?.content || "",
   );
+  const toolLearning = toolSession ? new ToolLearningSession({
+    get: () => useIde.getState().llmToolLearning[learningKey] || { rules: [] },
+    update: (fn) => useIde.getState().updateToolLearning(learningKey, fn),
+    contract: () => toolSession.contract, compatibility: toolSession.mode, locale: opts.locale,
+  }) : undefined;
   const transport = cliKind
     ? (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => completeViaCli(cliKind, model, messages, useTools ? toolsForCall(opts.observeOnly) : [], hardStopMs(useIde.getState().llmHardStopMin), onDelta)
     : isBrowserTarget(spec, opts.baseUrl)
@@ -300,6 +307,7 @@ export async function chatWithProvider(opts: {
       },
       complete,
       { ...clientTools(opts), onHarness: opts.onHarness,
+        toolLearning,
         selectTools: toolSession ? (names) => toolSession.select(names) : undefined,
         tryTextFallback: toolSession ? () => toolSession.tryTextFallback() : undefined,
         onNativeToolSuccess: cliKind ? undefined : () => noteToolSuccess(spec.id, model, normalizeBaseUrl(opts.baseUrl || spec.baseUrl)),

@@ -1,5 +1,6 @@
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { parseTextTool, validateToolCall, isToolStall, toolCallKey, type ToolContract } from "./tool-compat";
+import type { ToolLearningBridge } from "./tool-learning";
 import { CANVAS_AGENT_GUIDE } from "./canvas/reference";
 import { compactMessages, COMPACT_MARK, type CompactMode } from "./compact.ts";
 import { throwIfAborted, isAbortLike, agentGen, AgentAbortError } from "./abort";
@@ -603,6 +604,7 @@ export async function runAgentLoop(
     selectTools?: (names: string[]) => unknown;
     tryTextFallback?: () => boolean;
     onNativeToolSuccess?: () => void;
+    toolLearning?: ToolLearningBridge;
   },
 ): Promise<AgentResult> {
   const files = new Map(data.files.map((f) => [f.path, f.content]));
@@ -752,10 +754,12 @@ export async function runAgentLoop(
       choice.tool_calls = stampToolCalls([{ tool_calls: choice.tool_calls }])[0]?.tool_calls as ToolCall[];
     }
     const { toolContract, ...historyChoice } = choice;
+    const learned = opts?.toolLearning?.resolve(choice);
+    if (learned?.error) return packResult(learned.error, { ok: false, error: learned.error });
     if (toolContract?.transport === "text" && previousTransport === "native" && !beforeTextFallback) beforeTextFallback = new Set(completedChanges);
     previousTransport = toolContract?.transport || "native";
     messages.push({ ...historyChoice, role: historyChoice.role || "assistant" } as Record<string, unknown>);
-    const parsedText = toolContract?.transport === "text" ? parseTextTool(choice.content || "", toolContract.names) : undefined;
+    const parsedText = learned?.calls ? { calls: learned.calls } : toolContract?.transport === "text" ? parseTextTool(choice.content || "", toolContract.names) : undefined;
     if (parsedText?.error) return packResult(say(`Ungültiger Werkzeugaufruf: ${parsedText.error}`, `Invalid tool call: ${parsedText.error}`), { ok: false, error: parsedText.error });
     const harvested = parsedText ? parsedText.calls : toolContract ? [] : harvestTools(choice.content || "");
     let toolCalls = (parsedText ? parsedText.calls : choice.tool_calls?.length ? choice.tool_calls : harvested) ?? [];
@@ -886,7 +890,10 @@ export async function runAgentLoop(
       if (argsCut) args.truncated = true;
       used.push(tc.function.name);
       opts?.onToolStart?.({ name: tc.function.name, args });
+      throwIfAborted();
+      if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
       const blocked =
+        opts?.toolLearning?.before(tc) ||
         checked?.error ||
         (observeOnly && !observeTool(tc.function.name) && tc.function.name !== "select_tools" ? say("Ask-Modus: nur lesen.", "Ask mode: read only.") : null) ||
         (observeOnly && mutateTool(tc.function.name)
@@ -913,7 +920,7 @@ export async function runAgentLoop(
         result = { error: blocked };
       } else if (beforeTextFallback?.has(toolCallKey(tc.function.name, args))) {
         result = { ok: true, already_executed: true, message: "Already completed before the transport change. No action repeated." };
-      } else if (batchFail && mutateTool(tc.function.name)) {
+      } else if (batchFail && (mutateTool(tc.function.name) || automaticCalls.has(tc))) {
         result = { error: say("Vorheriges Tool fehlgeschlagen — Rest übersprungen.", "Previous tool failed — remaining writes skipped.") };
       } else if (denied) {
         result = { error: `Harness budget: only ${allow.join(", ")}` };
@@ -991,6 +998,7 @@ export async function runAgentLoop(
       }
       opts?.onTool?.({ name: tc.function.name, args, result: frame ? { ...(result as object), image: frame } : result });
       const rec = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
+      if (!blocked && !denied && !batchFail && agentGen() === loopGen) opts?.toolLearning?.after(tc, rec);
       if (args.path && rec.path == null) rec.path = String(args.path);
       if (tc.function.name === "shell" && args.command && rec.command == null) rec.command = String(args.command);
       if (!rec.error && rec.ok !== false) {

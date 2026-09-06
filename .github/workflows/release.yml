@@ -77,6 +77,8 @@ jobs:
           ANVIL_ELECTRON_BUILD: "1"
       - name: Minified Canvas runtime and TypeScript modules
         run: npm run test:canvas:release
+      - name: Learned tool calls, settings and persisted mappings in production
+        run: npm run test:tools:learning -- --production
       - name: Chat send, Stop and retry
         run: npm run test:chat-send
 

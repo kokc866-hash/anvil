@@ -7,6 +7,7 @@ import { shrinkTools } from "./tool-fallback.ts";
 export type ToolCompatibility = "standard" | "compact" | "text";
 export type ToolContract = { transport: "native" | "text"; names: string[] };
 export const toolCompatibility = (value: unknown): ToolCompatibility => value === "compact" || value === "text" ? value : "standard";
+const taskText = (task: string) => task.split("\n\nAuftrag:\n").at(-1) || task;
 
 /** No credentials in settings/log keys; retain case-sensitive model and deployment paths. */
 export function toolTargetKey(provider: string, model: string, baseUrl: string, protocol = provider === "ollama" ? "ollama-chat" : providerOf(provider).api) {
@@ -72,7 +73,7 @@ export function parseTextTool(content: string, names: string[]): { calls: ToolCa
 
 /** Tool-free answers, questions and long thinking alone do not establish a stall. */
 export function isToolStall(task: string, used: string[], text: string, finish?: string): boolean {
-  const ask = task.split("\n\nAuftrag:\n").at(-1) || task;
+  const ask = taskText(task);
   const write = /\b(schreib\w*|erstelle?\w*|implement\w*|beheb\w*|reparier\w*|fix|create|write|edit)\b/i.test(ask);
   const run = /\b(run|compile|compili\w*|kompili\w*|ausführ\w*|starte?|test\w*)\b/i.test(ask);
   const wrote = used.some((n) => /^(write_file|edit_file|append_file)$/.test(n));
@@ -106,7 +107,7 @@ export class ToolSession {
   private fallback = false;
   readonly mode: ToolCompatibility;
   readonly task: string;
-  constructor(mode: ToolCompatibility, task: string) { this.mode = mode; this.task = task; }
+  constructor(mode: ToolCompatibility, task: string) { this.mode = mode; this.task = taskText(task); }
   tools(available: typeof AGENT_TOOLS): typeof AGENT_TOOLS {
     this.available = available;
     if (this.mode === "standard") return available;

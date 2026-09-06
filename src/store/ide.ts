@@ -1,4 +1,5 @@
 import { toolTargetKey, toolCompatibility } from "@/lib/tool-compat";
+import { sanitizeToolLearning } from "@/lib/tool-learning";
 import { migrateLegacyCaps } from "@/lib/model-caps";
 import type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
 export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
@@ -251,6 +252,7 @@ export const useIde = create<IdeState>()(
       llmSlots: {},
       llmProfiles: [],
       llmToolModes: {},
+      llmToolLearning: {},
       sessionTokens: { prompt: 0, completion: 0 },
       sessionJournal: { ...EMPTY_JOURNAL },
       sidebar: "files",
@@ -419,6 +421,9 @@ export const useIde = create<IdeState>()(
         const key = toolTargetKey(cur.llmProvider, cur.llmModel, cur.llmBaseUrl || providerOf(cur.llmProvider).baseUrl);
         set({ llmToolModes: { ...cur.llmToolModes, [key]: toolCompatibility(mode) } });
       },
+      updateToolLearning: (key, update) => set((cur) => ({
+        llmToolLearning: sanitizeToolLearning({ ...cur.llmToolLearning, [key]: update(cur.llmToolLearning[key] || { rules: [] }) }),
+      })),
       setLlmModel: (llmModel) => {
         const cur = get();
         const next = modelForProvider(cur.llmProvider, llmModel);
@@ -1262,7 +1267,7 @@ export const useIde = create<IdeState>()(
         set({ sessionJournal: normalizeJournal(sessionJournal) });
         void import("@/lib/session").then((m) => m.persistSessionDisk()).catch(() => undefined);
       },
-      finalizeAssistant: (reply, tools) => {
+      finalizeAssistant: (reply, tools, options) => {
         flushLiveChat();
         const chat = [...get().chat];
         const last = chat[chat.length - 1];
@@ -1272,7 +1277,7 @@ export const useIde = create<IdeState>()(
           const now = Date.now();
           chat[chat.length - 1] = {
             ...last,
-            content: echo ? reply : last.content.trim() ? last.content : reply,
+            content: options?.replace || echo ? reply : last.content.trim() ? last.content : reply,
             tools: tools ?? last.tools,
             ms: now - (last.at || now),
             steps: last.steps?.map((s) => (s.status === "run" ? { ...s, status: stopped ? "err" : "ok", ms: now - (s.at || now) } : s)),
@@ -1481,6 +1486,7 @@ export const useIde = create<IdeState>()(
           llmBaseUrl: "http://127.0.0.1:11434/v1",
           llmModel: "llama3.1",
           llmToolModes: {},
+          llmToolLearning: {},
           companionUrl: "http://127.0.0.1:7845",
           companionKeep: false,
           netCompiler: true,
@@ -1515,6 +1521,7 @@ export const useIde = create<IdeState>()(
             p.llmProvider === "github" ? String(p.llmModel || "gpt-4.1").replace(/^openai\//, "") : String(p.llmModel || current.llmModel || "")),
           llmSlots: (p.llmSlots as typeof current.llmSlots) ?? {},
           llmToolModes: p.llmToolModes && typeof p.llmToolModes === "object" && !Array.isArray(p.llmToolModes) ? Object.fromEntries(Object.entries(p.llmToolModes).map(([key, mode]) => [key, toolCompatibility(mode)])) : {},
+          llmToolLearning: sanitizeToolLearning(p.llmToolLearning),
           llmProfiles: Array.isArray(p.llmProfiles) ? (p.llmProfiles as LlmProfile[]).map((profile) => ({ ...profile, authMode: connectionMode(profile.provider, profile.authMode) })) : [],
           runInWindow: typeof p.runInWindow === "boolean" ? p.runInWindow : true,
           runHtml: p.runHtml !== false,

@@ -242,6 +242,15 @@ export default defineConfig(({ command, isPreview }) => ({
       ? [
           nitro({
             preset: process.env.ANVIL_ELECTRON_BUILD === "1" ? "node-server" : "vercel",
+            // Keep the SSR service entry and its namespace runtime together.
+            // Splitting these produces an undeclared ssr_exports binding in
+            // Rolldown 1.2.x: https://github.com/TanStack/router/issues/8031
+            rolldownConfig: {
+              output: { codeSplitting: { groups: [{
+                name: "anvil-ssr", priority: 100,
+                test: /[/\\]\.nitro[/\\]vite[/\\]services[/\\]ssr[/\\](?:index\.js|assets[/\\]rolldown-runtime-[^/\\]+\.js)$/,
+              }] } },
+            },
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.

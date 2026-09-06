@@ -53,6 +53,15 @@ test("standard keeps exactly its existing catalog and never opts into stall fall
   assert.equal(new ToolSession("text", "Schreibe Datei").tryTextFallback(), false);
 });
 
+test("project rules do not crowd out tools needed by the actual chat task", () => {
+  const wrapped = "Projektregeln:\nNach Änderungen Tests ausführen. Run/Engine in .anvil/harness.json. MCP nur bei Bedarf.\n\nAuftrag:\nLies README.md und erkläre den Inhalt.";
+  const session = new ToolSession("text", wrapped);
+  const names = session.tools(AGENT_TOOLS).map((t) => t.function.name);
+  assert.ok(names.includes("read_file")); assert.ok(names.includes("grep"));
+  assert.ok(!names.includes("engine_run")); assert.ok(!names.includes("mcp_call"));
+  assert.ok(names.length <= 8);
+});
+
 test("normal answers, questions and completed work cannot trigger a stall fallback", () => {
   assert.equal(isToolStall("Analysiere Dateien", [], "Keine Tools verfügbar"), false);
   assert.equal(isToolStall("Schreibe Datei", [], "Welche Sprache soll ich verwenden?"), false);
