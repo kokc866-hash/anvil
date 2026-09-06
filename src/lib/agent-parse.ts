@@ -1,3 +1,4 @@
+import { AGENT_TOOL_NAMES } from "./agent-tools.ts";
 export function decodeWriteEscapes(s: string): string {
   if (!s) return s;
   let t = s;
@@ -151,9 +152,6 @@ export function blocksToWriteCalls(
   }));
 }
 
-const TOOL_NAMES =
-  /^(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|play|format_file|open_preview|git_status|git_commit|git_push|git_clone|fetch_url|debug_start|debug_continue|debug_step|debug_stop|debug_breakpoint|debug_eval|debug_state|debug_watch|memory_list|memory_add|memory_forget|skill_list|skill_write|skill_read|skill_run|skill_debug|skill_patch|skill_outcome|mcp_list|mcp_call|engine_detect|engine_status|engine_run|harness_read|harness_write|graph_write|board_read|board_open|board_reset|board_write)$/;
-
 function harvestXml(src: string): { id: string; type: "function"; function: { name: string; arguments: string } }[] {
   if (!/<tool_call>|tool call/i.test(src)) return [];
   const out: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
@@ -181,7 +179,7 @@ function harvestPlain(src: string): { id: string; type: "function"; function: { 
     try {
       const j = JSON.parse(obj) as Record<string, unknown>;
       const name = String(j.name || "");
-      if (!TOOL_NAMES.test(name)) continue;
+      if (!AGENT_TOOL_NAMES.has(name)) continue;
       const args = j.arguments ?? j.params ?? {};
       out.push({
         id: `js_${++n}`,
@@ -193,8 +191,7 @@ function harvestPlain(src: string): { id: string; type: "function"; function: { 
     }
   }
   if (out.length) return out;
-  const callRe =
-    /(?:^|\n)\s*(list_files|read_file|write_file|append_file|edit_file|delete_file|mkdir|rename|grep|run_file|set_plan|shell|see_run|play|format_file|open_preview|git_status|git_commit|git_push|git_clone|fetch_url|debug_start|debug_continue|debug_step|debug_stop|debug_breakpoint|debug_eval|debug_state|debug_watch|memory_list|memory_add|memory_forget|skill_list|skill_write|skill_read|skill_run|skill_debug|skill_patch|skill_outcome|mcp_list|mcp_call|engine_detect|engine_status|engine_run|harness_read|harness_write|graph_write|board_read|board_open|board_reset|board_write)\s*\(/g;
+  const callRe = new RegExp(`(?:^|\\n)\\s*(${[...AGENT_TOOL_NAMES].join("|")})\\s*\\(`, "g");
   let cm: RegExpExecArray | null;
   while ((cm = callRe.exec(src))) {
     const name = cm[1];

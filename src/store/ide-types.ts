@@ -1,3 +1,4 @@
+import type { ToolCompatibility } from "@/lib/tool-compat";
 import { type LlmProvider } from "@/lib/providers";
 
 import { type InputMap } from "@/lib/input-map";
@@ -30,6 +31,7 @@ export type LlmSlot = {
 };
 
 export type LlmProfile = LlmSlot & {
+  toolMode?: ToolCompatibility;
   id: string;
   name: string;
   provider: LlmProvider;
@@ -232,6 +234,7 @@ export type IdeState = {
   llmHardStopMin: number;
   llmSlots: Record<string, LlmSlot>;
   llmProfiles: LlmProfile[];
+  llmToolModes: Record<string, ToolCompatibility>;
   sessionTokens: { prompt: number; completion: number };
   sessionJournal: SessionJournal;
   sidebar: SidebarId;
@@ -354,6 +357,7 @@ export type IdeState = {
   setLlmAuthMode: (v: "abo" | "key") => void;
   setLlmBaseUrl: (v: string) => void;
   setLlmModel: (v: string) => void;
+  setLlmToolMode: (mode: ToolCompatibility) => void;
   setLlmApiKey: (v: string) => void;
   setLlmContext: (n: number) => void;
   setLlmContextAuto: (v: boolean) => void;

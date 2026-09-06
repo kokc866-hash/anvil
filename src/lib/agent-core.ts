@@ -1,3 +1,5 @@
+import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
+import { parseTextTool, validateToolCall, isToolStall, toolCallKey, type ToolContract } from "./tool-compat";
 import { CANVAS_AGENT_GUIDE } from "./canvas/reference";
 import { compactMessages, COMPACT_MARK, type CompactMode } from "./compact.ts";
 import { throwIfAborted, isAbortLike, agentGen, AgentAbortError } from "./abort";
@@ -69,199 +71,7 @@ export type AgentResult = {
   parked?: boolean;
 };
 
-function tool(
-  name: string,
-  description: string,
-  properties: Record<string, unknown>,
-  required: string[] = [],
-) {
-  return {
-    type: "function" as const,
-    function: {
-      name,
-      description,
-      parameters: { type: "object", properties, required, additionalProperties: true },
-    },
-  };
-}
-
-export const AGENT_TOOLS = [
-  tool("list_files", "List workspace paths. Optional glob substring, prefix folder, offset for the next page.", {
-    glob: { type: "string" },
-    prefix: { type: "string" },
-    offset: { type: "integer" },
-  }),
-  tool("read_file", "Read a file. If the result says start_line, continue that path. Never rewrite because a read was long.", {
-    path: { type: "string" },
-    start_line: { type: "integer" },
-    end_line: { type: "integer" },
-  }, ["path"]),
-  tool("write_file", "Create or overwrite a file. Prefer edit_file/append_file for existing large files. If truncated, append_file — do not rewrite.", {
-    path: { type: "string" },
-    content: { type: "string" },
-  }, ["path", "content"]),
-  tool("append_file", "Append text to an existing file (or create). Use when write_file was truncated or to add at the end.", {
-    path: { type: "string" },
-    content: { type: "string" },
-  }, ["path", "content"]),
-  tool("edit_file", "Replace exact text. old_string must be unique unless replace_all. Safer than rewriting the whole file.", {
-    path: { type: "string" },
-    old_string: { type: "string" },
-    new_string: { type: "string" },
-    replace_all: { type: "boolean" },
-  }, ["path", "old_string", "new_string"]),
-  tool("delete_file", "Delete a file from the workspace.", { path: { type: "string" } }, ["path"]),
-  tool("mkdir", "Create an empty folder.", { path: { type: "string" } }, ["path"]),
-  tool("rename", "Rename or move a file or folder.", {
-    from: { type: "string" },
-    to: { type: "string" },
-  }, ["from", "to"]),
-  tool("run_file", "Run an executable workspace entry: HTML/Python/JS/TS/Go/Rust/C/C++/Java/C#/PHP/Ruby. Native languages compile then run. Never run Markdown, JSON, headers, ref/ or .anvil/ files. After source edits, run the program entry. On failure inspect stderr and exit code before changing source.", {
-    path: { type: "string" },
-  }, ["path"]),
-  tool("see_run", "HTML: snapshot the preview. Native/CLI: last Compile/Run log or open OS window — never a fake iframe for .exe.", {}),
-  tool("play", "Send keys to the HTML preview, then snapshot. keys: left,right,up,down,ok.", {
-    keys: { type: "array", items: { type: "string" } },
-    hold_ms: { type: "number" },
-  }, ["keys"]),
-  tool("format_file", "Format a workspace file (JS/TS/JSON/HTML/Markdown; Go/Rust/C/C++ via Companion).", { path: { type: "string" } }, ["path"]),
-  tool("open_preview", "Open live preview for HTML, Markdown, JSON, or last run.", {
-    path: { type: "string" },
-  }, ["path"]),
-  tool("git_status", "Git status of the opened project folder via Companion. Falls back to session dirty list.", {}),
-  tool("git_commit", "Real git commit in the opened project folder (Companion). Needs a gekoppelten Ordner.", {
-    message: { type: "string" },
-  }, ["message"]),
-  tool("git_push", "Commit and push the workspace to GitHub. Needs repo + token in settings.", {
-    message: { type: "string" },
-  }),
-  tool("git_clone", "Clone a GitHub repo (owner/repo or URL) into the workspace. Does not wipe other files unless replace is true.", {
-    url: { type: "string" },
-    replace: { type: "boolean", description: "If true, delete existing workspace files first." },
-  }, ["url"]),
-  tool("shell", "Run a limited command: python <file>, node <file>, npm test, pytest [-q] [-k name], python -m pytest, go test, cargo test, dotnet test.", {
-    command: { type: "string" },
-  }, ["command"]),
-  tool("fetch_url", "Fetch a public https page as text. Not localhost.", { url: { type: "string" } }, ["url"]),
-  tool("debug_start", "Start debugger on a Python/JS/TS file. Pauses on entry or breakpoints.", {
-    path: { type: "string" },
-    pause_on_entry: { type: "boolean" },
-  }),
-  tool("debug_continue", "Continue from current debug pause.", {}),
-  tool("debug_step", "Step to the next line.", {}),
-  tool("debug_stop", "Stop the debugger.", {}),
-  tool("debug_breakpoint", "Toggle or set a breakpoint.", {
-    path: { type: "string" },
-    line: { type: "number" },
-    on: { type: "boolean" },
-  }, ["path", "line"]),
-  tool("debug_eval", "Evaluate an expression in the paused frame.", { expr: { type: "string" } }, ["expr"]),
-  tool("debug_state", "Current debugger state: paused, line, locals, stack, breakpoints.", {}),
-  tool("debug_watch", "Watch an expression; updated on each pause.", { expr: { type: "string" } }, ["expr"]),
-  tool("memory_list", "Learned user/project facts and skills. Facts in Gelerntes have [id] for memory_forget.", {}),
-  tool("memory_add", "Save a durable preference, project fact, or lesson. Call after the user corrects you.", {
-    kind: { type: "string", description: "user | project | lesson" },
-    text: { type: "string" },
-  }, ["text"]),
-  tool("memory_forget", "Delete a learned fact. id from Gelerntes [id], or the fact text.", { id: { type: "string" } }, ["id"]),
-  tool("skill_list", "List skills the agent wrote (reusable workflows).", {}),
-  tool("skill_write", "Create or update a skill. Use after a reusable multi-step workflow succeeded.", {
-    name: { type: "string" },
-    when: { type: "string", description: "When to use this skill" },
-    body: { type: "string", description: "Concrete steps" },
-    kind: { type: "string", description: "guide or plugin" },
-  }, ["name", "when", "body"]),
-  tool("skill_read", "Read a skill body.", { name: { type: "string" } }, ["name"]),
-  tool("skill_run", "Activate a skill and follow its body now with tools.", { name: { type: "string" } }, ["name"]),
-  tool("skill_debug", "Validate a skill (or all). Returns issues to fix with skill_write/skill_patch.", {
-    name: { type: "string" },
-  }),
-  tool("skill_patch", "Update when/body of an existing skill after debug.", {
-    name: { type: "string" },
-    when: { type: "string" },
-    body: { type: "string" },
-  }, ["name"]),
-  tool("skill_outcome", "Report whether the last skill helped: ok, fail, reject.", {
-    kind: { type: "string" },
-  }, ["kind"]),
-  tool("set_plan", "Visible checklist. Call once at start with 3-7 short steps in the user's language.", {
-    steps: { type: "array", items: { type: "string" } },
-  }, ["steps"]),
-  tool("ask_user", "Ask the user a question with 2–5 options. Use when a choice, missing fact, or risky write needs a decision. Do not guess. After the answer, continue the same job.", {
-    prompt: { type: "string" },
-    why: { type: "string" },
-    choices: { type: "array", items: { type: ["string", "object"] } },
-    allow_text: { type: "boolean" },
-    recommended: { type: "string" },
-    blocking: { type: "string", description: "hard | soft" },
-  }, ["prompt"]),
-  tool("mcp_list", "List tools from configured MCP HTTP servers.", {}),
-  tool("mcp_call", "Call a tool on a configured MCP server.", {
-    server: { type: "string" },
-    name: { type: "string" },
-    arguments: { type: "object", additionalProperties: true },
-  }, ["server", "name"]),
-  tool("engine_detect", "Detect Godot/Unity/Unreal/Bevy/… in the workspace. Games run in those engines, not inside Anvil.", {}),
-  tool("engine_status", "Ping the local engine companion (HTTP). Returns binaries if running.", {}),
-  tool("engine_run", "Run play/check/editor on the detected engine via companion. action: play|check|editor|test or cmd.", {
-    action: { type: "string" },
-    cmd: { type: "string" },
-    timeoutMs: { type: "number" },
-  }),
-  tool("harness_read", "Read .anvil/harness.json and .anvil/graph.json (project run/graph loop).", {}),
-  tool("harness_write", "Optional. Persist a custom after-write loop. Defaults already run. Never use this to enable run_file — call run_file.", {
-    name: { type: "string" },
-    when: { type: "string" },
-    afterWrite: { type: "string", description: "run | engine | preview | none" },
-    loopTries: { type: "number" },
-    maxRounds: { type: "number" },
-    graphLoop: { type: "boolean" },
-    runLoop: { type: "boolean" },
-    testLoop: { type: "boolean" },
-    engineLoop: { type: "boolean" },
-  }, ["name"]),
-  tool("graph_write", "Rebuild .anvil/graph.json from the workspace (HTML/Python/tests/engine). Pass edges only to replace the whole graph, never append. fromSources:true ignores old edges.", {
-    name: { type: "string" },
-    fromSources: { type: "boolean" },
-    edges: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          when: { type: "string" },
-          edge: { type: "string" },
-          tool: { type: "string" },
-          glob: { type: "string" },
-        },
-      },
-    },
-  }),
-  tool("board_read", "Read the harness Tafel (.anvil/board.json): phases, wires, graph nodes.", {}),
-  tool("board_open", "Open the Tafel in the UI.", {}),
-  tool("board_reset", "Reset the Tafel to the factory layout (Plan→Arbeit→Run→Fertig, Vorschau/Patch/Engine).", {}),
-  tool("board_write", "Rebuild or edit the Tafel. fromSources:true builds nodes from the workspace. reset, add, from+to, or full json. Tafel stays open.", {
-    reset: { type: "boolean" },
-    fromSources: { type: "boolean" },
-    rebuild: { type: "boolean" },
-    from: { type: "string" },
-    to: { type: "string" },
-    tool: { type: "string" },
-    edge: { type: "string" },
-    glob: { type: "string" },
-    when: { type: "string" },
-    remove: { type: "string" },
-    add: { type: "object", additionalProperties: true },
-    connect: { type: "object", additionalProperties: true },
-    board: { type: "object", additionalProperties: true },
-    json: { type: "string" },
-    nodes: { type: "array", items: { type: "object", additionalProperties: true } },
-    wires: { type: "array", items: { type: "object", additionalProperties: true } },
-  }),
-  tool("grep", "Search workspace files. Returns path:line:content. glob limits the folder. Up to 80 hits.", {
-    query: { type: "string" },
-    glob: { type: "string" },
-  }, ["query"]),
-];
+export const AGENT_TOOLS = TOOL_REGISTRY.filter((t) => t.function.name !== "select_tools");
 
 const CORE_NAMES = new Set([
   "list_files",
@@ -282,7 +92,7 @@ const CORE_NAMES = new Set([
 export const CORE_TOOLS = AGENT_TOOLS.filter((t) => CORE_NAMES.has(t.function.name));
 
 export function pickAgentTools(opts: ToolPick = {}): typeof AGENT_TOOLS {
-  return AGENT_TOOLS.filter((t) => keepAgentTool(t.function.name, opts));
+  return TOOL_REGISTRY.filter((t) => keepAgentTool(t.function.name, opts));
 }
 
 export { pinHistory, applyGitClone };
@@ -328,6 +138,7 @@ export type { ToolCall } from "./tool-call";
 export { asToolCall, stampToolCalls } from "./tool-call";
 
 export type LlmChoice = {
+  toolContract?: ToolContract;
   content?: string | null;
   tool_calls?: ToolCall[];
   role?: string;
@@ -789,6 +600,9 @@ export async function runAgentLoop(
     play?: (keys: string[], hold?: number) => Promise<unknown>;
     see?: () => Promise<unknown>;
     onHarness?: (bar: string) => void;
+    selectTools?: (names: string[]) => unknown;
+    tryTextFallback?: () => boolean;
+    onNativeToolSuccess?: () => void;
   },
 ): Promise<AgentResult> {
   const files = new Map(data.files.map((f) => [f.path, f.content]));
@@ -796,6 +610,10 @@ export async function runAgentLoop(
   for (const p of files.keys()) for (const d of parents(p)) dirs.add(d);
   const runPaths: string[] = [];
   const used: string[] = [];
+  const completedTools: string[] = [];
+  const completedChanges = new Set<string>();
+  let beforeTextFallback: Set<string> | undefined;
+  let previousTransport: "native" | "text" | undefined;
   const deleted: string[] = [];
   let usage = { prompt: 0, completion: 0 };
   let compacted = false;
@@ -922,6 +740,8 @@ export async function runAgentLoop(
       }
       throw err;
     }
+    throwIfAborted();
+    if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
     if (choice.usage) {
       usage = {
         prompt: usage.prompt + choice.usage.prompt,
@@ -931,21 +751,23 @@ export async function runAgentLoop(
     if (choice.tool_calls?.length) {
       choice.tool_calls = stampToolCalls([{ tool_calls: choice.tool_calls }])[0]?.tool_calls as ToolCall[];
     }
-    messages.push(choice as Record<string, unknown>);
-    const harvested = harvestTools(`${choice.content || ""}\n${choice.reasoning || ""}`);
-    let toolCalls = (choice.tool_calls?.length ? choice.tool_calls : harvested) ?? [];
-    if (harvested.length && !choice.tool_calls?.length) {
-      void import("./model-caps").then((m) => m.noteHarvest());
-    }
-    if (choice.tool_calls?.length) {
-      void import("./model-caps").then((m) => m.noteToolSuccess(true));
+    const { toolContract, ...historyChoice } = choice;
+    if (toolContract?.transport === "text" && previousTransport === "native" && !beforeTextFallback) beforeTextFallback = new Set(completedChanges);
+    previousTransport = toolContract?.transport || "native";
+    messages.push({ ...historyChoice, role: historyChoice.role || "assistant" } as Record<string, unknown>);
+    const parsedText = toolContract?.transport === "text" ? parseTextTool(choice.content || "", toolContract.names) : undefined;
+    if (parsedText?.error) return packResult(say(`Ungültiger Werkzeugaufruf: ${parsedText.error}`, `Invalid tool call: ${parsedText.error}`), { ok: false, error: parsedText.error });
+    const harvested = parsedText ? parsedText.calls : toolContract ? [] : harvestTools(choice.content || "");
+    let toolCalls = (parsedText ? parsedText.calls : choice.tool_calls?.length ? choice.tool_calls : harvested) ?? [];
+    if (choice.tool_calls?.length && toolContract?.transport !== "text" && choice.tool_calls.every((c) => !validateToolCall(c, toolContract?.names || AGENT_TOOLS.map((t) => t.function.name)).error)) {
+      opts?.onNativeToolSuccess?.();
     }
     if (!toolCalls.length) {
       const text = choice.content?.trim() || "";
-      if (isToolTemplateEcho(text) || isToolTemplateEcho(choice.reasoning || "")) {
+      if (!toolContract && isToolTemplateEcho(text)) {
         return packResult(say("Das Modell hat das Tool-Schema nachgeschrieben statt ein Tool aufzurufen. Bei Qwen + llama.cpp: Denken auf aus, nochmal senden.", "The model echoed the tool schema instead of calling a tool. For Qwen + llama.cpp: turn thinking off and send again."));
       }
-      const blocks = observeOnly ? [] : extractFileBlocks(text);
+      const blocks = observeOnly || toolContract ? [] : extractFileBlocks(text);
       if (blocks.length) {
         toolCalls = blocksToWriteCalls(blocks, round);
       }
@@ -961,7 +783,7 @@ export async function runAgentLoop(
       if (tiny || thinkOnly) emptyHits += 1;
       else emptyHits = 0;
       if (observeOnly) {
-        if ((tiny || thinkOnly) && nudged < 2 && round + 1 < cap) {
+        if (!toolContract && (tiny || thinkOnly) && nudged < 2 && round + 1 < cap) {
           nudged += 1;
           messages.push({
             role: "user",
@@ -970,6 +792,21 @@ export async function runAgentLoop(
           continue;
         }
         return packResult(text || say("Fertig.", "Done."));
+      }
+      if (toolContract) {
+        // A normal answer/question is not a capability failure. Retry only an unfinished
+        // response or an explicit refusal to use tools while concrete work is outstanding.
+        const stalled = !askPickedNone(ask) && isToolStall(ask, completedTools, text, choice.finish_reason);
+        if (stalled && round + 1 < cap && opts?.tryTextFallback?.()) {
+          beforeTextFallback = new Set(completedChanges);
+          void import("./app-log").then((m) => m.appLog("cap", "Für diesen Auftrag einmal auf Text-Tools gewechselt; keine dauerhafte Einschränkung."));
+          messages.push({ role: "user", content: say(
+            'Auftrag noch offen. Ab jetzt Text-Tools: ein JSON-Objekt mit name und arguments. Vorhandene Tool-Ergebnisse gelten weiter. Bereits ausgeführte Änderungen nicht wiederholen.',
+            'Task still open. Use text tools: one JSON object with name and arguments. Keep previous tool results; never replay completed changes.',
+          ) });
+          continue;
+        }
+        return packResult(text || say("Modell hat ohne Werkzeugaufruf aufgehört.", "Model stopped without a tool call."), !text || stalled ? { ok: false, error: "tool-stall" } : {});
       }
       const must = open || looksStoppedEarly(choice) || looksLikeNoTools(text) || emptyHits === 1;
       if (emptyHits >= 2) {
@@ -996,6 +833,7 @@ export async function runAgentLoop(
       }
       return packResult(text || say("Fertig.", "Done."));
     }
+    const automaticCalls = new Set<ToolCall>();
     if (!observeOnly && toolCalls.length) {
       const names = toolCalls.map((c) => c.function.name);
       const wroteNow = names.some((n) => /write_file|append_file|edit_file/.test(n));
@@ -1006,6 +844,7 @@ export async function runAgentLoop(
         for (const tc of toolCalls) {
           if (!/write_file|append_file|edit_file/.test(tc.function.name)) continue;
           try {
+            if (toolContract && validateToolCall(tc, toolContract.names).error) continue;
             const p = String(parseToolArgs(tc.function.arguments || "{}").args.path ?? "");
             if (p && !skipAutoRunPath(p)) written.push(p);
           } catch {
@@ -1015,14 +854,12 @@ export async function runAgentLoop(
         const hint = written.at(-1) || "";
         const path = hint ? pickRunPath([...files.keys(), ...written], hint) : "";
         if (path) {
-          toolCalls = [
-            ...toolCalls,
-            {
-              id: `call_auto_run_${round}`,
-              type: "function",
-              function: { name: "run_file", arguments: JSON.stringify({ path }) },
-            },
-          ];
+          const automatic: ToolCall = {
+            id: `call_auto_run_${round}`, type: "function",
+            function: { name: "run_file", arguments: JSON.stringify({ path }) },
+          };
+          automaticCalls.add(automatic);
+          toolCalls = [...toolCalls, automatic];
         }
       }
     }
@@ -1030,6 +867,8 @@ export async function runAgentLoop(
     if (lastAsst && lastAsst.role === "assistant") lastAsst.tool_calls = toolCalls;
     let batchFail = false;
     for (let ti = 0; ti < toolCalls.length; ti++) {
+      throwIfAborted();
+      if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
       const tc = toolCalls[ti];
       let args: Record<string, unknown> = {};
       let argsCut = false;
@@ -1041,10 +880,15 @@ export async function runAgentLoop(
         args = {};
         argsCut = true;
       }
+      const checked = toolContract ? validateToolCall(tc,
+        automaticCalls.has(tc) && !observeOnly ? ["run_file"] : toolContract.names) : undefined;
+      if (checked && !checked.error) { args = checked.args; argsCut = false; }
       if (argsCut) args.truncated = true;
       used.push(tc.function.name);
       opts?.onToolStart?.({ name: tc.function.name, args });
       const blocked =
+        checked?.error ||
+        (observeOnly && !observeTool(tc.function.name) && tc.function.name !== "select_tools" ? say("Ask-Modus: nur lesen.", "Ask mode: read only.") : null) ||
         (observeOnly && mutateTool(tc.function.name)
           ? say(`Ask-Modus: kein ${tc.function.name}. Nur lesen.`, `Ask mode: no ${tc.function.name}. Read only.`)
           : null) ||
@@ -1067,10 +911,14 @@ export async function runAgentLoop(
       let writes: Record<string, string> | undefined;
       if (blocked) {
         result = { error: blocked };
+      } else if (beforeTextFallback?.has(toolCallKey(tc.function.name, args))) {
+        result = { ok: true, already_executed: true, message: "Already completed before the transport change. No action repeated." };
       } else if (batchFail && mutateTool(tc.function.name)) {
         result = { error: say("Vorheriges Tool fehlgeschlagen — Rest übersprungen.", "Previous tool failed — remaining writes skipped.") };
       } else if (denied) {
         result = { error: `Harness budget: only ${allow.join(", ")}` };
+      } else if (tc.function.name === "select_tools" && opts?.selectTools) {
+        result = opts.selectTools(args.names as string[]);
       } else if (tc.function.name === "read_file") {
         const p = String(args.path || "");
         const key = readKey(p, Number(args.start_line) || 1);
@@ -1145,6 +993,10 @@ export async function runAgentLoop(
       const rec = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
       if (args.path && rec.path == null) rec.path = String(args.path);
       if (tc.function.name === "shell" && args.command && rec.command == null) rec.command = String(args.command);
+      if (!rec.error && rec.ok !== false) {
+        completedTools.push(tc.function.name);
+        if (mutateTool(tc.function.name) || /^(mcp_call|shell|git_commit|git_push|memory_add|memory_forget)$/.test(tc.function.name)) completedChanges.add(toolCallKey(tc.function.name, args));
+      }
       if (mutateTool(tc.function.name) && (rec.error || rec.ok === false)) batchFail = true;
       const w = afterTool(harness, tc.function.name, rec, {
         ...hopts,

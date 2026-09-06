@@ -1,3 +1,5 @@
+import { toolTargetKey, toolCompatibility } from "@/lib/tool-compat";
+import { migrateLegacyCaps } from "@/lib/model-caps";
 import type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
 export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
 import { create } from "zustand";
@@ -248,6 +250,7 @@ export const useIde = create<IdeState>()(
       llmHardStopMin: 0,
       llmSlots: {},
       llmProfiles: [],
+      llmToolModes: {},
       sessionTokens: { prompt: 0, completion: 0 },
       sessionJournal: { ...EMPTY_JOURNAL },
       sidebar: "files",
@@ -411,6 +414,11 @@ export const useIde = create<IdeState>()(
         const cur = get();
         set({ llmBaseUrl, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), baseUrl: llmBaseUrl } } });
       },
+      setLlmToolMode: (mode) => {
+        const cur = get();
+        const key = toolTargetKey(cur.llmProvider, cur.llmModel, cur.llmBaseUrl || providerOf(cur.llmProvider).baseUrl);
+        set({ llmToolModes: { ...cur.llmToolModes, [key]: toolCompatibility(mode) } });
+      },
       setLlmModel: (llmModel) => {
         const cur = get();
         const next = modelForProvider(cur.llmProvider, llmModel);
@@ -464,6 +472,7 @@ export const useIde = create<IdeState>()(
           id: hit?.id ?? `p-${crypto.randomUUID()}`,
           name: label,
           provider: cur.llmProvider,
+          toolMode: toolCompatibility(cur.llmToolModes[toolTargetKey(cur.llmProvider, cur.llmModel, cur.llmBaseUrl || providerOf(cur.llmProvider).baseUrl)]),
           ...slotOf(cur),
         };
         if (!providerOf(cur.llmProvider).needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
@@ -479,6 +488,7 @@ export const useIde = create<IdeState>()(
         if (!providerOf(cur.llmProvider).needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
         set({
           llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur), [connectionSlot(p.provider, p.authMode)]: p },
+          ...(p.toolMode ? { llmToolModes: { ...cur.llmToolModes, [toolTargetKey(p.provider, modelForProvider(p.provider, p.model), p.baseUrl || providerOf(p.provider).baseUrl)]: toolCompatibility(p.toolMode) } } : {}),
           llmProvider: p.provider,
           llmAuthMode: connectionMode(p.provider, p.authMode),
           llmBaseUrl: p.provider === "codex" || p.provider === "github" ? "" : p.baseUrl,
@@ -1470,6 +1480,7 @@ export const useIde = create<IdeState>()(
           llmAuthMode: "key",
           llmBaseUrl: "http://127.0.0.1:11434/v1",
           llmModel: "llama3.1",
+          llmToolModes: {},
           companionUrl: "http://127.0.0.1:7845",
           companionKeep: false,
           netCompiler: true,
@@ -1491,6 +1502,10 @@ export const useIde = create<IdeState>()(
       storage: idePersistStorage(),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
+        const active = { provider: String(p.llmProvider || current.llmProvider), model: String(p.llmModel || current.llmModel), baseUrl: String(p.llmBaseUrl || current.llmBaseUrl) };
+        const slots = Object.entries((p.llmSlots || {}) as Record<string, LlmSlot>).map(([key, slot]) => ({ provider: key.split(":")[0], model: slot.model, baseUrl: slot.baseUrl }));
+        const profiles = Array.isArray(p.llmProfiles) ? p.llmProfiles as LlmProfile[] : [];
+        migrateLegacyCaps([active, ...slots, ...profiles].filter((c) => c.provider && c.model).map((c) => ({ ...c, baseUrl: c.baseUrl || providerOf(c.provider).baseUrl })));
         return {
           ...current,
           ...p,
@@ -1499,6 +1514,7 @@ export const useIde = create<IdeState>()(
           llmModel: modelForProvider(String(p.llmProvider || current.llmProvider),
             p.llmProvider === "github" ? String(p.llmModel || "gpt-4.1").replace(/^openai\//, "") : String(p.llmModel || current.llmModel || "")),
           llmSlots: (p.llmSlots as typeof current.llmSlots) ?? {},
+          llmToolModes: p.llmToolModes && typeof p.llmToolModes === "object" && !Array.isArray(p.llmToolModes) ? Object.fromEntries(Object.entries(p.llmToolModes).map(([key, mode]) => [key, toolCompatibility(mode)])) : {},
           llmProfiles: Array.isArray(p.llmProfiles) ? (p.llmProfiles as LlmProfile[]).map((profile) => ({ ...profile, authMode: connectionMode(profile.provider, profile.authMode) })) : [],
           runInWindow: typeof p.runInWindow === "boolean" ? p.runInWindow : true,
           runHtml: p.runHtml !== false,

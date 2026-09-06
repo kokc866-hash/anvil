@@ -3,6 +3,7 @@ export type SelectMsg = { role: "user" | "assistant"; content: string; images?: 
 
 export type ToolPick = {
   observeOnly?: boolean;
+  compatibility?: boolean;
   mcp?: boolean;
   engine?: boolean;
   skills?: boolean;
@@ -58,6 +59,7 @@ const ALWAYS_TOOLS = new Set([
 ]);
 
 export function keepAgentTool(name: string, opts: ToolPick = {}): boolean {
+  if (name === "select_tools") return Boolean(opts.compatibility);
   if (opts.observeOnly) return OBSERVE_NAMES.has(name);
   if (ALWAYS_TOOLS.has(name)) return true;
   if (name.startsWith("mcp_")) return Boolean(opts.mcp);

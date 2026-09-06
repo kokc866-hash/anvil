@@ -74,6 +74,7 @@ const IDE_KEYS = [
   "inputMap",
   "keyMap",
   "llmProfiles",
+  "llmToolModes",
 ] as const;
 
 export function exportSettingsPack(): Record<string, unknown> {

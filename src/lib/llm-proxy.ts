@@ -1,3 +1,4 @@
+import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
 import { AGENT_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
@@ -79,6 +80,8 @@ type ChatInput = {
   apiKey: string;
   messages?: Record<string, unknown>[];
   useTools?: boolean;
+  toolNames?: string[];
+  compactTools?: boolean;
   prompt?: string;
   context?: number;
   thinking?: ThinkingMode;
@@ -114,6 +117,8 @@ export const proxyLlm = createServerFn({ method: "POST" })
         maxOut: data.maxOut,
       };
       const cap = data.caps;
+      const selected = Array.isArray(data.toolNames) ? TOOL_REGISTRY.filter((t) => data.toolNames!.includes(t.function.name)) : AGENT_TOOLS;
+      const selectedTools = data.compactTools ? shrinkTools(selected) || [] : selected;
       let useTools = Boolean(data.useTools);
       if (cap) {
         useTools = sendTools(cap, useTools);
@@ -121,10 +126,10 @@ export const proxyLlm = createServerFn({ method: "POST" })
       }
       const choice =
         spec.api === "anthropic"
-          ? await anthropicChat(data.baseUrl, data.model, key, messages, useTools, rt, cap)
+          ? await anthropicChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools)
           : spec.api === "azure"
-            ? await azureChat(data.baseUrl, data.model, key, messages, useTools, rt, cap)
-            : await openaiChat(spec.id, data.baseUrl, data.model, key, messages, useTools, rt, cap);
+            ? await azureChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools)
+            : await openaiChat(spec.id, data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools);
       return { ok: true as const, choice };
     } catch (err) {
       return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
@@ -160,8 +165,9 @@ async function postOpenAi(
   ctx = 32768,
   cap?: ModelCap,
   kind = "",
+  selectedTools = AGENT_TOOLS,
 ): Promise<LlmChoice> {
-  let tools = useTools ? AGENT_TOOLS : null;
+  let tools = useTools ? selectedTools : null;
   if (tools) {
     payload.tools = tools;
     payload.tool_choice = "auto";
@@ -196,9 +202,10 @@ async function postOpenAi(
   if (res.status === 400) {
     const patch = classifyLlmError(400, body);
     if (patch) {
-      applyCapToPayload(payload, { tools: "unknown", noThinkWithTools: false, noStreamTools: false, noRequired: false, responsesApi: false, note: "", at: 0, ...patch }, Boolean(tools) && patch.tools !== "off" && patch.tools !== "text");
-      if (patch.tools === "text" && tools) prepareTextTools(payload, tools);
-      if (patch.tools === "off" || patch.tools === "text") {
+      // The client owns transport learning and must parse the retried answer as text.
+      if (patch.tools === "text") httpFail(res.status, body, kind);
+      applyCapToPayload(payload, { tools: "unknown", noThinkWithTools: false, noStreamTools: false, noRequired: false, responsesApi: false, note: "", at: 0, ...patch }, Boolean(tools) && patch.tools !== "off");
+      if (patch.tools === "off") {
         tools = null;
         delete payload.tools;
         delete payload.tool_choice;
@@ -226,7 +233,7 @@ async function postOpenAi(
   }
   if (allowResponses && res.status === 400 && tools && /reasoning_effort/i.test(body) && /function tools|tool/i.test(body)) {
     const alt = endpoint.replace(/\/chat\/completions.*$/, "/responses");
-    return postResponses(alt, headers, payload, true, kind);
+    return postResponses(alt, headers, payload, true, kind, selectedTools);
   }
   httpFail(res.status, body, kind);
 }
@@ -237,10 +244,11 @@ async function postResponses(
   payload: Record<string, unknown>,
   useTools: boolean,
   kind = "",
+  selectedTools = AGENT_TOOLS,
 ): Promise<LlmChoice> {
   const body: Record<string, unknown> = responsesBody(payload, kind);
   if (useTools) {
-    body.tools = toResponsesTools(AGENT_TOOLS);
+    body.tools = toResponsesTools(selectedTools);
     body.tool_choice = "auto";
   }
   const send = (b: Record<string, unknown>) =>
@@ -264,7 +272,7 @@ async function postResponses(
     raw = await res.text();
   }
   if (!res.ok && res.status === 400 && useTools) {
-    const next = shrinkTools(AGENT_TOOLS);
+    const next = shrinkTools(selectedTools);
     if (next) {
       body.tools = toResponsesTools(next);
       res = await send(body);
@@ -288,6 +296,7 @@ async function openaiChat(
   useTools: boolean,
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   cap?: ModelCap,
+  selectedTools = AGENT_TOOLS,
 ): Promise<LlmChoice> {
   const spec = providerOf(providerId);
   const url = assertUrl(normalizeBaseUrl(baseUrl || spec.baseUrl), providerId);
@@ -308,14 +317,14 @@ async function openaiChat(
     const endpoint = `${host.toString().replace(/\/+$/, "")}/chat/completions`;
     if (usesResponsesApi(rt, useTools)) {
       const respUrl = endpoint.replace(/\/chat\/completions$/, "/responses");
-      return postResponses(respUrl, headers, payload, useTools, providerId).catch((err: unknown) => {
+      return postResponses(respUrl, headers, payload, useTools, providerId, selectedTools).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (!/HTTP 404|not found/i.test(msg)) throw err;
         delete payload.reasoning_effort;
-        return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, providerId);
+        return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, providerId, selectedTools);
       });
     }
-    return postOpenAi(endpoint, headers, payload, useTools, true, rt.context, cap, providerId);
+    return postOpenAi(endpoint, headers, payload, useTools, true, rt.context, cap, providerId, selectedTools);
   };
 
   return talk(url);
@@ -329,6 +338,7 @@ async function azureChat(
   useTools: boolean,
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   cap?: ModelCap,
+  selectedTools = AGENT_TOOLS,
 ): Promise<LlmChoice> {
   const url = assertUrl(baseUrl, "azure");
   const endpoint = `${url.origin}/openai/deployments/${encodeURIComponent(model)}/chat/completions?api-version=2024-10-21`;
@@ -337,9 +347,9 @@ async function azureChat(
   const headers = { "Content-Type": "application/json", "api-key": apiKey };
   if (usesResponsesApi({ ...rt, api: "azure" }, useTools)) {
     const resp = `${url.origin}/openai/v1/responses`;
-    return postResponses(resp, headers, { ...payload, model }, useTools, "azure");
+    return postResponses(resp, headers, { ...payload, model }, useTools, "azure", selectedTools);
   }
-  return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, "azure");
+  return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, "azure", selectedTools);
 }
 
 async function anthropicChat(
@@ -350,6 +360,7 @@ async function anthropicChat(
   useTools: boolean,
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   _cap?: ModelCap,
+  selectedTools = AGENT_TOOLS,
 ): Promise<LlmChoice> {
   const url = assertUrl(baseUrl || "https://api.anthropic.com", "anthropic");
   const fitted = { messages: [...messages] };
@@ -368,7 +379,7 @@ async function anthropicChat(
     },
     { ...rt, api: "anthropic" },
   );
-  let tools = useTools ? AGENT_TOOLS : null;
+  let tools = useTools ? selectedTools : null;
   const mapTools = (list: typeof AGENT_TOOLS) =>
     list.map((t) => ({
       name: t.function.name,
@@ -388,7 +399,7 @@ async function anthropicChat(
   let res = await send(hdr);
   if (!res.ok) {
     let err = await res.text();
-    if (res.status === 400 && tools === AGENT_TOOLS) {
+    if (res.status === 400 && tools === selectedTools) {
       tools = shrinkTools(tools) || tools;
       body.tools = mapTools(tools);
       res = await send(hdr);

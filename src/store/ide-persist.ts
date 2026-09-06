@@ -87,6 +87,7 @@ export function partializeIde(s: IdeState) {
     llmHardStopMin: s.llmHardStopMin,
     llmSlots: s.llmSlots,
     llmProfiles: s.llmProfiles,
+    llmToolModes: s.llmToolModes,
     sessionTokens: s.sessionTokens,
     sessionJournal: s.sessionJournal,
     agentJob: s.agentJob,

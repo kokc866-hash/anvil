@@ -1,3 +1,4 @@
+import { toolTargetKey } from "./tool-compat.ts";
 export type ToolMode = "unknown" | "ok" | "text" | "off";
 
 export type ModelCap = {
@@ -16,7 +17,6 @@ const EVT = "anvil-caps";
 
 let mem: Record<string, ModelCap> = {};
 let loaded = false;
-let target = { provider: "", model: "" };
 
 function empty(): ModelCap {
   return {
@@ -30,10 +30,29 @@ function empty(): ModelCap {
   };
 }
 
-export function capKey(provider: string, model: string): string {
-  const key = String(provider || "").trim();
-  // Errors learned on /v1 must not disable tools/thinking on native /api/chat.
-  return `${key === "ollama" ? "ollama-native-chat" : key}::${String(model || "").trim().toLowerCase()}`;
+export function capKey(provider: string, model: string, baseUrl = ""): string {
+  return toolTargetKey(provider, model, baseUrl);
+}
+
+/** Claim old provider/model learning only for an unambiguous, already saved connection. */
+export function migrateLegacyCaps(connections: { provider: string; model: string; baseUrl: string }[]) {
+  const grouped = new Map<string, Set<string>>();
+  for (const c of connections) {
+    const legacy = `${c.provider === "ollama" ? "ollama-native-chat" : c.provider}::${c.model.trim().toLowerCase()}`;
+    const keys = grouped.get(legacy) || new Set<string>();
+    keys.add(capKey(c.provider, c.model, c.baseUrl)); grouped.set(legacy, keys);
+  }
+  let changed = false;
+  for (const [key, value] of Object.entries(load())) {
+    if (key.startsWith("[")) continue;
+    const targets = grouped.get(key);
+    if (targets?.size === 1) {
+      const target = [...targets][0];
+      if (!mem[target]) mem[target] = value;
+    }
+    delete mem[key]; changed = true;
+  }
+  if (changed) save();
 }
 
 function load(): Record<string, ModelCap> {
@@ -75,53 +94,49 @@ function seed(provider: string, model: string): Partial<ModelCap> {
   return {};
 }
 
-export function bindCapTarget(provider: string, model: string) {
-  target = { provider, model };
-}
-
-export function getCap(provider = target.provider, model = target.model): ModelCap {
-  const k = capKey(provider, model);
+export function getCap(provider: string, model: string, baseUrl = ""): ModelCap {
+  const k = capKey(provider, model, baseUrl);
   if (!k || k === "::") return empty();
   const hit = load()[k];
   if (hit) return { ...empty(), ...hit };
   return { ...empty(), ...seed(provider, model) };
 }
 
-export function setCap(provider: string, model: string, patch: Partial<ModelCap>) {
-  const k = capKey(provider, model);
-  if (!k || k === "::") return getCap(provider, model);
-  const prev = getCap(provider, model);
+export function setCap(provider: string, model: string, patch: Partial<ModelCap>, baseUrl = "") {
+  const k = capKey(provider, model, baseUrl);
+  if (!k || k === "::") return getCap(provider, model, baseUrl);
+  const prev = getCap(provider, model, baseUrl);
   const next: ModelCap = { ...prev, ...patch, at: Date.now() };
   load()[k] = next;
   save();
   return next;
 }
 
-export function resetCap(provider: string, model: string) {
-  const k = capKey(provider, model);
+export function resetCap(provider: string, model: string, baseUrl = "") {
+  const k = capKey(provider, model, baseUrl);
   delete load()[k];
   save();
 }
 
 export function capLabel(cap: ModelCap): string {
-  if (cap.tools === "off") return "keine Tools";
-  if (cap.tools === "text") return "Tools als Text";
-  if (cap.tools === "ok") return "Tools ok";
   const bits: string[] = [];
+  if (cap.tools === "off") bits.push("keine Tools");
+  if (cap.tools === "text") bits.push("Tools als Text");
+  if (cap.tools === "ok") bits.push("Tools ok");
   if (cap.noThinkWithTools) bits.push("Thinking aus bei Tools");
   if (cap.noStreamTools) bits.push("ohne Stream");
   if (cap.noRequired) bits.push("choice auto");
   if (cap.responsesApi) bits.push("Responses");
-  if (cap.note) bits.push(cap.note);
+  if (cap.note && !bits.includes(cap.note)) bits.push(cap.note);
   return bits.length ? bits.join(" · ") : "noch nichts gemerkt";
 }
 
 export function classifyLlmError(status: number, body: string): Partial<ModelCap> | null {
   const t = `${status} ${body}`;
-  if (status !== 400 && status !== 422 && !/jinja|template|tool call type|reasoning_effort/i.test(t)) return null;
+  if (status !== 400 && status !== 422) return null;
   const patch: Partial<ModelCap> = { note: "" };
   let hit = false;
-  if (/reasoning_effort|function tools with reasoning|tools with reasoning/i.test(t)) {
+  if (/tools?/i.test(t) && /reasoning|thinking/i.test(t) && /not support|unsupported|cannot|incompatible|not allowed/i.test(t)) {
     patch.noThinkWithTools = true;
     patch.note = "Thinking bei Tools aus";
     hit = true;
@@ -134,17 +149,17 @@ export function classifyLlmError(status: number, body: string): Partial<ModelCap
     patch.note = patch.note || "eine System-Nachricht";
     hit = true;
   }
-  if (/tool_choice|required.*not support/i.test(t)) {
+  if (/tool_choice|required.*not support/i.test(t) && /not support|unsupported|must be|not allowed|invalid.*(?:value|choice)/i.test(t)) {
     patch.noRequired = true;
     patch.note = patch.note || "tool_choice auto";
     hit = true;
   }
-  if (/stream.*tool|tool.*stream|streaming.*not support/i.test(t)) {
+  if (/stream.*tool|tool.*stream|streaming.*not support/i.test(t) && /not support|unsupported|cannot|incompatible|not allowed/i.test(t)) {
     patch.noStreamTools = true;
     patch.note = patch.note || "ohne Stream";
     hit = true;
   }
-  if (/does not support tools|unknown field.*\btools\b|tools are not enabled|tool use is not supported|\"tools\".*unexpected/i.test(t)) {
+  if (!patch.noThinkWithTools && /does not support tools|unknown field.*\btools\b|tools are not enabled|tool use is not supported|\"tools\".*unexpected/i.test(t)) {
     patch.tools = "text";
     patch.note = "Tools als Text";
     hit = true;
@@ -152,40 +167,24 @@ export function classifyLlmError(status: number, body: string): Partial<ModelCap
   return hit ? patch : null;
 }
 
-export function learnFromError(provider: string, model: string, status: number, body: string): ModelCap | null {
+export function learnFromError(provider: string, model: string, status: number, body: string, baseUrl = ""): ModelCap | null {
   const patch = classifyLlmError(status, body);
   if (!patch) return null;
-  const prev = getCap(provider, model);
+  const prev = getCap(provider, model, baseUrl);
   const same =
     (patch.noThinkWithTools ? prev.noThinkWithTools : true) &&
     (patch.noStreamTools ? prev.noStreamTools : true) &&
     (patch.noRequired ? prev.noRequired : true) &&
     (patch.tools ? prev.tools === patch.tools : true);
   if (same && prev.at) return null;
-  const next = setCap(provider, model, patch);
+  const next = setCap(provider, model, patch, baseUrl);
   void import("./app-log").then((m) => m.appLog("cap", `${provider} ${model} ${next.note || capLabel(next)}`));
   return next;
 }
 
-export function noteToolSuccess(structured: boolean) {
-  const { provider, model } = target;
-  if (!provider || !model) return;
-  const prev = getCap(provider, model);
-  if (structured) {
-    if (prev.tools === "ok") return;
-    setCap(provider, model, { tools: "ok", note: prev.note });
-    return;
-  }
-  if (prev.tools === "unknown") setCap(provider, model, { tools: "ok", note: prev.note });
-}
-
-export function noteHarvest() {
-  const { provider, model } = target;
-  if (!provider || !model) return;
-  const prev = getCap(provider, model);
-  if (prev.tools === "ok") return;
-  if (prev.tools === "text") return;
-  setCap(provider, model, { tools: "text", note: "Tools als Text" });
+export function noteToolSuccess(provider: string, model: string, baseUrl: string) {
+  const prev = getCap(provider, model, baseUrl);
+  if (prev.tools !== "ok") setCap(provider, model, { tools: "ok", note: prev.note }, baseUrl);
 }
 
 export function applyCapToPayload(payload: Record<string, unknown>, cap: ModelCap, toolsOn: boolean): boolean {

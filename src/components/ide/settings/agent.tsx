@@ -1,3 +1,4 @@
+import { toolTargetKey, toolCompatibility, type ToolCompatibility } from "@/lib/tool-compat";
 import { SecretStorageStatus } from "./secret-storage-status";
 import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -464,9 +465,12 @@ export function AgentSection({ q }: { q: string }) {
       ) : (
         <p className="py-2 text-xs text-muted">Thinking, Temperatur und Antwortlimit werden von der CLI gesteuert.</p>
       )}
-      <Vis q={q} label="Modell Format Tools 400">
-        <CapRow provider={llmProvider} model={llmModel} />
-      </Vis>
+      {!aboOn && llmProvider !== "grok" && llmProvider !== "brain" ? (
+        <Vis q={q} label="Modell Format Tools Werkzeuge Kompatibilität kompakt Text 400">
+          <ToolModeRow provider={llmProvider} model={llmModel} baseUrl={llmBaseUrl} />
+          <CapRow provider={llmProvider} model={llmModel} baseUrl={llmBaseUrl} />
+        </Vis>
+      ) : null}
       <Vis q={q} label="Retry Versuche Abbruch lokal">
         <Slider
           label="Versuche"
@@ -885,7 +889,7 @@ function McpFields() {
   );
 }
 
-function CapRow({ provider, model }: { provider: string; model: string }) {
+function CapRow({ provider, model, baseUrl }: { provider: string; model: string; baseUrl: string }) {
   const t = useT();
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -893,7 +897,7 @@ function CapRow({ provider, model }: { provider: string; model: string }) {
     window.addEventListener("anvil-caps", on);
     return () => window.removeEventListener("anvil-caps", on);
   }, []);
-  const cap = getCap(provider, model);
+  const cap = getCap(provider, model, baseUrl || providerOf(provider).baseUrl);
   void tick;
   const known = cap.tools !== "unknown" || cap.noThinkWithTools || cap.noStreamTools || cap.noRequired || cap.note;
   return (
@@ -901,11 +905,36 @@ function CapRow({ provider, model }: { provider: string; model: string }) {
       <div className="flex max-w-[16rem] flex-col items-end gap-1">
         <p className="text-right font-mono text-[11px] text-muted">{capLabel(cap)}</p>
         {known ? (
-          <Button className="h-7 text-[11px]" variant="quiet" onClick={() => resetCap(provider, model)}>
+          <Button className="h-7 text-[11px]" variant="quiet" onClick={() => resetCap(provider, model, baseUrl || providerOf(provider).baseUrl)}>
             {t("capReset")}
           </Button>
         ) : null}
       </div>
     </Row>
   );
+}
+
+function ToolModeRow({ provider, model, baseUrl }: { provider: string; model: string; baseUrl: string }) {
+  const modes = useIde((s) => s.llmToolModes);
+  const setMode = useIde((s) => s.setLlmToolMode);
+  const locale = useIde((s) => s.locale);
+  const de = locale !== "en";
+  const key = toolTargetKey(provider, model, baseUrl || providerOf(provider).baseUrl);
+  const mode = toolCompatibility(modes[key]);
+  const hints = de ? {
+    standard: "Bisherige Tool-Auswahl. Beim Update bleibt dieser Modus aktiv.",
+    compact: "Bis zu 8 passende Tools. Weitere gezielt nachladen. Bei eindeutigem Stillstand ein Textversuch für diesen Auftrag.",
+    text: "Bis zu 8 Tools als Text. Ein vollständiger JSON-Aufruf pro Antwort; keine nativen Function Calls.",
+  } : {
+    standard: "Existing tool selection. Updates keep this mode active.",
+    compact: "Up to 8 relevant tools; select more as needed. One text fallback for this task on a clear stall.",
+    text: "Up to 8 tools as text. One complete JSON call per answer; no native function calls.",
+  };
+  return <div className="py-3" role="group" aria-label={de ? "Tool-Kompatibilität" : "Tool compatibility"}>
+    <p className="mb-2 text-sm text-fg">{de ? "Tool-Kompatibilität" : "Tool compatibility"}</p>
+    <div className="flex flex-wrap gap-1">
+      {(["standard", "compact", "text"] as ToolCompatibility[]).map((value, i) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className={`rounded-md border border-border px-3 py-2 text-xs ${mode === value ? "bg-hover text-fg" : "bg-bg text-muted"}`}>{(de ? ["Bisherig", "Kompakt", "Text"] : ["Existing", "Compact", "Text"])[i]}</button>)}
+    </div>
+    <p className="mt-2 text-xs text-muted">{hints[mode]} {de ? "Gilt für dieses Modell an dieser Serveradresse; ab dem nächsten Auftrag. Thinking bleibt wie eingestellt." : "Applies to this model at this server address, starting with the next task. Keeps your thinking setting."}</p>
+  </div>;
 }

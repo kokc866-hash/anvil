@@ -1,6 +1,6 @@
 # Anleitungen
 
-Anvil **1.3.16** (06.09.2026)
+Anvil **1.3.17** (06.09.2026)
 
 Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/releases) — Setup-exe oder ZIP (Ordner wählen, `Anvil.exe`). Kein Portable-Exe.
 

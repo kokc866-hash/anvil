@@ -1,3 +1,4 @@
+import { ToolSession, toolTargetKey, toolCompatibility } from "./tool-compat";
 import { grokRound } from "./agent";
 import {
   pickAgentTools,
@@ -45,7 +46,7 @@ import { requestPhase } from "./request-state";
 import { withCompanion } from "./companion-life";
 import {
   applyCapToPayload,
-  bindCapTarget,
+  noteToolSuccess,
   getCap,
   learnFromError,
   sendTools,
@@ -253,11 +254,15 @@ export async function chatWithProvider(opts: {
     return { ok: false, reply: `API-Key für ${spec.label} unter Einstellungen eintragen.`, error: "no key" };
   }
 
+  const toolSession = cliKind ? undefined : new ToolSession(
+    toolCompatibility(useIde.getState().llmToolModes[toolTargetKey(spec.id, model, normalizeBaseUrl(opts.baseUrl || spec.baseUrl))]),
+    opts.messages.filter((m) => m.role === "user").at(-1)?.content || "",
+  );
   const transport = cliKind
     ? (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => completeViaCli(cliKind, model, messages, useTools ? toolsForCall(opts.observeOnly) : [], hardStopMs(useIde.getState().llmHardStopMin), onDelta)
     : isBrowserTarget(spec, opts.baseUrl)
-    ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly)
-    : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly);
+    ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession)
+    : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession);
 
   let modelRound = 0;
   const complete: typeof transport = async (messages, tools, onDelta) => {
@@ -267,6 +272,10 @@ export async function chatWithProvider(opts: {
     const choice = await transport(messages, tools, onDelta);
     const { appLog } = await import("./app-log");
     appLog("agent", `R${run} Antwort ${round} · text=${choice.content?.length ?? 0} think=${choice.reasoning?.length ?? 0} Werkzeugaufrufe=${choice.tool_calls?.length ?? 0} finish=${choice.finish_reason || "-"}`);
+    if (toolSession) {
+      choice.toolContract = { ...toolSession.contract, names: [...toolSession.contract.names] };
+      if (toolSession.mode === "standard" && choice.toolContract.transport === "native" && choice.toolContract.names.length > 0) delete choice.toolContract;
+    }
     return choice;
   };
 
@@ -290,7 +299,11 @@ export async function chatWithProvider(opts: {
         observeOnly: opts.observeOnly,
       },
       complete,
-      { ...clientTools(opts), onHarness: opts.onHarness },
+      { ...clientTools(opts), onHarness: opts.onHarness,
+        selectTools: toolSession ? (names) => toolSession.select(names) : undefined,
+        tryTextFallback: toolSession ? () => toolSession.tryTextFallback() : undefined,
+        onNativeToolSuccess: cliKind ? undefined : () => noteToolSuccess(spec.id, model, normalizeBaseUrl(opts.baseUrl || spec.baseUrl)),
+      },
     );
   } catch (err) {
     requestPhase(run, isAbortLike(err) ? "stopped" : "error");
@@ -608,17 +621,20 @@ function clientTools(opts: {
   };
 }
 
-function toolsForCall(observeOnly = false) {
+function toolsForCall(observeOnly = false, session?: ToolSession) {
   const st = useIde.getState();
+  const compatible = Boolean(session && session.mode !== "standard");
   const picked = pickAgentTools({
     observeOnly,
-    mcp: st.mcpServers.some((s) => s.enabled) || Boolean(st.activeSurfaceId && st.activeSurfaceId !== "anvil"),
-    engine: Boolean(st.engineLoop || st.engineLink?.ok),
+    compatibility: compatible,
+    mcp: compatible || st.mcpServers.some((s) => s.enabled) || Boolean(st.activeSurfaceId && st.activeSurfaceId !== "anvil"),
+    engine: compatible || Boolean(st.engineLoop || st.engineLink?.ok),
     skills: useLearn.getState().skills.length > 0,
-    debug: Boolean(st.debug.paused) || Object.values(st.breakpoints).some((b) => b.length),
-    git: Boolean(st.workspaceCwd?.trim()),
+    debug: compatible || Boolean(st.debug.paused) || Object.values(st.breakpoints).some((b) => b.length),
+    git: compatible || Boolean(st.workspaceCwd?.trim()),
   });
-  return picked.filter((t) => toolsAllowed(st.activeSurfaceId, st.surfaceMode, t.function.name));
+  const allowed = picked.filter((t) => toolsAllowed(st.activeSurfaceId, st.surfaceMode, t.function.name));
+  return session ? session.tools(allowed) : allowed;
 }
 
 function setWireCtx(payload: Record<string, unknown>, ctx: number): void {
@@ -638,6 +654,7 @@ function makeLocalComplete(
   context = 32768,
   thinking: ThinkingMode = "auto",
   observeOnly = false,
+  session?: ToolSession,
 ) {
   const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
   const chatUrl = localChatUrl(spec.id, base);
@@ -653,8 +670,10 @@ function makeLocalComplete(
     onDelta?: (s: string, kind?: "text" | "think") => void,
   ): Promise<LlmChoice> => {
     if (!base) throw new Error("Bitte eine API-URL eintragen.");
-    bindCapTarget(spec.id, model);
-    const cap0 = getCap(spec.id, model);
+    const learnedCap = getCap(spec.id, model, base);
+    const cap0 = session?.text && learnedCap.tools !== "off" ? { ...learnedCap, tools: "text" as const } : learnedCap;
+    const offered = toolsForCall(observeOnly, session);
+    session?.record(useTools && cap0.tools !== "off" ? offered : [], cap0.tools === "text");
     const wantTools = sendTools(cap0, Boolean(useTools));
     const think = wantTools && cap0.noThinkWithTools ? "off" : thinking;
     const st = useIde.getState();
@@ -669,13 +688,14 @@ function makeLocalComplete(
       { provider: spec.id, model, api: spec.api, context: wireCtx, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
       { tools: wantTools },
     );
-    let tools = wantTools ? toolsForCall(observeOnly) : null;
-    let choiceMode: "auto" | "required" = useTools === "required" && wantTools && !cap0.noRequired ? "required" : "auto";
+    let tools = wantTools ? offered : null;
+    let choiceMode: "auto" | "required" = useTools === "required" && (!session || session.mode === "standard") && wantTools && !cap0.noRequired ? "required" : "auto";
     if (tools) {
       payload.tools = tools;
       payload.tool_choice = choiceMode;
     }
-    if (useTools && cap0.tools === "text") prepareTextTools(payload, toolsForCall(observeOnly));
+    if (useTools) session?.prepare(payload);
+    if (useTools && cap0.tools === "text") prepareTextTools(payload, offered);
     applyCapToPayload(payload, cap0, Boolean(tools));
     let last: unknown;
     let stripped = false;
@@ -725,10 +745,13 @@ function makeLocalComplete(
             last = new Error("Kontext voll, kürze");
             continue;
           }
-          if (res.status === 400) {
-            const learned = learnFromError(spec.id, current, 400, body);
+          if (res.status === 400 || res.status === 422) {
+            const learned = learnFromError(spec.id, current, res.status, body, base);
             if (learned) {
-              if (useTools && learned.tools === "text") prepareTextTools(payload, tools || toolsForCall(observeOnly));
+              if (useTools && learned.tools === "text") {
+                prepareTextTools(payload, tools || offered);
+                session?.record(offered, true);
+              }
               const still = applyCapToPayload(payload, learned, Boolean(useTools) && learned.tools !== "off" && learned.tools !== "text");
               if (!still) {
                 tools = null;
@@ -817,11 +840,11 @@ function makeProxyComplete(
   context = 32768,
   thinking: ThinkingMode = "auto",
   observeOnly = false,
+  session?: ToolSession,
 ) {
   return async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void): Promise<LlmChoice> => {
     const key = apiKey.trim();
     const nativeHttp = hasLlmTransport();
-    bindCapTarget(spec.id, model);
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
     let last: unknown;
     const gen = agentGen();
@@ -830,7 +853,14 @@ function makeProxyComplete(
     for (let attempt = 1; attempt <= tries; attempt++) {
       throwIfAborted();
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
-      const cap = getCap(spec.id, model);
+      const learnedCap = getCap(spec.id, model, base);
+      const cap = session?.text && learnedCap.tools !== "off" ? { ...learnedCap, tools: "text" as const } : learnedCap;
+      const offered = toolsForCall(observeOnly, session);
+      session?.record(useTools && cap.tools !== "off" ? offered : [], cap.tools === "text");
+      const prepared: Record<string, unknown> = { messages };
+      if (useTools) session?.prepare(prepared);
+      if (useTools && cap.tools === "text") prepareTextTools(prepared, offered);
+      const wireMessages = prepared.messages as Record<string, unknown>[];
       const wantTools = sendTools(cap, Boolean(useTools));
       const think = wantTools && cap.noThinkWithTools ? "off" : thinking;
       const rt = { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: useIde.getState().llmTemperature, maxOut: useIde.getState().llmMaxOut };
@@ -841,7 +871,7 @@ function makeProxyComplete(
       try {
         if (nativeHttp && spec.api === "anthropic") {
           const st = useIde.getState();
-          const fitted = { messages: [...messages] };
+          const fitted = { messages: [...wireMessages] };
           prepChatPayload(fitted, context);
           const packed = fitted.messages as Record<string, unknown>[];
           const system = packed.filter((m) => m.role === "system").map((m) => String(m.content ?? "")).join("\n\n");
@@ -857,7 +887,7 @@ function makeProxyComplete(
           );
           body.stream = true;
           if (wantTools) {
-            body.tools = toolsForCall(observeOnly).map((t) => ({
+            body.tools = offered.map((t) => ({
               name: t.function.name,
               description: t.function.description,
               input_schema: t.function.parameters ?? { type: "object", properties: {} },
@@ -873,6 +903,8 @@ function makeProxyComplete(
           let res = await sendAnt();
           if (!res.ok && res.status === 400) {
             const errText = await res.text();
+            const learned = learnFromError(spec.id, model, res.status, errText, base);
+            if (learned && attempt < tries) { last = new Error(learned.note); continue; }
             const think = body.thinking as Record<string, unknown> | undefined;
             if (think?.type === "adaptive" && /adaptive|thinking/i.test(errText)) {
               const maxTok = Number(body.max_tokens) || 8192;
@@ -897,7 +929,7 @@ function makeProxyComplete(
           const st = useIde.getState();
           if (needResponses) {
             const chatPayload: Record<string, unknown> = applyLlmOptions(
-              { model, temperature: st.llmTemperature, messages },
+              { model, temperature: st.llmTemperature, messages: wireMessages },
               { ...rt, api: "azure" },
               { tools: wantTools },
             );
@@ -905,7 +937,7 @@ function makeProxyComplete(
             const body = responsesBody(chatPayload, "azure");
             body.stream = true;
             if (wantTools) {
-              body.tools = toResponsesTools(toolsForCall(observeOnly));
+              body.tools = toResponsesTools(offered);
               body.tool_choice = "auto";
             }
             const res = await lanFetch(`${host.origin}/openai/v1/responses`, {
@@ -918,12 +950,12 @@ function makeProxyComplete(
             throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
           }
           const payload: Record<string, unknown> = applyLlmOptions(
-            { temperature: st.llmTemperature, messages, stream: true },
+            { temperature: st.llmTemperature, messages: wireMessages, stream: true },
             { ...rt, api: "azure" },
             { tools: wantTools },
           );
           if (wantTools) {
-            payload.tools = toolsForCall(observeOnly);
+            payload.tools = offered;
             payload.tool_choice = "auto";
           }
           prepChatPayload(payload, context);
@@ -942,7 +974,7 @@ function makeProxyComplete(
         if (pipeOk && needResponses) {
           const st = useIde.getState();
           const chatPayload: Record<string, unknown> = applyLlmOptions(
-            { model, temperature: st.llmTemperature, messages },
+            { model, temperature: st.llmTemperature, messages: wireMessages },
             { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
             { tools: wantTools },
           );
@@ -950,8 +982,8 @@ function makeProxyComplete(
           const body = responsesBody(chatPayload, spec.id);
           body.stream = true;
           if (wantTools) {
-            body.tools = toResponsesTools(toolsForCall(observeOnly));
-            body.tool_choice = useTools === "required" && !cap.noRequired ? "required" : "auto";
+            body.tools = toResponsesTools(offered);
+            body.tool_choice = useTools === "required" && (!session || session.mode === "standard") && !cap.noRequired ? "required" : "auto";
           }
           let res = await lanFetch(`${base}/responses`, {
             method: "POST",
@@ -975,7 +1007,7 @@ function makeProxyComplete(
             } else if (res.status === 404) {
               last = new Error(`HTTP 404: ${errText.slice(0, 180)}`);
             } else {
-              const learned = learnFromError(spec.id, model, res.status, errText);
+              const learned = learnFromError(spec.id, model, res.status, errText, base);
               if (learned && attempt < tries) {
                 last = new Error(learned.note || `HTTP ${res.status}`);
                 continue;
@@ -1002,17 +1034,17 @@ function makeProxyComplete(
             {
               model,
               temperature: st.llmTemperature,
-              messages,
+              messages: wireMessages,
               stream: Boolean(onDelta) && !(wantTools && cap.noStreamTools),
             },
             { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
             { tools: wantTools },
           );
           if (wantTools) {
-            payload.tools = toolsForCall(observeOnly);
-            payload.tool_choice = useTools === "required" && !cap.noRequired ? "required" : "auto";
+            payload.tools = offered;
+            payload.tool_choice = useTools === "required" && (!session || session.mode === "standard") && !cap.noRequired ? "required" : "auto";
           }
-          if (useTools && cap.tools === "text") prepareTextTools(payload, toolsForCall(observeOnly));
+          if (useTools && cap.tools === "text") prepareTextTools(payload, offered);
           applyCapToPayload(payload, cap, wantTools);
           prepChatPayload(payload, context);
           const res = await lanFetch(`${base}/chat/completions`, {
@@ -1031,7 +1063,7 @@ function makeProxyComplete(
             return choice;
           }
           const body = await res.text();
-          const learned = learnFromError(spec.id, model, res.status, body);
+          const learned = learnFromError(spec.id, model, res.status, body, base);
           if (learned && attempt < tries) {
             last = new Error(learned.note || `HTTP ${res.status}`);
             continue;
@@ -1052,8 +1084,10 @@ function makeProxyComplete(
               baseUrl: baseUrl || spec.baseUrl,
               model,
               apiKey: key,
-              messages,
+              messages: wireMessages,
               useTools: wantTools,
+              toolNames: session && session.mode !== "standard" ? offered.map((t) => t.function.name) : undefined,
+              compactTools: Boolean(session && session.mode !== "standard"),
               context,
               thinking: think,
               temperature: useIde.getState().llmTemperature,
@@ -1066,7 +1100,7 @@ function makeProxyComplete(
         if (!r.ok || !r.choice) {
           const err = r.error || "Keine Antwort";
           const st = /HTTP (\d{3})/.exec(err);
-          const learned = learnFromError(spec.id, model, st ? Number(st[1]) : 400, err);
+          const learned = learnFromError(spec.id, model, st ? Number(st[1]) : 0, err, base);
           if (learned && attempt < tries) {
             last = new Error(learned.note || err);
             continue;
@@ -1089,6 +1123,9 @@ function makeProxyComplete(
           throw new AgentAbortError(explainAbort(err));
         }
         const msg = err instanceof Error ? err.message : String(err);
+        const status = /^HTTP (\d{3})/.exec(msg);
+        const learned = status ? learnFromError(spec.id, model, Number(status[1]), msg, base) : null;
+        if (learned && attempt < tries) continue;
         const retry = /500|502|503|timeout|network|Failed to fetch/i.test(msg);
         if (!retry || attempt >= tries) throw err;
         await new Promise((res) => setTimeout(res, 800 * attempt));
