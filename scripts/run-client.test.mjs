@@ -44,4 +44,17 @@ test("manual Run survives agent Stop, keeps the custom URL, and returns native e
     assert.equal((await runFile(target, files)).ok, false);
   }
   assert.equal(calls.length, 1, "metadata must never reach the process backend");
+  let held = 0, released = 0;
+  window.anvilNative = {
+    companionEnsure: async () => { held++; return { ok: true }; },
+    companionRelease: async () => { released++; return { ok: true }; },
+  };
+  globalThis.fetch = async () => {
+    assert.equal(held - released, 1, "status requests must hold the local Companion alive");
+    return Response.json({ ok: false, running: false, stderr: "late process failure", stdout: "", duration: 1000, code: 9, cmd: "fixture" });
+  };
+  const { companionRunStatus } = await server.ssrLoadModule("/src/lib/companion.ts");
+  assert.equal((await companionRunStatus("fixture/123")).stderr, "late process failure");
+  assert.equal(held, 1);
+  assert.equal(released, 1);
 });

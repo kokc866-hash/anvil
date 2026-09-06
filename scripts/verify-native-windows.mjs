@@ -27,7 +27,11 @@ if (unpack.status !== 0) throw new Error(`Zig extraction failed: ${unpack.error?
 const folder = readdirSync(dir, { withFileTypes: true }).find((f) => f.isDirectory() && f.name.startsWith("zig-"));
 if (!folder) throw new Error("Zig folder missing.");
 const zig = path.join(dir, folder.name, "zig.exe");
+const terminal = spawnSync(process.execPath, ["--test", "--test-name-pattern=Windows terminal", "scripts/native-run.test.mjs"], {
+  env: { ...process.env, ANVIL_NATIVE_ZIG: zig }, stdio: "inherit", timeout: 30000,
+});
+if (terminal.status !== 0) throw new Error("Interactive Windows terminal verification failed.");
 const result = spawnSync(process.execPath, ["--test", "scripts/native-run.test.mjs"], {
-  env: { ...process.env, ANVIL_NATIVE_ZIG: zig }, stdio: "inherit", timeout: 300000,
+  env: { ...process.env, ANVIL_NATIVE_ZIG: zig }, stdio: "inherit", timeout: 480000,
 });
 process.exitCode = result.status ?? 1;

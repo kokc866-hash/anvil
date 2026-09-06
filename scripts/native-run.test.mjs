@@ -62,7 +62,7 @@ test("Python snapshot, temp files and logs live under the installation even with
   assert.ok(existsSync(path.dirname(first.stage.out)), "previous build remains available");
 });
 
-test("selected C++ entry links C helper as C and excludes the other Snake main", { skip: !resolveBin("cxx"), timeout: 240000 }, async () => {
+test("selected C++ entry links C helper as C and excludes the other Snake main", { skip: !resolveBin("cxx"), timeout: 360000 }, async () => {
   const result = await compileLang({ lang: "cpp", entry: "snake/snake.cpp", timeoutMs: 120000, asTest: true, files: [
     { path: "snake/snake.cpp", content: '#include <cstdio>\nextern "C" int twice(int);\nint main(){ std::printf("answer=%d\\n", twice(21)); return 0; }\n' },
     { path: "snake/snake.c", content: "int main(void){ return 99; }\n" },
@@ -99,6 +99,12 @@ test("Windows terminal gives Python real input/output console handles", { skip: 
   }
   assert.equal(final.ok, true, final.stderr);
   const file = path.join(path.dirname(final.stage.out), "src", "terminal.tty");
+  const runDir = path.dirname(final.stage.out);
+  const diagnostic = [JSON.stringify(final), "terminal.json.launch", "terminal.json.result"].map((value) => {
+    const log = path.join(runDir, value);
+    return existsSync(log) ? readFileSync(log, "utf8") : value;
+  }).join("\n");
+  assert.ok(existsSync(file), diagnostic);
   assert.equal(readFileSync(file, "utf8"), "True,True");
 });
 

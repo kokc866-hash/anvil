@@ -212,7 +212,7 @@ export async function companionInstall(
 }
 
 export async function companionCompile(
-  body: { lang: string; entry: string; files: { path: string; content: string }[]; timeoutMs?: number; cwd?: string; asTest?: boolean },
+  body: { lang: string; entry: string; files: { path: string; content: string }[]; timeoutMs?: number; cwd?: string; asTest?: boolean; compileTimeoutMs?: number },
   base = DEFAULT_COMPANION,
   signal?: AbortSignal,
 ): Promise<CompanionJob> {
@@ -220,7 +220,7 @@ export async function companionCompile(
     method: "POST",
     headers: headers(),
     body: JSON.stringify(body),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(660000)]) : AbortSignal.timeout(660000),
   });
   if (!r.ok) {
     const t = await r.text();
@@ -525,8 +525,11 @@ export async function companionDebug(
 }
 
 export async function companionRunStatus(id: string, base = DEFAULT_COMPANION): Promise<CompanionJob> {
-  const r = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(5000) });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-  return j as CompanionJob;
+  const { withCompanion } = await import("./companion-life");
+  return withCompanion(async () => {
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(5000) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return j as CompanionJob;
+  }, base);
 }

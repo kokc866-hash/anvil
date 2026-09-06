@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: anvil-release
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   metadata:

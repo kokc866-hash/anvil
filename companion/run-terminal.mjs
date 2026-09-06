@@ -11,7 +11,7 @@ export function terminalStep(step, cwd, env, folders) {
   if (process.platform === "win32") {
     const consoleHost = fileURLToPath(new URL("./terminal-console.ps1", import.meta.url));
     const powershell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    return { file: powershell, args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", consoleHost, "-NodePath", process.execPath, "-RunnerPath", host, "-JobPath", manifest], env: { ...env, ELECTRON_RUN_AS_NODE: "1" } };
+    return { file: powershell, args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", consoleHost, "-JobPath", manifest], env };
   }
   const terminal = process.env.DISPLAY && (which("x-terminal-emulator") || which("xterm"));
   if (!terminal) throw new Error("Dieses Programm benötigt ein interaktives Terminal. Auf diesem Rechner ist kein Desktop-Terminal verfügbar.");

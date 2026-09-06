@@ -24,8 +24,9 @@ export async function compileLang(body, { resolveCwd = (cwd) => cwd, signal } = 
     const files = Array.isArray(body.files) ? body.files : [];
     if (files.length > 400) throw new Error("Run-Snapshot umfasst mehr als 400 Dateien.");
     if (!files.some((f) => safeRel(f.path) === entry)) throw new Error("Startdatei fehlt im Run-Snapshot: " + entry);
-    const maxMs = (Number(process.env.ANVIL_COMPANION_TIMEOUT) || 120000);
+    const maxMs = (Number(process.env.ANVIL_COMPANION_TIMEOUT) || 600000);
     const timeoutMs = Math.min(maxMs, Math.max(1000, Number(body.timeoutMs) || 120000));
+    const compileMs = Math.min(maxMs, Math.max(1000, Number(body.compileTimeoutMs) || 300000));
     const persistRoot = body.cwd ? resolveCwd(body.cwd) : "";
     folders = createRunFolder(entry, persistRoot);
     beginRun(folders.id);
@@ -149,7 +150,7 @@ export async function compileLang(body, { resolveCwd = (cwd) => cwd, signal } = 
       const cwd = s.cwd || (isRun && !projectBound ? runCwd : workDir);
       const phase = i < steps.length - 1 ? "compile" : "run";
       const runStep = isRun && interactive ? terminalStep(s, cwd, env, folders) : s;
-      last = await spawnRun(runStep.file, runStep.args, cwd, timeoutMs, runStep.env || env, {
+      last = await spawnRun(runStep.file, runStep.args, cwd, isRun ? timeoutMs : compileMs, runStep.env || env, {
         signal,
         stdoutFile: path.join(folders.dir, `${i}-stdout.log`),
         stderrFile: path.join(folders.dir, `${i}-stderr.log`),
