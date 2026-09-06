@@ -15,8 +15,17 @@ public static class AnvilConsole {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetStdHandle(int kind, IntPtr handle);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
   [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
-  public static IntPtr Open(string name) { return CreateFileW(name, 0xC0000000u, 3, IntPtr.Zero, 3, 0, IntPtr.Zero); }
+  public static IntPtr Open(string name) {
+    var handle = CreateFileW(name, 0xC0000000u, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    // Process.Start passes these handles through STARTF_USESTDHANDLES.
+    if (handle != new IntPtr(-1) && !SetHandleInformation(handle, 1, 1)) {
+      int error = Marshal.GetLastWin32Error(); CloseHandle(handle);
+      throw new System.ComponentModel.Win32Exception(error);
+    }
+    return handle;
+  }
   // Windows CRT argv quoting. No shell interprets program arguments.
   public static string Quote(string value) {
     var text = new StringBuilder("\"");
