@@ -1,6 +1,6 @@
 /** Release gate against the user's Windows toolchain; downloads stay in CI's fixture directory. */
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -18,10 +18,12 @@ const archive = Buffer.from(await download.arrayBuffer());
 if (createHash("sha256").update(archive).digest("hex") !== info.shasum) throw new Error("Zig checksum differs from official metadata.");
 const archivePath = path.join(dir, "zig.zip");
 writeFileSync(archivePath, archive);
-const unpack = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Expand-Archive -LiteralPath $env:ANVIL_ZIG_ARCHIVE -DestinationPath $env:ANVIL_ZIG_FIXTURE -Force"], {
-  env: { ...process.env, ANVIL_ZIG_ARCHIVE: archivePath, ANVIL_ZIG_FIXTURE: dir }, stdio: "inherit", timeout: 120000,
+const sevenZip = path.join(process.env.ProgramFiles || "C:\\Program Files", "7-Zip", "7z.exe");
+if (!existsSync(sevenZip)) throw new Error("Windows runner's 7-Zip installation is missing.");
+const unpack = spawnSync(sevenZip, ["x", "-y", "-bd", "-bso0", "-o" + dir, archivePath], {
+  stdio: "pipe", encoding: "utf8", timeout: 180000,
 });
-if (unpack.status !== 0) throw new Error("Zig extraction failed.");
+if (unpack.status !== 0) throw new Error(`Zig extraction failed: ${unpack.error?.message || unpack.stderr || unpack.status}`);
 const folder = readdirSync(dir, { withFileTypes: true }).find((f) => f.isDirectory() && f.name.startsWith("zig-"));
 if (!folder) throw new Error("Zig folder missing.");
 const zig = path.join(dir, folder.name, "zig.exe");
