@@ -567,6 +567,14 @@ export async function brainGenerate(opts: {
     } finally {
       signal.removeEventListener("abort", interrupt);
     }
+  }).catch(async (error) => {
+    if (error?.name === "BrainExecutionTimeout" && engine === loadedEngine) {
+      // A stuck worker cannot acknowledge cancellation. Detach before resetting
+      // the queue so late output can never contaminate a new helper session.
+      useBrain.getState().setStatus({ status: "error", loadedId: "", error: `${error.message}. Helfer unter Einstellungen erneut laden.` });
+      await disposeBrainEngine();
+    }
+    throw error;
   });
 }
 

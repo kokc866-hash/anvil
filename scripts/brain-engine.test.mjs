@@ -56,8 +56,10 @@ test("a stalled helper can be unloaded and late tokens cannot enter the next ses
   await timeout;
   assert.equal(interrupts, 1);
   assert.equal(useBrain.getState().busy, false);
-  await unloadBrain();
   assert.equal(terminated, true, "worker disposal cannot await its stuck interrupt/unload reply");
+  assert.equal(useBrain.getState().status, "error", "a quarantined engine cannot still appear ready");
+  assert.equal(useBrain.getState().loadedId, "");
+  await unloadBrain();
   fixtureEngine({ chat: { completions: { create: async () => ({ choices: [{ message: { content: "fresh" } }] }) } } }, null);
   ready();
   assert.equal(await brainGenerate({ messages: [{ role: "user", content: "fresh" }], job: "intent" }), "fresh");

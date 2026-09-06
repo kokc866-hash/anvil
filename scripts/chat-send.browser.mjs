@@ -18,9 +18,16 @@ const upstream = httpServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += chunk;
   if (req.method === "POST") {
-    requests.push({ provider: "LAN", url: req.url, body: JSON.parse(body) });
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    res.end(sse({ choices: [{ index: 0, delta: { content: reply("LAN") }, finish_reason: null }] }) + "data: [DONE]\n\n");
+    const payload = JSON.parse(body);
+    requests.push({ provider: "LAN", url: req.url, body: payload });
+    if (req.url !== "/api/chat") { res.writeHead(404); res.end("expected native Ollama chat"); return; }
+    if (JSON.stringify(payload.messages).includes("fixture-http-error")) {
+      res.writeHead(404, { "content-type": "application/json" }); res.end('{"error":"model not found"}'); return;
+    }
+    const toolRound = JSON.stringify(payload.messages).includes("fixture-tool-round") && !payload.messages.some((message) => message.role === "tool");
+    res.writeHead(200, { "content-type": payload.stream ? "application/x-ndjson" : "application/json" });
+    const message = toolRound ? { role: "assistant", thinking: "Ich lese die Datei.", tool_calls: [{ function: { name: "read_file", arguments: { path: "README.md" } } }] } : { role: "assistant", content: reply("LAN") };
+    res.end(JSON.stringify({ message, done: true, done_reason: "stop", prompt_eval_count: 123, eval_count: 17 }) + (payload.stream ? "\n" : ""));
   } else {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ data: [{ id: "fixture-local" }] }));
@@ -71,7 +78,7 @@ try {
     await page.route("**/pipe", async (route) => {
       const req = route.request();
       const target = req.headers()["x-anvil-target"] || "";
-      if (target.startsWith(cfg.base)) return route.continue();
+      if (target.startsWith(cfg.base.replace(/\/v1$/, ""))) return route.continue();
       assert.ok(target.startsWith("https://api.openai.com/v1/"), `unexpected model destination: ${target}`);
       const headers = {
         "access-control-allow-origin": "http://127.0.0.1:8189",
@@ -93,6 +100,7 @@ try {
         llmBaseUrl: provider === "ollama" ? cfg.base : "https://api.openai.com/v1",
         llmModel: provider === "ollama" ? "fixture-local" : "gpt-5.6-terra",
         llmAuthMode: "key", llmApiKey: provider === "ollama" ? "" : "fixture-key",
+        llmContext: 8192, llmContextAuto: false, llmThinking: "low",
         agentMode: mode, activeSurfaceId: "anvil", mcpServers: [],
         files: { "index.html": "<h1>Fixture</h1>", "README.md": "Fixture documentation" },
         activePath: null, openPaths: [], attached: [], autoRunAgent: false,
@@ -100,6 +108,8 @@ try {
       // Production verifies the unmodified bundle. The dev regression below
       // enables a fake loaded GPU engine but uses the real scheduler/apps/send.
       localStorage.setItem("anvil-brain", JSON.stringify({ state: { on: false, autoLoad: false }, version: 0 }));
+      // A failed /v1 attempt from 1.3.14 must not disable native chat capabilities.
+      localStorage.setItem("anvil-model-caps", JSON.stringify({ "ollama::fixture-local": { tools: "off", noThinkWithTools: true, noStreamTools: true, at: Date.now() } }));
       window.anvilNative = {
         llmPipe: async () => cfg.pipe,
         companionEnsure: async () => ({ ok: true }),
@@ -159,13 +169,52 @@ try {
     for (const request of sent) {
       assert.equal(request.provider, label);
       assert.equal(request.body.model, provider === "ollama" ? "fixture-local" : "gpt-5.6-terra");
+      if (provider === "ollama") {
+        assert.equal(request.url, "/api/chat");
+        assert.equal(request.body.options.num_ctx, 8192);
+        assert.equal(request.body.think, "low");
+        assert.equal(request.body.tool_choice, undefined);
+      }
     }
+    const log = await page.evaluate(() => JSON.parse(localStorage.getItem("anvil-applog") || "[]"));
+    assert.ok(log.some((row) => row.tag === "http" && row.msg.includes("POST") && row.msg.includes(provider === "ollama" ? "/api/chat" : "/responses")));
+    assert.ok(log.some((row) => row.tag === "agent" && row.msg.includes("abgeschlossen")));
+    assert.equal(JSON.stringify(log).includes("fixture-key"), false);
     assert.deepEqual(errors, []);
     if (mode === "ask" && process.env.ANVIL_QA_SCREENSHOTS) {
       await mkdir(process.env.ANVIL_QA_SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: path.join(process.env.ANVIL_QA_SCREENSHOTS, production ? "chat-production.png" : "chat-dev.png") });
     }
     console.log(`${production ? "PRODUCTION" : "STALLED_HELPER"}_${label}_${mode.toUpperCase()}_SEND_OK`);
+    await page.close();
+  }
+
+  {
+    const { page, errors } = await openChat("ollama", "agent");
+    const before = requests.length;
+    await send(page, "fixture-tool-round: Lies README.md mit read_file und bestätige dann den Inhalt.");
+    await answered(page, "LAN");
+    const sent = requests.slice(before);
+    assert.equal(sent.length, 2);
+    assert.ok(sent[0].body.tools.some((tool) => tool.function.name === "read_file"));
+    const history = sent[1].body.messages;
+    assert.ok(history.some((message) => message.role === "assistant" && message.tool_calls?.[0]?.function.arguments.path === "README.md"));
+    assert.ok(history.some((message) => message.role === "tool" && message.tool_name === "read_file" && message.content.includes("Fixture documentation")));
+    assert.deepEqual(errors, []);
+    console.log("OLLAMA_NATIVE_TOOL_HISTORY_ROUND_OK");
+    await page.close();
+  }
+
+  {
+    const { page, errors } = await openChat("ollama", "agent");
+    await send(page, "fixture-http-error");
+    await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy && window.__anvilIde.getState().chat.some((m) => m.role === "assistant" && m.content));
+    const log = await page.evaluate(() => JSON.parse(localStorage.getItem("anvil-applog") || "[]"));
+    assert.ok(log.some((row) => row.tag === "http" && row.msg.includes("HTTP 404")));
+    assert.ok(log.some((row) => row.tag === "agent" && row.msg.includes("fehlgeschlagen")));
+    assert.equal(log.some((row) => row.tag === "agent" && row.msg.includes("abgeschlossen")), false);
+    assert.deepEqual(errors, []);
+    console.log("FAILED_REQUEST_LOG_OUTCOME_OK");
     await page.close();
   }
 

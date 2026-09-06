@@ -21,10 +21,12 @@ import { nodeCommand, withNodeEnv } from "./node-cmd.mjs";
 import { serverLaunch } from "./ui-boot.mjs";
 import { ANVIL_PARTITION, allowAnvilPerm, anvilWebPrefs } from "./session.mjs";
 import { sweepAnvilTemp } from "../companion/tmp.mjs";
+import { appOrigin } from "./app-origin.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.ANVIL_PORT || 8080);
-const URL = `http://127.0.0.1:${PORT}/`;
+const APP_URL = `http://127.0.0.1:${PORT}/`;
+const isAppUrl = appOrigin(PORT);
 function appTitle() {
   try {
     const v = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
@@ -136,12 +138,7 @@ function hideSplash() {
 
 function sameApp(url) {
   if (!url || url.startsWith("data:") || url === "about:blank") return true;
-  try {
-    const u = new URL(url);
-    return u.hostname === "127.0.0.1" && Number(u.port || 80) === PORT;
-  } catch {
-    return false;
-  }
+  return isAppUrl(url);
 }
 
 function hardenContents(wc) {
@@ -413,7 +410,7 @@ async function createWindow() {
     win.show();
     win.focus();
   });
-  await win.loadURL(URL);
+  await win.loadURL(APP_URL);
   if (!win.isVisible()) {
     hideSplash();
     win.show();
@@ -458,12 +455,12 @@ if (!gotLock) {
       });
     });
     helperSrv = await startHelperHost();
-    bindSecretsIpc((url) => Boolean(url && /^https?:/.test(url) && sameApp(url)));
+    bindSecretsIpc(isAppUrl);
     pipeSrv = await startLlmPipe(resolveCredentialHeaders);
     bindPathsIpc();
     bindHwIpc();
     bindAccountIpc();
-    bindCliIpc((url) => Boolean(url && /^https?:/.test(url) && sameApp(url)));
+    bindCliIpc(isAppUrl);
     bindUpdateIpc();
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());

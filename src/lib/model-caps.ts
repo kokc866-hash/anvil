@@ -31,7 +31,9 @@ function empty(): ModelCap {
 }
 
 export function capKey(provider: string, model: string): string {
-  return `${String(provider || "").trim()}::${String(model || "").trim().toLowerCase()}`;
+  const key = String(provider || "").trim();
+  // Errors learned on /v1 must not disable tools/thinking on native /api/chat.
+  return `${key === "ollama" ? "ollama-native-chat" : key}::${String(model || "").trim().toLowerCase()}`;
 }
 
 function load(): Record<string, ModelCap> {

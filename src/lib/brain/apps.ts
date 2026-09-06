@@ -59,7 +59,7 @@ export async function brainExplainError(stderr: string, path: string): Promise<s
     stop: ["\n\n\n"],
     pri: 1,
     job: "errors",
-  });
+  }).catch(() => "");
   return raw.split("\n").slice(0, 4).join("\n").slice(0, 400) || heur;
 }
 
@@ -82,7 +82,7 @@ export async function brainDiffSummary(items: { path: string; before: string; af
     stop: ["\n"],
     pri: 1,
     job: "diffs",
-  });
+  }).catch(() => "");
   return firstUsefulLine(raw, 140) || blob;
 }
 
@@ -103,7 +103,7 @@ export async function brainSearchNeedle(q: string): Promise<string> {
     stop: ["\n", " "],
     pri: 1,
     job: "search",
-  });
+  }).catch(() => "");
   const n = firstUsefulLine(raw, 32).replace(/['"]/g, "");
   return n.length >= 2 ? n : q;
 }
@@ -125,7 +125,7 @@ export async function brainAttach(ask: string, files: string[]): Promise<string[
     json: true,
     pri: 1,
     job: "attach",
-  });
+  }).catch(() => "");
   const j = extractJson(raw) as { paths?: string[] } | null;
   const set = new Set(files);
   return (j?.paths ?? []).filter((p) => set.has(p)).slice(0, 4);
@@ -147,7 +147,7 @@ export async function brainChatTitle(user: string): Promise<string> {
     stop: ["\n"],
     pri: 2,
     job: "title",
-  });
+  }).catch(() => "");
   return firstUsefulLine(raw, 48) || heur;
 }
 
@@ -163,7 +163,7 @@ export async function brainDocstring(lang: string, code: string): Promise<string
     stop: ["```"],
     pri: 1,
     job: "doc",
-  });
+  }).catch(() => "");
   return raw.replace(/^```[\w]*\n?|\n?```$/g, "").trim().slice(0, 400);
 }
 
@@ -181,7 +181,7 @@ export async function brainBreakpoint(stderr: string): Promise<{ path: string; l
     json: true,
     pri: 1,
     job: "break",
-  });
+  }).catch(() => "");
   const j = extractJson(raw) as { path?: string; line?: number } | null;
   if (!j?.path || !j.line) return null;
   return { path: j.path, line: Number(j.line) };
@@ -356,7 +356,7 @@ export async function brainRename(hint: string, ext: string): Promise<string> {
     stop: ["\n", " ", "/"],
     pri: 2,
     job: "rename",
-  });
+  }).catch(() => "");
   const line = firstUsefulLine(raw, 40).replace(/^["'`]+|["'`]+$/g, "");
   if (!line) return heur;
   return slugName(line, ext);
@@ -394,7 +394,7 @@ export async function brainRunPick(files: string[], active: string): Promise<str
     stop: ["\n", " "],
     pri: 1,
     job: "runpick",
-  });
+  }).catch(() => "");
   const line = firstUsefulLine(raw, 80);
   return cand.includes(line) ? line : heur;
 }
@@ -417,7 +417,7 @@ export async function brainFixLine(): Promise<string> {
     stop: ["\n\n"],
     pri: 1,
     job: "fixline",
-  });
+  }).catch(() => "");
   return firstUsefulLine(raw, 120) || heur;
 }
 

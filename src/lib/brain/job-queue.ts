@@ -3,6 +3,7 @@ export type BrainPri = 0 | 1 | 2;
 type Job = {
   pri: BrainPri;
   key: string;
+  ms: number;
   fn: (signal: AbortSignal) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -10,7 +11,9 @@ type Job = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-/** Deadlines include queue time. A timed-out engine stays quarantined until it
+const unavailable = () => Object.assign(new Error("Helfer nach Zeitlimit noch nicht verfügbar."), { name: "BrainUnavailable" });
+
+/** Queue wait and execution each have bounded budgets. A timed-out engine stays quarantined until it
  * settles or its owner disposes it and resets the queue. Never overlap GPU jobs. */
 export class BrainJobQueue {
   private pending: Job[] = [];
@@ -24,21 +27,20 @@ export class BrainJobQueue {
     this.onDone = onDone;
   }
 
-  enqueue<T>(pri: BrainPri, key: string, ms: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  enqueue<T>(pri: BrainPri, key: string, ms: number, fn: (signal: AbortSignal) => Promise<T>, waitMs = ms): Promise<T> {
     if (this.held) return Promise.reject(new Error("Helfer pausiert"));
-    if (this.active?.ctrl.signal.aborted) return Promise.reject(this.active.ctrl.signal.reason);
+    if (this.active?.ctrl.signal.aborted) return Promise.reject(unavailable());
     for (const job of this.pending.filter((j) => j.key === key)) {
       this.cancel(job, Object.assign(new Error("superseded"), { name: "Superseded" }));
     }
     return new Promise<T>((resolve, reject) => {
       const job: Job = {
-        pri, key, fn, resolve: resolve as (value: unknown) => void, reject,
+        pri, key, ms, fn, resolve: resolve as (value: unknown) => void, reject,
         ctrl: new AbortController(),
         timer: setTimeout(() => {
-          const error = new Error(`Helfer-Zeitlimit: ${key}`);
+          const error = Object.assign(new Error(`Helfer-Wartezeit überschritten: ${key}`), { name: "BrainQueueTimeout" });
           this.cancel(job, error);
-          if (this.active === job) this.clear(error);
-        }, ms),
+        }, waitMs),
       };
       this.pending.push(job);
       this.pending.sort((a, b) => a.pri - b.pri);
@@ -63,6 +65,12 @@ export class BrainJobQueue {
       return;
     }
     this.active = job;
+    clearTimeout(job.timer);
+    job.timer = setTimeout(() => {
+      const error = Object.assign(new Error(`Helfer-Zeitlimit bei Ausführung: ${job.key}`), { name: "BrainExecutionTimeout" });
+      this.cancel(job, error);
+      this.clear(unavailable());
+    }, job.ms);
     this.onBusy(true);
     const started = Date.now();
     void Promise.resolve()

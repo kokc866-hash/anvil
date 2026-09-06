@@ -73,7 +73,7 @@ import { resetLiveWrite } from "@/lib/live-write";
 
 import { attachmentHints } from "@/lib/attachment-hints";
 import { selectFileKeys } from "@/lib/workspace-index";
-import { requestPhase } from "@/lib/request-state";
+import { requestPhase, useRequestState } from "@/lib/request-state";
 
 export async function applyWorkspace(ev: WorkspaceEvent) {
   const s = useIde.getState();
@@ -170,7 +170,7 @@ export async function sendChat(
   if (my !== agentGen()) return;
   appLog(
     "agent",
-    `start ${useIde.getState().llmProvider} ${useIde.getState().llmModel || "-"} host=${logHost(useIde.getState().llmBaseUrl)} ctx=${useIde.getState().llmContext} think=${useIde.getState().llmThinking}`,
+    `R${my} start ${useIde.getState().llmProvider} ${useIde.getState().llmModel || "-"} host=${logHost(useIde.getState().llmBaseUrl)} ctx=${useIde.getState().llmContext} think=${useIde.getState().llmThinking}`,
   );
   useBrain.getState().setFollowups([]);
   setDraft("");
@@ -710,7 +710,7 @@ export async function sendChat(
       if (!parked) {
         useIde.getState().setAgentJob(null);
         const last = useIde.getState().chat.at(-1);
-        const failed = /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test(
+        const failed = ["error", "stopped"].includes(useRequestState.getState().phase) || /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test(
           (last?.content || "").trim(),
         );
         const proved = Boolean(
@@ -722,7 +722,8 @@ export async function sendChat(
       void idleCompanion().catch(() => undefined);
       requestPhase(my, "done");
       setAgentBusy(false);
-      appLog("agent", parked ? "frage" : "ende");
+      const phase = useRequestState.getState().phase;
+      appLog("agent", `R${my} ${parked ? "wartet auf Rückfrage" : phase === "error" ? "fehlgeschlagen" : phase === "stopped" ? "gestoppt" : "abgeschlossen"}`);
       if (!parked) useIde.getState().setRunning(false);
       if (!parked && !holdUi) void import("@/lib/run-window").then((m) => m.releaseAgentUi());
       else if (!parked) {

@@ -35,6 +35,7 @@ import { cliKindFor, completeViaCli } from "./cli-client";
 import { fetchModels, normalizeBaseUrl } from "./connection";
 export { normalizeBaseUrl } from "./connection";
 import { lanFetch, hasLlmTransport } from "./lan-fetch";
+import { localChatUrl, sanitizeLocalPayload, wrapOllamaResponse } from "./local-wire";
 import { anthropicHeaders, pipeHeaders, responsesNative } from "./llm-headers";
 import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
 import { useIde } from "@/store/ide";
@@ -258,10 +259,15 @@ export async function chatWithProvider(opts: {
     ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly)
     : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly);
 
-  const complete: typeof transport = (messages, tools, onDelta) => {
+  let modelRound = 0;
+  const complete: typeof transport = async (messages, tools, onDelta) => {
     throwIfAborted();
     requestPhase(run, "waiting");
-    return transport(messages, tools, onDelta);
+    const round = ++modelRound;
+    const choice = await transport(messages, tools, onDelta);
+    const { appLog } = await import("./app-log");
+    appLog("agent", `R${run} Antwort ${round} · text=${choice.content?.length ?? 0} think=${choice.reasoning?.length ?? 0} Werkzeugaufrufe=${choice.tool_calls?.length ?? 0} finish=${choice.finish_reason || "-"}`);
+    return choice;
   };
 
   try {
@@ -645,6 +651,7 @@ function makeLocalComplete(
   observeOnly = false,
 ) {
   const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
+  const chatUrl = localChatUrl(spec.id, base);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "text/event-stream",
@@ -692,17 +699,11 @@ function makeLocalComplete(
       try {
         payload.model = current;
         prepChatPayload(payload, wireCtx);
-        if (spec.id === "ollama") delete payload.tool_choice;
-        void import("./app-log").then((m) =>
-          m.appLog(
-            "agent",
-            `POST ${base}/chat/completions model=${current} think=${String(payload.think)} tools=${Array.isArray(payload.tools) ? (payload.tools as unknown[]).length : 0} ctx=${wireCtx} stream=${payload.stream ? 1 : 0}`,
-          ),
-        );
-        const res = await localFetch(`${base}/chat/completions`, {
+        const wirePayload = sanitizeLocalPayload(spec.id, payload);
+        const res = await localFetch(chatUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify(payload),
+          body: JSON.stringify(wirePayload),
           signal: withAgentTimeout(hardStopMs(useIde.getState().llmHardStopMin)),
         });
         if (!res.ok) {
@@ -784,8 +785,8 @@ function makeLocalComplete(
           void import("./app-log").then((m) => m.appLog("http", `${res.status} ${body.slice(0, 160)}`));
           throw new Error(`HTTP ${res.status}: ${body.slice(0, 280)}`);
         }
-        if (onDelta && (res.headers.get("content-type")?.includes("text/event-stream") || payload.stream)) {
-          const choice = await readSseChat(res, onDelta);
+        if (spec.id === "ollama" || (onDelta && (res.headers.get("content-type")?.includes("text/event-stream") || payload.stream))) {
+          const choice = await readSseChat(spec.id === "ollama" ? wrapOllamaResponse(chatUrl, res) : res, onDelta);
           if (!choice.content && !choice.reasoning && !choice.tool_calls?.length) {
             throw new StreamStallError("Leere Antwort");
           }
@@ -1155,16 +1156,22 @@ export async function completeLocal(opts: {
       },
       { provider: spec.id, model, api: spec.api, context: ctx, thinking: "off", temperature: 0.2, maxOut: 1200 },
     );
-    const res = await lanFetch(`${base}/chat/completions`, {
+    const chatUrl = localChatUrl(spec.id, base);
+    const res = await lanFetch(chatUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(opts.apiKey.trim() ? { Authorization: `Bearer ${opts.apiKey.trim()}` } : {}),
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(sanitizeLocalPayload(spec.id, payload)),
       signal: withAgentTimeout(0),
     }, spec.id === "custom" ? base : "");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (spec.id === "ollama") {
+      const choice = await readSseChat(wrapOllamaResponse(chatUrl, res));
+      if (!choice.content?.trim()) throw new Error("Leere Antwort.");
+      return choice.content.trim();
+    }
     const json = (await res.json()) as { choices: { message: { content?: string } }[] };
     const text = json.choices[0]?.message?.content?.trim();
     if (!text) throw new Error("Leere Antwort.");

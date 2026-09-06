@@ -1,167 +1,138 @@
-/** What we actually POST to Ollama / LM Studio / llama.cpp. Keep this boring. */
-
-const OLLAMA_KEYS = new Set([
-  "model",
-  "messages",
-  "stream",
-  "tools",
-  "think",
-  "keep_alive",
-  "options",
-  "temperature",
-]);
-
-const LOCAL_KEYS = new Set([
-  ...OLLAMA_KEYS,
-  "max_tokens",
-  "enable_thinking",
-  "chat_template_kwargs",
-  "reasoning_budget",
-]);
-
-const OPT_KEYS = new Set(["num_ctx", "n_ctx", "num_predict", "temperature", "think", "keep_alive"]);
+/** Translate the agent's OpenAI-shaped history to Ollama's native chat API. */
+const OLLAMA_KEYS = new Set(["model", "messages", "stream", "tools", "think", "keep_alive", "options"]);
+const OPT_KEYS = new Set(["num_ctx", "num_predict", "temperature"]);
+type RecordValue = Record<string, unknown>;
+const record = (value: unknown): RecordValue => value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
 
 export function ollamaRoot(baseUrl: string): string {
-  return String(baseUrl || "")
-    .trim()
-    .replace(/\/+$/, "")
-    .replace(/\/v1$/i, "")
-    .replace(/\/openai$/i, "");
+  return baseUrl.trim().replace(/\/+$/, "").replace(/\/(?:v1|openai|api\/(?:chat|tags|generate))$/i, "");
 }
 
-export function usesOllamaNative(provider: string, baseUrl = ""): boolean {
-  const p = String(provider || "").toLowerCase();
-  if (p === "ollama") return true;
-  const u = String(baseUrl || "");
-  return /:11434\b/.test(u) || /\/api\/(chat|tags|generate)\b/i.test(u);
+export function usesOllamaNative(provider: string): boolean {
+  // Custom endpoints stay OpenAI-compatible even when they happen to use 11434.
+  return provider.toLowerCase() === "ollama";
 }
 
 export function localChatUrl(provider: string, baseUrl: string): string {
-  const base = String(baseUrl || "").replace(/\/+$/, "");
-  if (usesOllamaNative(provider, baseUrl)) return `${ollamaRoot(base)}/api/chat`;
-  return `${base}/chat/completions`;
+  return usesOllamaNative(provider) ? `${ollamaRoot(baseUrl)}/api/chat` : `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
 }
 
-export function sanitizeLocalPayload(
-  provider: string,
-  payload: Record<string, unknown>,
-  toolsOn: boolean,
-): Record<string, unknown> {
-  const ollama = usesOllamaNative(provider, "");
-  const allow = ollama ? OLLAMA_KEYS : LOCAL_KEYS;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(payload)) {
-    if (allow.has(k) && v !== undefined) out[k] = v;
-  }
-  if (out.options && typeof out.options === "object") {
-    const src = out.options as Record<string, unknown>;
-    const opt: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(src)) {
-      if (OPT_KEYS.has(k) && v !== undefined) opt[k] = v;
+function ollamaMessages(messages: unknown): RecordValue[] {
+  const names = new Map<string, string>();
+  if (!Array.isArray(messages) || !messages.length) return [{ role: "user", content: " " }];
+  return messages.map((value) => {
+    const message = record(value);
+    const out: RecordValue = { role: message.role === "developer" ? "system" : message.role, content: message.content ?? "" };
+    if (Array.isArray(message.content)) {
+      const text: string[] = [];
+      const images: string[] = [];
+      for (const value of message.content) {
+        const part = record(value);
+        if (part.type === "text") text.push(String(part.text ?? ""));
+        else if (part.type === "image_url") {
+          const image = String(record(part.image_url).url ?? "").match(/^data:image\/[^;,]+;base64,([\s\S]+)$/i);
+          if (!image) throw new Error("Ollama benötigt angehängte Bilddaten; die Bild-URL enthält keine Base64-Daten.");
+          images.push(image[1]);
+        }
+      }
+      out.content = text.join("\n");
+      if (images.length) out.images = images;
     }
-    out.options = opt;
-  }
-  // Think stays what the user set. Do not force it off when tools are on.
-  if (toolsOn && out.tool_choice === "required") out.tool_choice = "auto";
-  if (!Array.isArray(out.messages) || !(out.messages as unknown[]).length) {
-    out.messages = [{ role: "user", content: " " }];
-  }
+    const thinking = message.thinking ?? message.reasoning ?? message.reasoning_content;
+    if (thinking) out.thinking = thinking;
+    if (Array.isArray(message.tool_calls)) {
+      out.tool_calls = message.tool_calls.map((value) => {
+        const call = record(value);
+        const fn = record(call.function);
+        let args = fn.arguments ?? {};
+        if (typeof args === "string") {
+          try { args = JSON.parse(args); }
+          catch { throw new Error(`Ungültige Werkzeugargumente für ${String(fn.name)}.`); }
+        }
+        if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Ollama-Werkzeugargumente müssen ein JSON-Objekt sein.");
+        if (call.id) names.set(String(call.id), String(fn.name));
+        return { type: "function", function: { name: fn.name, arguments: args } };
+      });
+    }
+    if (message.role === "tool") {
+      const name = message.tool_name ?? message.name ?? names.get(String(message.tool_call_id));
+      if (name) out.tool_name = name;
+    }
+    return out;
+  });
+}
+
+export function sanitizeLocalPayload(provider: string, payload: RecordValue): RecordValue {
+  if (!usesOllamaNative(provider)) return payload;
+  const out = Object.fromEntries(Object.entries(payload).filter(([key, value]) => OLLAMA_KEYS.has(key) && value !== undefined));
+  const options = record(payload.options);
+  out.options = Object.fromEntries(Object.entries(options).filter(([key, value]) => OPT_KEYS.has(key) && value !== undefined));
+  out.messages = ollamaMessages(payload.messages);
   return out;
 }
 
-export function localWireNote(url: string, payload: Record<string, unknown>): string {
-  const msgs = Array.isArray(payload.messages) ? payload.messages.length : 0;
-  const tools = Array.isArray(payload.tools) ? payload.tools.length : 0;
-  const opt = (payload.options as { num_ctx?: number }) || {};
-  const raw = JSON.stringify(payload);
-  return `POST ${url} model=${payload.model || "-"} stream=${payload.stream ? 1 : 0} think=${String(payload.think)} tools=${tools} ctx=${opt.num_ctx ?? "-"} msgs=${msgs} bytes=${raw.length}`;
-}
+type StreamState = { nextTool: number; done: boolean; tools: boolean };
 
-/** Pack-UI greift nach dieser Marke — sonst ist der Wire nicht im Bundle. */
-export const LOCAL_WIRE_MARK = "anvil-local-wire-v18";
-
-export function rewriteOllamaChat(url: string, init: RequestInit): { url: string; init: RequestInit } {
-  try {
-    const parsed = new URL(url.includes("://") ? url : `http://${url}`);
-    const ollama = parsed.port === "11434" || /:11434\b/.test(url);
-    if (!ollama) return { url, init };
-  } catch {
-    return { url, init };
-  }
-  if (typeof init.body !== "string") return { url, init };
-  try {
-    const body = JSON.parse(init.body) as Record<string, unknown>;
-    const toolsOn = Array.isArray(body.tools) && (body.tools as unknown[]).length > 0;
-    const clean = sanitizeLocalPayload("ollama", body, toolsOn);
-    return { url, init: { ...init, body: JSON.stringify(clean) } };
-  } catch {
-    return { url, init };
-  }
-}
-
-export function ndjsonLineToSse(line: string): string {
-  const raw = line.trim();
-  if (!raw) return "";
-  let j: Record<string, unknown>;
-  try {
-    j = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return "";
-  }
-  if (j.error) return `data: ${JSON.stringify({ error: j.error })}\n\n`;
-  if (j.done === true) return "data: [DONE]\n\n";
-  const msg = (j.message && typeof j.message === "object" ? j.message : {}) as {
-    content?: string;
-    thinking?: string;
-    tool_calls?: { id?: string; function?: { name?: string; arguments?: unknown }; index?: number }[];
-  };
-  const delta: Record<string, unknown> = {};
+export function ndjsonLineToSse(line: string, state: StreamState = { nextTool: 0, done: false, tools: false }): string {
+  if (!line.trim()) return "";
+  let json: RecordValue;
+  try { json = JSON.parse(line); }
+  catch { throw new Error("Ollama hat ungültiges oder unvollständiges JSON geliefert."); }
+  if (json.error) throw new Error(`Ollama: ${typeof json.error === "string" ? json.error : JSON.stringify(json.error)}`);
+  const msg = record(json.message);
+  const delta: RecordValue = {};
   if (msg.content) delta.content = msg.content;
   if (msg.thinking) delta.reasoning = msg.thinking;
-  if (msg.tool_calls?.length) {
-    delta.tool_calls = msg.tool_calls.map((tc, i) => ({
-      index: typeof tc.index === "number" ? tc.index : i,
-      id: tc.id,
-      function: {
-        name: tc.function?.name,
-        arguments: typeof tc.function?.arguments === "string" ? tc.function.arguments : JSON.stringify(tc.function?.arguments ?? {}),
-      },
-    }));
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+    state.tools = true;
+    delta.tool_calls = msg.tool_calls.map((value) => {
+      const call = record(value);
+      const fn = record(call.function);
+      const index = typeof fn.index === "number" ? fn.index : typeof call.index === "number" ? call.index : state.nextTool;
+      state.nextTool = Math.max(state.nextTool, index + 1);
+      return { index, id: call.id, function: { name: fn.name, arguments: typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {}) } };
+    });
   }
-  if (!Object.keys(delta).length) return "";
-  return `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`;
+  state.done = json.done === true;
+  const usage = state.done ? { prompt_tokens: json.prompt_eval_count ?? 0, completion_tokens: json.eval_count ?? 0 } : undefined;
+  const finish = state.done ? json.done_reason === "length" ? "length" : state.tools ? "tool_calls" : "stop" : undefined;
+  // Non-streaming replies put their entire message in the same object as done.
+  return `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }], usage })}\n\n${state.done ? "data: [DONE]\n\n" : ""}`;
 }
 
 export function wrapOllamaResponse(url: string, res: Response): Response {
-  if (!/\/api\/chat(?:\?|$)/i.test(url)) return res;
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("text/event-stream")) return res;
-  if (!res.body) return res;
+  if (!/\/api\/chat$/i.test(url) || !res.ok || !res.body) return res;
   const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  const enc = new TextEncoder();
-  let buf = "";
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const state: StreamState = { nextTool: 0, done: false, tools: false };
+  let buffer = "";
   const stream = new ReadableStream<Uint8Array>({
-    async pull(ctrl) {
-      const { value, done } = await reader.read();
-      if (done) {
-        const tail = ndjsonLineToSse(buf);
-        if (tail) ctrl.enqueue(enc.encode(tail));
-        ctrl.close();
-        return;
+    async pull(controller) {
+      try {
+        let output = "";
+        while (!output && !state.done) {
+          const chunk = await reader.read();
+          buffer += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = chunk.done ? "" : lines.pop() ?? "";
+          for (const line of lines) {
+            output += ndjsonLineToSse(line, state);
+            if (state.done) break;
+          }
+          if (chunk.done && !state.done) throw new Error("Ollama-Antwort unvollständig: Abschluss fehlt.");
+        }
+        if (output) controller.enqueue(encoder.encode(output));
+        if (state.done) { controller.close(); await reader.cancel(); }
+      } catch (error) {
+        controller.error(error);
+        await reader.cancel().catch(() => undefined);
       }
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      let out = "";
-      for (const line of lines) out += ndjsonLineToSse(line);
-      if (out) ctrl.enqueue(enc.encode(out));
     },
-    cancel() {
-      return reader.cancel();
-    },
+    cancel(reason) { return reader.cancel(reason); },
   });
   const headers = new Headers(res.headers);
   headers.set("content-type", "text/event-stream");
+  headers.delete("content-length");
   return new Response(stream, { status: res.status, statusText: res.statusText, headers });
 }

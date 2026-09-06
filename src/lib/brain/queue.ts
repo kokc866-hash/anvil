@@ -5,7 +5,7 @@ export type { BrainPri } from "./job-queue";
 
 const JOB_MS: Record<string, number> = {
   intent: 800,
-  attach: 1600,
+  attach: 6000,
   compact: 1600,
   title: 2200,
   distill: 2500,
@@ -56,7 +56,7 @@ export function helperHeld(): boolean {
 }
 
 export function enqueueBrain<T>(pri: BrainPri, key: string, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  return queue.enqueue(pri, key, jobMs(key), fn);
+  return queue.enqueue(pri, key, jobMs(key), fn, Math.min(jobMs(key), 2500));
 }
 
 export function cacheGet(key: string): string | null {

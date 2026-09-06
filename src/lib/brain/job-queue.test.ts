@@ -20,7 +20,7 @@ test("a queued attachment times out even when the active GPU request never settl
   });
   const firstError = assert.rejects(first, /Zeitlimit/);
   const attachment = queue.enqueue(1, "attach", 1600, async () => assert.fail("GPU jobs overlap"));
-  const attachmentError = assert.rejects(attachment, /Zeitlimit: attach/);
+  const attachmentError = assert.rejects(attachment, { name: "BrainQueueTimeout", message: "Helfer-Wartezeit überschritten: attach" });
   await flush();
   t.mock.timers.tick(1600);
   await attachmentError;
@@ -30,6 +30,26 @@ test("a queued attachment times out even when the active GPU request never settl
   assert.equal(interrupted, true);
   assert.equal(busy, false);
   await assert.rejects(queue.enqueue(0, "intent", 800, async () => "agent"), /Zeitlimit/);
+});
+
+test("waiting does not consume an attachment's execution budget", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const queue = new BrainJobQueue(() => {}, () => {});
+  const first = deferred();
+  const attach = deferred();
+  const active = queue.enqueue(0, "title", 5000, () => first.promise);
+  let started = false;
+  const result = queue.enqueue(1, "attach", 6000, () => { started = true; return attach.promise; }, 2500);
+  await flush();
+  t.mock.timers.tick(2000);
+  assert.equal(started, false);
+  first.resolve("title");
+  await active;
+  await flush();
+  assert.equal(started, true);
+  t.mock.timers.tick(5500);
+  attach.resolve("paths");
+  assert.equal(await result, "paths");
 });
 
 test("an active timeout rejects waiters and quarantines the engine without overlapping jobs", async (t) => {

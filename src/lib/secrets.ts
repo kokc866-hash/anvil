@@ -97,6 +97,17 @@ let deadline: ReturnType<typeof setTimeout> | undefined;
 let legacyRaw: string | null = null;
 let migrate = false;
 let errorText = "";
+let reportedError = "";
+
+function storageError(error: unknown): string {
+  let detail = error instanceof Error ? error.message : String(error);
+  // IPC/OS errors are useful, but may contain a value supplied to the bridge.
+  const values = cached ? [cached.llmApiKey, cached.githubToken, cached.companionToken,
+    ...Object.values(cached.keys), ...cached.vault.map((v) => v.value)] : [];
+  for (const value of values.filter(Boolean).sort((a, b) => b.length - a.length))
+    detail = detail.split(value).join("[Schlüssel]");
+  return `Schlüssel konnten nicht dauerhaft gespeichert werden: ${detail.replace(/[\r\n]+/g, " ").slice(0, 180)}`;
+}
 
 function changed() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event("anvil-secret-status"));
@@ -161,6 +172,9 @@ export function loadSecrets(): Secrets {
 export function saveSecrets(partial: Partial<Secrets>): void {
   const current = loadSecrets();
   const next = merge(current, partial);
+  // Repeated companion leases/provider selections must not write identical keys.
+  // A failed patch stays pending and can still be retried by flushSecrets().
+  if (JSON.stringify(current) === JSON.stringify(next)) return;
   if (!native()) {
     store()?.setItem(KEY, JSON.stringify(next));
     return;
@@ -194,6 +208,7 @@ export async function flushSecrets(): Promise<void> {
       info = result;
       cached = merge(normalize(result.secrets), pending ?? {});
       errorText = result.error || "";
+      if (!errorText) reportedError = "";
       if (result.persistent && result.browserMigrated && legacyRaw !== null) {
         const storage = store();
         if (storage?.getItem(KEY) === legacyRaw) storage.removeItem(KEY);
@@ -202,8 +217,12 @@ export async function flushSecrets(): Promise<void> {
       }
     } catch (error) {
       restorePending(patch);
-      errorText = "Schlüssel konnten nicht dauerhaft gespeichert werden.";
-      void import("./intern").then((m) => m.note("persist", errorText));
+      errorText = storageError(error);
+      if (errorText !== reportedError) {
+        reportedError = errorText;
+        const message = errorText;
+        void import("./intern").then((m) => m.note("persist", message));
+      }
       throw error;
     } finally {
       writing = null;

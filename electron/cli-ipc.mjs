@@ -10,7 +10,7 @@ export function stopCliJobs() {
 
 export function bindCliIpc(isTrusted) {
   async function job(event, request, action) {
-    if (!isTrusted?.(event.senderFrame?.url))
+    if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isTrusted?.(event.senderFrame.url))
       return { ok: false, error: "CLI nur im Anvil-Hauptfenster verfügbar." };
     const { id, kind } = request ?? {};
     if (typeof id !== "string" || !/^[\w-]{1,80}$/.test(id) || !CLI_KINDS.includes(kind))
