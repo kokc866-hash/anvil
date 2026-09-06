@@ -50,6 +50,18 @@ try {
   assert.match(invalidCapture, /Aufnahmebereich/);
   const encrypted = await readFile(path.join(userData, "secrets.enc"));
   assert.equal(encrypted.includes(Buffer.from(fixtureKey)), false);
+  await page.evaluate(() => {
+    window.__qaAllowClose = false;
+    window.__qaCloseRequests = 0;
+    window.anvilNative.onBeforeClose(async () => {
+      window.__qaCloseRequests++;
+      return window.__qaAllowClose;
+    });
+  });
+  await electron.evaluate(({ app }) => { app.quit(); });
+  await page.waitForFunction(() => window.__qaCloseRequests === 1);
+  assert.ok(electron.windows().includes(page), "canceling the save prompt must keep the editor open");
+  await page.evaluate(() => { window.__qaAllowClose = true; });
   await electron.close();
   electron = null;
 
@@ -76,6 +88,7 @@ try {
   assert.match(rejected.save, /nicht erlaubt/);
   assert.deepEqual(await readFile(path.join(userData, "secrets.enc")), encrypted);
   console.log("ELECTRON_PRIVATE_IPC_ENCRYPTED_RESTART_AND_ORIGIN_OK");
+  // The extra window above must not prevent a complete application quit.
 } finally {
   await electron?.close();
   server.closeAllConnections();

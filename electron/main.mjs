@@ -355,6 +355,7 @@ function stopServer() {
 }
 
 let closingApproved = false;
+let quitRequested = false;
 async function createWindow() {
   app.setName("Anvil");
   const icon = loadAppIcon(ROOT);
@@ -410,6 +411,7 @@ async function createWindow() {
     if (event.sender !== editorWindow.webContents || !waiting || reply !== ticket) return;
     waiting = false;
     if (ok === true) { closingApproved = true; editorWindow.close(); }
+    else quitRequested = false;
   };
   ipcMain.on("editor-close-ready", readyToClose);
   ipcMain.on("editor-close-result", finishClose);
@@ -422,6 +424,8 @@ async function createWindow() {
     ipcMain.removeListener("editor-close-ready", readyToClose);
     ipcMain.removeListener("editor-close-result", finishClose);
     win = null;
+    // Resume a requested app quit after the save handshake, including other windows.
+    if (quitRequested) queueMicrotask(() => app.quit());
   });
   win.once("ready-to-show", () => {
     hideSplash();
@@ -526,7 +530,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (win && !closingApproved) { event.preventDefault(); win.close(); return; }
+  if (win && !closingApproved) { event.preventDefault(); quitRequested = true; win.close(); return; }
   stopCliJobs();
   stopCompanion();
   stopServer();
