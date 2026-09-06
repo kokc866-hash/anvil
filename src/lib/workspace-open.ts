@@ -34,6 +34,8 @@ export async function openOsWorkspace(dir?: string): Promise<{
   const native = nativeHelper();
   const picked = dir || (await native?.workspacePick?.());
   if (!picked) return { ok: false, error: "Kein Ordner" };
+  if (!(await import("./save").then((s) => s.prepareWorkspaceSwitch()))) return { ok: false, error: "Projektwechsel abgebrochen" };
+  const initial = useIde.getState();
   await holdCompanion();
   try {
     const w = await companionWorkspace(picked);
@@ -41,15 +43,23 @@ export async function openOsWorkspace(dir?: string): Promise<{
     const cwd = w.cwd || picked;
     const tree = await companionTree(cwd);
     const ide = useIde.getState();
-    ide.setWorkspaceCwd(cwd);
+    if (initial.workspaceEpoch !== ide.workspaceEpoch || initial.files !== ide.files) {
+      if (ide.workspaceCwd) await companionWorkspace(ide.workspaceCwd);
+      return { ok: false, error: "Projekt inzwischen geändert; Ordner erneut öffnen." };
+    }
     if (tree.ok && tree.files) {
+      const { abortAgent } = await import("./abort");
+      abortAgent("Projekt gewechselt");
+      await import("./disk").then((d) => d.clearLocation("workspace"));
+      ide.setWorkspaceCwd(cwd);
       ide.applyFiles(tree.files, tree.dirs);
       const name = cwd.replace(/\\/g, "/").split("/").pop() || cwd;
       ide.setDiskName(name);
       const first = Object.keys(tree.files).sort()[0];
       if (first) ide.openFile(first);
-    } else if (tree.error) {
-      return { ok: false, cwd, error: tree.error };
+    } else {
+      if (initial.workspaceCwd) await companionWorkspace(initial.workspaceCwd);
+      return { ok: false, error: tree.error || "Ordner konnte nicht gelesen werden" };
     }
     return { ok: true, cwd, n: tree.n, skipped: tree.skipped };
   } finally {

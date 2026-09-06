@@ -165,6 +165,7 @@ export async function sendChat(
       if (w) useIde.getState().setNotice(w);
     });
   const my = beginAgent();
+  const workspaceEpoch = useIde.getState().workspaceEpoch;
   setAgentBusy(true);
   await import("@/lib/model-context").then((m) => m.applyCloudContext()).catch(() => null);
   if (my !== agentGen()) return;
@@ -461,7 +462,7 @@ export async function sendChat(
         else appendAssistant(chunk);
       },
       onWorkspace: (event) => {
-        if (my === agentGen()) return applyWorkspace(event);
+        if (my === agentGen() && useIde.getState().workspaceEpoch === workspaceEpoch) return applyWorkspace(event);
       },
       onToolStart: ({ name, args }) => {
         if (my !== agentGen()) return;
@@ -707,6 +708,7 @@ export async function sendChat(
     const live = my === agentGen();
     const busy = useIde.getState().agentBusy;
     if (live) {
+      resetLiveWrite();
       if (!parked) {
         useIde.getState().setAgentJob(null);
         const last = useIde.getState().chat.at(-1);

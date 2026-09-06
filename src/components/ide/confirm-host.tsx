@@ -17,6 +17,7 @@ export function ConfirmHost() {
           <Button className="h-8" variant="quiet" onClick={() => ask.resolve(false)}>
             {ask.cancel || "Abbrechen"}
           </Button>
+          {ask.secondary ? <Button className="h-8" variant="quiet" onClick={() => ask.resolve("secondary")}>{ask.secondary}</Button> : null}
           <Button className="h-8" variant={ask.danger ? "danger" : "primary"} onClick={() => ask.resolve(true)}>
             {ask.ok || "OK"}
           </Button>

@@ -53,7 +53,8 @@ export async function refreshProblems(): Promise<void> {
   st.setLspProblems(local);
   try {
     const { lintDeep } = await import("./lsp-compile");
-    const deep = await lintDeep(useIde.getState().files, useIde.getState().openPaths);
+    const deep = await lintDeep(st.files, st.openPaths);
+    if (st.files !== useIde.getState().files || st.workspaceEpoch !== useIde.getState().workspaceEpoch) return;
     noteCompileChecked(deep.checked);
     useIde.getState().setCompileProblems(deep.hits);
   } catch {

@@ -24,13 +24,14 @@ const undo = memo((items: IdeState["undo"], open: string[], dirty: IdeState["dir
   ),
 );
 const diffs = memo((items: IdeState["pendingDiffs"]) =>
-  items.slice(0, 16).map((d) => ({ ...d, before: d.before.slice(0, 400_000), after: d.after.slice(0, 400_000) })),
+  items,
 );
 const queue = memo((items: string[]) => items.slice(0, 8).map((t) => t.slice(0, 2000)));
 
 export function partializeIde(s: IdeState) {
   return {
     files: s.files,
+    editBases: s.editBases,
     openPaths: s.openPaths,
     activePath: s.activePath,
     chat: s.chat,

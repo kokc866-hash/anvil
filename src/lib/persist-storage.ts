@@ -193,6 +193,16 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           const source = state.files;
           const chat = Array.isArray(state.chat) ? (state.chat as ArchiveMessage[]) : undefined;
           delete state.files;
+          const recovery = Array.isArray(state.pendingDiffs) ? {
+            pendingDiffs: state.pendingDiffs,
+            editBases: (state.editBases ?? {}) as Record<string, string | null>,
+          } : undefined;
+          if (recovery) {
+            // Compact recovery keeps whole documents only; primary backups are never truncated.
+            let budget = 500_000;
+            state.pendingDiffs = recovery.pendingDiffs.filter((d) => { const n = JSON.stringify(d).length; if (n > budget) return false; budget -= n; return true; });
+            state.editBases = Object.fromEntries(Object.entries(recovery.editBases).filter(([, text]) => { const n = text?.length ?? 0; if (n > budget) return false; budget -= n; return true; }));
+          }
           // Keep a small recovery copy. The primary archive retains complete messages.
           if (chat)
             state.chat = persistChat(chat).map((m) => ({
@@ -243,10 +253,10 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
               }
             }
           }
-          if (files || chat) {
-            const snapshot = { files, chat };
+          if (files || chat || recovery) {
+            const snapshot = { files, chat, recovery };
             const previous = written.get(name) ?? {};
-            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat)
+            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat || snapshot.recovery !== previous.recovery)
               await saveArchive(name, snapshot, previous);
             written.set(name, snapshot);
           }
@@ -293,7 +303,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
         }
         const archive = await loadArchive(name).catch((error) => {
           if (name === "anvil-ide") persistenceError(name, error);
-          return { files: null, chat: null };
+          return { files: null, chat: null, recovery: null };
         });
         const llm = name === "anvil-ide" ? readLlm() : null;
         if (!parsed && archive.files === null && archive.chat === null && !llm) {
@@ -311,8 +321,9 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           }
         }
         files ??= parsed.state?.files ?? {};
-        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined });
+        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined, recovery: archive.recovery ?? undefined });
         parsed.state = { ...(llm ?? {}), ...(parsed.state ?? {}), files };
+        if (archive.recovery) Object.assign(parsed.state, archive.recovery);
         if (archive.chat !== null) parsed.state.chat = archive.chat;
         seen.add(name);
         return parsed as StorageValue<unknown>;
@@ -322,6 +333,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
       }
     },
     setItem: (name, value) => {
+      if (name === "anvil-ide" && /^\/(run|console)(\/|$)/.test(window.location?.pathname ?? "")) return;
       if (!seen.has(name)) return;
       const previous = latest.get(name);
       if (previous?.version === value.version && sameSlice(previous?.state, value.state)) return;

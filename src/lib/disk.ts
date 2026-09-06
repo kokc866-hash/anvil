@@ -141,8 +141,20 @@ export async function loadSlotAll(slot: DiskSlot): Promise<DiskPack> {
 }
 
 export async function pickFolder(): Promise<DiskPack> {
-  await pickLocation("workspace");
-  return loadSlotAll("workspace");
+  const handle = await picker();
+  if (!(await import("./save").then((s) => s.prepareWorkspaceSwitch()))) throw new Error("Projektwechsel abgebrochen");
+  const { useIde } = await import("@/store/ide");
+  const initial = useIde.getState();
+  const epoch = initial.workspaceEpoch;
+  if (!(await ensurePerm(handle, "readwrite"))) throw new Error("Keine Berechtigung für den Ordner.");
+  const dirs: string[] = [], acc = { n: 0, bytes: 0, skipped: 0 };
+  const files = await readFolder(handle, "", dirs, acc);
+  if (useIde.getState().workspaceEpoch !== epoch || useIde.getState().files !== initial.files) throw new Error("Projekt inzwischen geändert; Ordner erneut öffnen.");
+  const { abortAgent } = await import("./abort"); abortAgent("Projekt gewechselt");
+  slots.workspace = handle; names.workspace = handle.name;
+  useIde.getState().setWorkspaceCwd("");
+  void persistHandle("workspace", handle);
+  return { files, dirs, skipped: acc.skipped };
 }
 
 export async function saveSlot(slot: DiskSlot, files: Record<string, string>, dirs: string[] = []): Promise<void> {
@@ -194,10 +206,16 @@ async function dirFor(path: string, create: boolean, target = diskWorkspaceHandl
   return { dir, name };
 }
 
-export async function writeDiskFile(path: string, content: string, target = diskWorkspaceHandle()): Promise<void> {
+export async function writeDiskFile(path: string, content: string, target = diskWorkspaceHandle(), expected?: string | null): Promise<void> {
   if (/^data:image\//i.test(content.trim())) return;
   const loc = await dirFor(path, true, target);
   if (!loc) return;
+  if (expected !== undefined) {
+    let actual: string | null = null;
+    try { actual = await (await (await loc.dir.getFileHandle(loc.name)).getFile()).text(); }
+    catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; }
+    if (actual !== expected && actual !== content) throw new Error(`Datei extern geändert: ${path}. Neu laden oder Änderungen abgleichen.`);
+  }
   const fh = await loc.dir.getFileHandle(loc.name, { create: true });
   const w = await fh.createWritable();
   await w.write(content);
@@ -211,6 +229,33 @@ export async function mkdirDisk(path: string, target = diskWorkspaceHandle()): P
   for (const part of path.split("/").filter(Boolean)) {
     dir = await dir.getDirectoryHandle(part, { create: true });
   }
+}
+
+export async function moveDiskPath(from: string, to: string, target: FileSystemDirectoryHandle): Promise<void> {
+  const src = await dirFor(from, false, target), dest = await dirFor(to, true, target);
+  if (!src || !dest) throw new Error("Workspace fehlt.");
+  const child = async (dir: DirHandle, name: string): Promise<FileSystemHandle | null> => {
+    try { return await dir.getFileHandle(name); } catch (e) { if ((e as DOMException).name !== "TypeMismatchError" && (e as DOMException).name !== "NotFoundError") throw e; }
+    try { return await dir.getDirectoryHandle(name); } catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; }
+    return null;
+  };
+  if (await child(dest.dir, dest.name)) throw new Error("Ziel existiert bereits.");
+  const source = await child(src.dir, src.name);
+  if (!source) throw new Error("Quelle nicht gefunden.");
+  const copy = async (entry: FileSystemHandle, parent: DirHandle, name: string): Promise<void> => {
+    if (entry.kind === "file") {
+      const file = await (entry as FileSystemFileHandle).getFile();
+      const handle = await parent.getFileHandle(name, { create: true });
+      const writer = await handle.createWritable();
+      try { await writer.write(file); await writer.close(); } catch (e) { await writer.abort().catch(() => undefined); throw e; }
+    } else {
+      const directory = await parent.getDirectoryHandle(name, { create: true });
+      for await (const [name, handle] of (entry as DirHandle).entries()) await copy(handle, directory, name);
+    }
+  };
+  try { await copy(source, dest.dir, dest.name); }
+  catch (e) { await dest.dir.removeEntry(dest.name, { recursive: true }).catch(() => undefined); throw e; }
+  await src.dir.removeEntry(src.name, { recursive: true });
 }
 
 export async function removeDiskPath(path: string, target = diskWorkspaceHandle()): Promise<void> {
@@ -295,4 +340,16 @@ async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc:
     }
   }
   return out;
+}
+
+export async function readDiskFiles(paths: string[], target = diskWorkspaceHandle()): Promise<Record<string, string | null>> {
+  const files: Record<string, string | null> = {};
+  for (const path of paths.slice(0, 64)) {
+    try {
+      const loc = await dirFor(path, false, target); if (!loc) continue;
+      const file = await (await loc.dir.getFileHandle(loc.name)).getFile();
+      if (file.size <= MAX) files[path] = await file.text();
+    } catch (e) { if ((e as DOMException).name === "NotFoundError") files[path] = null; else throw e; }
+  }
+  return files;
 }

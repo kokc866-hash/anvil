@@ -24,7 +24,7 @@ import { baseName, buildTree, cleanPath, isPinnedPath, joinPath, parentDir, visi
 import { Button } from "@/components/ui/button";
 import { CtxMenu, type CtxItem } from "@/components/ide/ctx-menu";
 import { cn } from "@/lib/cn";
-import { diskFolderName, diskSupported, pickFolder, saveFolder } from "@/lib/disk";
+import { diskFolderName, diskSupported, pickFolder } from "@/lib/disk";
 import { canOpenOsWorkspace, openOsWorkspace } from "@/lib/workspace-open";
 import { zipFiles } from "@/lib/archive";
 import { langFromPath, templateFor } from "@/lib/languages";
@@ -231,12 +231,8 @@ export function FileTree() {
         setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
       })().catch((err) => setNotice(err instanceof Error ? err.message : "Ordner nicht geöffnet"));
     }
-    function onSave() {
-      const st = useIde.getState();
-      void saveFolder(st.files, st.dirs)
-        .then(() => setNotice("Auf Festplatte gespeichert"))
-        .catch((err) => setNotice(err instanceof Error ? err.message : "Speichern fehlgeschlagen"));
-    }
+    function onSave() { void import("@/lib/save").then((s) => s.saveNow({ all: true })); }
+
     window.addEventListener("anvil-new-file", onNew as EventListener);
     window.addEventListener("anvil-open-disk", onOpen);
     window.addEventListener("anvil-save-disk", onSave);

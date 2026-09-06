@@ -18,13 +18,12 @@ import { StatusBar } from "./status-bar";
 import { CommandPalette } from "./command-palette";
 import { HSplit, VSplit } from "./splitter";
 import { startDebug, debugStep, debugStop } from "@/lib/debug-engine";
-import { runFile } from "@/lib/run-client";
 import { startIdeSync } from "@/lib/ide-sync";
 import { reloadPlugins } from "@/lib/plugins";
 import { loadVscodeFromWorkspace } from "@/lib/plugins/vscode";
 import { pluginWatchPath, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
 import { hasOsFiles, importDropped } from "@/lib/dnd";
-import { restoreLocations, saveSlot, loadSlotAll, hasLocation } from "@/lib/disk";
+import { restoreLocations, loadSlotAll, hasLocation } from "@/lib/disk";
 import { focusOutputWindow, openOutputWindow } from "@/lib/output-window";
 import { openRunWindow } from "@/lib/run-window";
 import { DEMO_PATHS, SEED_FILES } from "@/lib/seed-files";
@@ -85,7 +84,38 @@ export function Workspace() {
   const boot = useIntern((s) => s.boot);
   const shellRef = useRef<HTMLDivElement>(null);
   const [inner, setInner] = useState(1280);
+  const [compactPane, setCompactPane] = useState("editor");
+  const compact = inner < 640;
+  useEffect(() => {
+    if (!compact) return;
+    return useIde.subscribe((s, prev) => {
+      if (s.activePath !== prev.activePath && s.activePath) setCompactPane("editor");
+      else if (s.sidebar !== prev.sidebar) setCompactPane(s.sidebar ? "files" : "editor");
+      else if (s.panels.agent !== prev.panels.agent && s.panels.agent) setCompactPane("agent");
+      else if (s.panels.trail !== prev.panels.trail && s.panels.trail) setCompactPane("trail");
+      else if (s.panels.output !== prev.panels.output && s.panels.output) setCompactPane("output");
+    });
+  }, [compact]);
   const [starterOpen, setStarterOpen] = useState(false);
+
+  useEffect(() => {
+    const refresh = () => { void import("@/lib/external-files").then((m) => m.refreshExternalFiles()); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
+
+  useEffect(() => {
+    const native = (window as unknown as { anvilNative?: { onBeforeClose?: (fn: () => Promise<boolean>) => () => void } }).anvilNative;
+    return native?.onBeforeClose?.(async () => {
+      const { prepareWorkspaceSwitch } = await import("@/lib/save");
+      if (!(await prepareWorkspaceSwitch())) return false;
+      const { stopAgent } = await import("@/lib/abort"); stopAgent("Anvil wird geschlossen");
+      await import("@/lib/disk-sync").then((d) => d.flushDiskSync());
+      await import("@/lib/secrets").then((s) => s.flushSecrets());
+      await import("@/lib/persist-storage").then((s) => s.flushPersistence());
+      return true;
+    });
+  }, []);
 
   useEffect(() => {
     startIntern();
@@ -169,11 +199,12 @@ export function Workspace() {
             const { companionTree } = await import("@/lib/companion");
             await holdCompanion();
             const tree = await companionTree(cwd);
-            if (tree.ok && tree.files) {
+            if (tree.ok && tree.files && st.workspaceEpoch === useIde.getState().workspaceEpoch && cwd === useIde.getState().workspaceCwd) {
               const { overlayDiskTree } = await import("@/lib/ws-skip");
               const cur = useIde.getState();
               const merged = overlayDiskTree(tree.files, cur.files, cur.dirty);
               st.applyFiles(merged, tree.dirs, { keepDirty: true });
+              void import("@/lib/disk-sync").then((d) => { if (cur.workspaceEpoch === useIde.getState().workspaceEpoch) d.noteDiskContents(tree.files!); });
               if (tree.skipped) st.setNotice(`${tree.n} Dateien, ${tree.skipped} übersprungen (Platten-Stand)`);
             }
             if (!st.companionKeep) await releaseCompanion();
@@ -188,7 +219,9 @@ export function Workspace() {
             const pack = await loadSlotAll("workspace");
             const { overlayDiskTree } = await import("@/lib/ws-skip");
             const cur = useIde.getState();
+            if (st.workspaceEpoch !== cur.workspaceEpoch) return;
             st.applyFiles(overlayDiskTree(pack.files, cur.files, cur.dirty), pack.dirs, { keepDirty: true });
+            void import("@/lib/disk-sync").then((d) => { if (cur.workspaceEpoch === useIde.getState().workspaceEpoch) d.noteDiskContents(pack.files); });
           } catch {
             st.setNotice("Workspace-Ordner in Einstellungen → Speicher erneut erlauben");
           }
@@ -247,23 +280,26 @@ export function Workspace() {
       (window as unknown as { __anvilIde?: typeof useIde }).__anvilIde = useIde;
     };
     applyFiles(useIde.getState().files);
-    let lint = 0;
+    let lint = 0, generation = 0;
     const kick = () => {
+      const job = ++generation;
       window.clearTimeout(lint);
       lint = window.setTimeout(() => {
-        void import("@/lib/lsp").then((l) => {
-          const st = useIde.getState();
-          void import("@/lib/ws-index").then((w) => w.rebuildIndex(st.files));
-          st.setLspProblems(l.lintWorkspace(st.files, st.openPaths));
-          void import("@/lib/lsp-compile").then((c) =>
-            c.lintDeep(st.files, st.openPaths).then((deep) => {
-              void import("@/lib/problems").then((p) => p.noteCompileChecked(deep.checked));
-              useIde.getState().setCompileProblems(deep.hits);
-            }),
-          );
-          void import("@/lib/companion-lint").then((c) => c.scheduleCompanionLint());
+        const st = useIde.getState();
+        const current = () => job === generation && st.files === useIde.getState().files && st.workspaceEpoch === useIde.getState().workspaceEpoch;
+        void import("@/lib/compiler-client").then((c) => c.compilerJob("lint", st.files, st.openPaths)).then((deep) => {
+          if (!current()) return;
+          st.setLspProblems(deep.local as import("@/lib/lsp").LspHit[]);
+          void import("@/lib/problems").then((p) => { if (current()) p.noteCompileChecked(deep.checked as string[]); });
+          st.setCompileProblems(deep.hits as import("@/lib/lsp").LspHit[]);
+        }).catch(() => { /* A stale request is superseded by the next revision. */ });
+        if (Object.keys(st.files).some((p) => p.endsWith(".py"))) void import("@/lib/lsp-compile").then((c) => c.pyCompileWorkspace(st.files, st.openPaths)).then((py) => {
+          if (!current() || !py.checked.length) return;
+          const cur = useIde.getState();
+          cur.setCompileProblems([...cur.compileProblems.filter((p) => p.source !== "py"), ...py.hits]);
         });
-      }, 400);
+        void import("@/lib/companion-lint").then((c) => { if (current()) c.scheduleCompanionLint(); });
+      }, 600);
     };
     kick();
     const unsub = useIde.subscribe((s, prev) => {
@@ -274,6 +310,8 @@ export function Workspace() {
     return () => {
       unsub();
       window.clearTimeout(lint);
+      generation++;
+      void import("@/lib/compiler-client").then((c) => c.stopCompilerWorker());
     };
   }, []);
 
@@ -281,22 +319,6 @@ export function Workspace() {
     document.documentElement.dataset.motion = motion;
   }, [motion]);
 
-  useEffect(() => {
-    if (!autoSaveDisk) return;
-    let t = 0;
-    const unsub = useIde.subscribe((s, prev) => {
-      if (s.files === prev.files) return;
-      window.clearTimeout(t);
-      t = window.setTimeout(() => {
-        if (!hasLocation("workspace")) return;
-        void saveSlot("workspace", useIde.getState().files, useIde.getState().dirs).catch(() => undefined);
-      }, 1800);
-    });
-    return () => {
-      unsub();
-      window.clearTimeout(t);
-    };
-  }, [autoSaveDisk]);
 
   useEffect(() => {
     const el = shellRef.current;
@@ -343,34 +365,7 @@ export function Workspace() {
   }, [notice, setNotice]);
 
   useEffect(() => {
-    async function runActive() {
-      const st = useIde.getState();
-      const { selectRunTarget } = await import("@/lib/run-target");
-      const path = selectRunTarget(Object.keys(st.files), st.activePath || "");
-      if (!path) { st.setNotice("Keine ausführbare Startdatei im Projekt gefunden."); return; }
-      st.setRunPath(path);
-      setRunning(true);
-      try {
-        // runFile selects and awaits the actual graphical output. Opening another
-        // window here could replace the session after it has already started.
-        const result = await runFile(path, st.files);
-        pushOutput(result);
-        if (result.stage?.kind !== "html" && !result.html) {
-          st.revealOutput();
-          st.setPreviewOpen(false);
-        }
-      } catch (err) {
-        pushOutput({
-          ok: false,
-          stdout: "",
-          stderr: err instanceof Error ? err.message : String(err),
-          duration: 0,
-          label: path,
-        });
-      } finally {
-        setRunning(false);
-      }
-    }
+    async function runActive() { await import("@/lib/editor-run").then((r) => r.runFromEditor()); }
     function onKey(e: KeyboardEvent) {
       if ((window as Window & { __anvilBindKey?: boolean }).__anvilBindKey) return;
       const st = useIde.getState();
@@ -426,7 +421,7 @@ export function Workspace() {
           void saveNow();
           break;
         case "saveAll":
-          void saveNow();
+          void saveNow({ all: true });
           break;
         case "newFile":
           st.setSidebar("files");
@@ -441,16 +436,7 @@ export function Workspace() {
           window.dispatchEvent(new Event("anvil-ask-sel"));
           break;
         case "closeTab":
-          if (st.activePath) {
-            const p = st.activePath;
-            if (st.dirty[p]) {
-              void import("@/lib/confirm").then((c) =>
-                c.confirmApp(`${t("unsavedTab")}: ${p}`, { title: t("tabClose"), ok: t("discard"), danger: true }).then((ok) => {
-                  if (ok) useIde.getState().closeFile(p);
-                }),
-              );
-            } else st.closeFile(p);
-          }
+          if (st.activePath) void import("@/lib/save").then((s) => s.closeTabs([st.activePath!]));
           break;
         case "gotoLine":
           window.dispatchEvent(new Event("anvil-goto"));
@@ -728,7 +714,21 @@ export function Workspace() {
       }}
     >
       <FirstRun />
-      <div key={boot} className="flex min-h-0 flex-1">
+      {compact ? (
+        <div className="flex min-h-0 flex-1">
+          <ActivityBar />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <nav aria-label="Arbeitsbereich" className="flex shrink-0 overflow-x-auto border-b border-border">
+              {[["files", "Dateien"], ["editor", "Editor"], ["agent", "Agent"], ["trail", "Spur"], ["output", "Ausgabe"]].map(([id, label]) => (
+                <button key={id} type="button" aria-pressed={compactPane === id} className={`min-h-11 shrink-0 px-2 text-xs ${compactPane === id ? "bg-hover text-fg" : "text-muted"}`} onClick={() => setCompactPane(id)}>{label}</button>
+              ))}
+            </nav>
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+              {compactPane === "files" ? sideBody(sidebar || "files") : compactPane === "agent" ? <ChatPane /> : compactPane === "trail" ? <TrailPane /> : compactPane === "output" ? <OutputPane /> : harnessBoardOpen ? <HarnessBoard /> : <EditorPane />}
+            </div>
+          </div>
+        </div>
+      ) : <div key={boot} className="flex min-h-0 flex-1">
         <ActivityBar />
         {showSide && !overlaySide && sideW > 0 ? (
           <>
@@ -809,9 +809,9 @@ export function Workspace() {
             </>
           ) : null}
         </div>
-      </div>
-      {showStatusBar ? <StatusBar /> : null}
-      {overlaySide ? (
+      </div>}
+      {showStatusBar ? <div className="shrink-0 overflow-x-auto whitespace-nowrap"><StatusBar /></div> : null}
+      {!compact && overlaySide ? (
         <>
           <button
             type="button"
@@ -828,7 +828,7 @@ export function Workspace() {
           </aside>
         </>
       ) : null}
-      {overlayAgent && ov.agentW > 0 ? (
+      {!compact && overlayAgent && ov.agentW > 0 ? (
         <aside
           className={`ui-pane absolute top-0 z-20 overflow-hidden border-l border-border bg-surface ${edge}`}
           style={{ right: ov.agentRight, width: ov.agentW }}
@@ -836,7 +836,7 @@ export function Workspace() {
           <ChatPane />
         </aside>
       ) : null}
-      {overlayTrail && ov.trailW > 0 ? (
+      {!compact && overlayTrail && ov.trailW > 0 ? (
         <aside
           className={`ui-pane isolate absolute top-0 overflow-hidden border-l border-border bg-surface ${ov.trailOnTop ? "z-30" : "z-20"} ${edge}`}
           style={{ right: ov.trailRight, width: ov.trailW }}

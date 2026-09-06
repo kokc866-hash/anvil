@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, session, shell, ipcMain } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
@@ -354,6 +354,7 @@ function stopServer() {
   server = null;
 }
 
+let closingApproved = false;
 async function createWindow() {
   app.setName("Anvil");
   const icon = loadAppIcon(ROOT);
@@ -402,7 +403,24 @@ async function createWindow() {
     void shell.openExternal(url);
     return { action: "deny" };
   });
+  const editorWindow = win;
+  let closeReady = false, waiting = false, ticket = 0;
+  const readyToClose = (event) => { if (event.sender === editorWindow.webContents) closeReady = true; };
+  const finishClose = (event, reply, ok) => {
+    if (event.sender !== editorWindow.webContents || !waiting || reply !== ticket) return;
+    waiting = false;
+    if (ok === true) { closingApproved = true; editorWindow.close(); }
+  };
+  ipcMain.on("editor-close-ready", readyToClose);
+  ipcMain.on("editor-close-result", finishClose);
+  win.on("close", (event) => {
+    if (closingApproved || !closeReady || editorWindow.webContents.isCrashed()) return;
+    event.preventDefault();
+    if (!waiting) { waiting = true; editorWindow.webContents.send("editor-before-close", ++ticket); }
+  });
   win.on("closed", () => {
+    ipcMain.removeListener("editor-close-ready", readyToClose);
+    ipcMain.removeListener("editor-close-result", finishClose);
     win = null;
   });
   win.once("ready-to-show", () => {
@@ -507,7 +525,8 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (win && !closingApproved) { event.preventDefault(); win.close(); return; }
   stopCliJobs();
   stopCompanion();
   stopServer();

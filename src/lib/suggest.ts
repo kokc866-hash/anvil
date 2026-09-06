@@ -1,5 +1,4 @@
 import { grammarOf } from "@/lib/syntax";
-import { langFromPath } from "@/lib/languages";
 import { vscodeSnippets } from "@/lib/plugins/vscode";
 import { profile } from "@/lib/learn";
 
@@ -92,24 +91,37 @@ const SNIPS: Record<string, Record<string, string>> = {
 };
 SNIPS.typescript = { ...SNIPS.javascript };
 
-function wordsOf(src: string): string[] {
-  return src.match(/\b[A-Za-z_][\w]{1,48}\b/g) ?? [];
-}
-
-function bigrams(src: string): Map<string, Map<string, number>> {
-  const map = new Map<string, Map<string, number>>();
-  const ws = wordsOf(src);
-  for (let i = 0; i < ws.length - 1; i++) {
-    const a = ws[i];
-    const b = ws[i + 1];
-    let inner = map.get(a);
-    if (!inner) {
-      inner = new Map();
-      map.set(a, inner);
-    }
-    inner.set(b, (inner.get(b) ?? 0) + 1);
+type Tokens = { source: string; words: string[]; pairs: Map<string, Map<string, number>> };
+const tokenCache = new Map<string, Tokens>();
+function tokens(key: string, source: string, limit = 12000): Tokens {
+  const cached = tokenCache.get(key);
+  if (cached?.source === source) return cached;
+  const words: string[] = [], pairs = new Map<string, Map<string, number>>();
+  const re = /\b[A-Za-z_][\w]{1,48}\b/g;
+  let m: RegExpExecArray | null;
+  // Limit extraction itself, rather than slicing the result of a full-file scan.
+  while (words.length < limit && (m = re.exec(source))) {
+    const prev = words.at(-1), word = m[0];
+    if (prev) { const row = pairs.get(prev) ?? new Map<string, number>(); row.set(word, (row.get(word) ?? 0) + 1); pairs.set(prev, row); }
+    words.push(word);
   }
-  return map;
+  const result = { source, words: [...new Set(words)], pairs };
+  tokenCache.set(key, result);
+  if (tokenCache.size > 2501) tokenCache.delete(tokenCache.keys().next().value!);
+  return result;
+}
+let projectSource: Record<string, string> | undefined;
+let projectWords: string[] = [];
+function workspaceWords(files: Record<string, string>): string[] {
+  if (files === projectSource) return projectWords;
+  const words = new Set<string>();
+  for (const [p, c] of Object.entries(files)) {
+    if (!/\.(py|js|ts|tsx|jsx|go|rs|cs|php|rb|java|c|cpp)$/.test(p)) continue;
+    for (const w of tokens(p, c, 400).words) if (w.length > 2) words.add(w);
+  }
+  for (const p of tokenCache.keys()) if (p !== "@active" && !(p in files)) tokenCache.delete(p);
+  projectSource = files; projectWords = [...words];
+  return projectWords;
 }
 
 export function prefixAt(lineToCursor: string): { prefix: string; prev: string } {
@@ -153,18 +165,9 @@ export function suggest(opts: {
   const snips = { ...(SNIPS[opts.lang] ?? {}), ...vscodeSnippets(opts.lang) };
   for (const [k, body] of Object.entries(snips)) add(k, "snip", body);
 
-  const ids = new Set<string>();
-  for (const w of wordsOf(opts.source)) {
-    if (w.length > 1) ids.add(w);
-  }
-  if (opts.files) {
-    for (const [p, c] of Object.entries(opts.files)) {
-      if (p === opts.path) continue;
-      if (langFromPath(p) !== opts.lang && !/\.(py|js|ts|go|rs|cs|php|rb|java|c|cpp)$/.test(p)) continue;
-      for (const w of wordsOf(c).slice(0, 400)) if (w.length > 2) ids.add(w);
-    }
-  }
-  for (const w of ids) add(w, "id");
+  const current = tokens("@active", opts.source);
+  for (const w of current.words) add(w, "id");
+  if (opts.files) for (const w of workspaceWords(opts.files)) add(w, "id");
 
   if (opts.files) {
     for (const p of Object.keys(opts.files)) {
@@ -173,12 +176,13 @@ export function suggest(opts: {
     }
   }
 
-  const bi = opts.prev ? bigrams(opts.source).get(opts.prev) : undefined;
+  const bi = opts.prev ? current.pairs.get(opts.prev) : undefined;
+  const learned = profile();
   const scored = [...pool.values()].map((s) => {
     let n = 0;
     if (s.kind === "snip") n += 30;
     if (s.kind === "kw") n += 20;
-    if (opts.lang && opts.lang === profile().topLang && s.kind === "snip") n += 18;
+    if (opts.lang && opts.lang === learned.topLang && s.kind === "snip") n += 18;
     if (s.text.toLowerCase() === low) n += 50;
     if (bi?.has(s.text)) n += 10 + (bi.get(s.text) ?? 0);
     n += Math.max(0, 12 - (s.text.length - prefix.length));

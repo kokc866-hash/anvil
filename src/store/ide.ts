@@ -5,7 +5,7 @@ import type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, Sp
 export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
 import { create } from "zustand";
 import { partializeIde } from "./ide-persist";
-import { syncWrite, syncRemove, syncMkdir, scheduleSyncWrite } from "@/lib/disk-sync";
+import { syncWrite, syncRemove, syncMkdir, syncMove, cancelSyncWrite, scheduleSyncWrite, captureDiskTarget, noteDiskContents, flushDiskSync } from "@/lib/disk-sync";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
@@ -36,6 +36,9 @@ import { EMPTY_JOURNAL, normalizeJournal } from "@/lib/session";
 import { normalizeJob, type AgentJob } from "@/lib/agent-ask";
 import { AGENT_MIN, AGENT_MAX, SIDE_MIN, SIDE_MAX, TRAIL_MIN, TRAIL_MAX } from "@/lib/layout";
 import { fitCloudAbo } from "@/lib/llm-fit";
+
+import { pushUndo } from "@/lib/document";
+import { planMove } from "@/lib/move-plan";
 
 const THINK_CAP = 64_000;
 
@@ -184,6 +187,9 @@ export const useIde = create<IdeState>()(
       };
       return {
       files: { ...SEED_FILES },
+      workspaceEpoch: 0,
+      pathOperation: null,
+      editBases: {},
       openPaths: [],
       activePath: "",
       dirty: {},
@@ -603,7 +609,7 @@ export const useIde = create<IdeState>()(
       pushCheckpoint: (label) => {
         const id = nid();
         const st = get();
-        const files = shrinkFiles(st.files, 2_000_000, [...st.openPaths, ...Object.keys(st.dirty)]);
+        const files = st.files;
         const row: Checkpoint = {
           id,
           at: Date.now(),
@@ -620,7 +626,10 @@ export const useIde = create<IdeState>()(
         const merged = { ...files };
         for (const [path, after] of Object.entries(next)) {
           if (files[path] === after) continue;
-          diffs.push({ path, before: files[path] ?? "", after, source: "propose" });
+          if (get().pathOperation && isInside(path, get().pathOperation!.to)) { get().setNotice("Verschieben zuerst abschließen lassen."); continue; }
+          const prior = get().pendingDiffs.find((d) => d.path === path);
+          diffs.push(prior ? { ...prior, after } : { path, before: files[path] ?? "", after, source: "propose", existedBefore: path in files, dirtyBefore: Boolean(get().dirty[path]), backupVersion: 2 });
+          cancelSyncWrite(path);
           merged[path] = after;
         }
         if (!diffs.length) return 0;
@@ -629,6 +638,7 @@ export const useIde = create<IdeState>()(
         const open = get().openPaths.includes(first) ? get().openPaths : quiet ? get().openPaths : [...get().openPaths, first];
         set({
           files: merged,
+          editBases: { ...get().editBases, ...Object.fromEntries(diffs.filter((d) => !(d.path in get().editBases)).map((d) => [d.path, d.existedBefore === false ? null : d.before])) },
           pendingDiffs: [...get().pendingDiffs.filter((d) => !diffs.some((x) => x.path === d.path)), ...diffs],
           dirty: { ...get().dirty, ...Object.fromEntries(diffs.map((d) => [d.path, true])) },
           openPaths: open,
@@ -648,6 +658,7 @@ export const useIde = create<IdeState>()(
         for (const p of Object.keys(c.files)) dirty[p] = true;
         set({
           files: { ...curFiles, ...c.files },
+          editBases: { ...get().editBases, ...Object.fromEntries(Object.keys(c.files).filter((p) => !(p in get().editBases)).map((p) => [p, curFiles[p] ?? null])) },
           dirs: [...new Set([...get().dirs, ...c.dirs])],
           dirty,
           pendingDiffs: [],
@@ -719,7 +730,7 @@ export const useIde = create<IdeState>()(
         const after = get().files[path] ?? "";
         if (before === after) return;
         set({
-          pendingDiffs: [...get().pendingDiffs.filter((d) => d.path !== path), { path, before, after, source: "round" }],
+          pendingDiffs: [...get().pendingDiffs.filter((d) => d.path !== path), { path, before, after, source: "round", existedBefore: path in ck.files, backupVersion: 2 }],
           panels: { ...get().panels, code: true },
         });
       },
@@ -775,7 +786,8 @@ export const useIde = create<IdeState>()(
         if (n < 0 || n >= jumpStack.length) return;
         const j = jumpStack[n];
         set({ jumpIndex: n });
-        (window as unknown as { __anvilGoto?: { path: string; line: number } }).__anvilGoto = j;
+        (window as unknown as { __anvilGoto?: { path: string; line: number; epoch: number } }).__anvilGoto = { ...j, epoch: get().workspaceEpoch };
+        window.dispatchEvent(new Event("anvil-jump"));
         get().openFile(j.path);
       },
       reopenTab: () => {
@@ -865,57 +877,61 @@ export const useIde = create<IdeState>()(
         const stack = [...(get().undo[path] ?? [])];
         const prev = stack.pop();
         if (prev == null) return;
+        get().setContent(path, prev);
         set({
-          files: { ...get().files, [path]: prev },
           undo: { ...get().undo, [path]: stack },
         });
         noteLearn("undo", path);
       },
-      renameFile: (from, to) => {
-        const src = cleanPath(from);
-        const name = cleanPath(to);
-        if (!name || name === src) return;
-        const { files, openPaths, activePath, dirty, pendingDiffs, undo, dirs } = get();
-        if (!(src in files) || name in files) return;
-        const nextFiles = { ...files, [name]: files[src] };
-        delete nextFiles[src];
-        const nextDirty = { ...dirty };
-        if (src in nextDirty) {
-          nextDirty[name] = nextDirty[src];
-          delete nextDirty[src];
-        }
-        const nextUndo = { ...undo };
-        if (src in nextUndo) {
-          nextUndo[name] = nextUndo[src];
-          delete nextUndo[src];
-        }
-        set({
-          files: nextFiles,
-          dirty: nextDirty,
-          undo: nextUndo,
-          dirs: withParents(dirs, name),
-          pendingDiffs: pendingDiffs.map((d) => (d.path === src ? { ...d, path: name } : d)),
-          openPaths: openPaths.map((p) => (p === src ? name : p)),
-          activePath: activePath === src ? name : activePath,
-          breakpoints: remapRecord(get().breakpoints, src, name),
-          attached: remapList(get().attached, src, name),
-          recentPaths: remapList(get().recentPaths, src, name),
-          closedTabs: remapList(get().closedTabs, src, name),
-          testResults: remapTestMap(get().testResults, src, name),
-        });
-        pushDisk("write", name, nextFiles[name] ?? "");
-        pushDisk("remove", src);
+      relocatePath: async (src, destRoot) => {
+        const initial = get();
+        if (initial.pathOperation) { initial.setNotice("Dateioperation läuft bereits."); return; }
+        set({ pathOperation: { from: src, to: destRoot } });
+        try {
+          const plan = planMove(initial.files, initial.dirs, src, destRoot);
+          const target = captureDiskTarget();
+          await syncMove(src, destRoot, target, () => {
+          const cur = get();
+          if (cur.workspaceEpoch !== initial.workspaceEpoch || cur.workspaceCwd !== initial.workspaceCwd) return;
+          // Read the latest buffers after I/O, retaining edits made during the move.
+          set({
+            files: remapRecord(cur.files, src, destRoot),
+            dirs: [...new Set([...remapList(cur.dirs, src, destRoot), ...ancestorDirs(destRoot)])],
+            openPaths: remapList(cur.openPaths, src, destRoot),
+            activePath: cur.activePath ? remapPath(cur.activePath, src, destRoot) : null,
+            dirty: remapRecord(cur.dirty, src, destRoot),
+            editBases: remapRecord(cur.editBases, src, destRoot),
+            undo: remapRecord(cur.undo, src, destRoot),
+            pendingDiffs: cur.pendingDiffs.map((d) => ({ ...d, path: remapPath(d.path, src, destRoot) })),
+            breakpoints: remapRecord(cur.breakpoints, src, destRoot),
+            attached: remapList(cur.attached, src, destRoot),
+            recentPaths: remapList(cur.recentPaths, src, destRoot),
+            collapsed: remapList(cur.collapsed, src, destRoot),
+            closedTabs: remapList(cur.closedTabs, src, destRoot),
+            testResults: remapTestMap(cur.testResults, src, destRoot),
+            runPath: cur.runPath ? remapPath(cur.runPath, src, destRoot) : null,
+            jumpStack: cur.jumpStack.map((j) => ({ ...j, path: remapPath(j.path, src, destRoot) })),
+          });
+          for (const p of Object.keys(plan.mapping)) {
+            cancelSyncWrite(p, target);
+            const to = plan.mapping[p];
+            if (get().autoSaveDisk && get().dirty[to] && !get().pendingDiffs.some((d) => d.path === to)) scheduleSyncWrite(to, get().files[to], target);
+          }
+          });
+        } catch (error) {
+          get().setNotice(error instanceof Error ? error.message : "Verschieben fehlgeschlagen; Quelle bleibt erhalten.");
+        } finally { set({ pathOperation: null }); }
       },
+      renameFile: (from, to) => { void get().relocatePath(from, to); },
       clearChat: () => set({ chat: [], sessionTokens: { prompt: 0, completion: 0 }, agentJob: null }),
       removeChat: (id) => set({ chat: get().chat.filter((m) => m.id !== id) }),
       proposeFiles: (next) => {
         get().patchFiles(next);
       },
       acceptDiff: (path) => {
-        const pendingDiffs = get().pendingDiffs.filter((d) => d.path !== path);
-        const dirty = { ...get().dirty };
-        delete dirty[path];
-        set({ pendingDiffs, dirty });
+        const diff = get().pendingDiffs.find((d) => d.path === path);
+        if (!diff) return;
+        set({ pendingDiffs: get().pendingDiffs.filter((d) => d !== diff) });
         const content = get().files[path];
         if (content != null) pushDisk("write", path, content);
         noteLearn("accept", path);
@@ -923,60 +939,48 @@ export const useIde = create<IdeState>()(
       rejectDiff: (path) => {
         const diff = get().pendingDiffs.find((d) => d.path === path);
         if (!diff) return;
+        if (get().files[path] !== diff.after) {
+          get().setNotice("Datei wurde inzwischen bearbeitet. Rücknahme zuerst im Diff abgleichen.");
+          return;
+        }
+        if (diff.backupVersion !== 2 && (diff.before.length === 400_000 || diff.after.length === 400_000)) {
+          get().setNotice("Alte Rücknahme ist möglicherweise gekürzt. Original aus Backup oder Git wiederherstellen.");
+          return;
+        }
         const files = { ...get().files };
-        const created = diff.before === "";
+        const created = diff.existedBefore === false;
         if (created) delete files[path];
         else files[path] = diff.before;
         const dirty = { ...get().dirty };
-        delete dirty[path];
-        set({
-          files,
-          pendingDiffs: get().pendingDiffs.filter((d) => d.path !== path),
-          dirty,
+        if (diff.dirtyBefore) dirty[path] = true;
+        else delete dirty[path];
+        cancelSyncWrite(path);
+        const editBases = { ...get().editBases };
+        if (!diff.dirtyBefore) delete editBases[path];
+        set({ files, dirty, editBases, pendingDiffs: get().pendingDiffs.filter((d) => d !== diff),
+          openPaths: get().openPaths.filter((p) => p in files),
+          activePath: get().activePath === path && created ? get().openPaths.find((p) => p in files) ?? null : get().activePath,
         });
-        if (created) pushDisk("remove", path);
-        else pushDisk("write", path, diff.before);
-        noteLearn("reject", `${path}::${(diff.after.split("\n").find((l) => l.trim().length > 6) ?? "").trim().slice(0, 100)}`);
+        // Proposals never reached disk. Only an already committed round needs a disk rollback.
+        if (diff.source === "round") {
+          if (created) pushDisk("remove", path);
+          else pushDisk("write", path, diff.before);
+        } else if (diff.dirtyBefore && get().autoSaveDisk) scheduleSyncWrite(path, diff.before);
+        noteLearn("reject", path);
       },
       rejectHunk: (path, hunk) => {
         const diff = get().pendingDiffs.find((d) => d.path === path);
         if (!diff) return;
-        const cur = get().files[path] ?? diff.after;
-        const next = rejectHunkLines(diff.before, cur, hunk);
-        if (next === diff.before) {
-          get().rejectDiff(path);
-          return;
-        }
-        set({
-          files: { ...get().files, [path]: next },
-          pendingDiffs: get().pendingDiffs.map((d) => (d.path === path ? { ...d, after: next } : d)),
+        if (get().files[path] !== diff.after) { get().setNotice("Datei wurde inzwischen bearbeitet. Diff neu öffnen."); return; }
+        const next = rejectHunkLines(diff.before, diff.after, hunk);
+        if (next === diff.before) { get().rejectDiff(path); return; }
+        set({ files: { ...get().files, [path]: next },
+          pendingDiffs: get().pendingDiffs.map((d) => d === diff ? { ...d, after: next } : d),
           dirty: { ...get().dirty, [path]: true },
         });
       },
-      acceptAllDiffs: () => {
-        noteLearn("accept", "all");
-        const pending = get().pendingDiffs;
-        set({ pendingDiffs: [], dirty: {} });
-        for (const d of pending) {
-          const content = get().files[d.path];
-          if (content != null) pushDisk("write", d.path, content);
-        }
-      },
-      rejectAllDiffs: () => {
-        const { pendingDiffs, files, dirty } = get();
-        const next = { ...files };
-        const nextDirty = { ...dirty };
-        for (const d of pendingDiffs) {
-          if (d.before === "") delete next[d.path];
-          else next[d.path] = d.before;
-          delete nextDirty[d.path];
-        }
-        set({ files: next, pendingDiffs: [], dirty: nextDirty });
-        for (const d of pendingDiffs) {
-          if (d.before === "") pushDisk("remove", d.path);
-          else pushDisk("write", d.path, d.before);
-        }
-      },
+      acceptAllDiffs: () => { for (const d of [...get().pendingDiffs]) get().acceptDiff(d.path); },
+      rejectAllDiffs: () => { for (const d of [...get().pendingDiffs]) get().rejectDiff(d.path); },
       openFile: (path) => {
         const { files, openPaths, panels, autoPreview } = get();
         if (!(path in files)) return;
@@ -1003,21 +1007,55 @@ export const useIde = create<IdeState>()(
           closedTabs: [path, ...get().closedTabs.filter((p) => p !== path)].slice(0, 24),
         });
       },
+      discardFile: async (path) => {
+        if (get().pendingDiffs.some((d) => d.path === path)) { get().rejectDiff(path); await flushDiskSync().catch(() => undefined); return; }
+        const s = get();
+        if (!(path in s.editBases)) {
+          if (s.dirty[path]) s.setNotice("Kein vollständiger Ausgangsstand verfügbar. Datei bleibt erhalten.");
+          return;
+        }
+        const before = s.editBases[path], target = captureDiskTarget();
+        cancelSyncWrite(path, target);
+        try {
+          // Let already-started writes settle before deciding what can be discarded.
+          await flushDiskSync();
+          if (get().workspaceEpoch !== s.workspaceEpoch || get().files[path] !== s.files[path]) return;
+          if (before !== null && (target.cwd || target.handle)) await syncWrite(path, before, target);
+          else if (before === null && !(path in get().editBases)) {
+            get().setNotice("Datei wurde inzwischen gespeichert. Zum Entfernen Datei löschen wählen.");
+            return;
+          }
+          const cur = get();
+          if (cur.workspaceEpoch !== s.workspaceEpoch || cur.files[path] !== s.files[path]) return;
+          const files = { ...cur.files }, dirty = { ...cur.dirty }, editBases = { ...cur.editBases };
+          if (before === null) delete files[path]; else files[path] = before;
+          delete dirty[path]; delete editBases[path];
+          set({ files, dirty, editBases, undo: { ...cur.undo, [path]: pushUndo(cur.undo[path] ?? [], s.files[path] ?? "") } });
+        } catch (error) {
+          if (get().workspaceEpoch === s.workspaceEpoch) {
+            set({ dirty: { ...get().dirty, [path]: true } });
+            get().setNotice(error instanceof Error ? error.message : "Zurücknehmen fehlgeschlagen. Datei bleibt offen.");
+          }
+        }
+      },
       setContent: (path, content) => {
-        const { files, dirty, undo } = get();
-        const prev = files[path] ?? "";
-        const stack = [...(undo[path] ?? [])];
-        if (stack[stack.length - 1] !== prev) stack.push(prev);
-        set({
-          files: { ...files, [path]: content },
-          dirty: { ...dirty, [path]: true },
-          undo: { ...undo, [path]: stack.slice(-40) },
+        if (get().pathOperation && isInside(path, get().pathOperation!.to)) return;
+        const { files, dirty, undo, editBases } = get();
+        if (files[path] === content) return;
+        const base = path in editBases ? editBases[path] : files[path] ?? null;
+        const nextDirty = { ...dirty };
+        if (base === content && !get().pendingDiffs.some((d) => d.path === path)) delete nextDirty[path]; else nextDirty[path] = true;
+        set({ files: { ...files, [path]: content }, dirty: nextDirty,
+          editBases: { ...editBases, [path]: base },
+          undo: { ...undo, [path]: pushUndo(undo[path] ?? [], files[path] ?? "") },
         });
         queueMicrotask(() => emitPlugin("change", path));
-        scheduleSyncWrite(path, content);
+        if (get().autoSaveDisk && !get().pendingDiffs.some((d) => d.path === path)) scheduleSyncWrite(path, content);
       },
       writeFile: (path, content, opts) => {
         const name = cleanPath(path);
+        const op = get().pathOperation;
+        if (op && isInside(name, op.to)) { get().setNotice("Ziel wird gerade verschoben. Änderung danach erneut anwenden."); return; }
         if (!name) return;
         const { files, openPaths, dirty, panels, dirs, activePath, undo } = get();
         const quiet = Boolean(opts?.quiet);
@@ -1032,7 +1070,8 @@ export const useIde = create<IdeState>()(
           files: { ...files, [name]: content },
           openPaths: quiet || openPaths.includes(name) ? openPaths : [...openPaths, name],
           activePath: quiet ? activePath : name,
-          dirty: { ...dirty, [name]: false },
+          dirty: { ...dirty, [name]: true },
+          editBases: { ...get().editBases, [name]: name in get().editBases ? get().editBases[name] : prev ?? null },
           dirs: withParents(dirs, name),
           panels: quiet ? panels : { ...panels, code: true },
           flashPath: quiet ? get().flashPath : name,
@@ -1047,6 +1086,8 @@ export const useIde = create<IdeState>()(
         pushDisk("write", name, content);
       },
       deleteFile: (path) => {
+        const op = get().pathOperation;
+        if (op && (isInside(path, op.from) || isInside(path, op.to))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
         const { files, openPaths, activePath, dirty } = get();
         const nextFiles = { ...files };
         delete nextFiles[path];
@@ -1067,6 +1108,7 @@ export const useIde = create<IdeState>()(
         pushDisk("remove", path);
       },
       createFolder: (path) => {
+        if (get().pathOperation && isInside(path, get().pathOperation!.to)) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
         const name = cleanPath(path);
         if (!name) return;
         const { files, dirs } = get();
@@ -1075,6 +1117,8 @@ export const useIde = create<IdeState>()(
         pushDisk("mkdir", name);
       },
       deleteDir: (path) => {
+        const op = get().pathOperation;
+        if (op && (isInside(op.from, path) || isInside(path, op.from) || isInside(op.to, path))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
         const dir = cleanPath(path);
         if (!dir) return;
         const { files, openPaths, activePath, dirty, dirs } = get();
@@ -1101,59 +1145,11 @@ export const useIde = create<IdeState>()(
         pushDisk("remove", dir);
       },
       movePath: (from, dest) => {
-        const src = cleanPath(from);
-        const target = cleanPath(dest);
-        if (!src || src === target) return;
-        if (target === src || target.startsWith(`${src}/`)) return;
+        const src = cleanPath(from), target = cleanPath(dest);
         const { files, dirs } = get();
-        const destIsDir =
-          !target || dirs.includes(target) || Object.keys(files).some((p) => isInside(p, target) && p !== target);
-        if (src in files) {
-          const to = destIsDir ? joinPath(target, src.split("/").pop() ?? src) : target;
-          if (to === src || to in files) return;
-          get().renameFile(src, to);
-          return;
-        }
-        if (!destIsDir && target in files) return;
-        const prefix = `${src}/`;
-        const nextFiles = { ...files };
-        for (const p of Object.keys(files)) {
-          if (p === src || p.startsWith(prefix)) {
-            const to = destIsDir
-              ? joinPath(target, p.slice(src.length > 0 ? src.length + 1 : 0) || p)
-              : joinPath(target, p.slice(prefix.length));
-            if (p in nextFiles) {
-              nextFiles[to] = nextFiles[p];
-              delete nextFiles[p];
-            }
-          }
-        }
-        const nextDirs = dirs
-          .filter((d) => !isInside(d, src))
-          .concat(
-            dirs
-              .filter((d) => isInside(d, src))
-              .map((d) => joinPath(target, d.slice(src.length + 1) || d.split("/").pop() || d)),
-          );
-        const destRoot = destIsDir ? joinPath(target, src.split("/").pop() ?? src) : target;
-        set({
-          files: nextFiles,
-          dirs: [...new Set([...(target ? [target] : []), ...nextDirs.filter(Boolean)])],
-          openPaths: remapList(get().openPaths, src, destRoot),
-          activePath: get().activePath ? remapPath(get().activePath!, src, destRoot) : get().activePath,
-          dirty: remapRecord(get().dirty, src, destRoot),
-          undo: remapRecord(get().undo, src, destRoot),
-          pendingDiffs: get().pendingDiffs.map((d) => ({ ...d, path: remapPath(d.path, src, destRoot) })),
-          breakpoints: remapRecord(get().breakpoints, src, destRoot),
-          attached: remapList(get().attached, src, destRoot),
-          recentPaths: remapList(get().recentPaths, src, destRoot),
-          collapsed: remapList(get().collapsed, src, destRoot),
-          closedTabs: remapList(get().closedTabs, src, destRoot),
-        });
-        pushDisk("remove", src);
-        for (const [p, c] of Object.entries(nextFiles)) {
-          if (!(p in files)) pushDisk("write", p, c);
-        }
+        const destIsDir = !target || dirs.includes(target) || Object.keys(files).some((p) => p.startsWith(target + "/"));
+        const to = destIsDir ? joinPath(target, src.split("/").pop() ?? src) : target;
+        if (src !== to) void get().relocatePath(src, to);
       },
       duplicateFile: (path) => {
         const { files } = get();
@@ -1167,13 +1163,14 @@ export const useIde = create<IdeState>()(
       },
       applyFiles: (next, extraDirs, opts) => {
         const prev = get();
+        noteDiskContents(next);
         const { openPaths, activePath, collapsed } = prev;
         let files = { ...next };
         const keepDirty = Boolean(opts?.keepDirty);
         const dirty: Record<string, boolean> = {};
         if (keepDirty) {
           for (const p of Object.keys(prev.dirty)) {
-            if (p in prev.files) {
+            if (prev.dirty[p] && p in prev.files) {
               files[p] = prev.files[p];
               dirty[p] = true;
             }
@@ -1188,13 +1185,16 @@ export const useIde = create<IdeState>()(
         const gone = (p: string) => !(p in files);
         set({
           files,
+          workspaceEpoch: keepDirty ? prev.workspaceEpoch : prev.workspaceEpoch + 1,
+          ...(!keepDirty ? { lspProblems: [], compileProblems: [], companionProblems: [], runProblems: [], jumpStack: [], jumpIndex: -1 } : {}),
+          editBases: keepDirty ? prev.editBases : {},
           dirs: [...new Set([...(extraDirs ?? []), ...fromFiles])].filter(Boolean),
           openPaths: keepOpen.length ? keepOpen : keepActive ? [keepActive] : [],
           activePath: keepActive,
           dirty,
           collapsed: nextCollapsed,
           pendingDiffs: keepDirty ? prev.pendingDiffs.filter((d) => d.path in files) : [],
-          undo: dropRecord(prev.undo, gone),
+          undo: keepDirty ? dropRecord(prev.undo, gone) : {},
           breakpoints: dropRecord(prev.breakpoints, gone),
           attached: prev.attached.filter((p) => p in files),
           recentPaths: prev.recentPaths.filter((p) => p in files),
@@ -1299,11 +1299,18 @@ export const useIde = create<IdeState>()(
         set({ chat: [...chat, { id: nid(), role: "assistant", content: reply, tools }] });
       },
       setDiskName: (diskName) => set({ diskName }),
-      setWorkspaceCwd: (workspaceCwd) => set({ workspaceCwd }),
+      setWorkspaceCwd: (workspaceCwd) => set({ workspaceCwd, workspaceEpoch: get().workspaceEpoch + (get().workspaceCwd === workspaceCwd ? 0 : 1) }),
       setSetupDone: (setupDone) => set({ setupDone }),
       setBackupName: (backupName) => set({ backupName }),
       setStorageMode: (storageMode) => set({ storageMode }),
-      setAutoSaveDisk: (autoSaveDisk) => set({ autoSaveDisk }),
+      setAutoSaveDisk: (autoSaveDisk) => {
+        set({ autoSaveDisk });
+        for (const p of Object.keys(get().dirty)) {
+          if (!get().dirty[p]) continue;
+          if (!autoSaveDisk) cancelSyncWrite(p);
+          else if (!get().pendingDiffs.some((d) => d.path === p) && p in get().files) scheduleSyncWrite(p, get().files[p]);
+        }
+      },
       setLoadOnStart: (loadOnStart) => set({ loadOnStart }),
       setGithubRepo: (githubRepo) => set({ githubRepo }),
       setGithubToken: (githubToken) => {
@@ -1372,7 +1379,7 @@ export const useIde = create<IdeState>()(
       setRunning: (running) => set({ running }),
       commit: (message) => {
         const { files, commits, dirty } = get();
-        const paths = Object.keys(dirty).filter(Boolean);
+        const paths = Object.keys(dirty).filter((p) => dirty[p]);
         const snap: Record<string, string> = {};
         for (const p of Object.keys(files)) snap[p] = files[p];
         set({
@@ -1386,13 +1393,16 @@ export const useIde = create<IdeState>()(
               snap,
             },
           ],
-          dirty: {},
         });
       },
       checkout: (id) => {
         const c = get().commits.find((x) => x.id === id);
         if (!c?.snap) return;
-        set({ files: { ...c.snap }, dirty: {}, pendingDiffs: [] });
+        get().pushCheckpoint("Vor Commit-Rücknahme");
+        set({ pendingDiffs: [] });
+        const paths = Object.keys(get().files);
+        for (const [path, content] of Object.entries(c.snap)) get().setContent(path, content);
+        for (const path of paths) if (!(path in c.snap)) get().deleteFile(path);
       },
       revertFile: (path) => {
         const hit = [...get().commits].reverse().find((c) => c.snap && path in c.snap);
@@ -1400,13 +1410,13 @@ export const useIde = create<IdeState>()(
           get().setNotice("Kein Commit für diese Datei");
           return;
         }
-        const dirty = { ...get().dirty };
-        delete dirty[path];
-        set({ files: { ...get().files, [path]: hit.snap[path] }, dirty });
+        get().setContent(path, hit.snap[path]);
       },
       resetWorkspace: () =>
         set({
           files: { ...SEED_FILES },
+          workspaceEpoch: get().workspaceEpoch + 1,
+          editBases: {},
           openPaths: [],
           activePath: "",
           dirty: {},

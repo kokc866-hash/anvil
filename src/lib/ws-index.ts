@@ -1,4 +1,4 @@
-import { contentSig, isSourcePath, rankPaths, skipPath } from "./ws-skip.ts";
+import { isSourcePath, rankPaths, skipPath } from "./ws-skip.ts";
 import { isSecretPath } from "./ref.ts";
 
 export type IdxKind = "fn" | "class" | "var" | "type";
@@ -124,6 +124,7 @@ export function parseFile(path: string, src: string): IdxFile {
 type IdxRef = IdxSym & { path: string };
 type FileCache = { sig: string; row: IdxFile };
 
+let lastFiles: Record<string, string> | undefined;
 let cache: { files: Map<string, FileCache>; rows: IdxFile[]; byName: Map<string, IdxRef[]> } | null = null;
 
 function rebuildByName(rows: IdxFile[]): Map<string, IdxRef[]> {
@@ -139,6 +140,8 @@ function rebuildByName(rows: IdxFile[]): Map<string, IdxRef[]> {
 }
 
 export function rebuildIndex(files: Record<string, string>): IdxFile[] {
+  if (files === lastFiles && cache) return cache.rows;
+  lastFiles = files;
   const prev = cache?.files ?? new Map<string, FileCache>();
   const next = new Map<string, FileCache>();
   const rows: IdxFile[] = [];
@@ -149,7 +152,7 @@ export function rebuildIndex(files: Record<string, string>): IdxFile[] {
     const src = files[path];
     if (src == null) continue;
     if (/^data:image\//i.test(src) || /^\s*\[image /i.test(src)) continue;
-    const sig = contentSig(src);
+    const sig = src;
     const hit = prev.get(path);
     const row = hit && hit.sig === sig ? hit.row : parseFile(path, src);
     if (!hit || hit.sig !== sig) dirty = true;

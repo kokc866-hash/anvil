@@ -211,6 +211,8 @@ function monacoPlugin(): Plugin {
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
 export default defineConfig(({ command, isPreview }) => ({
+  // Prebundle lazy local formatters up front so first use cannot reload an active editor.
+  optimizeDeps: { include: ["prettier/standalone", "prettier/plugins/babel", "prettier/plugins/estree", "prettier/plugins/typescript", "prettier/plugins/html", "prettier/plugins/markdown", "prettier/plugins/postcss", "prettier/plugins/yaml"] },
   server: {
     host: "0.0.0.0",
     port: 8080,

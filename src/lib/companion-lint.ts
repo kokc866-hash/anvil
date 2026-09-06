@@ -16,7 +16,8 @@ const WANT: Record<string, RegExp> = {
 };
 let timer = 0;
 let lastPing = 0;
-let pingOk = false;
+let pingOk = false, pingBase = "";
+let generation = 0, running = false, again = false;
 
 function enabledIds(): string[] {
   const m = useIde.getState().lspEnabled;
@@ -30,20 +31,27 @@ function wantFile(path: string): boolean {
 }
 
 async function alive(base: string): Promise<boolean> {
-  if (Date.now() - lastPing < 20000) return pingOk;
-  lastPing = Date.now();
+  if (base === pingBase && Date.now() - lastPing < 20000) return pingOk;
+  lastPing = Date.now(); pingBase = base;
   const p = await companionPing(base);
   pingOk = p.ok;
   return pingOk;
 }
 
 export async function refreshCompanionLint(): Promise<void> {
+  if (running) { again = true; return; }
+  running = true;
+  const job = ++generation;
+  try {
   const st = useIde.getState();
   const base = st.companionUrl || "http://127.0.0.1:7845";
+  const current = () => job === generation && st.workspaceEpoch === useIde.getState().workspaceEpoch && st.files === useIde.getState().files && st.companionUrl === useIde.getState().companionUrl;
   if (!(await alive(base))) {
+    if (!current()) return;
     if (st.companionProblems.length) st.setCompanionProblems([]);
     return;
   }
+  if (!current()) return;
   const max = st.lspMaxFiles || 24;
   const open = new Set(st.openPaths);
   const files = Object.entries(st.files)
@@ -60,6 +68,7 @@ export async function refreshCompanionLint(): Promise<void> {
     lspTimeoutMs: (st.lspTimeout || 8) * 1000,
     maxFiles: max,
   });
+  if (!current()) return;
   if (!r.ok) {
     st.pushLspLog(false, r.error || "Lint fehlgeschlagen");
     return;
@@ -76,9 +85,11 @@ export async function refreshCompanionLint(): Promise<void> {
   const bad = (r.tools || []).filter((t) => !t.ok).map((t) => t.name);
   if (bad.length) st.pushLspLog(false, `${bad.join(", ")} mit Fehler · ${hits.length} Meldungen`);
   else st.pushLspLog(true, `${hits.length} Meldungen · ${(r.tools || []).map((t) => t.name).join(", ") || "ok"}`);
+  } finally { running = false; if (again) { again = false; scheduleCompanionLint(); } }
 }
 
 export function scheduleCompanionLint(): void {
+  generation++;
   window.clearTimeout(timer);
   timer = window.setTimeout(() => void refreshCompanionLint(), 1600);
 }

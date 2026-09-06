@@ -29,6 +29,16 @@ ipcRenderer.on("secrets-changed", (_event, state) => {
 
 contextBridge.exposeInMainWorld("anvilCompanionToken", companionToken);
 contextBridge.exposeInMainWorld("anvilNative", {
+  onBeforeClose: (fn) => {
+    const receive = async (_event, ticket) => {
+      let ok = false;
+      try { ok = Boolean(await fn()); } catch { /* Keep the window open on failed saves. */ }
+      ipcRenderer.send("editor-close-result", ticket, ok);
+    };
+    ipcRenderer.on("editor-before-close", receive);
+    ipcRenderer.send("editor-close-ready");
+    return () => ipcRenderer.removeListener("editor-before-close", receive);
+  },
   secretsLoad: () => secretState,
   secretsSave: async (partial, options) => {
     const state = await ipcRenderer.invoke("secrets-save", partial, options);

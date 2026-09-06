@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatCode } from "@/lib/format";
+import { formatDocument } from "@/lib/format";
 import type { LangId } from "@/lib/languages";
 import { defineAnvilThemes, editorChrome, loadMonaco, monacoLang, pruneModels, wireNav, type MonacoEditor, type MonacoNS } from "@/lib/monaco";
 import { applyModelText, markerEndCol, modelUriString } from "@/lib/monaco-models";
@@ -27,6 +27,10 @@ type Props = {
 };
 
 export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdit, onAskSelection }: Props) {
+  const workspaceEpoch = useIde((s) => s.workspaceEpoch);
+  const [ready, setReady] = useState(0);
+  const syncingRef = useRef(false);
+  const hintSnapshot = useRef<(() => boolean) | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const edRef = useRef<MonacoEditor | null>(null);
   const monacoRef = useRef<MonacoNS | null>(null);
@@ -77,28 +81,42 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     const el = hostRef.current;
     if (!el) return;
     let dead = false;
+    viewsRef.current.clear();
+    viewPathRef.current = pathRef.current;
     const subs: { dispose: () => void }[] = [];
     let brainTimer = 0;
+    let hintTimer = 0;
+    let hintGeneration = 0;
     void loadMonaco()
       .then((monaco) => {
         if (dead || !hostRef.current) return;
         monacoRef.current = monaco;
         defineAnvilThemes(monaco, useIde.getState().theme);
         wireNav(monaco);
-        const uri = monaco.Uri.parse(modelUriString(pathRef.current));
+        const uri = monaco.Uri.parse(modelUriString(pathRef.current, useIde.getState().workspaceEpoch));
         let model = monaco.editor.getModel(uri);
         if (!model) model = monaco.editor.createModel(valueRef.current, monacoLang(langRef.current), uri);
+        else applyModelText(model as Parameters<typeof applyModelText>[0], valueRef.current);
         const ed = monaco.editor.create(hostRef.current, {
           model,
           ...editorChrome(useIde.getState()),
         });
         edRef.current = ed;
-        const go = (window as unknown as { __anvilGoto?: { path: string; line: number } }).__anvilGoto;
-        if (go && go.path === pathRef.current) {
-          ed.revealLineInCenter?.(go.line);
-          ed.setPosition({ lineNumber: go.line, column: 1 });
-          (window as unknown as { __anvilGoto?: { path: string; line: number } }).__anvilGoto = undefined;
-        }
+        setReady((n) => n + 1);
+        const applyJump = () => {
+          const holder = window as unknown as { __anvilGoto?: { path: string; line: number; epoch?: number } };
+          const go = holder.__anvilGoto;
+          if (go?.epoch !== undefined && go.epoch !== useIde.getState().workspaceEpoch) { holder.__anvilGoto = undefined; return; }
+          if (!go || go.path !== pathRef.current || ed.getModel()?.uri.path !== "/" + pathRef.current) return;
+          const line = Math.max(1, Math.min(go.line, ed.getModel()?.getLineCount?.() ?? go.line));
+          ed.revealLineInCenter?.(line);
+          ed.setPosition({ lineNumber: line, column: 1 });
+          holder.__anvilGoto = undefined;
+          ed.focus();
+        };
+        window.addEventListener("anvil-jump", applyJump);
+        subs.push({ dispose: () => window.removeEventListener("anvil-jump", applyJump) });
+        applyJump();
         const KM = monaco.KeyMod;
         const KC = monaco.KeyCode;
         ed.addAction({
@@ -154,6 +172,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const st = useIde.getState();
             const p = pathRef.current;
             void defsAt({ ...st.files, [p]: src }, p, offset, st.openPaths).then((defs) => {
+              if (dead || ed.getModel() !== modelNow || modelNow.getValue() !== src) return;
               const d = defs[0];
               if (d) gotoFile(d.path, d.line);
             });
@@ -204,6 +223,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const p = pathRef.current;
             const files = { ...st.files, [p]: src };
             void defsAt(files, p, offset, st.openPaths).then((defs) => {
+              if (dead || ed.getModel() !== modelNow || modelNow.getValue() !== src) return;
               const d = defs[0];
               if (!d) {
                 useIde.getState().setNotice("Keine Definition");
@@ -228,6 +248,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const files = { ...st.files, [p]: src };
             const w = wordAt(src, offset);
             void defsAt(files, p, offset, st.openPaths).then((defs) => {
+              if (dead || ed.getModel() !== modelNow || modelNow.getValue() !== src) return;
               if (!defs.length) {
                 useIde.getState().setNotice("Keine Definition");
                 return;
@@ -240,14 +261,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           id: "anvil.format",
           label: "Dokument formatieren",
           keybindings: [],
-          run: () => {
-            void formatCode(pathRef.current, ed.getValue())
-              .then((next) => {
-                onChangeRef.current(next);
-                useIde.getState().setNotice("Formatiert");
-              })
-              .catch(() => useIde.getState().setNotice("Format fehlgeschlagen"));
-          },
+          run: () => { void formatDocument(pathRef.current); },
         });
         ed.addAction({
           id: "anvil.dupline",
@@ -353,23 +367,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           id: "anvil.save",
           label: "Speichern",
           keybindings: [],
-          run: () => {
-            const st = useIde.getState();
-            const finish = (src: string) => {
-              onChangeRef.current(src);
-              void import("@/lib/save").then((s) => s.saveNow());
-            };
-            if (!st.formatOnSave) {
-              finish(ed.getValue());
-              return;
-            }
-            void formatCode(pathRef.current, ed.getValue())
-              .then(finish)
-              .catch(() => {
-                useIde.getState().setNotice("Format fehlgeschlagen — ungeformt gespeichert");
-                finish(ed.getValue());
-              });
-          },
+          run: () => { void import("@/lib/save").then((s) => s.saveNow()); },
         });
         ed.addAction({
           id: "anvil.preview",
@@ -394,11 +392,13 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             const sel = ed.getSelection();
             const modelNow = ed.getModel();
             if (!sel || !modelNow) return;
+            const version = modelNow.getVersionId?.();
+            const original = modelNow.getValue();
             const text = modelNow.getValueInRange(sel).trim() || (ed.getValue().split("\n")[sel.startLineNumber - 1] ?? "");
             const lang = pathRef.current.split(".").pop() ?? "js";
             void import("@/lib/brain").then((b) =>
               b.brainComment(lang, text).then((c) => {
-                if (!c) return;
+                if (!c || dead || ed.getModel() !== modelNow || modelNow.getVersionId?.() !== version || modelNow.getValue() !== original) return;
                 ed.executeEdits("anvil-comment", [
                   {
                     range: {
@@ -430,7 +430,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             });
           },
         });
-        const refreshHints = () => {
+        const computeHints = (generation: number) => {
           if (!suggestOnRef.current) {
             setHints([]);
             return;
@@ -444,6 +444,11 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             endLineNumber: pos.lineNumber,
             endColumn: pos.column,
           });
+          const selection = ed.getSelection();
+          if (selection && (selection.startLineNumber !== selection.endLineNumber || selection.startColumn !== selection.endColumn)) { setHints([]); return; }
+          const version = modelNow.getVersionId?.();
+          const valid = () => !dead && generation === hintGeneration && ed.getModel() === modelNow && modelNow.getVersionId?.() === version && ed.getPosition()?.lineNumber === pos.lineNumber && ed.getPosition()?.column === pos.column;
+          hintSnapshot.current = valid;
           const { prefix, prev } = prefixAt(line);
           const local = suggest({
             source: ed.getValue(),
@@ -461,19 +466,28 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
               void import("@/lib/brain").then(async (b) => {
                 if (dead || !b.brainReady() || !b.useBrain.getState().jobs.complete) return;
                 const rest = await b.brainCompleteCode({ lang: snap.lang, prefix: snap.prefix, before: snap.line });
-                if (!rest || dead) return;
+                if (!rest || !valid()) return;
                 setHints((prevHints) => {
-                  const hit: Suggestion = { text: snap.prefix + rest, rest, kind: "snip", insert: rest };
+                  const hit: Suggestion = { text: snap.prefix + rest, rest, kind: "snip", insert: snap.prefix + rest };
                   return [hit, ...prevHints.filter((h) => h.insert !== rest)].slice(0, 4);
                 });
               });
             }, 450);
           }
         };
+        const refreshHints = () => {
+          hintGeneration++;
+          hintSnapshot.current = null;
+          setHints([]);
+          window.clearTimeout(hintTimer);
+          window.clearTimeout(brainTimer);
+          const generation = hintGeneration;
+          hintTimer = window.setTimeout(() => computeHints(generation), 60);
+        };
         subs.push(
           ed.onDidChangeModelContent(() => {
             const v = ed.getValue();
-            if (v !== valueRef.current) onChangeRef.current(v);
+            if (!syncingRef.current && ed.getModel()?.uri.path === "/" + pathRef.current && v !== valueRef.current) onChangeRef.current(v);
             refreshHints();
           }),
         );
@@ -513,15 +527,16 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     return () => {
       dead = true;
       window.clearTimeout(brainTimer);
+      window.clearTimeout(hintTimer);
       for (const s of subs) s.dispose();
       edRef.current?.dispose();
       edRef.current = null;
       const monaco = monacoRef.current;
-      if (monaco) pruneModels(monaco, useIde.getState().openPaths);
+      if (monaco) pruneModels(monaco, useIde.getState().openPaths, useIde.getState().workspaceEpoch);
     };
     // ein Editor, Modelle per Tab
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [workspaceEpoch]);
 
   useEffect(() => {
     let prev = useIde.getState().openPaths.join("\n");
@@ -530,7 +545,8 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       if (next === prev) return;
       prev = next;
       const monaco = monacoRef.current;
-      if (monaco) pruneModels(monaco, s.openPaths);
+      if (monaco) pruneModels(monaco, s.openPaths, s.workspaceEpoch);
+      for (const p of viewsRef.current.keys()) if (!s.openPaths.includes(p)) viewsRef.current.delete(p);
     });
   }, []);
 
@@ -541,8 +557,6 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       "anvil-peek": "anvil.peek",
       "anvil-format": "anvil.format",
       "anvil-dup": "anvil.dupline",
-      "anvil-replace": "anvil.replace",
-      "anvil-symbols": "anvil.symbols",
       "anvil-moveUp": "anvil.move-up",
       "anvil-moveDown": "anvil.move-down",
       "anvil-comment": "anvil.comment",
@@ -573,10 +587,11 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     const monaco = monacoRef.current;
     const ed = edRef.current;
     if (!monaco || !ed) return;
+    syncingRef.current = true;
     const prev = viewPathRef.current;
     if (prev && prev !== path && ed.saveViewState) viewsRef.current.set(prev, ed.saveViewState());
     viewPathRef.current = path;
-    const uri = monaco.Uri.parse(modelUriString(path));
+    const uri = monaco.Uri.parse(modelUriString(path, workspaceEpoch));
     let model = monaco.editor.getModel(uri);
     if (!model) model = monaco.editor.createModel(valueRef.current, monacoLang(language), uri);
     else applyModelText(model as Parameters<typeof applyModelText>[0], valueRef.current);
@@ -587,7 +602,9 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     monaco.editor.setModelLanguage(model, monacoLang(language));
     const vs = viewsRef.current.get(path);
     if (vs && ed.restoreViewState) ed.restoreViewState(vs);
-  }, [path, language]);
+    syncingRef.current = false;
+    window.dispatchEvent(new Event("anvil-jump"));
+  }, [path, language, workspaceEpoch, ready]);
 
   useEffect(() => {
     const ed = edRef.current;
@@ -595,9 +612,11 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     if (!ed || !model) return;
     if (model.getValue() === value) return;
     const pos = ed.getPosition();
+    syncingRef.current = true;
     applyModelText(model, value);
+    syncingRef.current = false;
     if (pos) ed.setPosition(pos);
-  }, [value]);
+  }, [value, ready, workspaceEpoch]);
 
   useEffect(() => {
     const ed = edRef.current;
@@ -620,7 +639,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           source: ["syntax", "python", "index", "json", "js", "c"].includes(p.source) ? t("lintHeur") : p.source,
         })),
     );
-  }, [lspProblems, path]);
+  }, [lspProblems, path, ready]);
 
   useEffect(() => {
     edRef.current?.updateOptions(editorChrome(useIde.getState()));
@@ -647,7 +666,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       ed.revealLineInCenter?.(debug.line);
     }
     decosRef.current = ed.deltaDecorations(decosRef.current, next);
-  }, [breakpoints, debug.paused, debug.line, debug.path, path]);
+  }, [breakpoints, debug.paused, debug.line, debug.path, path, ready]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -680,7 +699,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         style={{ height: "100%" }}
         onKeyDownCapture={(e) => {
           if (!suggestOn || !hintsRef.current.length) return;
-          if (e.key === "Tab") {
+          if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !e.nativeEvent.isComposing && hintSnapshot.current?.()) {
             e.preventDefault();
             e.stopPropagation();
             acceptHint(hintsRef.current[0]);
@@ -696,7 +715,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     const ed = edRef.current;
     const pos = ed?.getPosition();
     const model = ed?.getModel();
-    if (!ed || !pos || !model) return;
+    if (!ed || !pos || !model || !hintSnapshot.current?.()) return;
     const line = model.getValueInRange({
       startLineNumber: pos.lineNumber,
       startColumn: 1,

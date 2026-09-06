@@ -88,7 +88,10 @@ export type FileDiff = {
   path: string;
   before: string;
   after: string;
-  source?: "round" | "propose";
+  existedBefore?: boolean;
+  dirtyBefore?: boolean;
+  backupVersion?: 2;
+  source?: "round" | "propose" | "external";
 };
 
 export type PlanStep = { text: string; status: "todo" | "run" | "ok" | "err" };
@@ -168,6 +171,11 @@ export type Panels = Record<PanelId, boolean>;
 
 export type IdeState = {
   files: Record<string, string>;
+  workspaceEpoch: number;
+  pathOperation: { from: string; to: string } | null;
+  editBases: Record<string, string | null>;
+  discardFile: (path: string) => Promise<void>;
+  relocatePath: (from: string, to: string) => Promise<void>;
   openPaths: string[];
   activePath: string | null;
   dirty: Record<string, boolean>;

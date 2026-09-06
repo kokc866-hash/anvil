@@ -69,12 +69,16 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Tool compatibility, transports and permissions
         run: npm run test:tools:browser
+      - name: Editor documents, persistence, workers and navigation
+        run: npm run test:editor
       - name: Canvas, Run, inputs and popout
         run: npm run test:canvas:browser
       - name: Production Canvas build
         run: npm run build
         env:
           ANVIL_ELECTRON_BUILD: "1"
+      - name: Production editor and local formatting
+        run: npm run test:editor:release
       - name: Minified Canvas runtime and TypeScript modules
         run: npm run test:canvas:release
       - name: Learned tool calls, settings and persisted mappings in production

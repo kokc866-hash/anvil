@@ -18,18 +18,20 @@ describe("monaco prune", () => {
   it("ignores empty keep", () => {
     assert.deepEqual(modelsToDrop(["/a.ts"], []), ["a.ts"]);
   });
-  it("strips anvil prefix and decodes", () => {
+  it("preserves decoded model paths and decodes complete URIs once", () => {
     assert.equal(pathFromModelUri("/src/app.ts"), "src/app.ts");
-    assert.equal(pathFromModelUri("/anvil/src/app.ts"), "src/app.ts");
-    assert.equal(pathFromModelUri(modelUriString("src/a b.ts").replace("inmemory://", "")), "src/a b.ts");
+    assert.equal(pathFromModelUri("/anvil/src/app.ts"), "anvil/src/app.ts");
+    assert.equal(pathFromModelUri(modelUriString("src/a b.ts")), "src/a b.ts");
   });
 });
 
 describe("monaco uri / edits", () => {
   it("builds stable inmemory uri", () => {
-    assert.equal(modelUriString("src/app.ts"), "inmemory://anvil/src/app.ts");
-    assert.equal(modelUriString("\\src\\app.ts"), "inmemory://anvil/src/app.ts");
+    assert.equal(modelUriString("src/app.ts"), "inmemory://anvil/src/app.ts?workspace=0");
+    assert.equal(modelUriString("\\src\\app.ts"), "inmemory://anvil/src/app.ts?workspace=0");
     assert.match(modelUriString("src/a b.ts"), /a%20b/);
+    assert.notEqual(modelUriString("a.ts", 1), modelUriString("a.ts", 2));
+    assert.equal(pathFromModelUri("/src/%20.ts"), "src/%20.ts");
   });
   it("marker is a token, not +200", () => {
     assert.equal(markerEndCol(3, "undefined foo"), 12);

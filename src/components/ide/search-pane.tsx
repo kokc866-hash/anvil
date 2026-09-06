@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useIde } from "@/store/ide";
 import { CtxMenu } from "./ctx-menu";
 import { gotoFile } from "@/lib/goto";
 import { rebuildIndex, searchIndex } from "@/lib/ws-index";
-import { afterLine, applyHits, findInFiles, type SearchHit, type SearchOpts } from "@/lib/search";
+import { afterLine, type SearchHit, type SearchOpts } from "@/lib/search";
 import { useT } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
+
+import { searchJob } from "@/lib/search-job";
 
 export function SearchPane() {
   const t = useT();
@@ -23,9 +25,22 @@ export function SearchPane() {
   const [menu, setMenu] = useState<{ x: number; y: number; path: string; text: string } | null>(null);
   const opts: SearchOpts = { regex, case: cs, word };
 
-  const hits = useMemo(() => {
-    if (q.trim().length < 2) return [] as SearchHit[];
-    return findInFiles(files, q, opts);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [more, setMore] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const searchSnapshot = useRef<Record<string, string> | null>(null);
+  const applyControl = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    searchSnapshot.current = null; setHits([]); setMore(false); setAsk(false); setPicked({}); setSearchError("");
+    const timer = setTimeout(() => {
+      if (!q) return;
+      void searchJob({ files, needle: q, opts }, control.signal).then((result) => {
+        if (control.signal.aborted) return;
+        searchSnapshot.current = files; setHits(result.hits ?? []); setMore(Boolean(result.more));
+      }).catch((e) => { if (!control.signal.aborted) setSearchError(e.message); });
+    }, 180);
+    return () => { clearTimeout(timer); control.abort(); applyControl.current?.abort(); };
   }, [files, q, regex, cs, word]);
 
   const symbols = useMemo(() => {
@@ -48,13 +63,21 @@ export function SearchPane() {
   const selected = hits.filter((h) => picked[`${h.path}:${h.line}:${h.col}`] !== false);
   const showRepl = repl.length > 0 || ask;
 
-  function apply(list: SearchHit[]) {
-    if (!list.length) return;
-    useIde.getState().pushCheckpoint(t("searchReplace"));
-    const patched = applyHits(files, list, q.trim(), repl, opts);
-    const n = useIde.getState().patchFiles(patched);
-    setAsk(false);
-    setNotice(n ? t("replacedN", { n: list.length, f: Object.keys(patched).length }) : t("noneFound"));
+  async function apply(list?: SearchHit[]) {
+    const st = useIde.getState();
+    if (searchSnapshot.current !== st.files) { setNotice("Suchergebnisse werden aktualisiert."); return; }
+    const control = new AbortController(); applyControl.current?.abort(); applyControl.current = control;
+    setBusy(true);
+    try {
+      const result = await searchJob({ files, needle: q, opts, replacement: repl, selected: list }, control.signal);
+      const cur = useIde.getState();
+      if (control.signal.aborted || cur.workspaceEpoch !== st.workspaceEpoch || cur.files !== files) return;
+      cur.pushCheckpoint(t("searchReplace"));
+      const n = cur.patchFiles(result.patched ?? {});
+      setAsk(false);
+      setNotice(n ? t("replacedN", { n: result.total ?? 0, f: n }) : t("noneFound"));
+    } catch (e) { if (!control.signal.aborted) setNotice(e instanceof Error ? e.message : "Ersetzen fehlgeschlagen"); }
+    finally { if (applyControl.current === control) setBusy(false); }
   }
 
   return (
@@ -107,7 +130,7 @@ export function SearchPane() {
           <Button
             variant="quiet"
             className="h-7 px-2 text-[11px]"
-            disabled={!selected.length}
+            disabled={busy || !selected.length}
             onClick={() => apply(selected)}
           >
             {t("replaceSel")}
@@ -115,21 +138,21 @@ export function SearchPane() {
           <Button
             variant="quiet"
             className="h-7 px-2 text-[11px]"
-            disabled={!hits.length}
-            onClick={() => (hits.length > 3 ? setAsk(true) : apply(hits))}
+            disabled={busy || !hits.length}
+            onClick={() => (hits.length > 3 || more ? setAsk(true) : void apply())}
           >
             {t("replaceAll")}
           </Button>
           <span className="font-mono text-[11px] text-subtle">
-            {hits.length}
+            {hits.length}{more ? "+" : ""}
             {groups.length ? ` · ${groups.length}` : ""}
             {symbols.length ? ` · ${symbols.length} ${t("symbols")}` : ""}
           </span>
         </div>
         {ask ? (
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-fg">
-            <span>{t("confirmReplace", { n: hits.length, f: groups.length })}</span>
-            <button type="button" className="text-danger hover:underline" onClick={() => apply(hits)}>
+            <span>{more ? "Alle Treffer im Projekt ersetzen (auch außerhalb der angezeigten 200)?" : t("confirmReplace", { n: hits.length, f: groups.length })}</span>
+            <button type="button" className="text-danger hover:underline" onClick={() => void apply()}>
               {t("replaceAll")}
             </button>
             <button type="button" className="text-muted hover:underline" onClick={() => setAsk(false)}>
@@ -137,10 +160,11 @@ export function SearchPane() {
             </button>
           </div>
         ) : null}
+        {searchError ? <p className="mt-1 text-xs text-danger">{searchError}</p> : null}
         {busy ? <p className="mt-1 text-[10px] text-subtle">{t("helperSearch")}</p> : null}
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
-        {q.trim().length < 2 ? (
+        {q.length < 1 ? (
           <p className="px-3 py-2 text-xs text-muted">{t("searchHint")}</p>
         ) : hits.length === 0 && symbols.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted">{t("noneFound")}</p>
@@ -170,7 +194,7 @@ export function SearchPane() {
                 {list.map((h, i) => {
                   const pk = `${h.path}:${h.line}:${h.col}`;
                   const on = picked[pk] !== false;
-                  const after = showRepl ? afterLine(h, q.trim(), repl, opts) : "";
+                  const after = showRepl ? afterLine(h, q, repl, opts) : "";
                   return (
                     <div key={`${pk}:${i}`} className="flex items-start gap-1 px-2 py-0.5 hover:bg-hover">
                       <input

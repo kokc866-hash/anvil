@@ -23,7 +23,7 @@ import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
 import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, assertLlmTarget } from "../scripts/llm-agent.mjs";
 import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
-import { gitDispatch, gitBin, listTree, writeRel, removeRel, mkdirRel, resolveCwd } from "./git.mjs";
+import { gitDispatch, gitBin, listTree, writeRel, removeRel, readRelFiles, moveRel, mkdirRel, resolveCwd } from "./git.mjs";
 import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
 import {
   allowCorsOrigin,
@@ -566,10 +566,27 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readBody(req);
       const cwd = safeCwd(body.cwd || workspace);
-      json(req, res, 200, writeRel(cwd, String(body.path || ""), String(body.content ?? "")));
+      json(req, res, 200, writeRel(cwd, String(body.path || ""), String(body.content ?? ""), typeof body.expected === "string" || body.expected === null ? body.expected : undefined));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/file/read") {
+    if (!checkToken(req)) { json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true }); return; }
+    try {
+      const body = await readBody(req);
+      if (!Array.isArray(body.paths)) throw new Error("Dateiliste fehlt.");
+      json(req, res, 200, readRelFiles(safeCwd(body.cwd || workspace), body.paths));
+    } catch (e) { json(req, res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) }); }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/file/move") {
+    if (!checkToken(req)) { json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true }); return; }
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, moveRel(safeCwd(body.cwd || workspace), body.from, body.to));
+    } catch (e) { json(req, res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) }); }
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/file/delete") {

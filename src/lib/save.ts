@@ -1,85 +1,89 @@
 import { formatCode } from "./format";
 import { hasLocation, saveSlot, diskWorkspaceHandle } from "./disk";
 import { emitPlugin } from "./plugins/events";
-import { captureDiskTarget, scheduleSyncWrite, flushDiskSync, syncMkdir } from "./disk-sync";
+import { captureDiskTarget, scheduleSyncWrite, flushDiskSync } from "./disk-sync";
 import { flushSecrets } from "./secrets";
 import { flushPersistence } from "./persist-storage";
 import { useIde } from "@/store/ide";
 
-let saving: Promise<void> | null = null;
-
-export function saveNow(): Promise<void> {
-  if (saving) return saving;
-  saving = saveCurrent().finally(() => {
-    saving = null;
-  });
-  return saving;
+type SaveRequest = { all?: boolean; path?: string; format?: boolean };
+let saving: Promise<unknown> = Promise.resolve();
+export function saveNow(request: SaveRequest = {}): Promise<boolean> {
+  const target = captureDiskTarget();
+  const path = request.path ?? useIde.getState().activePath;
+  const job = saving.catch(() => undefined).then(() => saveCurrent(request, path, target));
+  saving = job;
+  return job;
 }
 
-async function saveCurrent() {
-  const initial = useIde.getState();
-  const target = captureDiskTarget();
-  const path = initial.activePath;
+async function saveCurrent(request: SaveRequest, path: string | null, target: ReturnType<typeof captureDiskTarget>): Promise<boolean> {
+  const sameTarget = () => {
+    const s = useIde.getState();
+    return s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && s.companionUrl === target.base && diskWorkspaceHandle() === target.handle;
+  };
+  if (!sameTarget()) return false;
   let note = "Gespeichert";
   try {
-    if (path && initial.formatOnSave && initial.files[path] != null) {
+    const initial = useIde.getState();
+    const paths = request.all ? Object.keys(initial.dirty).filter((p) => initial.dirty[p] && p in initial.files) : path && path in initial.files ? [path] : [];
+    if (paths.some((p) => initial.pendingDiffs.some((d) => d.path === p && d.source !== "round"))) {
+      initial.setNotice("Änderungsvorschläge zuerst übernehmen oder zurücknehmen."); return false;
+    }
+    if (initial.formatOnSave && request.format !== false) for (const p of paths) {
+      const before = useIde.getState().files[p];
       try {
-        const next = await formatCode(path, initial.files[path]);
-        const current = useIde.getState();
-        if (
-          current.workspaceCwd !== target.cwd ||
-          current.companionUrl !== target.base ||
-          diskWorkspaceHandle() !== target.handle
-        )
-          return;
-        // Never replace edits made while the formatter was running.
-        if (next !== initial.files[path] && current.files[path] === initial.files[path])
-          current.setContent(path, next);
-      } catch {
-        note = "Format fehlgeschlagen — ungeformt gespeichert";
-      }
+        const next = await formatCode(p, before);
+        if (!sameTarget()) return false;
+        if (useIde.getState().files[p] === before && next !== before) useIde.getState().setContent(p, next);
+      } catch { note = "Format fehlgeschlagen — ursprünglichen Text gespeichert"; }
     }
-    const st = useIde.getState();
-    if (
-      st.workspaceCwd !== target.cwd ||
-      st.companionUrl !== target.base ||
-      diskWorkspaceHandle() !== target.handle
-    )
-      return;
-    const files = st.files;
-    const fullSave = Boolean(target.handle) || st.autoSaveDisk || st.storageMode === "disk";
-    if (fullSave && !target.cwd && !target.handle)
-      throw new Error("Kein Workspace-Ordner gewählt.");
-    const dirty = Object.keys(st.dirty).filter((p) => p in files);
-    const paths = fullSave ? Object.keys(files) : dirty.length ? dirty : path ? [path] : [];
+    if (!sameTarget()) return false;
+    const st = useIde.getState(), files = st.files;
     emitPlugin("save", path ?? "");
-    const directories = fullSave ? st.dirs.map((dir) => syncMkdir(dir, target)) : [];
     for (const p of paths) if (p in files) scheduleSyncWrite(p, files[p], target);
-    const results = await Promise.allSettled([
-      ...directories,
-      flushDiskSync(),
-      flushPersistence(),
-      flushSecrets(),
-    ]);
-    const failed = results.find((r) => r.status === "rejected");
-    if (failed?.status === "rejected") throw failed.reason;
+    await flushDiskSync();
+    await Promise.all([flushPersistence(), flushSecrets()]);
     if (hasLocation("backup")) await saveSlot("backup", files, st.dirs);
-    const current = useIde.getState();
-    if (
-      current.workspaceCwd === target.cwd &&
-      current.companionUrl === target.base &&
-      diskWorkspaceHandle() === target.handle
-    ) {
-      const remaining = { ...current.dirty };
-      for (const p of paths) if (current.files[p] === files[p]) delete remaining[p];
-      useIde.setState({ dirty: remaining });
-    }
-    st.setNotice(note);
+    if (!sameTarget()) return false;
+    useIde.getState().setNotice(note);
+    return !paths.some((p) => Boolean(useIde.getState().dirty[p]));
   } catch (error) {
-    useIde
-      .getState()
-      .setNotice(error instanceof Error ? error.message : "Speichern fehlgeschlagen");
+    useIde.getState().setNotice(error instanceof Error ? error.message : "Speichern fehlgeschlagen");
+    return false;
   }
+}
+
+/** Used by both the tab button and keyboard command. */
+export async function closeTabs(paths: string[]): Promise<void> {
+  const before = useIde.getState();
+  const dirty = paths.filter((p) => before.dirty[p]);
+  if (dirty.length) {
+    const { saveChoice } = await import("./confirm");
+    const choice = await saveChoice(dirty.join("\n"));
+    if (choice === "cancel" || before.workspaceEpoch !== useIde.getState().workspaceEpoch) return;
+    if (dirty.some((p) => before.files[p] !== useIde.getState().files[p])) { useIde.getState().setNotice("Dateien inzwischen geändert. Schließen erneut wählen."); return; }
+    if (choice === "save") { for (const p of dirty) if (!(await saveNow({ path: p }))) return; }
+    else for (const p of dirty) await useIde.getState().discardFile(p);
+    if (dirty.some((p) => useIde.getState().dirty[p])) return;
+  }
+  if (before.workspaceEpoch === useIde.getState().workspaceEpoch) for (const p of paths) useIde.getState().closeFile(p);
+}
+
+export async function prepareWorkspaceSwitch(): Promise<boolean> {
+  const before = useIde.getState();
+  const paths = Object.keys(before.dirty).filter((p) => before.dirty[p]);
+  if (paths.length) {
+    const { saveChoice } = await import("./confirm");
+    const choice = await saveChoice(`${paths.length} Datei(en) vor dem Projektwechsel`);
+    if (choice === "cancel" || before.workspaceEpoch !== useIde.getState().workspaceEpoch) return false;
+    if (paths.some((p) => before.files[p] !== useIde.getState().files[p])) return false;
+    if (choice === "save") { if (!(await saveNow({ all: true }))) return false; }
+    else for (const p of paths) await useIde.getState().discardFile(p);
+    if (Object.values(useIde.getState().dirty).some(Boolean)) return false;
+  }
+  await flushDiskSync();
+  await flushPersistence();
+  return before.workspaceEpoch === useIde.getState().workspaceEpoch;
 }
 
 export function focusAgent() {

@@ -1,6 +1,6 @@
 /** Real git + source tree on a registered workspace folder. Token-gated by the server. */
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync, renameSync, realpathSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { toolEnv } from "./toolchain.mjs";
 import { runRoot } from "./run-storage.mjs";
@@ -412,16 +412,42 @@ export function insideRoot(root, full) {
   return f === r || f.startsWith(rs);
 }
 
-export function writeRel(cwd, rel, content) {
+export function writeRel(cwd, rel, content, expected) {
   const root = resolveCwd(cwd);
   const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean || clean.includes("..")) throw new Error("Pfad ungültig.");
   if (String(content || "").trim().startsWith("data:image/")) return { ok: true, path: clean, skipped: "image" };
   const full = path.join(root, ...clean.split("/"));
   if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
+  if (expected !== undefined) {
+    const actual = existsSync(full) ? readFileSync(full, "utf8") : null;
+    if (actual !== expected && actual !== content) throw new Error(`Datei extern geändert: ${clean}. Neu laden oder Änderungen abgleichen.`);
+  }
   mkdirSync(path.dirname(full), { recursive: true });
   writeFileSync(full, content, "utf8");
   return { ok: true, path: clean };
+}
+
+/** Rename the entire on-disk tree, including binaries and ignored files. */
+export function moveRel(cwd, from, to) {
+  const root = realpathSync(resolveCwd(cwd));
+  const resolve = (rel) => {
+    if (typeof rel !== "string" || !rel || /[:\\\x00-\x1f]/.test(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
+    const full = path.join(root, rel);
+    if (!insideRoot(root, full) || full === root) throw new Error("Pfad ungültig.");
+    let parent = path.dirname(full);
+    while (!existsSync(parent)) parent = path.dirname(parent);
+    if (!insideRoot(root, realpathSync(parent))) throw new Error("Pfad verlässt den Workspace.");
+    return full;
+  };
+  const src = resolve(from), dest = resolve(to);
+  if (insideRoot(src, dest)) throw new Error("Ziel liegt in der Quelle.");
+  if (!existsSync(src)) throw new Error("Quelle nicht gefunden.");
+  if (lstatSync(src).isSymbolicLink()) throw new Error("Verknüpfung separat verschieben.");
+  if (existsSync(dest)) throw new Error("Ziel existiert bereits.");
+  mkdirSync(path.dirname(dest), { recursive: true });
+  renameSync(src, dest);
+  return { ok: true };
 }
 
 export function mkdirRel(cwd, rel) {
@@ -460,4 +486,18 @@ export async function gitDispatch(action, body) {
   if (action === "diff") return gitDiff(cwd, body.path ? String(body.path) : "");
   if (action === "tree") return listTree(cwd);
   return { ok: false, error: `unbekannt: ${action}` };
+}
+
+export function readRelFiles(cwd, paths) {
+  const root = realpathSync(resolveCwd(cwd)), files = {};
+  for (const rel of paths.slice(0, 64)) {
+    if (typeof rel !== "string" || !rel || /[:\\\x00-\x1f]/.test(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
+    const full = path.join(root, rel);
+    if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
+    if (!existsSync(full)) { files[rel] = null; continue; }
+    if (!insideRoot(root, realpathSync(full))) throw new Error("Pfad verlässt den Workspace.");
+    const stat = statSync(full);
+    if (stat.isFile() && stat.size <= 1_500_000) files[rel] = readFileSync(full, "utf8");
+  }
+  return { ok: true, files };
 }

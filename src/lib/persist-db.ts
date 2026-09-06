@@ -68,7 +68,7 @@ function range(name: string) {
 
 export async function loadArchive(
   name: string,
-): Promise<{ files: Record<string, string> | null; chat: ArchiveMessage[] | null }> {
+): Promise<{ files: Record<string, string> | null; chat: ArchiveMessage[] | null; recovery: ArchiveSnapshot["recovery"] | null }> {
   const db = await database();
   const tx = db.transaction(["kv", "file", "chat"], "readonly");
   const done = complete(tx);
@@ -76,6 +76,7 @@ export async function loadArchive(
   const marker = result(kv.get(`${name}:files-present`));
   const legacy = result(kv.get(`${name}:files`));
   const order = result(kv.get(`${name}:chat-order`));
+  const recovery = result(kv.get(`${name}:recovery`));
   const files: Record<string, string> = {};
   const messages = new Map<string, ArchiveMessage>();
   const read = (store: "file" | "chat", receive: (key: string, value: unknown) => void) => {
@@ -96,11 +97,12 @@ export async function loadArchive(
   const [present, oldFiles, ids] = await Promise.all([marker, legacy, order, done]);
   return {
     files: present || Object.keys(files).length ? files : ((oldFiles as Record<string, string> | undefined) ?? null),
+    recovery: (await recovery) ?? null,
     chat: Array.isArray(ids) ? ids.flatMap((id: string) => (messages.has(id) ? [messages.get(id)!] : [])) : null,
   };
 }
 
-export type ArchiveSnapshot = { files?: Record<string, string>; chat?: ArchiveMessage[] };
+export type ArchiveSnapshot = { files?: Record<string, string>; chat?: ArchiveMessage[]; recovery?: { pendingDiffs: unknown[]; editBases: Record<string, string | null> } };
 
 /** One transaction commits deletions, message order and changed contents together. */
 export async function saveArchive(name: string, next: ArchiveSnapshot, previous: ArchiveSnapshot): Promise<void> {
@@ -153,6 +155,7 @@ export async function saveArchive(name: string, next: ArchiveSnapshot, previous:
     if (!ids.size) chat.delete(range(name));
     kv.put([...ids], `${name}:chat-order`);
   }
+  if (next.recovery && next.recovery !== previous.recovery) kv.put(next.recovery, `${name}:recovery`);
   await done;
 }
 
@@ -162,6 +165,6 @@ export async function removeArchive(name: string): Promise<void> {
   const done = complete(tx);
   tx.objectStore("file").delete(range(name));
   tx.objectStore("chat").delete(range(name));
-  for (const suffix of [":files", ":files-present", ":chat-order"]) tx.objectStore("kv").delete(name + suffix);
+  for (const suffix of [":files", ":files-present", ":chat-order", ":recovery"]) tx.objectStore("kv").delete(name + suffix);
   await done;
 }

@@ -1,3 +1,4 @@
+import { isEditorCancellation } from "./editor-cancellation.ts";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "./persist-storage";
@@ -177,6 +178,7 @@ export function startIntern(): void {
   });
   window.addEventListener("unhandledrejection", (e) => {
     const r = e.reason;
+    if (isEditorCancellation(r)) return;
     note("js", r instanceof Error ? r.message : String(r));
   });
   void import("./health").then((h) => h.startHealth());

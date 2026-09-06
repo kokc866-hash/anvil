@@ -441,12 +441,12 @@ export async function companionTree(
   }
 }
 
-export async function companionWriteFile(path: string, content: string, cwd?: string, base = DEFAULT_COMPANION): Promise<boolean> {
+export async function companionWriteFile(path: string, content: string, cwd?: string, base = DEFAULT_COMPANION, expected?: string | null): Promise<boolean> {
   try {
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/file`, {
       method: "POST",
       headers: headers(),
-      body: JSON.stringify({ path, content, cwd }),
+      body: JSON.stringify({ path, content, cwd, expected }),
       signal: AbortSignal.timeout(15000),
     });
     const j = (await r.json()) as { ok?: boolean };
@@ -454,6 +454,22 @@ export async function companionWriteFile(path: string, content: string, cwd?: st
   } catch {
     return false;
   }
+}
+
+export async function companionWriteChecked(path: string, content: string, cwd: string, base = DEFAULT_COMPANION, expected?: string | null): Promise<void> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/file`, {
+    method: "POST", headers: headers(), body: JSON.stringify({ path, content, cwd, expected }), signal: AbortSignal.timeout(15000),
+  });
+  const result = await r.json() as { ok?: boolean; error?: string };
+  if (!r.ok || !result.ok) throw new Error(result.error || `Nicht gespeichert: ${path}`);
+}
+
+export async function companionMoveFile(from: string, to: string, cwd: string, base = DEFAULT_COMPANION): Promise<void> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/file/move`, {
+    method: "POST", headers: headers(), body: JSON.stringify({ from, to, cwd }), signal: AbortSignal.timeout(30000),
+  });
+  const result = await r.json() as { ok?: boolean; error?: string };
+  if (!r.ok || !result.ok) throw new Error(result.error || "Verschieben fehlgeschlagen.");
 }
 
 export async function companionDeleteFile(path: string, cwd?: string, base = DEFAULT_COMPANION): Promise<boolean> {
@@ -532,4 +548,13 @@ export async function companionRunStatus(id: string, base = DEFAULT_COMPANION): 
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     return j as CompanionJob;
   }, base);
+}
+
+export async function companionReadFiles(paths: string[], cwd: string, base = DEFAULT_COMPANION): Promise<Record<string, string | null>> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/file/read`, {
+    method: "POST", headers: headers(), body: JSON.stringify({ paths: paths.slice(0, 64), cwd }), signal: AbortSignal.timeout(10000),
+  });
+  const result = await r.json() as { ok: boolean; files?: Record<string, string | null>; error?: string };
+  if (!r.ok || !result.ok || !result.files) throw new Error(result.error || "Dateien konnten nicht gelesen werden.");
+  return result.files;
 }

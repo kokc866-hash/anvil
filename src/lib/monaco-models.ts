@@ -4,24 +4,18 @@ export function normModelPath(p: string): string {
   return String(p || "").replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
-export function modelUriString(path: string): string {
+export function modelUriString(path: string, workspace = 0): string {
   const parts = normModelPath(path).split("/").filter(Boolean).map((s) => encodeURIComponent(s));
-  return `inmemory://anvil/${parts.join("/")}`;
+  return `inmemory://anvil/${parts.join("/")}?workspace=${workspace}`;
 }
 
 export function pathFromModelUri(uriPath: string): string {
-  const raw = String(uriPath || "").replace(/^\/+/, "").replace(/^anvil\//, "");
-  return raw
-    .split("/")
-    .map((s) => {
-      try {
-        return decodeURIComponent(s);
-      } catch {
-        return s;
-      }
-    })
-    .filter(Boolean)
-    .join("/");
+  // Monaco's URI.path is already decoded. A literal percent or anvil/ directory is valid.
+  const raw = String(uriPath || "");
+  if (raw.startsWith("inmemory://")) {
+    try { return decodeURIComponent(new URL(raw).pathname).replace(/^\/+/, ""); } catch { return ""; }
+  }
+  return raw.replace(/^\/+/, "");
 }
 
 export function modelsToDrop(uris: string[], keep: string[]): string[] {
@@ -38,6 +32,8 @@ export function markerEndCol(col: number, message: string): number {
 
 type ModelLike = {
   getValue: () => string;
+  getPositionAt?: (offset: number) => { lineNumber: number; column: number };
+  pushStackElement?: () => void;
   getLineCount?: () => number;
   getLineMaxColumn?: (n: number) => number;
   pushEditOperations?: (before: unknown[], edits: unknown[], after: unknown) => unknown;
@@ -49,22 +45,29 @@ export function applyModelText(model: ModelLike, next: string): boolean {
   if (model.getValue() === next) return false;
   if (typeof model.pushEditOperations === "function" && model.getLineCount && model.getLineMaxColumn) {
     try {
+      const before = model.getValue();
+      let start = 0, end = before.length, nextEnd = next.length;
+      while (start < end && start < nextEnd && before[start] === next[start]) start++;
+      while (end > start && nextEnd > start && before[end - 1] === next[nextEnd - 1]) { end--; nextEnd--; }
       const last = Math.max(1, model.getLineCount());
+      const from = model.getPositionAt?.(start), to = model.getPositionAt?.(end);
+      model.pushStackElement?.();
       model.pushEditOperations(
         [],
         [
           {
             range: {
-              startLineNumber: 1,
-              startColumn: 1,
-              endLineNumber: last,
-              endColumn: model.getLineMaxColumn(last),
+              startLineNumber: from?.lineNumber ?? 1,
+              startColumn: from?.column ?? 1,
+              endLineNumber: to?.lineNumber ?? last,
+              endColumn: to?.column ?? model.getLineMaxColumn(last),
             },
-            text: next,
+            text: from && to ? next.slice(start, nextEnd) : next,
           },
         ],
         () => null,
       );
+      model.pushStackElement?.();
       return true;
     } catch {
       /* fall through to setValue */

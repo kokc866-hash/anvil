@@ -10,10 +10,8 @@ import { brainGenerate, brainReady, brainSystem, brainTabHint, getTabHint, subsc
 import { canRun, langFromPath } from "@/lib/languages";
 import { selectRunTarget } from "@/lib/run-target";
 import { looksGraphical } from "@/lib/game-host";
-import { emitPlugin } from "@/lib/plugins/events";
 import { canDebug } from "@/lib/debug-remote";
 import { debugContinue, debugStep, debugStop, startDebug } from "@/lib/debug-engine";
-import { runFile } from "@/lib/run-client";
 import { cn } from "@/lib/cn";
 import { isRefImage, refImageSrc, copyIntoRef, isSecretPath } from "@/lib/ref";
 import { envNames } from "@/lib/vault";
@@ -30,7 +28,11 @@ import { EDITOR_COMPACT } from "@/lib/layout";
 import { confirmApp } from "@/lib/confirm";
 import { EDITOR_MAX_CHARS } from "@/lib/monaco-models";
 
+import { captureDocument, applyDocument } from "@/lib/document";
+import { useLivePreview } from "@/lib/live-write";
+
 export function EditorPane() {
+  const draft = useLivePreview((s) => s.draft);
   const t = useT();
   const kNew = useKbd("newFile");
   const kAgent = useKbd("agent");
@@ -50,12 +52,12 @@ export function EditorPane() {
   const pending = useIde((s) => s.pendingDiffs);
   const openFile = useIde((s) => s.openFile);
   const setContent = useIde((s) => s.setContent);
-  const setRunning = useIde((s) => s.setRunning);
-  const pushOutput = useIde((s) => s.pushOutput);
   const acceptAllDiffs = useIde((s) => s.acceptAllDiffs);
   const rejectAllDiffs = useIde((s) => s.rejectAllDiffs);
   const acceptDiff = useIde((s) => s.acceptDiff);
   const rejectDiff = useIde((s) => s.rejectDiff);
+  const inlineTicket = useRef(0);
+  const epoch = useIde((s) => s.workspaceEpoch);
   const [inline, setInline] = useState<(TextSel & { prompt: string; busy: boolean }) | null>(null);
   const [find, setFind] = useState<{ q: string; i: number; repl?: string } | null>(null);
   const [sym, setSym] = useState("");
@@ -78,30 +80,14 @@ export function EditorPane() {
   const runPopout = useIde((s) => s.runPopout);
   const setPreviewOpen = useIde((s) => s.setPreviewOpen);
   const liveRun = useIde((s) => s.liveRun);
+  const agentBusy = useIde((s) => s.agentBusy);
   const setLiveRun = useIde((s) => s.setLiveRun);
   const debug = useIde((s) => s.debug);
   const liveGen = useRef(0);
   const currentDiff = pending.find((d) => d.path === activePath);
 
-  async function askClose(path: string) {
-    const st = useIde.getState();
-    if (st.dirty[path]) {
-      const ok = await confirmApp(`${t("unsavedTab")}: ${path}`, { title: t("tabClose"), ok: t("discard"), danger: true });
-      if (!ok) return;
-    }
-    st.closeFile(path);
-  }
-
-  async function askCloseOthers(keep: string) {
-    const st = useIde.getState();
-    const rest = st.openPaths.filter((p) => p !== keep);
-    const dirtyN = rest.filter((p) => st.dirty[p]);
-    if (dirtyN.length) {
-      const ok = await confirmApp(`${t("unsavedTab")}: ${dirtyN.length}`, { title: t("tabClose"), ok: t("discard"), danger: true });
-      if (!ok) return;
-    }
-    for (const p of rest) useIde.getState().closeFile(p);
-  }
+  async function askClose(path: string) { await import("@/lib/save").then((s) => s.closeTabs([path])); }
+  async function askCloseOthers(keep: string) { await import("@/lib/save").then((s) => s.closeTabs(useIde.getState().openPaths.filter((p) => p !== keep))); }
 
   useEffect(() => {
     if (!activePath) return;
@@ -119,7 +105,7 @@ export function EditorPane() {
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [Boolean(activePath)]);
 
   const shownTabs = useMemo(
     () => pickVisibleTabs(openPaths, activePath, tabFit),
@@ -166,7 +152,7 @@ export function EditorPane() {
     function onEsc() {
       setFind(null);
       setGoto(null);
-      setInline(null);
+      (inlineTicket.current++, setInline(null));
       setSymOpen(false);
     }
     function onReplace() {
@@ -214,9 +200,10 @@ export function EditorPane() {
     const src = activeSrc;
     const q = find.q;
     const hits: number[] = [];
+    const lower = src.toLowerCase(), query = q.toLowerCase();
     let from = 0;
     while (q && from < src.length) {
-      const at = src.toLowerCase().indexOf(q.toLowerCase(), from);
+      const at = lower.indexOf(query, from);
       if (at < 0) break;
       hits.push(at);
       from = at + q.length;
@@ -225,46 +212,7 @@ export function EditorPane() {
   }, [find?.q, activeSrc, activePath]);
 
   async function run(opts?: { live?: boolean; tok?: number }) {
-    let path = activePath;
-    if (!path) return;
-    if (!opts?.live && !canRun(path)) {
-      const pick = selectRunTarget(Object.keys(useIde.getState().files), path);
-      if (pick && pick !== path) {
-        path = pick;
-        useIde.getState().setNotice(`Run: ${pick}`);
-      }
-    }
-    const s = useIde.getState();
-    if (!canRun(path)) { s.setNotice("Keine ausführbare Startdatei im Projekt gefunden."); return; }
-    s.setRunPath(path);
-    if (!opts?.live) {
-      const html = /\.html?$/i.test(path) || s.runInWindow || s.runPopout;
-      if (html) {
-        openRunWindow();
-        s.setPreviewOpen(false);
-      } else {
-        s.revealOutput();
-        s.setPreviewOpen(false);
-      }
-    }
-    if (!opts?.live) setRunning(true);
-    try {
-      const result = await runFile(path, useIde.getState().files);
-      if (opts?.live && opts.tok != null && opts.tok !== liveGen.current) return;
-      pushOutput(result);
-      emitPlugin("run", path);
-    } catch (err) {
-      if (opts?.live && opts.tok != null && opts.tok !== liveGen.current) return;
-      pushOutput({
-        ok: false,
-        stdout: "",
-        stderr: err instanceof Error ? err.message : String(err),
-        duration: 0,
-        label: path,
-      });
-    } finally {
-      if (!opts?.live) setRunning(false);
-    }
+    await import("@/lib/editor-run").then((r) => r.runFromEditor(activePath, { live: opts?.live, current: opts?.live ? () => opts.tok === liveGen.current : undefined }));
   }
 
   useEffect(() => {
@@ -277,7 +225,7 @@ export function EditorPane() {
     if (!src.trim() || src.length > 24000) return;
     const id = ++liveGen.current;
     const t = window.setTimeout(() => {
-      if (id !== liveGen.current) return;
+      if (id !== liveGen.current || useIde.getState().agentBusy) return;
       void run({ live: true, tok: id });
     }, 700);
     return () => {
@@ -285,10 +233,14 @@ export function EditorPane() {
       liveGen.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveRun, activePath, activeSrc]);
+  }, [liveRun, activePath, activeSrc, agentBusy]);
+
+  useEffect(() => { inlineTicket.current++; setInline(null); return () => { inlineTicket.current++; }; }, [activePath, epoch]);
 
   async function applyInline() {
     if (!inline || !activePath || !inline.prompt.trim()) return;
+    const ticket = ++inlineTicket.current;
+    const snap = captureDocument(activePath);
     setInline({ ...inline, busy: true });
     try {
       const s = useIde.getState();
@@ -317,10 +269,12 @@ export function EditorPane() {
         });
       }
       const next = stripFence(raw);
-      const cur = useIde.getState().files[activePath] ?? "";
-      setContent(activePath, cur.slice(0, inline.start) + next + cur.slice(inline.end));
-      setInline(null);
+      if (ticket !== inlineTicket.current) return;
+      const cur = snap.content ?? "";
+      if (!applyDocument(snap, cur.slice(0, inline.start) + next + cur.slice(inline.end))) { useIde.getState().setNotice("Datei inzwischen geändert; Inline-Edit nicht übernommen."); }
+      (inlineTicket.current++, setInline(null));
     } catch (err) {
+      if (ticket !== inlineTicket.current) return;
       setInline({
         ...inline,
         busy: false,
@@ -369,9 +323,17 @@ export function EditorPane() {
     setGoto(null);
   }
 
+    const liveDraft = draft ? (
+        <details open className="max-h-[40%] shrink-0 overflow-auto border-b border-border bg-surface">
+          <summary className="sticky top-0 bg-surface px-3 py-1 text-xs text-muted">Live-Entwurf · {draft.path} · noch nicht übernommen</summary>
+          <pre className="whitespace-pre-wrap p-3 font-mono text-xs">{draft.content}</pre>
+        </details>
+      ) : null;
+
   if (!activePath) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-bg px-8 text-center">
+        {liveDraft}
         <p className="font-display text-lg font-medium tracking-tight text-fg">{t("emptyEditor")}</p>
         <p className="mt-2 max-w-sm text-sm text-muted text-pretty">{t("emptyEditorH")}</p>
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -438,10 +400,10 @@ export function EditorPane() {
           {currentDiff ? (
             <>
               <Button variant="primary" className="h-7 px-2 text-xs" onClick={() => acceptDiff(activePath)}>
-                {currentDiff.source === "round" ? t("keepFile") : t("accept")}
+                {currentDiff.source === "external" ? "Editorstand speichern" : currentDiff.source === "round" ? t("keepFile") : t("accept")}
               </Button>
               <Button className="h-7 px-2 text-xs" onClick={() => rejectDiff(activePath)}>
-                {currentDiff.source === "round" ? t("revertFile") : t("reject")}
+                {currentDiff.source === "external" ? "Plattenstand laden" : currentDiff.source === "round" ? t("revertFile") : t("reject")}
               </Button>
             </>
           ) : null}
@@ -832,17 +794,18 @@ export function EditorPane() {
             className="h-9 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
             onChange={(e) => setInline({ ...inline, prompt: e.target.value })}
             onKeyDown={(e) => {
-              if (e.key === "Escape") setInline(null);
+              if (e.key === "Escape") (inlineTicket.current++, setInline(null));
             }}
           />
           <Button type="submit" variant="primary" className="h-9" disabled={inline.busy || !inline.prompt.trim()}>
             {inline.busy ? "…" : "Edit"}
           </Button>
-          <Button type="button" className="h-9" onClick={() => setInline(null)}>
+          <Button type="button" className="h-9" onClick={() => (inlineTicket.current++, setInline(null))}>
             Abbrechen
           </Button>
         </form>
       ) : null}
+      {liveDraft}
       {currentDiff && showDiff ? (
         <DiffView path={currentDiff.path} before={currentDiff.before} after={currentDiff.after} />
       ) : (

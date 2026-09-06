@@ -14,6 +14,8 @@ export type MonacoEditor = {
   getSelection: () => { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } | null;
   getModel: () => {
     getValue: () => string;
+    getVersionId?: () => number;
+    pushStackElement?: () => void;
     getOffsetAt: (p: { lineNumber: number; column: number }) => number;
     getPositionAt?: (offset: number) => { lineNumber: number; column: number };
     getValueInRange: (r: object) => string;
@@ -66,7 +68,7 @@ export type MonacoNS = {
     defineTheme: (name: string, theme: Record<string, unknown>) => void;
     setTheme: (name: string) => void;
     setModelMarkers?: (model: unknown, owner: string, markers: object[]) => void;
-    getModels?: () => Array<{ uri?: { path?: string }; dispose?: () => void }>;
+    getModels?: () => Array<{ uri?: { path?: string; query?: string }; dispose?: () => void }>;
   };
   languages?: {
     registerCompletionItemProvider: (
@@ -135,7 +137,11 @@ export type MonacoNS = {
   MarkerSeverity?: { Error: number; Warning: number; Info: number };
 };
 
+import { isEditorCancellation } from "./editor-cancellation";
 let cached: Promise<MonacoNS> | null = null;
+if (typeof window !== "undefined") window.addEventListener("unhandledrejection", (event) => {
+  if (isEditorCancellation(event.reason)) event.preventDefault();
+});
 
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -290,7 +296,7 @@ export function defineAnvilThemes(monaco: MonacoNS, theme: "dark" | "light") {
   monaco.editor.setTheme(theme === "light" ? "anvil-light" : "anvil-dark");
 }
 
-export function pruneModels(monaco: MonacoNS, keep: string[]) {
+export function pruneModels(monaco: MonacoNS, keep: string[], workspace = 0) {
   const models = monaco.editor.getModels?.() ?? [];
   const drop = new Set(
     modelsToDrop(
@@ -300,7 +306,7 @@ export function pruneModels(monaco: MonacoNS, keep: string[]) {
   );
   for (const m of models) {
     const path = pathFromModelUri(String(m.uri?.path || ""));
-    if (!drop.has(path)) continue;
+    if (!drop.has(path) && m.uri?.query === `workspace=${workspace}`) continue;
     try {
       m.dispose?.();
     } catch {
@@ -380,12 +386,10 @@ export function wireNav(monaco: MonacoNS) {
         const path = pathOf(model);
         const offset = model.getOffsetAt(position);
         const files = { ...filesOf(), [path]: model.getValue() };
-        return import("./lsp-compile").then((c) =>
-          c.ensureTs(files, openOf()).then(() => {
-            const md = c.tsQuickInfoSync(path, offset) ?? hoverFor(files, path, model.getValue(), offset);
-            return md ? { contents: [{ value: md }] } : null;
-          }),
-        );
+        return import("./lsp-compile").then((c) => c.tsQuickInfo(files, path, offset, openOf())).then((info) => {
+          const md = info ?? hoverFor(files, path, model.getValue(), offset);
+          return md ? { contents: [{ value: md }] } : null;
+        }).catch(() => null);
       },
     });
     monaco.languages.registerDefinitionProvider(lang, {
@@ -395,7 +399,7 @@ export function wireNav(monaco: MonacoNS) {
         const offset = model.getOffsetAt(position);
         const files = { ...filesOf(), [path]: model.getValue() };
         const toLoc = (d: { path: string; line: number; col?: number }) => ({
-          uri: monaco.Uri.parse(modelUriString(d.path)),
+          uri: monaco.Uri.parse(modelUriString(d.path, (window as unknown as { __anvilIde?: { getState: () => { workspaceEpoch: number } } }).__anvilIde?.getState().workspaceEpoch ?? 0)),
           range: {
             startLineNumber: d.line,
             startColumn: d.col || 1,
@@ -407,19 +411,29 @@ export function wireNav(monaco: MonacoNS) {
       },
     });
     monaco.languages.registerRenameProvider?.(lang, {
-      provideRenameEdits(model, position, newName) {
+      async provideRenameEdits(model, position, newName) {
         if (!position) return null;
-        const path = pathOf(model);
-        const files = { ...filesOf(), [path]: model.getValue() };
-        const r = renameSymbol(files, path, model.getOffsetAt(position), newName);
-        if ("error" in r) return null;
+        const { useIde } = await import("@/store/ide");
+        const state = useIde.getState();
+        const path = pathOf(model), content = model.getValue();
+        const files = { ...state.files, [path]: content };
         try {
-          const ide = requireStore().useIde.getState() as { setContent: (p: string, c: string) => void };
-          for (const [p, text] of Object.entries(r.files)) ide.setContent(p, text);
-        } catch {
-          /* */
-        }
-        return { edits: [] };
+          const semantic = /\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/.test(path);
+          let proposed: Record<string, string>;
+          if (semantic) proposed = await import("./lsp-compile").then((c) => c.tsRename(files, path, model.getOffsetAt(position), newName, state.openPaths));
+          else {
+            const result = renameSymbol(files, path, model.getOffsetAt(position), newName);
+            if ("error" in result) throw new Error(result.error);
+            proposed = result.files;
+          }
+          const current = useIde.getState();
+          if (state.workspaceEpoch !== current.workspaceEpoch || Object.keys(proposed).some((p) => files[p] !== current.files[p])) {
+            current.setNotice("Dateien inzwischen geändert; Umbenennung nicht übernommen."); return null;
+          }
+          current.patchFiles(proposed);
+          current.setNotice(semantic ? "Symbol-Umbenennung zur Übernahme geöffnet" : "Textuelle Umbenennung: Treffer im Diff prüfen");
+          return { edits: [] };
+        } catch (e) { useIde.getState().setNotice(e instanceof Error ? e.message : "Umbenennung fehlgeschlagen"); return null; }
       },
     });
   }
