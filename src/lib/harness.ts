@@ -1,3 +1,4 @@
+import { isExecutablePath } from "./run-target.ts";
 export type HarnessPhase = "plan" | "act" | "observe" | "patch" | "see" | "engine" | "done" | "abort";
 
 export type ObsKind = "write" | "edit" | "run" | "engine" | "see" | "play" | "test" | "read" | "mcp" | "other";
@@ -259,7 +260,7 @@ export function harnessBar(state: HarnessState): string {
 
 function skipRun(path?: string) {
   if (!path) return false;
-  return path.startsWith(".anvil/") || /\.(md|json|txt|svg)$/i.test(path);
+  return !isExecutablePath(path) && !/\.(gd|tscn|unity|uproject|gml)$/i.test(path);
 }
 
 function clamp(n: number, lo: number, hi: number) {

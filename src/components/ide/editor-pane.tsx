@@ -8,6 +8,7 @@ import { completeText, stripFence } from "@/lib/complete";
 import { agentGen, beginAgent } from "@/lib/abort";
 import { brainGenerate, brainReady, brainSystem, brainTabHint, getTabHint, subscribeTabHints, tabHintSnap, useBrain } from "@/lib/brain";
 import { canRun, langFromPath } from "@/lib/languages";
+import { selectRunTarget } from "@/lib/run-target";
 import { looksGraphical } from "@/lib/game-host";
 import { emitPlugin } from "@/lib/plugins/events";
 import { canDebug } from "@/lib/debug-remote";
@@ -227,15 +228,14 @@ export function EditorPane() {
     let path = activePath;
     if (!path) return;
     if (!opts?.live && !canRun(path)) {
-      const pick = await import("@/lib/brain").then((b) =>
-        b.brainRunPick(Object.keys(useIde.getState().files), path!),
-      );
+      const pick = selectRunTarget(Object.keys(useIde.getState().files), path);
       if (pick && pick !== path) {
         path = pick;
         useIde.getState().setNotice(`Run: ${pick}`);
       }
     }
     const s = useIde.getState();
+    if (!canRun(path)) { s.setNotice("Keine ausführbare Startdatei im Projekt gefunden."); return; }
     s.setRunPath(path);
     if (!opts?.live) {
       const html = /\.html?$/i.test(path) || s.runInWindow || s.runPopout;
@@ -273,7 +273,7 @@ export function EditorPane() {
     const lang = langFromPath(activePath);
     const src = activeSrc;
     if (lang !== "python" && lang !== "javascript" && lang !== "typescript") return;
-    if (looksGraphical(src)) return;
+    if (looksGraphical(src) || /\bcurses\b|\binput\s*\(/.test(src)) return;
     if (!src.trim() || src.length > 24000) return;
     const id = ++liveGen.current;
     const t = window.setTimeout(() => {
@@ -423,7 +423,7 @@ export function EditorPane() {
   }
 
   const lang = langFromPath(activePath);
-  const runnable = canRun(activePath);
+  const runnable = canRun(activePath) || Boolean(selectRunTarget(Object.keys(useIde.getState().files), activePath));
   const crumbs = activePath.split("/");
 
   return (

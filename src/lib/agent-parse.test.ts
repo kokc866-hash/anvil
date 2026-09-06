@@ -216,3 +216,10 @@ test("pickRunPath prefers main.cpp after a header write", () => {
   assert.equal(pickRunPath(["src/app.py"], "src/app.py"), "src/app.py");
   assert.equal(pickRunPath(["README.md"]), "");
 });
+
+test("Run ignores documents, configuration, headers and reference sources", () => {
+  for (const path of [".anvil/rules.md", ".anvil/harness.json", "ref/README.md", "ref/example.py", "game.h", "types.d.ts"]) {
+    assert.equal(pickRunPath([path]), "");
+  }
+  assert.equal(pickRunPath(["snake/rules.md", "unrelated/main.cpp", "snake/snake.py"], "snake/rules.md"), "snake/snake.py");
+});

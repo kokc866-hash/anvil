@@ -32,6 +32,7 @@ export type SurfaceSnap = {
   view?: string;
   ready: boolean;
   error?: string;
+  servers?: { id: string; name: string; ready: boolean; error?: string }[];
 };
 
 export function surfaceLabel(id: string, servers: Named[]): string {
@@ -83,9 +84,10 @@ export function toolsAllowed(id: string, mode: SurfaceMode, name: string): boole
 export function surfacePrompt(snap: SurfaceSnap): string {
   if (snap.id === ANVIL_SURFACE) {
     const mcp = snap.tools.filter((t) => t.name !== "(fehler)");
-    const extra = mcp.length
-      ? `\nMCP verbunden, nicht aktiv (${mcp.length} Tools). Nur nutzen wenn der User die fremde Fläche nennt, sonst Anvil-Dateien.`
-      : "";
+    const servers = snap.servers ?? [];
+    const extra = servers.length || mcp.length
+      ? `\nKonfigurierte MCP-Server: ${servers.map((s) => `${s.id} (${s.name}): ${s.error || (s.ready ? "Katalog geladen" : "Katalog noch nicht geladen")}`).join("; ") || "siehe mcp_list"}.\nMCP ist über mcp_list und mcp_call verfügbar. Bei fehlendem Katalog zuerst mcp_list aufrufen. ${mcp.length} externe Werkzeuge sind aktuell zwischengespeichert; diese Zahl zählt keine nativen Anvil-Tools. Für den Auftrag passende MCP-Aufrufe sind erlaubt.\n${mcp.slice(0, 40).map((t) => `- ${t.serverId || t.server}: ${t.name}`).join("\n")}`
+      : "\nKeine MCP-Server konfiguriert. Die übergebenen nativen Anvil-Werkzeuge bleiben verfügbar.";
     return `Arbeitsfläche: Anvil (Dateien, Run, Git). Modus: ${snap.mode === "bridge" ? "Brücke — MCP und Anvil erlaubt" : "Anvil"}.${extra}`;
   }
   const ctx = contextLine(snap.context);

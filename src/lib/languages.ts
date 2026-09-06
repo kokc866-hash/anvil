@@ -1,4 +1,5 @@
 import { vscodeExt } from "@/lib/plugins/vscode";
+import { isExecutablePath } from "./run-target";
 
 export type LangId =
   | "python"
@@ -233,8 +234,7 @@ export function langMeta(id: LangId): LangMeta | undefined {
 }
 
 export function canRun(path: string): boolean {
-  const run = langMeta(langFromPath(path))?.run;
-  return run === "browser" || run === "remote" || run === "preview";
+  return isExecutablePath(path);
 }
 
 export function langLabel(lang: LangId): string {

@@ -15,7 +15,10 @@ import { runLint, lintBins } from "./lint.mjs";
 import { listLsp, pullLsp, checkLsp } from "./lsp.mjs";
 import { installBin, installerKind, refreshPath } from "./install.mjs";
 import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, toolchainProgress, toolHome, toolEnv } from "./toolchain.mjs";
-import { ccArgs, javaMainClass, isCargo, isGoMod, isCsproj, firstCsproj, looksGui } from "./compile-plan.mjs";
+import { compileLang } from "./compile-run.mjs";
+import { runRoot } from "./run-storage.mjs";
+import { activeRunCount, runStatus } from "./run-jobs.mjs";
+import { spawnRun as spawnOnce } from "./run-process.mjs";
 import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
 import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, assertLlmTarget } from "../scripts/llm-agent.mjs";
@@ -182,264 +185,6 @@ function safeRel(p) {
   const n = String(p || "").replaceAll("\\", "/").replace(/^\/+/, "");
   if (!n || n.includes("..") || path.isAbsolute(n)) throw new Error("ungültiger Pfad");
   return n;
-}
-
-function spawnOnce(file, args, cwd, timeoutMs, env, opts = {}) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const show = Boolean(opts.show);
-    const detach = Boolean(opts.detach);
-    const child = spawn(file, args, {
-      cwd,
-      shell: false,
-      env: env || process.env,
-      windowsHide: !show,
-      detached: detach,
-      stdio: detach ? ["ignore", "pipe", "pipe"] : undefined,
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const cap = (s, add) => (s + add).toString().slice(-24000);
-    child.stdout?.on("data", (d) => {
-      stdout = cap(stdout, d.toString());
-    });
-    child.stderr?.on("data", (d) => {
-      stderr = cap(stderr, d.toString());
-    });
-    const finish = (r) => {
-      if (settled) return;
-      settled = true;
-      resolve(r);
-    };
-    if (detach) {
-      const t = setTimeout(() => {
-        try {
-          child.stdout?.destroy();
-        } catch {
-          /* */
-        }
-        try {
-          child.stderr?.destroy();
-        } catch {
-          /* */
-        }
-        try {
-          child.unref();
-        } catch {
-          /* */
-        }
-        finish({
-          ok: true,
-          code: 0,
-          stdout: (stdout || "Bühne: Fenster läuft.") + (child.pid ? `\npid ${child.pid}` : ""),
-          stderr,
-          duration: Date.now() - start,
-          running: true,
-          pid: child.pid,
-        });
-      }, 2500);
-      child.on("close", (code) => {
-        clearTimeout(t);
-        finish({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start });
-      });
-      child.on("error", (err) => {
-        clearTimeout(t);
-        finish({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start });
-      });
-      return;
-    }
-    const t = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1500);
-    }, timeoutMs || MAX_MS);
-    child.on("close", (code) => {
-      clearTimeout(t);
-      finish({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start });
-    });
-    child.on("error", (err) => {
-      clearTimeout(t);
-      finish({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start });
-    });
-  });
-}
-
-function trySafeCwd(cwd) {
-  if (!cwd) return "";
-  try {
-    return safeCwd(cwd);
-  } catch {
-    return "";
-  }
-}
-
-async function compileLang(body) {
-  const lang = String(body.lang || "");
-  const entry = safeRel(body.entry || "");
-  const files = Array.isArray(body.files) ? body.files.slice(0, 80) : [];
-  const timeoutMs = Math.min(MAX_MS, Number(body.timeoutMs) || 60000);
-  const persistRoot = trySafeCwd(body.cwd);
-  const tmp = path.join(os.tmpdir(), "anvil-run-" + randomBytes(6).toString("hex"));
-  const workDir = persistRoot ? path.join(persistRoot, ".anvil", "work") : tmp;
-  const outDir = persistRoot ? path.join(persistRoot, ".anvil", "out") : workDir;
-  const runCwd = persistRoot || workDir;
-  mkdirSync(workDir, { recursive: true });
-  mkdirSync(outDir, { recursive: true });
-  const win = process.platform === "win32";
-  const exe = (name) => (win ? path.join(outDir, name + ".exe") : path.join(outDir, name));
-  const env = toolEnv();
-  const gui = looksGui(files);
-  const abs = (rel) => path.join(workDir, rel);
-  let keepTmp = false;
-  try {
-    for (const f of files) {
-      const rel = safeRel(f.path);
-      const full = abs(rel);
-      mkdirSync(path.dirname(full), { recursive: true });
-      writeFileSync(full, String(f.content ?? ""), "utf8");
-    }
-    const need = (bin) => {
-      const p = resolveBin(bin) || which(bin);
-      if (!p) throw new Error(`${bin} nicht in Anvil. Compiler holen (Einstellungen → Companion).`);
-      return p;
-    };
-    const steps = [];
-    let projectBound = false;
-    if (lang === "go") {
-      projectBound = true;
-      if (!isGoMod(files) && !existsSync(path.join(workDir, "go.mod"))) writeFileSync(path.join(workDir, "go.mod"), "module anvil\n\ngo 1.22\n");
-      if (/_test\.go$/i.test(entry)) steps.push({ file: need("go"), args: ["test", "-v", "./..."] });
-      else steps.push({ file: need("go"), args: ["run", entry] });
-    } else if (lang === "rust") {
-      if (isCargo(files) || existsSync(path.join(workDir, "Cargo.toml"))) {
-        projectBound = true;
-        const testRs = /_test\.rs$/i.test(entry) || /(^|\/)tests\//i.test(entry);
-        steps.push({ file: need("cargo"), args: testRs ? ["test"] : ["run", "--quiet"] });
-      } else {
-        const out = exe("out");
-        steps.push({ file: need("rustc"), args: [entry, "-o", out] });
-        steps.push({ file: out, args: [] });
-      }
-    } else if (lang === "java") {
-      const srcs = files.map((f) => safeRel(f.path)).filter((p) => p.endsWith(".java"));
-      steps.push({ file: need("javac"), args: ["-d", outDir, ...(srcs.length ? srcs : [entry])] });
-      const src = files.find((f) => safeRel(f.path) === entry);
-      const cls = javaMainClass(entry, src?.content ?? "");
-      steps.push({ file: need("java"), args: ["-cp", outDir, cls] });
-    } else if (lang === "c" || lang === "cpp") {
-      const bin = lang === "c" ? "cc" : "cxx";
-      const compiler =
-        resolveBin(bin) ||
-        (lang === "c" ? which("cc") || which("gcc") || which("clang") : which("c++") || which("g++") || which("clang++"));
-      if (!compiler) throw new Error(`${lang === "c" ? "cc" : "c++"} nicht in Anvil. Zig/C holen.`);
-      const out = exe("out");
-      steps.push({ file: compiler, args: ccArgs(compiler, lang, entry, files, out) });
-      steps.push({ file: out, args: [] });
-    } else if (lang === "php") {
-      steps.push({ file: need("php"), args: [abs(entry)] });
-    } else if (lang === "ruby") {
-      steps.push({ file: need("ruby"), args: [abs(entry)] });
-    } else if (lang === "python") {
-      const py = resolveBin("python") || which("python") || which("python3") || which("py");
-      if (!py) throw new Error("python nicht in Anvil. Python holen (Einstellungen → Companion).");
-      steps.push({ file: py, args: [abs(entry)] });
-    } else if (lang === "javascript" || lang === "typescript") {
-      const node = resolveBin("node") || which("node");
-      if (!node) throw new Error("node nicht in Anvil. Node holen (Einstellungen → Companion).");
-      if (lang === "typescript") {
-        const tsc = resolveBin("tsc") || which("tsc") || which("tsc.cmd");
-        if (tsc) {
-          steps.push({ file: tsc, args: ["--outDir", ".", "--esModuleInterop", "--module", "commonjs", "--skipLibCheck", entry] });
-          steps.push({ file: node, args: [abs(entry.replace(/\.tsx?$/i, ".js"))] });
-        } else {
-          steps.push({ file: node, args: ["--experimental-strip-types", abs(entry)] });
-        }
-      } else {
-        steps.push({ file: node, args: [abs(entry)] });
-      }
-    } else if (lang === "csharp") {
-      projectBound = true;
-      const testCs = /Tests?\.cs$/i.test(entry) || /(^|\/)tests?\//i.test(entry);
-      if (!isCsproj(files)) {
-        const src = readFileSync(abs(entry), "utf8");
-        if (entry !== "Program.cs") writeFileSync(path.join(workDir, "Program.cs"), src);
-        const csproj = testCs
-          ? `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" /><PackageReference Include="xunit" Version="2.9.2" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" /></ItemGroup></Project>`
-          : `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`;
-        writeFileSync(path.join(workDir, "app.csproj"), csproj);
-      }
-      const proj = firstCsproj(files);
-      const args = testCs
-        ? proj
-          ? ["test", "--nologo", "-v", "n", "--project", proj]
-          : ["test", "--nologo", "-v", "n"]
-        : proj
-          ? ["run", "--nologo", "-v", "q", "--project", proj]
-          : ["run", "--nologo", "-v", "q"];
-      steps.push({ file: need("dotnet"), args });
-    } else {
-      throw new Error("Sprache nicht lokal: " + lang);
-    }
-    let last = { ok: false, code: 1, stdout: "", stderr: "", duration: 0 };
-    let cmd = "";
-    const phases = [];
-    for (let i = 0; i < steps.length; i++) {
-      const s = steps[i];
-      cmd = [s.file, ...s.args].join(" ");
-      const isRun = i === steps.length - 1;
-      const cwd = isRun && !projectBound ? runCwd : workDir;
-      last = await spawnOnce(s.file, s.args, cwd, timeoutMs, env, {
-        show: isRun && gui,
-        detach: isRun && gui,
-      });
-      last.cmd = cmd;
-      const phase = i < steps.length - 1 ? "compile" : "run";
-      phases.push({ phase, cmd, ok: last.ok, stdout: last.stdout || "", stderr: last.stderr || "" });
-      if (last.running) keepTmp = !persistRoot;
-      if (!last.ok) break;
-    }
-    const stdout = phases
-      .map((p) => {
-        const title = p.phase === "compile" ? "Compile" : "Run";
-        const body = [p.cmd, p.stdout].filter(Boolean).join("\n");
-        return `— ${title} —\n${body}`.trim();
-      })
-      .join("\n\n");
-    const fail = phases.find((p) => !p.ok);
-    const outPath = persistRoot ? path.join(".anvil", "out") : "";
-    const stage = last.running
-      ? { kind: "window", out: outPath }
-      : { kind: "log", out: outPath };
-    return {
-      ...last,
-      cmd: phases.map((p) => p.cmd).join(" && "),
-      stdout,
-      stderr: fail ? fail.stderr : last.stderr,
-      steps: phases,
-      stage,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      code: 1,
-      stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
-      duration: 0,
-      cmd: lang,
-    };
-  } finally {
-    if (!persistRoot) {
-      if (keepTmp) {
-        rmSoon(workDir, 6, 10 * 60 * 1000);
-        sweepAnvilTemp({ keep: 1, maxAgeMs: 60 * 60 * 1000 });
-      } else {
-        if (!rmDir(workDir)) rmSoon(workDir);
-        sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
-      }
-    } else {
-      sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
-    }
-  }
 }
 
 async function formatLang(body) {
@@ -708,7 +453,7 @@ const server = http.createServer(async (req, res) => {
     refreshPath();
     json(req, res, 200, {
       ok: true,
-      version: "1.3.2",
+      version: JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version,
       modes: ["http", "mcp", "compile", "lsp", "install", "toolchain", "git", "debug"],
       bins: bins(),
       lsp: listLsp(),
@@ -717,6 +462,7 @@ const server = http.createServer(async (req, res) => {
       toolHome: toolHome(),
       lspHome: lspHome(),
       packages: snapshot(),
+      runRoot: runRoot(),
       toolPull: toolchainProgress(),
       git: Boolean(gitBin()),
       workspace,
@@ -725,6 +471,15 @@ const server = http.createServer(async (req, res) => {
   }
   if (!checkToken(req)) {
     json(req, res, 401, { ok: false, error: "Token fehlt (Header x-anvil-token)." });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/v1/run-active") {
+    json(req, res, 200, { active: activeRunCount(), runRoot: runRoot() });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/v1/run-status") {
+    try { json(req, res, 200, runStatus(url.searchParams.get("id"))); }
+    catch (e) { json(req, res, 404, { ok: false, error: String(e) }); }
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/llm") {
@@ -907,7 +662,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/v1/compile") {
     try {
       const body = await readBody(req);
-      json(req, res, 200, await compileLang(body));
+      const ac = new AbortController();
+      res.on("close", () => { if (!res.writableEnded) ac.abort(); });
+      json(req, res, 200, await compileLang(body, { resolveCwd: safeCwd, signal: ac.signal }));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e) });
     }

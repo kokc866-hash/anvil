@@ -83,6 +83,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:connections
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: node scripts/verify-native-windows.mjs
       - run: npm run build
         env:
           ANVIL_ELECTRON_BUILD: "1"
@@ -90,6 +94,8 @@ jobs:
       - run: npx electron-builder --win nsis zip --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - run: ./scripts/verify-installer.ps1
+        shell: pwsh
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}

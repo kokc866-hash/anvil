@@ -21,6 +21,7 @@ export type CompanionInfo = {
   installer?: string | null;
   toolchains?: ToolchainInfo[];
   toolHome?: string;
+  runRoot?: string;
   lspHome?: string;
   packages?: { home: string; toolchains: string; lsp: string };
   git?: boolean;
@@ -36,7 +37,7 @@ export type CompanionJob = {
   stderr: string;
   duration: number;
   cmd: string;
-  stage?: { kind: "html" | "window" | "log"; out?: string };
+  stage?: { kind: "html" | "window" | "log"; out?: string; id?: string };
   running?: boolean;
 };
 
@@ -114,7 +115,7 @@ export async function companionPing(base = DEFAULT_COMPANION): Promise<Companion
     const j = (await r.json()) as CompanionInfo;
     if (r.status === 401) return { ok: false, needToken: true, error: j.error || "Token fehlt" };
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-    return { ok: true, version: j.version, bins: j.bins, lsp: j.lsp, installer: j.installer ?? null, toolchains: j.toolchains, toolHome: j.toolHome, git: Boolean(j.git), workspace: j.workspace };
+    return { ok: true, version: j.version, bins: j.bins, lsp: j.lsp, installer: j.installer ?? null, toolchains: j.toolchains, toolHome: j.toolHome, runRoot: j.runRoot, git: Boolean(j.git), workspace: j.workspace };
   } catch {
     return { ok: false, error: "Companion aus. Auf dem Rechner: node companion/server.mjs" };
   }
@@ -211,14 +212,15 @@ export async function companionInstall(
 }
 
 export async function companionCompile(
-  body: { lang: string; entry: string; files: { path: string; content: string }[]; timeoutMs?: number; cwd?: string },
+  body: { lang: string; entry: string; files: { path: string; content: string }[]; timeoutMs?: number; cwd?: string; asTest?: boolean },
   base = DEFAULT_COMPANION,
+  signal?: AbortSignal,
 ): Promise<CompanionJob> {
   const r = await fetch(`${base.replace(/\/$/, "")}/v1/compile`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify(body),
-    signal: withAgentTimeout(Math.min(120000, Math.max(8000, body.timeoutMs ?? 60000))),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000),
   });
   if (!r.ok) {
     const t = await r.text();
@@ -520,4 +522,11 @@ export async function companionDebug(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Debug nicht erreichbar" };
   }
+}
+
+export async function companionRunStatus(id: string, base = DEFAULT_COMPANION): Promise<CompanionJob> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(5000) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j as CompanionJob;
 }

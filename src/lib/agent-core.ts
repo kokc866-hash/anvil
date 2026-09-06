@@ -115,7 +115,7 @@ export const AGENT_TOOLS = [
     from: { type: "string" },
     to: { type: "string" },
   }, ["from", "to"]),
-  tool("run_file", "Run a workspace file and return the output. HTML/Python/JS execute (HTML can be turned off in Settings → Output). Go/Rust/C/C++/Java/C#/PHP/Ruby: compile then run — the result has Compile and Run. After write/edit always run. On failure: patch and run again (max 3).", {
+  tool("run_file", "Run an executable workspace entry: HTML/Python/JS/TS/Go/Rust/C/C++/Java/C#/PHP/Ruby. Native languages compile then run. Never run Markdown, JSON, headers, ref/ or .anvil/ files. After source edits, run the program entry. On failure inspect stderr and exit code before changing source.", {
     path: { type: "string" },
   }, ["path"]),
   tool("see_run", "HTML: snapshot the preview. Native/CLI: last Compile/Run log or open OS window — never a fake iframe for .exe.", {}),
@@ -313,7 +313,8 @@ Environment:
 - HTML preview shows. Native GUI opens a real OS window (Bühne). No game engine inside Anvil. Godot/Unity/Unreal/Bevy: edit scripts, engine_run or mcp_call.
 - Canvas: Anvil.create / Anvil.run / Anvil.attach(canvas) for sketches.
 - shell: allowed runners only, not a system terminal.
-- MCP only on the active surface. The board is a DAG (Plan→Work→Run→Done), then close it.
+- MCP tools are reached through mcp_list and mcp_call. The surface block specifies the available servers and scope. Native Anvil tools are separate and do not need MCP activation. Use available tools as needed for the user's task; never claim they are disabled without a tool error.
+- Markdown, JSON, headers, ref/ and .anvil/ files are context/configuration, not executable entries. Do not run them. The board is a DAG (Plan→Work→Run→Done), then close it.
 - run_file always runs. Do not harness_write to turn run on.
 
 Scale:
@@ -575,6 +576,7 @@ export function applyTool(
   if (name === "run_file") {
     const path = norm(String(args.path ?? ""));
     if (!files.has(path)) return { result: { error: `not found: ${path}` } };
+    if (skipAutoRunPath(path)) return { result: { ok: false, error: `${path} is not an executable entry. Read it or use open_preview.`, executable: false, runEntry: pickRunPath(files.keys(), path) || null } };
     runPaths.push(path);
     return { result: { running: path }, command: { cmd: "run", path } };
   }
@@ -982,10 +984,10 @@ export async function runAgentLoop(
           role: "user",
           content: !wrote
             ? say("Kein Text ohne Tool. Jetzt write_file oder edit_file.", "No prose without a tool. Now write_file or edit_file.")
-            : !ran
+            : !ran && runAt
               ? say(
-                  `Dateien liegen. Jetzt run_file({"path":"${runAt || "main.cpp"}"}). Kein harness_write.`,
-                  `Files are in place. Now run_file({"path":"${runAt || "main.cpp"}"}). No harness_write.`,
+                  `Dateien liegen. Jetzt run_file({"path":"${runAt}"}). Kein harness_write.`,
+                  `Files are in place. Now run_file({"path":"${runAt}"}). No harness_write.`,
                 )
               : say("Auftrag offen. Nächstes Tool, kein Plansatz.", "Job still open. Next tool, no plan sentence."),
         });

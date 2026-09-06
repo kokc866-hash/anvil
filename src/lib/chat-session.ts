@@ -1,3 +1,4 @@
+import { isExecutablePath } from "./run-target";
 import { chatWithProvider } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
 import { toolCode, toolDetail } from "@/lib/llm-options";
@@ -551,6 +552,7 @@ export async function sendChat(
             stdout?: string;
             stderr?: string;
             tries_left?: number;
+            stage?: { kind?: string; id?: string };
             graphical?: boolean;
             cmd?: string;
             error?: string;
@@ -559,6 +561,7 @@ export async function sendChat(
           const max = useIde.getState().loopTries;
           const left = typeof o.tries_left === "number" ? o.tries_left : max;
           useIde.getState().setChatLastRun({
+            id: o.stage?.id,
             ok: !err && o.ok !== false && !o.isError,
             path: String(
               args.path ??
@@ -572,7 +575,7 @@ export async function sendChat(
             attempt: Math.max(1, max - left + (o.ok ? 0 : 1)),
             max,
             graphical: Boolean(o.graphical),
-            running: false,
+            running: o.stage?.kind === "window",
           });
         }
       },
@@ -662,7 +665,7 @@ export async function sendChat(
             try {
               const latest = useIde.getState().files;
               let ok = true;
-              for (const p of result.runPaths!) {
+              for (const p of result.runPaths!.filter(isExecutablePath)) {
                 useIde.getState().setRunPath(p);
                 const r = await runFile(p, latest);
                 if (my !== agentGen()) return;

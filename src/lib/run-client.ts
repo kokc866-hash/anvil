@@ -5,9 +5,10 @@ import { langFromPath, langMeta, type LangId } from "./languages";
 import { compileFiles } from "./compile-files";
 import type { RunResult } from "@/store/ide";
 import { useIde } from "@/store/ide";
-import { throwIfAborted } from "./abort";
+import { throwIfAborted, withAgentTimeout } from "./abort";
 import { scrubRunError } from "./run-error";
 import { isTestFile } from "./test-parse";
+import { isExecutablePath } from "./run-target";
 
 type PyodideLike = {
   runPythonAsync: (code: string) => Promise<unknown>;
@@ -269,35 +270,58 @@ async function companionJob(
   lang: string,
   path: string,
   files: Record<string, string>,
+  opts?: { asTest?: boolean },
 ): Promise<RunResult | null> {
-  const remoteFiles = compileFiles(lang, path, files);
+  const st = useIde.getState();
+  const url = st.companionUrl || "http://127.0.0.1:7845";
+  const signal = st.agentBusy ? withAgentTimeout(0) : undefined;
   const { withCompanion } = await import("./companion-life");
+  const { nativeHelper } = await import("./helper-local");
   return withCompanion(async () => {
     try {
-      const { companionCompile, companionPing } = await import("./companion");
-      const st = useIde.getState();
-      const url = st.companionUrl || "http://127.0.0.1:7845";
-      const ping = await companionPing(url);
-      if (!ping.ok) return null;
-      const job = await companionCompile({
-        lang,
-        entry: path,
-        files: remoteFiles,
-        cwd: st.workspaceCwd || undefined,
-      });
-      if (/nicht im PATH|nicht lokal|nicht in Anvil/i.test(job.stderr)) return null;
-      return {
-        ok: job.ok,
-        stdout: job.stdout,
-        stderr: job.stderr,
-        duration: 0,
-        label: path,
-        stage: job.stage ?? { kind: job.running ? "window" : "log" },
-      };
-    } catch {
-      return null;
+      const { companionCompile } = await import("./companion");
+      const job = await companionCompile({ lang, entry: path, files: compileFiles(lang, path, files),
+        cwd: st.workspaceCwd || undefined, asTest: opts?.asTest }, url, signal);
+      if (job.running && job.stage?.id) watchNativeRun(job.stage.id, url);
+      return { ok: job.ok, stdout: job.stdout, stderr: job.stderr, duration: job.duration / 1000,
+        label: path, stage: job.stage ?? { kind: job.running ? "window" : "log" } };
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      // The web build can run Python in the browser when no local Companion is configured.
+      if (!nativeHelper() && url === "http://127.0.0.1:7845" && err instanceof TypeError) return null;
+      return { ok: false, stdout: "", stderr: `Companion ${url}: ${err instanceof Error ? err.message : String(err)}`,
+        duration: 0, label: path, stage: { kind: "log" } };
     }
-  });
+  }, url);
+}
+
+const nativeWatches = new Set<string>();
+function watchNativeRun(id: string, base: string) {
+  const key = `${base}/${id}`;
+  if (nativeWatches.has(key)) return;
+  nativeWatches.add(key);
+  let failures = 0;
+  const poll = async () => {
+    try {
+      const { companionRunStatus } = await import("./companion");
+      const r = await companionRunStatus(id, base);
+      failures = 0;
+      useIde.setState((st) => ({
+        output: st.output.map((o) => o.stage?.id === id ? { ...o, ok: r.ok, stdout: r.stdout, stderr: r.stderr, duration: r.duration / 1000, stage: r.stage } : o),
+        chat: st.chat.map((c) => c.lastRun?.id === id ? { ...c, lastRun: { ...c.lastRun, ok: r.ok, stdout: r.stdout, stderr: r.stderr, running: r.running } } : c),
+      }));
+      if (!r.running) { nativeWatches.delete(key); return; }
+    } catch {
+      if (++failures >= 3) {
+        useIde.setState((st) => ({ output: st.output.map((o) => o.stage?.id === id ? { ...o, ok: false,
+          stderr: [o.stderr, "Run-Status nicht mehr erreichbar. Companion-Verbindung unterbrochen."].filter(Boolean).join("\n"),
+          stage: { ...o.stage, kind: "log" } } : o) }));
+        nativeWatches.delete(key); return;
+      }
+    }
+    setTimeout(() => void poll(), 2000);
+  };
+  setTimeout(() => void poll(), 1000);
 }
 
 export async function runFile(
@@ -305,7 +329,7 @@ export async function runFile(
   files: Record<string, string>,
   opts?: { asTest?: boolean },
 ): Promise<RunResult> {
-  throwIfAborted();
+  if (useIde.getState().agentBusy) throwIfAborted();
   const lang = langFromPath(path);
   const code = files[path];
   const started = performance.now();
@@ -317,6 +341,7 @@ export async function runFile(
   if (code == null) {
     return done({ ok: false, stdout: "", stderr: `Datei nicht gefunden: ${path}` });
   }
+  if (!isExecutablePath(path)) return done({ ok: false, stdout: "", stderr: `${path} ist keine ausführbare Startdatei. Dokumente über die Vorschau öffnen.` });
   if (lang === "html") {
     if (!useIde.getState().runHtml) {
       return done({ ok: false, stdout: "", stderr: "HTML-Run aus (Einstellungen → Ausgabe)." });
@@ -324,7 +349,7 @@ export async function runFile(
     return done({ ok: true, stdout: "Vorschau.", stderr: "", html: withEngine(code, useIde.getState().inputMap), stage: { kind: "html" } });
   }
   if (lang === "python") {
-    const live = await companionJob("python", path, files);
+    const live = await companionJob("python", path, files, opts);
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runPython(files, path);
     return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
@@ -354,13 +379,13 @@ export async function runFile(
         });
       }
     }
-    const live = await companionJob(lang, path, files);
+    const live = await companionJob(lang, path, files, opts);
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runJsSandboxed(src);
     return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
   }
   if (langMeta(lang)?.run === "remote") {
-    const live = await companionJob(lang, path, files);
+    const live = await companionJob(lang, path, files, opts);
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const remoteFiles = compileFiles(lang, path, files);
     const { withCompanion } = await import("./companion-life");
@@ -413,35 +438,13 @@ export async function evalSnippet(
   if (langMeta(lang)?.run === "remote") {
     const ext = hintPath.split(".").pop() ?? "txt";
     const entry = `__repl__.${ext}`;
-    const { withCompanion } = await import("./companion-life");
-    return withCompanion(async () => {
-      try {
-        const { companionCompile, companionPing } = await import("./companion");
-        const url = useIde.getState().companionUrl || "http://127.0.0.1:7845";
-        const ping = await companionPing(url);
-        if (ping.ok) {
-          const job = await companionCompile({
-            lang,
-            entry,
-            files: compileFiles(lang, entry, { ...files, [entry]: wrapRepl(lang, code) }),
-          });
-          if (!/nicht im PATH|nicht lokal|nicht in Anvil/i.test(job.stderr)) {
-            return done({ ok: job.ok, stdout: job.stdout, stderr: job.stderr });
-          }
-        }
-      } catch {
-        /* */
-      }
-      if (!useIde.getState().netCompiler) {
-        return done({ ok: false, stdout: "", stderr: "Compiler fehlt. In Einstellungen → Companion in Anvil laden." });
-      }
-      const remote = await runRemote({
-        data: { lang, entry, files: [{ path: entry, content: wrapRepl(lang, code) }] },
-      });
-      return done({ ok: remote.ok, stdout: remote.stdout, stderr: remote.stderr });
-    });
+    const prepared = { ...files, [entry]: wrapRepl(lang, code) };
+    const local = await companionJob(lang, entry, prepared, { asTest: true });
+    if (local) return done({ ok: local.ok, stdout: local.stdout, stderr: local.stderr, stage: local.stage });
+    if (!useIde.getState().netCompiler) return done({ ok: false, stdout: "", stderr: "Compiler fehlt. In Einstellungen → Companion in Anvil laden." });
+    const remote = await runRemote({ data: { lang, entry, files: compileFiles(lang, entry, prepared) } });
+    return done({ ok: remote.ok, stdout: remote.stdout, stderr: remote.stderr });
   }
   const { stdout, stderr } = await runJsSandboxed(code);
   return done({ ok: !stderr, stdout, stderr });
 }
-

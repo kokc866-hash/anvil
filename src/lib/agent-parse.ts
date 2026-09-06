@@ -33,22 +33,14 @@ export function isNudgeEcho(text: string): boolean {
   );
 }
 
-const RUN_EXT = /\.(cpp|cc|cxx|c|py|js|mjs|cjs|ts|tsx|go|rs|java|cs|php|rb|html|htm)$/i;
-const RUN_PREF = ["main.cpp", "main.c", "src/main.cpp", "src/main.c", "main.py", "index.html", "main.js", "src/main.rs", "main.go"];
+import { isExecutablePath, selectRunTarget } from "./run-target.ts";
 
 export function pickRunPath(files: Iterable<string>, hint = ""): string {
-  const list = [...files].map((p) => p.replace(/\\/g, "/"));
-  const h = hint.replace(/\\/g, "/");
-  if (h && RUN_EXT.test(h) && list.includes(h)) return h;
-  for (const p of RUN_PREF) if (list.includes(p)) return p;
-  const named = list.find((p) => /(^|\/)main\.(cpp|cc|cxx|c|py|go|rs|java|cs)$/i.test(p));
-  if (named) return named;
-  return list.find((p) => RUN_EXT.test(p) && !p.startsWith(".anvil/")) || "";
+  return selectRunTarget(files, hint);
 }
 
 export function skipAutoRunPath(path: string): boolean {
-  const p = path.replace(/\\/g, "/");
-  return !p || p.startsWith(".anvil/") || /\.(md|json|txt|svg)$/i.test(p);
+  return !isExecutablePath(path);
 }
 
 export function extractFileBlocks(text: string): { path: string; content: string }[] {

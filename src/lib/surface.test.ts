@@ -55,3 +55,11 @@ describe("surface", () => {
     assert.doesNotMatch(t, /Anvil \(Dateien/);
   });
 });
+
+it("Anvil exposes configured MCP servers even before their catalog arrives", () => {
+  const prompt = surfacePrompt({ id: ANVIL_SURFACE, mode: "exclusive", label: "Anvil", tools: [], resources: [], context: {}, ready: true,
+    servers: [{ id: "docs", name: "Docs", ready: false }] });
+  assert.match(prompt, /docs/);
+  assert.match(prompt, /mcp_list/);
+  assert.doesNotMatch(prompt, /nicht aktiv|Nur nutzen wenn/);
+});

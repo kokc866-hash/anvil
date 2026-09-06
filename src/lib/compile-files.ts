@@ -44,13 +44,14 @@ export function compileFiles(
 ): { path: string; content: string }[] {
   const man = MANIFEST[lang];
   return Object.entries(files)
+    .sort(([a], [b]) => a === entry ? -1 : b === entry ? 1 : 0)
     .filter(([p]) => {
       if (p === entry) return true;
+      if (/(^|\/)(\.anvil|\.git|node_modules|ref)\//i.test(p)) return false;
       if (man?.test(p)) return true;
       const l = langOf(p);
       if (lang === "c" || lang === "cpp") return l === "c" || l === "cpp";
       return l === lang;
     })
-    .slice(0, 400)
     .map(([path, content]) => ({ path, content: decodeWriteEscapes(content) }));
 }

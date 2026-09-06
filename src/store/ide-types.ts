@@ -116,6 +116,7 @@ export type ChatMsg = {
   ms?: number;
   changes?: FileChange[];
   lastRun?: {
+    id?: string;
     ok: boolean;
     path: string;
     stdout: string;
@@ -157,7 +158,7 @@ export type RunResult = {
   duration: number;
   label: string;
   html?: string;
-  stage?: { kind: "html" | "window" | "log"; out?: string };
+  stage?: { kind: "html" | "window" | "log"; out?: string; id?: string };
 };
 
 export type Panels = Record<PanelId, boolean>;

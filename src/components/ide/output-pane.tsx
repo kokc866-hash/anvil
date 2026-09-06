@@ -355,10 +355,11 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
             {newest.map((r, i) => (
             <div key={`${r.label}-${logs.length - i}`} className="mb-3">
               <p className={cn("tabular-nums", r.ok ? "text-ok" : "text-danger")}>
-                {r.ok ? t("ok") : t("fail")} · {r.label} · {r.duration.toFixed(2)}s
+                {r.stage?.kind === "window" ? "läuft" : r.ok ? t("ok") : t("fail")} · {r.label} · {r.duration.toFixed(2)}s
               </p>
               {r.stdout && r.stdout !== "Vorschau." ? <LogText text={r.stdout} /> : null}
               {r.stderr ? <LogText text={r.stderr} tone="danger" /> : null}
+              {r.stage?.out ? <div className="mt-1 select-text break-all text-[11px] text-muted">Ausgabeordner: {r.stage.out}</div> : null}
             </div>
           ))}
           </>

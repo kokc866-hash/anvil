@@ -9,7 +9,7 @@ import {
   type GitInfo,
   type WorkspaceEvent,
 } from "./agent-core";
-import { stripPayload, shrinkTools } from "./tool-fallback";
+import { stripPayload, shrinkTools, prepareTextTools } from "./tool-fallback";
 import { runAgentShell } from "./agent-shell";
 import { agentDebug } from "./debug-engine";
 import { agentLearn, useLearn } from "./learn";
@@ -426,13 +426,22 @@ function clientTools(opts: {
       }
     },
     mcp: async (action: "list" | "call", server?: string, name?: string, args?: unknown) => {
-      const { mcpList, mcpCall } = await import("./mcp");
+      const { mcpList, mcpCall, mcpListError, mcpSnapshot } = await import("./mcp");
       const { useIde } = await import("@/store/ide");
       const st = useIde.getState();
-      const servers = st.mcpServers ?? [];
+      const servers = (st.mcpServers ?? []).filter((s) => st.surfaceMode === "bridge" || !st.activeSurfaceId || st.activeSurfaceId === ANVIL_SURFACE || s.id === st.activeSurfaceId);
       const active = st.activeSurfaceId;
       const want = server?.trim() || (active !== ANVIL_SURFACE ? active : "");
-      if (action === "list") return mcpList(servers);
+      if (action === "list") {
+        await mcpList(servers);
+        const snapshot = mcpSnapshot(servers);
+        return {
+          tools: snapshot.tools,
+          resources: snapshot.resources,
+          servers: servers.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.name, ready: snapshot.ready.has(s.id), error: mcpListError(s.id) || undefined })),
+          hint: servers.some((s) => s.enabled) ? "Call mcp_call with server=id and the exact tool name. Native Anvil tools are separate." : "No enabled MCP server is configured. Native Anvil tools are available independently.",
+        };
+      }
       const t0 = Date.now();
       try {
         const r = await mcpCall(
@@ -535,14 +544,13 @@ function clientTools(opts: {
       const st = useIde.getState();
       keepAgentRun();
       const last = [...st.output].reverse().find((o) => o.stdout || o.stderr || o.html);
-      if (last?.stage?.kind === "window") {
+      if (last?.stage?.id) {
         st.revealOutput();
-        return {
-          ok: true,
-          stage: "window",
-          stdout: (last.stdout || "").slice(0, 4000),
-          note: "Bühne: natives Fenster. Kein HTML-Frame.",
-        };
+        const { companionRunStatus } = await import("./companion");
+        const current = await companionRunStatus(last.stage.id, st.companionUrl || undefined);
+        return { ok: current.ok, running: current.running, stage: current.stage?.kind,
+          out: current.stage?.out, stdout: current.stdout, stderr: current.stderr,
+          note: current.running ? "Natives Programm läuft im eigenen Fenster/Terminal. Tasten dort eingeben." : "Native Ausführung beendet; dies ist das tatsächliche Prozessergebnis." };
       }
       if (!st.runHtml) return { ok: false, error: "HTML-Run aus (Einstellungen → Ausgabe)." };
       const htmlPath =
@@ -671,6 +679,7 @@ function makeLocalComplete(
       payload.tools = tools;
       payload.tool_choice = choiceMode;
     }
+    if (useTools && cap0.tools === "text") prepareTextTools(payload, toolsForCall(observeOnly));
     applyCapToPayload(payload, cap0, Boolean(tools));
     let last: unknown;
     let stripped = false;
@@ -729,6 +738,7 @@ function makeLocalComplete(
           if (res.status === 400) {
             const learned = learnFromError(spec.id, current, 400, body);
             if (learned) {
+              if (useTools && learned.tools === "text") prepareTextTools(payload, tools || toolsForCall(observeOnly));
               const still = applyCapToPayload(payload, learned, Boolean(useTools) && learned.tools !== "off" && learned.tools !== "text");
               if (!still) {
                 tools = null;
@@ -1012,6 +1022,7 @@ function makeProxyComplete(
             payload.tools = toolsForCall(observeOnly);
             payload.tool_choice = useTools === "required" && !cap.noRequired ? "required" : "auto";
           }
+          if (useTools && cap.tools === "text") prepareTextTools(payload, toolsForCall(observeOnly));
           applyCapToPayload(payload, cap, wantTools);
           prepChatPayload(payload, context);
           const res = await lanFetch(`${base}/chat/completions`, {

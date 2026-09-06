@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { toolEnv } from "./toolchain.mjs";
+import { runRoot } from "./run-storage.mjs";
 import { blockedCwd, whichExts } from "./guard.mjs";
 
 const SKIP = new Set([
@@ -333,6 +334,7 @@ function walk(dir, prefix, acc) {
     if (e.name.startsWith(".") && !KEEP_DOT.has(e.name) && !/^\.(eslint|prettier)/i.test(e.name)) continue;
     if (SKIP.has(e.name)) continue;
     const full = path.join(dir, e.name);
+    if (path.resolve(full) === path.resolve(runRoot())) continue;
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
     const relPosix = rel.replace(/\\/g, "/");
     if (/(^|\/)\.anvil\/(work|out)(\/|$)/i.test(relPosix) || relPosix === ".anvil/work" || relPosix === ".anvil/out") continue;

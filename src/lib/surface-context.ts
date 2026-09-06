@@ -33,6 +33,7 @@ export async function surfaceNote(): Promise<{ text: string; id: string; mode: S
     ready: id === ANVIL_SURFACE || Boolean(selected?.enabled && snapshot.ready.has(id)),
     view: st.mcpView[id]?.text,
     error: selected ? mcpListError(selected.id) : undefined,
+    servers: servers.filter((s) => s.enabled && s.url.trim()).map((s) => ({ id: s.id, name: s.name, ready: snapshot.ready.has(s.id), error: mcpListError(s.id) })),
   };
   return { text: surfacePrompt(snap), id, mode };
 }

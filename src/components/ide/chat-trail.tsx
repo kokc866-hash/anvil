@@ -274,7 +274,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
       ) : null}
       {run && (run.stdout || run.stderr) ? (
         <pre className={cn("mt-1 max-h-32 overflow-auto font-mono text-[10px] leading-4", run.ok ? "text-muted" : "text-danger")}>
-          {clip(run.stderr || run.stdout) || run.path}
+          {clip([run.stdout, run.stderr].filter(Boolean).join("\n\n")) || run.path}
         </pre>
       ) : run?.running ? (
         <p className="mt-1 text-[10px] text-muted think-live">{t("trailOut")}</p>

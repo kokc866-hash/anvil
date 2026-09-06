@@ -1,3 +1,4 @@
+import { readMcpSse } from "./mcp-stream.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -75,4 +76,22 @@ describe("mcp", () => {
     assert.equal(schemaHint({ properties: { q: {}, n: {} }, required: ["q"] }), "q*, n");
     assert.equal(schemaHint(undefined), "");
   });
+});
+
+it("MCP returns a matching result while the SSE connection remains open", async () => {
+  let canceled = false;
+  const stream = new ReadableStream({ start(c) {
+    c.enqueue(new TextEncoder().encode('data: {"id":9,"result":"ignore"}\n\ndata: {"id":4,\n'));
+    c.enqueue(new TextEncoder().encode('data: "result":{"tools":[{"name":"run"}]}}\r\n\r\n'));
+  }, cancel() { canceled = true; } });
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    const result = await Promise.race([readMcpSse(new Response(stream), undefined, 4), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("waited for stream EOF")), 500); })]);
+    assert.deepEqual(result, { tools: [{ name: "run" }] });
+    assert.equal(canceled, true);
+  } finally { clearTimeout(timer!); }
+});
+it("MCP reports RPC errors and an unmatched response", async () => {
+  await assert.rejects(readMcpSse(new Response('data: {"id":4,"error":{"message":"server failed"}}\n\n'), undefined, 4), /server failed/);
+  await assert.rejects(readMcpSse(new Response('data: {"id":9,"result":{}}\n\n'), undefined, 4), /ohne passende/);
 });

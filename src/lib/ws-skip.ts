@@ -84,6 +84,7 @@ export function keepBareFile(name: string): boolean {
 export function skipPath(path: string): boolean {
   const norm = path.replace(/\\/g, "/");
   if (/(^|\/)\.anvil\/(work|out)(\/|$)/i.test(norm)) return true;
+  if (/(^|\/)runs\/[^/]+-[a-f0-9]{12}\/\d+-[a-f0-9]{12}(\/|$)/.test(norm)) return true;
   const parts = norm.split("/");
   for (const p of parts) {
     if (SKIP_DIRS.has(p)) return true;

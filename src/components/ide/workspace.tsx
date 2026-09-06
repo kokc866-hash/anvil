@@ -345,8 +345,9 @@ export function Workspace() {
   useEffect(() => {
     async function runActive() {
       const st = useIde.getState();
-      const path = st.activePath;
-      if (!path) return;
+      const { selectRunTarget } = await import("@/lib/run-target");
+      const path = selectRunTarget(Object.keys(st.files), st.activePath || "");
+      if (!path) { st.setNotice("Keine ausführbare Startdatei im Projekt gefunden."); return; }
       st.setRunPath(path);
       if (/\.html?$/i.test(path) || st.runInWindow || st.runPopout) {
         openRunWindow();
@@ -886,4 +887,3 @@ function sideBody(id: ReturnType<typeof useIde.getState>["sidebar"]): ReactNode 
   if (id === "mcp") return <McpPane />;
   return <FileTree />;
 }
-

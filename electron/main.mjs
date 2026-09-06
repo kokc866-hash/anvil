@@ -252,7 +252,7 @@ function startServer() {
 function startCompanion() {
   const script = join(ROOT, "companion", "server.mjs");
   if (!existsSync(script)) return null;
-  return startChild([script]);
+  return startChild([script], { ANVIL_INSTALL_DIR: app.isPackaged ? dirname(app.getPath("exe")) : ROOT });
 }
 
 function stopCompanion() {
@@ -332,10 +332,18 @@ function releaseCompanion(keep, releaseRef = true) {
   if (releaseRef) companionRefs = Math.max(0, companionRefs - 1);
   if (keep || companionRefs > 0 || !companionOwned) return { ok: true, running: Boolean(companion) };
   if (companionIdle) clearTimeout(companionIdle);
-  companionIdle = setTimeout(() => {
+  companionIdle = setTimeout(async () => {
     companionIdle = 0;
+    if (companionRefs > 0) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:${companionPort()}/v1/run-active`, {
+        headers: { "x-anvil-token": readCompanionToken() }, signal: AbortSignal.timeout(2000),
+      });
+      const status = await response.json();
+      if (status.active > 0) { releaseCompanion(false, false); return; }
+    } catch { /* An unavailable Companion can be stopped. */ }
     if (companionRefs === 0) stopCompanion();
-  }, 1200);
+  }, 2000);
   return { ok: true, running: true };
 }
 

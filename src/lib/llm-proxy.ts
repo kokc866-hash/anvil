@@ -1,10 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
-import { AGENT_TOOLS, CORE_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
+import { AGENT_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
 import { isContextError, prepChatPayload } from "./compact";
 import { applyLlmOptions, patchResponses400, responsesBody, toResponsesTools, usesResponsesApi, type ThinkingMode } from "./llm-options";
 import { parseResponses, parseResponsesSse } from "./responses-parse";
-import { shrinkTools, stripPayload } from "./tool-fallback";
+import { shrinkTools, stripPayload, prepareTextTools } from "./tool-fallback";
 import { applyCapToPayload, classifyLlmError, sendTools, type ModelCap } from "./model-caps";
 import { isPrivateHost } from "./net-guard";
 import { providerOf } from "./providers";
@@ -166,6 +166,7 @@ async function postOpenAi(
     payload.tools = tools;
     payload.tool_choice = "auto";
   }
+  if (cap?.tools === "text" && tools) prepareTextTools(payload, tools);
   if (cap) applyCapToPayload(payload, cap, Boolean(tools));
   prepChatPayload(payload, ctx);
   const hdr = withUa(headers);
@@ -196,6 +197,7 @@ async function postOpenAi(
     const patch = classifyLlmError(400, body);
     if (patch) {
       applyCapToPayload(payload, { tools: "unknown", noThinkWithTools: false, noStreamTools: false, noRequired: false, responsesApi: false, note: "", at: 0, ...patch }, Boolean(tools) && patch.tools !== "off" && patch.tools !== "text");
+      if (patch.tools === "text" && tools) prepareTextTools(payload, tools);
       if (patch.tools === "off" || patch.tools === "text") {
         tools = null;
         delete payload.tools;
@@ -387,8 +389,8 @@ async function anthropicChat(
   if (!res.ok) {
     let err = await res.text();
     if (res.status === 400 && tools === AGENT_TOOLS) {
-      tools = CORE_TOOLS;
-      body.tools = mapTools(CORE_TOOLS);
+      tools = shrinkTools(tools) || tools;
+      body.tools = mapTools(tools);
       res = await send(hdr);
       if (!res.ok) err = await res.text();
     }

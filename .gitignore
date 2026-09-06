@@ -20,4 +20,5 @@ attachments/
 dist-test/
 dist-win/
 ui-build/
+runs/
 .vercel/

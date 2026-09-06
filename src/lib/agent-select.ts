@@ -51,6 +51,10 @@ const ALWAYS_TOOLS = new Set([
   "memory_list",
   "memory_add",
   "memory_forget",
+  "skill_list",
+  "skill_read",
+  "skill_write",
+  "skill_run",
 ]);
 
 export function keepAgentTool(name: string, opts: ToolPick = {}): boolean {

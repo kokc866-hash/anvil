@@ -1,3 +1,4 @@
+import { readMcpSse } from "./mcp-stream";
 export type McpServer = {
   id: string;
   name: string;
@@ -173,7 +174,7 @@ async function rpc(
   }
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("text/event-stream")) {
-    return readMcpSse(res, onChunk, isNote ? undefined : id);
+    return readMcpSse(res, (event) => { const text = mcpEventText(event); if (text) onChunk?.(text); }, isNote ? undefined : id);
   }
   const text = await res.text();
   if (isNote) return {};
@@ -449,61 +450,6 @@ function mcpEventText(obj: unknown): string {
   const result = o.result;
   if (result && typeof result === "object") bits.push(mcpEventText(result));
   return bits.filter(Boolean).join("");
-}
-
-async function readMcpSse(
-  res: Response,
-  onChunk?: (t: string) => void,
-  wantId?: number,
-): Promise<unknown> {
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`MCP ${res.status}: ${t.slice(0, 200)}`);
-  }
-  if (!res.body) throw new Error("MCP-Stream leer");
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  let result: unknown;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        const t = line.trim();
-        if (!t.startsWith("data:")) continue;
-        const data = t.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
-        try {
-          const json = JSON.parse(data) as {
-            result?: unknown;
-            error?: { message?: string };
-            id?: unknown;
-          };
-          if (json.error && (wantId == null || json.id == null || json.id === wantId)) {
-            throw new Error(json.error.message || "MCP error");
-          }
-          const piece = mcpEventText(json);
-          if (piece) onChunk?.(piece);
-          const idOk = wantId == null || json.id == null || json.id === wantId;
-          if (idOk && json && "result" in json) result = json.result;
-        } catch (err) {
-          if (err instanceof SyntaxError) continue;
-          throw err;
-        }
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* */
-    }
-  }
-  return result;
 }
 
 export async function mcpCall(
