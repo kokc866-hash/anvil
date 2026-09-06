@@ -393,9 +393,9 @@ Der Agent liest immer, wenn vorhanden:
 |---|---|
 | Port 8080 belegt | stop.bat |
 | Einstellungen weg nach anderem Fenster | Immer über start.bat / Electron, nicht wild im Browser |
-| Ollama „lokale URL“ | URL mit `/v1`, CORS `OLLAMA_ORIGINS=*`, Verbindung prüfen |
+| Ollama „lokale URL“ | URL mit `/v1`, etwa `http://IP:11434/v1`, dann Modellliste laden. Desktop nutzt die native Modellleitung; direkter Browserzugriff benötigt passende CORS-Freigaben. |
 | Modell bricht ab | Versuche 3–5, keep-alive am Server, kleineres Modell |
-| Chat-Feld tot | Esc, Agent-Leiste zu/auf, Intern → Oberfläche neu. Nach 90 s ohne Fortschritt Hinweis. Harter Stop nur wenn unter Agent gesetzt. |
+| Chat-Feld tot | Anfragephase oben im Chat beachten. Nach drei Minuten erscheint ein Hinweis zum manuellen Stoppen. Harter Stop nur wenn unter Agent gesetzt. Esc oder Stop beendet die Anfrage. |
 | HTML links, Konsole rechts, nichts zu sehen | Run im Fenster an, Vorschau im Editor aus |
 | Graph-Phasen im Chat obwohl Graph aus | Graph-Schalter in Einstellungen **und** Tafel; Chat zeigt Phasen nur wenn an |
 | Helfer nicht in der Leiste | Helfer an + Laden, nicht nur Katalog gewählt |

@@ -401,22 +401,16 @@ export async function pruneSession(): Promise<void> {
     if (next.length) undo[path] = next;
     if (next.length !== stack.length) undoChanged = true;
   }
-  let journal = st.sessionJournal ?? EMPTY_JOURNAL;
-  if (st.chat.length > CHAT_RAM) {
-    const dropped = st.chat.slice(0, st.chat.length - CHAT_RAM);
-    journal = mergeJournal(journal, extractJournal(dropped, journal));
-  }
-  const chat = trimList(st.chat, CHAT_RAM);
+  // The archive keeps every message; model context is bounded by packChatHistory.
+  const chat = st.chat;
   const mcpLog = trimList(st.mcpLog, 40);
   const lspLog = trimList(st.lspLog, 40);
-  const journalChanged = journal !== st.sessionJournal && (journal.at !== st.sessionJournal?.at || journal.turns !== st.sessionJournal?.turns);
-  if (!undoChanged && chat === st.chat && mcpLog === st.mcpLog && lspLog === st.lspLog && !journalChanged) return;
+  if (!undoChanged && chat === st.chat && mcpLog === st.mcpLog && lspLog === st.lspLog) return;
   useIde.setState({
     undo: undoChanged ? undo : st.undo,
     chat,
     mcpLog,
     lspLog,
-    sessionJournal: journal,
   });
   void persistSessionDisk();
 }

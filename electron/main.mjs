@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { bindHelperIpc, startHelperHost } from "./helper-host.mjs";
 import { startLlmPipe } from "./llm-pipe.mjs";
+import { bindSecretsIpc, resolveCredentialHeaders } from "./secrets.mjs";
 import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
 import { bindHwIpc } from "./hw.mjs";
 import { bindAccountIpc } from "./account-auth.mjs";
@@ -293,8 +294,16 @@ function waitPort(port, ms = 8000) {
   });
 }
 
+let companionStarting = null;
 async function ensureCompanion() {
   companionRefs += 1;
+  if (companionIdle) { clearTimeout(companionIdle); companionIdle = 0; }
+  companionStarting ??= startCompanionReady().finally(() => { companionStarting = null; });
+  try { return await companionStarting; }
+  catch (error) { companionRefs = Math.max(0, companionRefs - 1); throw error; }
+}
+
+async function startCompanionReady() {
   if (companionIdle) {
     clearTimeout(companionIdle);
     companionIdle = 0;
@@ -319,8 +328,8 @@ async function ensureCompanion() {
   return { ok: true, token: readCompanionToken(), owned: companionOwned };
 }
 
-function releaseCompanion(keep) {
-  companionRefs = Math.max(0, companionRefs - 1);
+function releaseCompanion(keep, releaseRef = true) {
+  if (releaseRef) companionRefs = Math.max(0, companionRefs - 1);
   if (keep || companionRefs > 0 || !companionOwned) return { ok: true, running: Boolean(companion) };
   if (companionIdle) clearTimeout(companionIdle);
   companionIdle = setTimeout(() => {
@@ -441,7 +450,8 @@ if (!gotLock) {
       });
     });
     helperSrv = await startHelperHost();
-    pipeSrv = await startLlmPipe();
+    bindSecretsIpc((url) => Boolean(url && /^https?:/.test(url) && sameApp(url)));
+    pipeSrv = await startLlmPipe(resolveCredentialHeaders);
     bindPathsIpc();
     bindHwIpc();
     bindAccountIpc();
@@ -450,6 +460,7 @@ if (!gotLock) {
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());
     handleOnce("companion-ensure", () => ensureCompanion());
+    handleOnce("companion-idle", (_e, keep) => releaseCompanion(Boolean(keep), false));
     handleOnce("companion-release", (_e, keep) => releaseCompanion(Boolean(keep)));
     handleOnce("clipboard-read", () => {
       const text = clipboard.readText() || "";

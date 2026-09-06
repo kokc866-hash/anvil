@@ -21,7 +21,7 @@ Eine aktuelle CLI muss auf dem Rechner installiert sein, auf dem Anvil Desktop l
 
 Anvil übergibt Gespräch und Werkzeugkatalog an die CLI. Werkzeuganforderungen kommen zurück an Anvil und laufen durch dessen vorhandenen Agentenablauf. Das CLI-Programm verwaltet Zugangsdaten und Token-Erneuerung. Anvil importiert keine Modell-OAuth-Tokens in den Browser und wechselt bei Abo-Fehlern nicht auf einen API-Key. API-Zugangsdaten aus der Umgebung werden dem CLI-Prozess nicht übergeben.
 
-**Verbindung prüfen** prüft Installation und den von Codex bzw. Claude gemeldeten Kontotyp. Copilot bietet hierfür keinen entsprechenden nichtinteraktiven Statusbefehl: Anvil zeigt die erkannte CLI-Version; die eigentliche Berechtigung wird beim Senden durch Copilot geprüft. Ein Statuscheck verbraucht keine Modellanfrage.
+**CLI-Status laden** zeigt Installation und den von Codex bzw. Claude gemeldeten Kontotyp. Copilot bietet hierfür keinen entsprechenden nichtinteraktiven Statusbefehl: Anvil zeigt die erkannte CLI-Version; die eigentliche Berechtigung wird beim Senden durch Copilot geprüft. Ein Statuscheck verbraucht keine Modellanfrage.
 
 Der Adapter überträgt derzeit Text. Bilder benötigen eine API-Verbindung. Thinking, Temperatur und Antwortlimit werden von der CLI gesteuert; Anvils Kontextbudget gilt für das übergebene Gespräch. Das eingestellte harte Zeitlimit und **Stop** beenden laufende CLI-Prozesse. Antworten werden nach Abschluss des CLI-Aufrufs in Anvil übernommen; CLI-Ausgaben signalisieren währenddessen Aktivität.
 
@@ -39,7 +39,7 @@ Die API-URL enthält keine Zugangsdaten, Query-Parameter oder Fragmente. Ein opt
 
 Anvil wählt vor der Anfrage einen Transport. Ein HTTP-Fehler des Anbieters wird weitergegeben; eine bereits gesendete Anfrage wird nicht zusätzlich über einen anderen Proxy abgespielt. Header für Azure und Anthropic bleiben erhalten. Beim Abbrechen eines Streams wird auch die vorgelagerte Verbindung geschlossen.
 
-Die Modellprüfung meldet HTTP-Fehler, ungültige Antworten und leere Listen. Ein mitgelieferter Modellkatalog ist eine Auswahlhilfe, kein Verbindungsnachweis. Ein selbst gewähltes Modell wird durch eine Modellabfrage nicht ersetzt. Azure prüft den Resource-Zugang über die [Models-List-API](https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21); das Deployment wird bei der Modellanfrage geprüft.
+**Modellliste laden** meldet HTTP-Fehler, ungültige Antworten und leere Listen. **Modellliste geladen · N Modelle** bedeutet, dass der Server seine Liste geliefert hat. Ob das gewählte Modell eine Antwort erzeugt, zeigt erst eine Chat-Anfrage. Der Chat nennt Vorbereitung, Modellanfrage, Denken, Antwort und laufende Werkzeuge als getrennte Phasen. Ein mitgelieferter Modellkatalog ist eine Auswahlhilfe, kein Verbindungsnachweis. Ein selbst gewähltes Modell wird durch eine Modellabfrage nicht ersetzt. Azure prüft den Resource-Zugang über die [Models-List-API](https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21); das Deployment wird bei der Modellanfrage geprüft.
 
 Azure-Responses-Anfragen verwenden den [v1-Endpunkt ohne datierten Versionsparameter](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
 
@@ -50,6 +50,8 @@ GitHub Models wurde am 30. Juli 2026 eingestellt. Copilot wird deshalb ausschlie
 API und Abo erhalten getrennte Einstellungsplätze. Beim Wechsel zwischen Ollama, LM Studio und anderen lokalen Anbietern bleibt jeder Anbieter bei seiner eigenen gespeicherten URL bzw. seinem Standardport.
 
 Profile speichern Verbindungstyp, Anbieter, URL, Modell, Kontext und Modellparameter. Zugangsdaten bleiben separat. Alte Profile ohne Verbindungstyp werden als API-Profil behandelt; Codex und Copilot werden als CLI-Abo behandelt. Alte Copilot-Endpunkte werden bei der Migration nicht mehr als HTTP-Ziel verwendet. Alte Abo-Tokenkopien werden aus Anvils Browser-Speicher entfernt; die Anmeldedaten der installierten CLIs bleiben bei den CLIs.
+
+Anvil Desktop speichert API-Schlüssel, GitHub-Token, Companion-Token und Tresoreinträge verschlüsselt über die Betriebssystem-Funktionen von Electron. Die bisherige Browser-Kopie wird erst nach bestätigter verschlüsselter Speicherung entfernt. Ist der Betriebssystem-Schlüsselspeicher nicht verfügbar, zeigt Anvil das unter dem API-Key an; neue Schlüssel bleiben dann nur für die Sitzung im Arbeitsspeicher. Eine vorhandene, nicht entschlüsselbare Datei wird erhalten. Im Browserbetrieb bleibt die separate Browser-Ablage bestehen. Details zur Migration und ihren Grenzen stehen unter [Optimierungen](06-optimierungen.md).
 
 ## Entwicklung und Prüfung
 

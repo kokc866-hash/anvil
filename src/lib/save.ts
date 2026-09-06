@@ -1,58 +1,85 @@
 import { formatCode } from "./format";
-import { hasLocation, saveSlot } from "./disk";
-import { companionWriteFile } from "./companion";
+import { hasLocation, saveSlot, diskWorkspaceHandle } from "./disk";
 import { emitPlugin } from "./plugins/events";
-import { flushDiskSync } from "./disk-sync";
+import { captureDiskTarget, scheduleSyncWrite, flushDiskSync, syncMkdir } from "./disk-sync";
+import { flushSecrets } from "./secrets";
+import { flushPersistence } from "./persist-storage";
 import { useIde } from "@/store/ide";
 
-let last = 0;
+let saving: Promise<void> | null = null;
 
-export async function saveNow() {
-  const now = Date.now();
-  if (now - last < 400) return;
-  last = now;
-  const st = useIde.getState();
-  const path = st.activePath;
-  let files = { ...st.files };
-  let note = "Gespeichert";
-  if (path && st.formatOnSave && files[path] != null) {
-    try {
-      const next = await formatCode(path, files[path]);
-      if (next !== files[path]) {
-        st.setContent(path, next);
-        files = { ...st.files, [path]: next };
-      }
-    } catch {
-      note = "Format fehlgeschlagen — ungeformt gespeichert";
-    }
-  }
-  emitPlugin("save", path ?? "");
-  await flushDiskSync();
-  const cwd = st.workspaceCwd;
-  const dirty = Object.keys(useIde.getState().dirty).filter((p) => p in files);
-  const paths = dirty.length ? dirty : path ? [path] : [];
-  if (cwd) {
-    await Promise.all(paths.map((p) => companionWriteFile(p, files[p] ?? "", cwd)));
-  }
-  if (hasLocation("workspace") || st.autoSaveDisk || st.storageMode === "disk") {
-    try {
-      await saveSlot("workspace", files, st.dirs);
-      if (hasLocation("backup")) await saveSlot("backup", files, st.dirs);
-      clearDirty(Object.keys(files));
-      st.setNotice(note);
-    } catch (err) {
-      st.setNotice(err instanceof Error ? err.message : "Speichern fehlgeschlagen");
-    }
-    return;
-  }
-  if (paths.length) clearDirty(paths);
-  st.setNotice(note);
+export function saveNow(): Promise<void> {
+  if (saving) return saving;
+  saving = saveCurrent().finally(() => {
+    saving = null;
+  });
+  return saving;
 }
 
-function clearDirty(paths: string[]) {
-  const dirty = { ...useIde.getState().dirty };
-  for (const p of paths) delete dirty[p];
-  useIde.setState({ dirty });
+async function saveCurrent() {
+  const initial = useIde.getState();
+  const target = captureDiskTarget();
+  const path = initial.activePath;
+  let note = "Gespeichert";
+  try {
+    if (path && initial.formatOnSave && initial.files[path] != null) {
+      try {
+        const next = await formatCode(path, initial.files[path]);
+        const current = useIde.getState();
+        if (
+          current.workspaceCwd !== target.cwd ||
+          current.companionUrl !== target.base ||
+          diskWorkspaceHandle() !== target.handle
+        )
+          return;
+        // Never replace edits made while the formatter was running.
+        if (next !== initial.files[path] && current.files[path] === initial.files[path])
+          current.setContent(path, next);
+      } catch {
+        note = "Format fehlgeschlagen — ungeformt gespeichert";
+      }
+    }
+    const st = useIde.getState();
+    if (
+      st.workspaceCwd !== target.cwd ||
+      st.companionUrl !== target.base ||
+      diskWorkspaceHandle() !== target.handle
+    )
+      return;
+    const files = st.files;
+    const fullSave = Boolean(target.handle) || st.autoSaveDisk || st.storageMode === "disk";
+    if (fullSave && !target.cwd && !target.handle)
+      throw new Error("Kein Workspace-Ordner gewählt.");
+    const dirty = Object.keys(st.dirty).filter((p) => p in files);
+    const paths = fullSave ? Object.keys(files) : dirty.length ? dirty : path ? [path] : [];
+    emitPlugin("save", path ?? "");
+    const directories = fullSave ? st.dirs.map((dir) => syncMkdir(dir, target)) : [];
+    for (const p of paths) if (p in files) scheduleSyncWrite(p, files[p], target);
+    const results = await Promise.allSettled([
+      ...directories,
+      flushDiskSync(),
+      flushPersistence(),
+      flushSecrets(),
+    ]);
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    if (hasLocation("backup")) await saveSlot("backup", files, st.dirs);
+    const current = useIde.getState();
+    if (
+      current.workspaceCwd === target.cwd &&
+      current.companionUrl === target.base &&
+      diskWorkspaceHandle() === target.handle
+    ) {
+      const remaining = { ...current.dirty };
+      for (const p of paths) if (current.files[p] === files[p]) delete remaining[p];
+      useIde.setState({ dirty: remaining });
+    }
+    st.setNotice(note);
+  } catch (error) {
+    useIde
+      .getState()
+      .setNotice(error instanceof Error ? error.message : "Speichern fehlgeschlagen");
+  }
 }
 
 export function focusAgent() {

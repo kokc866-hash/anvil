@@ -25,6 +25,7 @@ type Native = {
   workspacePick?: () => Promise<string | null>;
   clipboardRead?: () => Promise<{ text: string; image: string }>;
   companionEnsure?: () => Promise<{ ok: boolean; token?: string; owned?: boolean }>;
+  companionIdle?: (keep?: boolean) => Promise<{ ok: boolean; running?: boolean }>;
   companionRelease?: (keep?: boolean) => Promise<{ ok: boolean; running?: boolean }>;
   hwMachine?: () => Promise<{ cores: number; ramGb: number; freeGb: number; vendor?: string; gpu?: string; arch?: string }>;
   llmPipe?: () => Promise<{ port: number; token: string }>;

@@ -22,13 +22,13 @@ function fwdHeaders(req) {
   return llmHeaders(req.headers);
 }
 
-export function createLlmPipeServer(token) {
+export function createLlmPipeServer(token, resolveHeaders = (headers, _encoded) => headers) {
   const server = createServer(async (req, res) => {
     const allow = pipeCorsOrigin(req.headers.origin);
     if (allow) res.setHeader("Access-Control-Allow-Origin", allow);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", [...LLM_HEADERS, "x-anvil-target", "x-anvil-pipe", "x-anvil-custom-base"].join(", "));
+    res.setHeader("Access-Control-Allow-Headers", [...LLM_HEADERS, "x-anvil-target", "x-anvil-pipe", "x-anvil-custom-base", "x-anvil-credentials"].join(", "));
     res.setHeader("Access-Control-Expose-Headers", "x-anvil-lan, x-anvil-pipe-auth");
     res.setHeader("x-anvil-lan", "1");
     if (req.headers.origin && !allow) { res.statusCode = 403; res.end("origin"); return; }
@@ -68,7 +68,7 @@ export function createLlmPipeServer(token) {
       res.on("close", () => { if (!res.writableEnded) stop(); });
       const r = await llmUpstream(u.toString(), {
         method,
-        headers: fwdHeaders(req),
+        headers: resolveHeaders(fwdHeaders(req), req.headers["x-anvil-credentials"]),
         body: buf && buf.length ? buf : undefined,
         signal: ac.signal,
       });
@@ -104,12 +104,12 @@ export function createLlmPipeServer(token) {
   return server;
 }
 
-export async function startLlmPipe() {
+export async function startLlmPipe(resolveHeaders) {
   const { handleOnce, onSync } = await import("./ipc.mjs");
   const token = randomBytes(16).toString("hex");
-  const server = createLlmPipeServer(token);
+  const server = createLlmPipeServer(token, resolveHeaders);
   const port = await listenLocal(server, "127.0.0.1", LLM_PIPE_PORT);
-  const info = { port, token };
+  const info = { port, token, credentialRefs: Boolean(resolveHeaders) };
   handleOnce("llm-pipe-info", () => info);
   onSync("llm-pipe-sync", () => info);
   return server;

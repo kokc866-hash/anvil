@@ -1,3 +1,4 @@
+import { selectFileKeys } from "@/lib/workspace-index";
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ChevronDown,
@@ -56,7 +57,7 @@ type Menu = { x: number; y: number; path: string; type: "dir" | "file" };
 
 export function FileTree() {
   const t = useT();
-  const fileKeys = useIde((s) => Object.keys(s.files).sort().join("\n"));
+  const fileKeys = useIde(selectFileKeys);
   const dirs = useIde((s) => s.dirs);
   const collapsed = useIde((s) => s.collapsed);
   const activePath = useIde((s) => s.activePath);

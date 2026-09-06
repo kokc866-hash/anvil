@@ -1,3 +1,4 @@
+import { startRequest, requestPhase } from "./request-state.ts";
 let ctrl = new AbortController();
 let why = "";
 let gen = 0;
@@ -21,6 +22,7 @@ export function beginAgent(): number {
   why = "";
   gen += 1;
   beat += 1;
+  startRequest(gen);
   return gen;
 }
 
@@ -29,6 +31,7 @@ export function agentGen(): number {
 }
 
 export function abortAgent(reason = "Abgebrochen"): void {
+  requestPhase(gen, "stopped");
   why = reason;
   gen += 1;
   try {
@@ -119,7 +122,7 @@ export function stopAgent(reason = "Gestoppt"): void {
     st.setTestsRunning(false);
     st.setNotice(reason);
     if (st.agentJob) st.setAgentJob(null);
-    void import("./companion-life").then((m) => m.releaseCompanion()).catch(() => undefined);
+    void import("./companion-life").then((m) => m.idleCompanion()).catch(() => undefined);
   });
   void import("./run-window").then((m) => m.releaseAgentUi());
 }

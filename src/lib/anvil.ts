@@ -1,13 +1,19 @@
-import { applyIntent, resolveIntent, type BrainIntent } from "./brain/tasks";
+import { applyIntent, heuristicIntent, resolveIntent, type BrainIntent } from "./brain/tasks";
 
 /** Anvil handelt. Das Hauptmodell denkt. Der lokale Helfer ist optional. */
 export type AnvilHand = "app" | "model";
 
+let prepared: { text: string; intent: BrainIntent } | null = null;
+let preparing = false;
+export async function prepareAnvilIntent(text: string) {
+  if (preparing || prepared?.text === text) return;
+  preparing = true;
+  try { prepared = { text, intent: await resolveIntent(text) }; }
+  finally { preparing = false; }
+}
+
 export async function anvilHandle(text: string): Promise<{ hand: AnvilHand; reply?: string }> {
-  const it = await Promise.race([
-    resolveIntent(text),
-    new Promise<BrainIntent>((res) => setTimeout(() => res({ kind: "agent", conf: 0.2 }), 800)),
-  ]);
+  const it = prepared?.text === text ? prepared.intent : heuristicIntent(text);
   if (it.kind !== "agent" && it.conf >= 0.85) {
     const reply = applyIntent(it);
     if (reply) return { hand: "app", reply };

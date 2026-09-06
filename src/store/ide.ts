@@ -1,4 +1,8 @@
+import type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
+export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
 import { create } from "zustand";
+import { partializeIde } from "./ide-persist";
+import { syncWrite, syncRemove, syncMkdir, scheduleSyncWrite } from "@/lib/disk-sync";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
@@ -6,17 +10,17 @@ import { langFromPath } from "@/lib/languages";
 import { modelForProvider, providerOf, connectionMode, connectionSlot, connectionDefaults, type LlmProvider } from "@/lib/providers";
 import { ancestorDirs, autoCollapsePaths, cleanPath, dropRecord, dupPath, isInside, joinPath, parentDir, remapList, remapPath, remapRecord } from "@/lib/fs";
 import { DEFAULT_INPUT_MAP, normalizeInputMap, type InputMap } from "@/lib/input-map";
-import { KEY_DEFAULTS, normalizeKeyMap, type Chord, type KeyId } from "@/lib/keymap";
+import { KEY_DEFAULTS, normalizeKeyMap } from "@/lib/keymap";
 import type { CompactMode } from "@/lib/compact";
 import type { ThinkingMode } from "@/lib/llm-options";
-import type { McpServer } from "@/lib/mcp";
-import { ANVIL_SURFACE, type SurfaceMode } from "@/lib/surface";
+
+import { ANVIL_SURFACE } from "@/lib/surface";
 import type { LspHit } from "@/lib/lsp";
-import type { TestHit } from "@/lib/test-parse";
+
 import { isTestFile, parseTests, dropTestPaths, remapTestMap } from "@/lib/test-parse";
 import { normalizeThinking } from "@/lib/llm-options";
 import { emitPlugin } from "@/lib/plugins/events";
-import { loadSecrets, saveSecrets, keyForProvider, saveKeyForProvider } from "@/lib/secrets";
+import { saveSecrets, keyForProvider, saveKeyForProvider } from "@/lib/secrets";
 import { clampContext } from "@/lib/tokens";
 import { rejectHunk as rejectHunkLines } from "@/lib/diff";
 import { parseRunTrace } from "@/lib/parse-run";
@@ -25,7 +29,7 @@ import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 import { abortReason } from "@/lib/abort";
 import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
-import { EMPTY_JOURNAL, normalizeJournal, persistChat, type SessionJournal } from "@/lib/session";
+import { EMPTY_JOURNAL, normalizeJournal } from "@/lib/session";
 import { normalizeJob, type AgentJob } from "@/lib/agent-ask";
 import { AGENT_MIN, AGENT_MAX, SIDE_MIN, SIDE_MAX, TRAIL_MIN, TRAIL_MAX } from "@/lib/layout";
 import { fitCloudAbo } from "@/lib/llm-fit";
@@ -68,34 +72,10 @@ function mergeLsp(local: LspHit[], ...rest: LspHit[][]): LspHit[] {
 }
 
 function pushDisk(kind: "write" | "remove" | "mkdir", path: string, content = "") {
-  void import("@/lib/disk-sync")
-    .then((d) => {
-      if (kind === "write") return d.syncWrite(path, content);
-      if (kind === "mkdir") return d.syncMkdir(path);
-      return d.syncRemove(path);
-    })
-    .catch(() => undefined);
+  const job = kind === "write" ? syncWrite(path, content) : kind === "mkdir" ? syncMkdir(path) : syncRemove(path);
+  void job.catch(() => undefined);
 }
 import { shrinkFiles } from "@/lib/persist-storage";
-import type { FileChange } from "@/lib/diff";
-
-export type LlmSlot = {
-  authMode?: "abo" | "key";
-  contextAuto?: boolean;
-  baseUrl: string;
-  model: string;
-  context: number;
-  thinking: ThinkingMode;
-  compact: CompactMode;
-  temperature: number;
-  maxOut: number;
-};
-
-export type LlmProfile = LlmSlot & {
-  id: string;
-  name: string;
-  provider: LlmProvider;
-};
 
 function slotOf(s: {
   llmAuthMode: "abo" | "key";
@@ -128,116 +108,10 @@ function noteLearn(k: string, d?: string) {
 
 export type { AfterWrite };
 export type { LlmProvider };
-export type ChatRole = "user" | "assistant";
-export type PanelId = "files" | "code" | "agent" | "output" | "trail";
-export type ThemeName = "dark" | "light";
-export type MotionLevel = "off" | "reduced" | "full";
-export type SplitMode = "auto" | "side" | "stack";
-export type SidebarId = "files" | "search" | "git" | "ext" | "learn" | "tests" | "ref" | "mcp" | null;
-export type PaletteMode = "files" | "commands" | "symbols" | null;
-export type AgentMode = "ask" | "agent";
+
 export type { AgentJob };
-export type OutputDock = "bottom" | "side";
-export type StorageMode = "browser" | "disk";
+
 export type { InputMap };
-
-export type DebugFrame = { path: string; line: number; fn: string };
-
-export type McpCallLog = {
-  at: number;
-  server: string;
-  name: string;
-  ok: boolean;
-  detail: string;
-  image?: string;
-};
-
-export type McpView = { text: string; image?: string; at: number };
-
-export type DebugState = {
-  active: boolean;
-  paused: boolean;
-  path: string | null;
-  line: number;
-  reason: string;
-  stack: DebugFrame[];
-  locals: Record<string, string>;
-  watches: string[];
-  watchValues: Record<string, string>;
-  lastEval: string;
-};
-
-export type FileDiff = {
-  path: string;
-  before: string;
-  after: string;
-  source?: "round" | "propose";
-};
-
-export type PlanStep = { text: string; status: "todo" | "run" | "ok" | "err" };
-
-export type Checkpoint = {
-  id: string;
-  at: number;
-  label: string;
-  files: Record<string, string>;
-  dirs: string[];
-};
-
-export type ChatVoice = "agent" | "helper";
-
-export type ChatMsg = {
-  id: string;
-  role: ChatRole;
-  voice?: ChatVoice;
-  content: string;
-  tools?: string[];
-  steps?: AgentStep[];
-  thinking?: string;
-  images?: string[];
-  plan?: PlanStep[];
-  planLocked?: boolean;
-  checkpointId?: string;
-  at?: number;
-  ms?: number;
-  changes?: FileChange[];
-  lastRun?: { ok: boolean; path: string; stdout: string; stderr: string; attempt: number; max: number; graphical?: boolean; running?: boolean };
-  lastTests?: { ok: boolean; pass: number; fail: number; running?: boolean };
-  harness?: string;
-};
-
-export type AgentStep = {
-  id: string;
-  name: string;
-  detail: string;
-  status: "run" | "ok" | "err";
-  image?: string;
-  path?: string;
-  code?: string;
-  before?: string;
-  at?: number;
-  ms?: number;
-};
-
-export type GitCommit = {
-  id: string;
-  message: string;
-  at: number;
-  paths: string[];
-  snap?: Record<string, string>;
-};
-
-export type RunResult = {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  duration: number;
-  label: string;
-  html?: string;
-  stage?: { kind: "html" | "window" | "log"; out?: string };
-};
-
-export type Panels = Record<PanelId, boolean>;
 
 export const PANEL_META: { id: PanelId; label: string; hint: string }[] = [
   { id: "files", label: "Dateien", hint: "Workspace" },
@@ -265,340 +139,6 @@ const EMPTY_DEBUG: DebugState = {
   watches: [],
   watchValues: {},
   lastEval: "",
-};
-
-type IdeState = {
-  files: Record<string, string>;
-  openPaths: string[];
-  activePath: string | null;
-  dirty: Record<string, boolean>;
-  chat: ChatMsg[];
-  commits: GitCommit[];
-  output: RunResult[];
-  running: boolean;
-  testsRunning: boolean;
-  testResults: Record<string, TestHit>;
-  agentBusy: boolean;
-  agentStartedAt: number;
-  agentJob: AgentJob | null;
-  panels: Panels;
-  settingsOpen: boolean;
-  harnessBoardOpen: boolean;
-  harnessBoardGrid: boolean;
-  harnessBoardSnap: boolean;
-  theme: ThemeName;
-  locale: "de" | "en";
-  motion: MotionLevel;
-  fontSize: number;
-  tabSize: 2 | 4 | 8;
-  lineNumbers: boolean;
-  wordWrap: boolean;
-  editorMinimap: boolean;
-  editorSticky: boolean;
-  editorGuides: boolean;
-  editorWheelZoom: boolean;
-  suggestOn: boolean;
-  insertSpaces: boolean;
-  formatOnSave: boolean;
-  autoPreview: boolean;
-  autoAcceptDiffs: boolean;
-  autoRunAgent: boolean;
-  planWho: PlanWho;
-  runLoop: boolean;
-  testLoop: boolean;
-  graphLoop: boolean;
-  engineLoop: boolean;
-  loopTries: number;
-  harnessAfterWrite: AfterWrite;
-  harnessMaxRounds: number;
-  graphSees: number;
-  liveRun: boolean;
-  liveEditor: boolean;
-  mcpStream: boolean;
-  showStatusBar: boolean;
-  openOutputOnRun: boolean;
-  runInWindow: boolean;
-  runHtml: boolean;
-  autoUpdate: boolean;
-  splitMode: SplitMode;
-  llmProvider: LlmProvider;
-  llmAuthMode: "abo" | "key";
-  llmBaseUrl: string;
-  llmModel: string;
-  llmApiKey: string;
-  llmContext: number;
-  llmContextAuto: boolean;
-  llmThinking: ThinkingMode;
-  llmCompact: CompactMode;
-  llmTemperature: number;
-  llmMaxOut: number;
-  llmRetries: number;
-  llmHardStopMin: number;
-  llmSlots: Record<string, LlmSlot>;
-  llmProfiles: LlmProfile[];
-  sessionTokens: { prompt: number; completion: number };
-  sessionJournal: SessionJournal;
-  sidebar: SidebarId;
-  palette: PaletteMode;
-  pendingDiffs: FileDiff[];
-  cursor: { line: number; col: number };
-  selection: { startLine: number; startCol: number; endLine: number; endCol: number };
-  searchQuery: string;
-  agentMode: AgentMode;
-  agentRules: string;
-  attached: string[];
-  agentDraft: string;
-  sidebarWidth: number;
-  agentWidth: number;
-  outputHeight: number;
-  outputWidth: number;
-  outputDock: OutputDock;
-  outputPopout: boolean;
-  trailWidth: number;
-  trailThinkH: number;
-  trailInChat: boolean;
-  autoHw: boolean;
-  hwNote: string;
-  runPopout: boolean;
-  previewOpen: boolean;
-  runPath: string | null;
-  pluginDisabled: string[];
-  pluginKnown: string[];
-  pluginStatus: string;
-  pluginConfig: Record<string, unknown>;
-  pluginProblems: { path: string; line: number; text: string; source: string }[];
-  lspProblems: LspHit[];
-  runProblems: LspHit[];
-  companionProblems: LspHit[];
-  compileProblems: LspHit[];
-  mcpServers: McpServer[];
-  activeSurfaceId: string;
-  surfaceMode: SurfaceMode;
-  mcpLog: McpCallLog[];
-  mcpView: Record<string, McpView>;
-  companionUrl: string;
-  companionKeep: boolean;
-  netCompiler: boolean;
-  lspEnabled: Record<string, boolean>;
-  lspTimeout: number;
-  lspMaxFiles: number;
-  lspLog: { at: number; ok: boolean; text: string }[];
-  engineLink: { label: string; ok: boolean } | null;
-  checkpoints: Checkpoint[];
-  agentInbox: string | null;
-  agentQueue: string[];
-  pendingAsk: { path: string; text: string } | null;
-  recentPaths: string[];
-  flashPath: string | null;
-  peek: { word: string; defs: { path: string; line: number; text: string }[] } | null;
-  jumpStack: { path: string; line: number }[];
-  jumpIndex: number;
-  closedTabs: string[];
-  breakpoints: Record<string, number[]>;
-  debug: DebugState;
-  notice: string;
-  undo: Record<string, string[]>;
-  dirs: string[];
-  collapsed: string[];
-  diskName: string;
-  workspaceCwd: string;
-  setupDone: boolean;
-  backupName: string;
-  storageMode: StorageMode;
-  autoSaveDisk: boolean;
-  loadOnStart: boolean;
-  githubRepo: string;
-  githubToken: string;
-  inputMap: InputMap;
-  keyMap: Record<KeyId, Chord>;
-  togglePanel: (id: PanelId) => void;
-  setPanels: (panels: Panels) => void;
-  setSettingsOpen: (v: boolean) => void;
-  setHarnessBoardOpen: (v: boolean) => void;
-  setHarnessBoardGrid: (v: boolean) => void;
-  setHarnessBoardSnap: (v: boolean) => void;
-  setTheme: (theme: ThemeName) => void;
-  setLocale: (locale: "de" | "en") => void;
-  setMotion: (v: MotionLevel) => void;
-  setFontSize: (n: number) => void;
-  setTabSize: (n: 2 | 4 | 8) => void;
-  setLineNumbers: (v: boolean) => void;
-  setWordWrap: (v: boolean) => void;
-  setEditorMinimap: (v: boolean) => void;
-  setEditorSticky: (v: boolean) => void;
-  setEditorGuides: (v: boolean) => void;
-  setEditorWheelZoom: (v: boolean) => void;
-  setSuggestOn: (v: boolean) => void;
-  setInsertSpaces: (v: boolean) => void;
-  setFormatOnSave: (v: boolean) => void;
-  setAutoPreview: (v: boolean) => void;
-  setAutoAcceptDiffs: (v: boolean) => void;
-  setAutoRunAgent: (v: boolean) => void;
-  setPlanWho: (v: PlanWho) => void;
-  setRunLoop: (v: boolean) => void;
-  setTestLoop: (v: boolean) => void;
-  setGraphLoop: (v: boolean) => void;
-  setEngineLoop: (v: boolean) => void;
-  setLoopTries: (n: number) => void;
-  setHarnessAfterWrite: (v: AfterWrite) => void;
-  setHarnessMaxRounds: (n: number) => void;
-  setGraphSees: (n: number) => void;
-  setLiveRun: (v: boolean) => void;
-  setLiveEditor: (v: boolean) => void;
-  setMcpStream: (v: boolean) => void;
-  setShowStatusBar: (v: boolean) => void;
-  setOpenOutputOnRun: (v: boolean) => void;
-  setRunInWindow: (v: boolean) => void;
-  setRunHtml: (v: boolean) => void;
-  setAutoUpdate: (v: boolean) => void;
-  setRunPopout: (v: boolean) => void;
-  setRunPath: (path: string | null) => void;
-  setSplitMode: (v: SplitMode) => void;
-  setLlmProvider: (v: LlmProvider, mode?: "abo" | "key") => void;
-  setLlmAuthMode: (v: "abo" | "key") => void;
-  setLlmBaseUrl: (v: string) => void;
-  setLlmModel: (v: string) => void;
-  setLlmApiKey: (v: string) => void;
-  setLlmContext: (n: number) => void;
-  setLlmContextAuto: (v: boolean) => void;
-  setLlmThinking: (v: ThinkingMode) => void;
-  setLlmCompact: (v: CompactMode) => void;
-  setLlmTemperature: (n: number) => void;
-  setLlmMaxOut: (n: number) => void;
-  setLlmRetries: (n: number) => void;
-  setLlmHardStopMin: (n: number) => void;
-  saveLlmProfile: (name: string) => void;
-  applyLlmProfile: (id: string) => void;
-  deleteLlmProfile: (id: string) => void;
-  addAgentStep: (step: Omit<AgentStep, "id">) => void;
-  appendThinking: (s: string) => void;
-  addSessionTokens: (prompt: number, completion: number) => void;
-  setSessionJournal: (j: SessionJournal) => void;
-  setSidebar: (v: SidebarId) => void;
-  setPalette: (v: PaletteMode) => void;
-  setCursor: (line: number, col: number) => void;
-  setSelection: (startLine: number, startCol: number, endLine: number, endCol: number) => void;
-  setSearchQuery: (v: string) => void;
-  setAgentMode: (v: AgentMode) => void;
-  setAgentRules: (v: string) => void;
-  setAttached: (v: string[]) => void;
-  setAgentDraft: (v: string) => void;
-  setSidebarWidth: (n: number) => void;
-  setAgentWidth: (n: number) => void;
-  setOutputHeight: (n: number) => void;
-  setOutputWidth: (n: number) => void;
-  setOutputDock: (v: OutputDock) => void;
-  setOutputPopout: (v: boolean) => void;
-  setTrailWidth: (n: number) => void;
-  setTrailThinkH: (n: number) => void;
-  setTrailInChat: (v: boolean) => void;
-  setAutoHw: (v: boolean) => void;
-  setHwNote: (v: string) => void;
-  revealOutput: () => void;
-  setPreviewOpen: (v: boolean) => void;
-  togglePlugin: (id: string) => void;
-  setPluginKnown: (ids: string[]) => void;
-  setPluginDisabled: (ids: string[]) => void;
-  setPluginStatus: (v: string) => void;
-  setPluginConfig: (v: Record<string, unknown>) => void;
-  setPluginProblems: (v: { path: string; line: number; text: string; source: string }[]) => void;
-  setLspProblems: (v: LspHit[]) => void;
-  setCompanionProblems: (v: LspHit[]) => void;
-  setCompileProblems: (v: LspHit[]) => void;
-  setMcpServers: (v: McpServer[]) => void;
-  setActiveSurface: (id: string) => void;
-  setSurfaceMode: (v: SurfaceMode) => void;
-  setMcpContext: (id: string, context: Record<string, string>) => void;
-  pushMcpLog: (e: McpCallLog) => void;
-  setMcpView: (id: string, v: McpView) => void;
-  clearMcpLog: () => void;
-  setCompanionUrl: (v: string) => void;
-  setCompanionKeep: (v: boolean) => void;
-  setNetCompiler: (v: boolean) => void;
-  setLspEnabled: (id: string, on: boolean) => void;
-  setLspTimeout: (n: number) => void;
-  setLspMaxFiles: (n: number) => void;
-  pushLspLog: (ok: boolean, text: string) => void;
-  clearLspLog: () => void;
-  setEngineLink: (v: { label: string; ok: boolean } | null) => void;
-  setChatLastRun: (v: ChatMsg["lastRun"]) => void;
-  setChatLastTests: (v: ChatMsg["lastTests"]) => void;
-  setChatHarness: (v: string) => void;
-  failRunningSteps: () => void;
-  openRoundDiff: (path: string, checkpointId?: string) => void;
-  pushCheckpoint: (label: string) => string;
-  patchFiles: (next: Record<string, string>, opts?: { quiet?: boolean }) => number;
-  restoreCheckpoint: (id: string) => boolean;
-  setChatChanges: (changes: FileChange[]) => void;
-  setPendingAsk: (v: { path: string; text: string } | null) => void;
-  revealPath: (path: string) => void;
-  cycleTab: (dir: 1 | -1) => void;
-  reorderTabs: (from: string, to: string) => void;
-  setPeek: (v: { word: string; defs: { path: string; line: number; text: string }[] } | null) => void;
-  pushJump: () => void;
-  goJump: (dir: -1 | 1) => void;
-  reopenTab: () => void;
-  setChatPlan: (steps: PlanStep[], id?: string) => void;
-  updatePlanStep: (i: number, status: PlanStep["status"], id?: string) => void;
-  pushAgent: (text: string, steal?: boolean) => void;
-  clearAgentInbox: () => void;
-  toggleBreakpoint: (path: string, line: number, on?: boolean) => void;
-  setDebug: (p: Partial<DebugState>) => void;
-  addWatch: (expr: string) => void;
-  removeWatch: (expr: string) => void;
-  setDebugWatches: (v: Record<string, string>) => void;
-  setDebugEval: (v: string) => void;
-  setNotice: (msg: string) => void;
-  undoFile: (path: string) => void;
-  renameFile: (from: string, to: string) => void;
-  clearChat: (keep?: boolean) => void;
-  removeChat: (id: string) => void;
-  proposeFiles: (next: Record<string, string>) => void;
-  acceptDiff: (path: string) => void;
-  rejectDiff: (path: string) => void;
-  rejectHunk: (path: string, hunk: number) => void;
-  acceptAllDiffs: () => void;
-  rejectAllDiffs: () => void;
-  openFile: (path: string) => void;
-  closeFile: (path: string, opts?: { force?: boolean }) => void;
-  setContent: (path: string, content: string) => void;
-  writeFile: (path: string, content: string, opts?: { quiet?: boolean }) => void;
-  deleteFile: (path: string) => void;
-  createFolder: (path: string) => void;
-  deleteDir: (path: string) => void;
-  movePath: (from: string, dest: string) => void;
-  duplicateFile: (path: string) => void;
-  toggleCollapsed: (path: string) => void;
-  applyFiles: (next: Record<string, string>, dirs?: string[], opts?: { keepDirty?: boolean }) => void;
-  addChat: (msg: Omit<ChatMsg, "id">) => void;
-  startAssistant: (opts?: { voice?: ChatVoice }) => void;
-  appendAssistant: (s: string) => void;
-  finalizeAssistant: (reply: string, tools?: string[]) => void;
-  setDiskName: (v: string) => void;
-  setWorkspaceCwd: (v: string) => void;
-  setSetupDone: (v: boolean) => void;
-  setBackupName: (v: string) => void;
-  setStorageMode: (v: StorageMode) => void;
-  setAutoSaveDisk: (v: boolean) => void;
-  setLoadOnStart: (v: boolean) => void;
-  setGithubRepo: (v: string) => void;
-  setGithubToken: (v: string) => void;
-  setInputMap: (v: InputMap) => void;
-  resetInputMap: () => void;
-  setKeyBind: (id: KeyId, chord: Chord) => void;
-  resetKeyMap: () => void;
-  setAgentBusy: (v: boolean) => void;
-  setAgentJob: (v: AgentJob | null) => void;
-  setTestsRunning: (v: boolean) => void;
-  mergeTestResults: (hits: TestHit[]) => void;
-  pushOutput: (r: RunResult) => void;
-  clearOutput: () => void;
-  setRunning: (v: boolean) => void;
-  commit: (message: string) => void;
-  checkout: (id: string) => void;
-  revertFile: (path: string) => void;
-  resetWorkspace: () => void;
-  resetSettings: () => void;
 };
 
 function nid() {
@@ -1459,7 +999,7 @@ export const useIde = create<IdeState>()(
           undo: { ...undo, [path]: stack.slice(-40) },
         });
         queueMicrotask(() => emitPlugin("change", path));
-        void import("@/lib/disk-sync").then((d) => d.scheduleSyncWrite(path, content));
+        scheduleSyncWrite(path, content);
       },
       writeFile: (path, content, opts) => {
         const name = cleanPath(path);
@@ -2001,127 +1541,7 @@ export const useIde = create<IdeState>()(
           workspaceCwd: typeof p.workspaceCwd === "string" ? p.workspaceCwd : "",
         };
       },
-      partialize: (s) => ({
-        files: s.files,
-        openPaths: s.openPaths,
-        activePath: s.activePath,
-        chat: persistChat(s.chat).map((m) => ({
-          ...m,
-          steps: m.steps?.map(({ image: _i, ...r }) => r),
-        })),
-        commits: s.commits.slice(-12).map((c, i, arr) => ({
-          ...c,
-          snap: i >= arr.length - 2 ? c.snap : undefined,
-        })),
-        panels: s.panels,
-        theme: s.theme,
-        locale: s.locale,
-        motion: s.motion,
-        fontSize: s.fontSize,
-        tabSize: s.tabSize,
-        lineNumbers: s.lineNumbers,
-        wordWrap: s.wordWrap,
-        editorMinimap: s.editorMinimap,
-        editorSticky: s.editorSticky,
-        editorGuides: s.editorGuides,
-        editorWheelZoom: s.editorWheelZoom,
-        suggestOn: s.suggestOn,
-        insertSpaces: s.insertSpaces,
-        formatOnSave: s.formatOnSave,
-        autoPreview: s.autoPreview,
-        autoAcceptDiffs: s.autoAcceptDiffs,
-        autoRunAgent: s.autoRunAgent,
-        planWho: s.planWho,
-        runLoop: s.runLoop,
-        testLoop: s.testLoop,
-        graphLoop: s.graphLoop,
-        engineLoop: s.engineLoop,
-        loopTries: s.loopTries,
-        harnessAfterWrite: s.harnessAfterWrite,
-        harnessMaxRounds: s.harnessMaxRounds,
-        graphSees: s.graphSees,
-        harnessBoardGrid: s.harnessBoardGrid,
-        harnessBoardSnap: s.harnessBoardSnap,
-        liveRun: s.liveRun,
-        liveEditor: s.liveEditor,
-        mcpStream: s.mcpStream,
-        showStatusBar: s.showStatusBar,
-        openOutputOnRun: s.openOutputOnRun,
-        runInWindow: s.runInWindow,
-        runHtml: s.runHtml,
-        autoUpdate: s.autoUpdate,
-        splitMode: s.splitMode,
-        llmProvider: s.llmProvider,
-        llmAuthMode: s.llmAuthMode,
-        llmBaseUrl: s.llmBaseUrl,
-        llmModel: s.llmModel,
-        llmContext: s.llmContext,
-        llmContextAuto: s.llmContextAuto,
-        llmThinking: s.llmThinking,
-        llmCompact: s.llmCompact,
-        llmTemperature: s.llmTemperature,
-        llmMaxOut: s.llmMaxOut,
-        llmRetries: s.llmRetries,
-        llmHardStopMin: s.llmHardStopMin,
-        llmSlots: s.llmSlots,
-        llmProfiles: s.llmProfiles,
-        sessionTokens: s.sessionTokens,
-        sessionJournal: s.sessionJournal,
-        agentJob: s.agentJob,
-        undo: Object.fromEntries(
-          Object.entries(s.undo)
-            .filter(([p]) => s.openPaths.includes(p) || Boolean(s.dirty[p]))
-            .slice(0, 10)
-            .map(([p, st]) => [p, st.slice(-4)]),
-        ),
-        sidebar: s.sidebar,
-        agentMode: s.agentMode,
-        agentRules: s.agentRules,
-        sidebarWidth: s.sidebarWidth,
-        agentWidth: s.agentWidth,
-        outputHeight: s.outputHeight,
-        outputWidth: s.outputWidth,
-        outputDock: s.outputDock,
-        trailWidth: s.trailWidth,
-        trailThinkH: s.trailThinkH,
-        trailInChat: s.trailInChat,
-        autoHw: s.autoHw,
-        hwNote: s.hwNote,
-        agentQueue: s.agentQueue.slice(0, 8).map((t) => t.slice(0, 2000)),
-        pluginDisabled: s.pluginDisabled,
-        pluginKnown: s.pluginKnown,
-        pluginConfig: s.pluginConfig,
-        breakpoints: s.breakpoints,
-        dirs: s.dirs,
-        collapsed: s.collapsed,
-        diskName: s.diskName,
-        workspaceCwd: s.workspaceCwd,
-        setupDone: s.setupDone,
-        backupName: s.backupName,
-        storageMode: s.storageMode,
-        autoSaveDisk: s.autoSaveDisk,
-        loadOnStart: s.loadOnStart,
-        githubRepo: s.githubRepo,
-        inputMap: s.inputMap,
-        keyMap: s.keyMap,
-        mcpServers: s.mcpServers,
-        activeSurfaceId: s.activeSurfaceId,
-        surfaceMode: s.surfaceMode,
-        companionUrl: s.companionUrl,
-        companionKeep: s.companionKeep,
-        netCompiler: s.netCompiler,
-        lspEnabled: s.lspEnabled,
-        lspTimeout: s.lspTimeout,
-        lspMaxFiles: s.lspMaxFiles,
-        recentPaths: s.recentPaths,
-        dirty: s.dirty,
-        pendingDiffs: s.pendingDiffs.slice(0, 16).map((d) => ({
-          ...d,
-          before: d.before.length > 400_000 ? d.before.slice(0, 400_000) : d.before,
-          after: d.after.length > 400_000 ? d.after.slice(0, 400_000) : d.after,
-        })),
-        attached: s.attached,
-      }),
+      partialize: partializeIde,
     },
   ),
 );

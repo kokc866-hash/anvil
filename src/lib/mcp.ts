@@ -24,6 +24,7 @@ import {
 } from "./mcp-parse";
 import { loadSecrets } from "./secrets";
 import { mergeMcpArgs } from "./surface";
+import { withCompanion } from "./companion-life";
 
 export {
   parseMcpBody,
@@ -50,6 +51,26 @@ let catalogFp = "";
 let resources: McpResource[] = [];
 const caps = new Map<string, string[]>();
 let rpcSeq = 1;
+let catalogGeneration = 0;
+const catalogServers = new Map<string, string>();
+const resourceKeys = new Map<string, Set<string>>();
+const requestedServers = new Map<string, string>();
+type ServerCatalog = { tools: McpTool[]; resources: McpResource[] };
+const serverRequests = new Map<string, { fingerprint: string; promise: Promise<ServerCatalog> }>();
+let refresh: { fingerprint: string; promise: Promise<McpTool[]> } | null = null;
+
+export function mcpSnapshot(servers: McpServer[]) {
+  const valid = servers.filter(
+    (s) => s.enabled && catalogServers.get(s.id) === serversFingerprint([s]),
+  );
+  const ids = new Set(valid.map((s) => s.id));
+  const names = new Set(valid.flatMap((s) => [s.id, s.name]));
+  return {
+    tools: catalog.filter((tool) => ids.has(tool.serverId ?? tool.server)),
+    resources: resources.filter((resource) => names.has(resource.server)),
+    ready: ids,
+  };
+}
 
 function nextRpcId(): number {
   rpcSeq = (rpcSeq % 1_000_000_000) + 1;
@@ -77,6 +98,7 @@ export function mcpCatalogNow(): string {
 }
 
 export function mcpForget(id: string): void {
+  catalogServers.delete(id);
   sessions.delete(id);
   caps.delete(id);
   listErrors.delete(id);
@@ -111,7 +133,8 @@ async function rpc(
     const t = loadSecrets().companionToken.trim();
     if (t) headers["x-anvil-token"] = t;
   }
-  const bearer = loadSecrets().keys[`mcp:${s.id}`]?.trim() || loadSecrets().keys[`mcp:${s.name}`]?.trim();
+  const bearer =
+    loadSecrets().keys[`mcp:${s.id}`]?.trim() || loadSecrets().keys[`mcp:${s.name}`]?.trim();
   if (bearer) headers.authorization = `Bearer ${bearer}`;
   const isNote = method.startsWith("notifications/");
   const id = nextRpcId();
@@ -194,11 +217,7 @@ async function initialize(s: McpServer): Promise<void> {
   }
 }
 
-async function listPaged<T>(
-  s: McpServer,
-  method: string,
-  key: string,
-): Promise<T[]> {
+async function listPaged<T>(s: McpServer, method: string, key: string): Promise<T[]> {
   const out: T[] = [];
   let cursor = "";
   for (let i = 0; i < 8; i++) {
@@ -220,7 +239,10 @@ export async function mcpClose(s: McpServer): Promise<void> {
     const parsed = parseMcpUrl(s.url);
     await fetch(parsed.toString(), {
       method: "DELETE",
-      headers: { "mcp-session-id": sid, "mcp-protocol-version": sess?.proto || MCP_PROTOCOL_PREFER },
+      headers: {
+        "mcp-session-id": sid,
+        "mcp-protocol-version": sess?.proto || MCP_PROTOCOL_PREFER,
+      },
       signal: AbortSignal.timeout(4000),
     });
   } catch {
@@ -228,7 +250,7 @@ export async function mcpClose(s: McpServer): Promise<void> {
   }
 }
 
-async function ingestServer(s: McpServer, live: McpServer[]): Promise<{ tools: McpTool[]; resources: McpResource[] }> {
+async function loadServer(s: McpServer, live: McpServer[]): Promise<ServerCatalog> {
   const key = catalogServerKey(s, live);
   const toolsOut: McpTool[] = [];
   const resOut: McpResource[] = [];
@@ -250,7 +272,11 @@ async function ingestServer(s: McpServer, live: McpServer[]): Promise<{ tools: M
   const cap = caps.get(s.id) ?? [];
   if (cap.includes("resources") || cap.length === 0) {
     try {
-      const rr = await listPaged<{ uri: string; name?: string; mimeType?: string }>(s, "resources/list", "resources");
+      const rr = await listPaged<{ uri: string; name?: string; mimeType?: string }>(
+        s,
+        "resources/list",
+        "resources",
+      );
       for (const x of rr) {
         resOut.push({
           server: key,
@@ -266,59 +292,135 @@ async function ingestServer(s: McpServer, live: McpServer[]): Promise<{ tools: M
   return { tools: toolsOut, resources: resOut };
 }
 
-export async function mcpList(servers: McpServer[]): Promise<McpTool[]> {
-  const out: McpTool[] = [];
-  const resOut: McpResource[] = [];
-  const live = servers.filter((x) => x.enabled && x.url.trim());
-  listErrors.clear();
-  for (const s of live) {
-    try {
-      const got = await ingestServer(s, live);
-      out.push(...got.tools);
-      resOut.push(...got.resources);
-    } catch (e) {
-      mcpForget(s.id);
-      const msg = e instanceof Error ? e.message : String(e);
-      listErrors.set(s.id, msg);
-      caps.set(s.id, []);
-    }
+async function ingestServer(s: McpServer, live: McpServer[]): Promise<ServerCatalog> {
+  const fingerprint = `${serversFingerprint([s])}|${catalogServerKey(s, live)}`;
+  const pending = serverRequests.get(s.id);
+  if (pending?.fingerprint === fingerprint) return pending.promise;
+  const promise = withCompanion(() => loadServer(s, live), s.url);
+  serverRequests.set(s.id, { fingerprint, promise });
+  try {
+    return await promise;
+  } finally {
+    if (serverRequests.get(s.id)?.promise === promise) serverRequests.delete(s.id);
   }
-  catalog = out;
-  resources = resOut;
+}
+
+function clearCatalog(id: string) {
+  const keys = new Set(catalog.filter((t) => t.serverId === id).map((t) => t.server));
+  for (const key of resourceKeys.get(id) ?? []) keys.add(key);
+  keys.add(id);
+  catalog = catalog.filter((t) => t.serverId !== id);
+  resources = resources.filter((r) => !keys.has(r.server));
+  catalogServers.delete(id);
+  resourceKeys.delete(id);
+}
+
+function acceptCatalog(s: McpServer, got: ServerCatalog) {
+  clearCatalog(s.id);
+  catalogServers.set(s.id, serversFingerprint([s]));
+  resourceKeys.set(s.id, new Set(got.resources.map((r) => r.server)));
+  listErrors.delete(s.id);
+  catalog = [...catalog, ...got.tools];
+  resources = [...resources, ...got.resources];
+}
+
+export async function mcpList(servers: McpServer[]): Promise<McpTool[]> {
+  const generation = ++catalogGeneration;
+  const live = servers.filter((s) => s.enabled && s.url.trim());
+  const ids = new Set(live.map((s) => s.id));
+  for (const id of requestedServers.keys())
+    if (!ids.has(id)) {
+      requestedServers.delete(id);
+      clearCatalog(id);
+      mcpForget(id);
+    }
+  for (const server of live) requestedServers.set(server.id, serversFingerprint([server]));
+  const results: { tools: McpTool[]; resources: McpResource[]; error?: string }[] = new Array(
+    live.length,
+  );
+  let index = 0;
+  // Independent servers share a bounded pool, not a serial chain of timeouts.
+  await Promise.all(
+    Array.from({ length: Math.min(4, live.length) }, async () => {
+      while (index < live.length) {
+        const i = index++;
+        try {
+          results[i] = await ingestServer(live[i], live);
+        } catch (error) {
+          results[i] = {
+            tools: [],
+            resources: [],
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+    }),
+  );
+  if (generation !== catalogGeneration) return catalog;
+  for (let i = 0; i < live.length; i++) {
+    const server = live[i];
+    if (requestedServers.get(server.id) !== serversFingerprint([server])) continue;
+    if (results[i].error) {
+      clearCatalog(server.id);
+      mcpForget(server.id);
+      listErrors.set(server.id, results[i].error!);
+    } else acceptCatalog(server, results[i]);
+  }
   catalogAt = Date.now();
-  catalogFp = serversFingerprint(servers);
-  return out;
+  catalogFp = live.every((s) => requestedServers.get(s.id) === serversFingerprint([s]))
+    ? serversFingerprint(servers)
+    : "";
+  return catalog;
 }
 
 export async function mcpProbe(s: McpServer, all: McpServer[]): Promise<McpTool[]> {
+  const fingerprint = serversFingerprint([s]);
+  requestedServers.set(s.id, fingerprint);
   listErrors.delete(s.id);
   try {
-    const got = await ingestServer(s, all.filter((x) => x.enabled && x.url.trim()));
-    catalog = [...catalog.filter((t) => t.serverId !== s.id), ...got.tools];
-    const drop = new Set(got.resources.map((r) => r.uri));
-    resources = [...resources.filter((r) => r.server !== s.id && r.server !== s.name && !drop.has(r.uri)), ...got.resources];
+    const got = await ingestServer(
+      s,
+      all.filter((x) => x.enabled && x.url.trim()),
+    );
+    if (requestedServers.get(s.id) !== fingerprint) return got.tools;
+    acceptCatalog(s, got);
     catalogAt = Date.now();
     catalogFp = "";
     return catalog;
   } catch (e) {
-    mcpForget(s.id);
-    listErrors.set(s.id, e instanceof Error ? e.message : String(e));
-    catalog = catalog.filter((t) => t.serverId !== s.id);
+    if (requestedServers.get(s.id) === fingerprint) {
+      clearCatalog(s.id);
+      mcpForget(s.id);
+      listErrors.set(s.id, e instanceof Error ? e.message : String(e));
+    }
     throw e;
   }
 }
 
-export async function mcpReadResource(servers: McpServer[], server: string, uri: string): Promise<unknown> {
+export async function mcpReadResource(
+  servers: McpServer[],
+  server: string,
+  uri: string,
+): Promise<unknown> {
   const s = findServer(servers, server);
   if (!s) throw new Error(`MCP-Server nicht gefunden: ${server}`);
-  await initialize(s);
-  return unwrapMcp(await rpc(s, "resources/read", { uri }));
+  return withCompanion(async () => {
+    await initialize(s);
+    return unwrapMcp(await rpc(s, "resources/read", { uri }));
+  }, s.url);
 }
 
 export async function mcpRefresh(servers: McpServer[], maxAgeMs = 60_000): Promise<McpTool[]> {
   const fp = serversFingerprint(servers);
   if (catalogFp === fp && Date.now() - catalogAt < maxAgeMs) return catalog;
-  return mcpList(servers);
+  if (refresh?.fingerprint === fp) return refresh.promise;
+  const promise = mcpList(servers);
+  refresh = { fingerprint: fp, promise };
+  try {
+    return await promise;
+  } finally {
+    if (refresh?.promise === promise) refresh = null;
+  }
 }
 
 function mcpEventText(obj: unknown): string {
@@ -330,7 +432,8 @@ function mcpEventText(obj: unknown): string {
   };
   take(o.message);
   take(o.text);
-  const params = o.params && typeof o.params === "object" ? (o.params as Record<string, unknown>) : null;
+  const params =
+    o.params && typeof o.params === "object" ? (o.params as Record<string, unknown>) : null;
   if (params) {
     take(params.message);
     take(params.text);
@@ -348,7 +451,11 @@ function mcpEventText(obj: unknown): string {
   return bits.filter(Boolean).join("");
 }
 
-async function readMcpSse(res: Response, onChunk?: (t: string) => void, wantId?: number): Promise<unknown> {
+async function readMcpSse(
+  res: Response,
+  onChunk?: (t: string) => void,
+  wantId?: number,
+): Promise<unknown> {
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(`MCP ${res.status}: ${t.slice(0, 200)}`);
@@ -409,11 +516,13 @@ export async function mcpCall(
 ): Promise<unknown> {
   const s = findServer(servers, server);
   if (!s) throw new Error(`MCP-Server nicht gefunden: ${server}`);
-  await initialize(s);
-  const merged = mergeMcpArgs(s.context, args);
-  if (extra?.cwd && merged.cwd == null) merged.cwd = extra.cwd;
-  const raw = await rpc(s, "tools/call", { name, arguments: merged }, onChunk);
-  return unwrapMcp(raw);
+  return withCompanion(async () => {
+    await initialize(s);
+    const merged = mergeMcpArgs(s.context, args);
+    if (extra?.cwd && merged.cwd == null) merged.cwd = extra.cwd;
+    const raw = await rpc(s, "tools/call", { name, arguments: merged }, onChunk);
+    return unwrapMcp(raw);
+  }, s.url);
 }
 
 export function newMcpId(): string {

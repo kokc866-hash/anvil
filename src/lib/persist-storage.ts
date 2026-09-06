@@ -1,6 +1,14 @@
 import type { PersistStorage, StorageValue } from "zustand/middleware";
-import { contentSig, formatBytes, rankPaths, skipPath } from "./ws-skip.ts";
+import { formatBytes, rankPaths, skipPath } from "./ws-skip.ts";
 import { isSecretPath, isRefPath } from "./ref.ts";
+import {
+  loadArchive,
+  saveArchive,
+  removeArchive,
+  type ArchiveMessage,
+  type ArchiveSnapshot,
+} from "./persist-db.ts";
+import { persistChat } from "./session.ts";
 
 export const PERSIST_TOTAL = 96_000_000;
 export const PERSIST_EACH = 3_000_000;
@@ -8,11 +16,17 @@ const LS_FILES = 1_500_000;
 
 export { formatBytes };
 
-export function shrinkFiles(files: Record<string, string>, budget = PERSIST_TOTAL, prefer: string[] = []): Record<string, string> {
+export function shrinkFiles(
+  files: Record<string, string>,
+  budget = PERSIST_TOTAL,
+  prefer: string[] = [],
+): Record<string, string> {
   const out: Record<string, string> = {};
   let used = 0;
   const order = rankPaths(
-    Object.keys(files).filter((p) => (!skipPath(p) && !isSecretPath(p)) || prefer.includes(p) || isRefPath(p)),
+    Object.keys(files).filter(
+      (p) => (!skipPath(p) && !isSecretPath(p)) || prefer.includes(p) || isRefPath(p),
+    ),
     [...prefer, ...Object.keys(files).filter(isRefPath)],
   );
   for (const path of order) {
@@ -27,7 +41,10 @@ export function shrinkFiles(files: Record<string, string>, budget = PERSIST_TOTA
   return out;
 }
 
-export function persistDropped(files: Record<string, string>, kept: Record<string, string>): number {
+export function persistDropped(
+  files: Record<string, string>,
+  kept: Record<string, string>,
+): number {
   return Object.keys(files).filter((p) => !(p in kept)).length;
 }
 
@@ -70,119 +87,6 @@ function readLlm(): Record<string, unknown> | null {
   }
 }
 
-let dbp: Promise<IDBDatabase> | null = null;
-
-function db(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") return Promise.reject(new Error("no idb"));
-  if (!dbp) {
-    dbp = new Promise((resolve, reject) => {
-      const req = indexedDB.open("anvil-persist", 2);
-      req.onupgradeneeded = () => {
-        const d = req.result;
-        if (!d.objectStoreNames.contains("kv")) d.createObjectStore("kv");
-        if (!d.objectStoreNames.contains("file")) d.createObjectStore("file");
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  return dbp;
-}
-
-function idbGet(key: string): Promise<Record<string, string> | null> {
-  return db()
-    .then(
-      (d) =>
-        new Promise<Record<string, string> | null>((resolve, reject) => {
-          if (!d.objectStoreNames.contains("kv")) {
-            resolve(null);
-            return;
-          }
-          const q = d.transaction("kv").objectStore("kv").get(key);
-          q.onsuccess = () => resolve((q.result as Record<string, string>) ?? null);
-          q.onerror = () => reject(q.error);
-        }),
-    )
-    .catch(() => null);
-}
-
-function idbDel(key: string): Promise<void> {
-  return db()
-    .then(
-      (d) =>
-        new Promise<void>((resolve, reject) => {
-          if (!d.objectStoreNames.contains("kv")) {
-            resolve();
-            return;
-          }
-          const q = d.transaction("kv", "readwrite").objectStore("kv").delete(key);
-          q.onsuccess = () => resolve();
-          q.onerror = () => reject(q.error);
-        }),
-    )
-    .catch(() => undefined);
-}
-
-function fileKey(name: string, path: string): string {
-  return `${name}\t${path}`;
-}
-
-async function idbLoadFiles(name: string): Promise<Record<string, string> | null> {
-  try {
-    const d = await db();
-    if (!d.objectStoreNames.contains("file")) return null;
-    const prefix = `${name}\t`;
-    const out: Record<string, string> = {};
-    await new Promise<void>((resolve, reject) => {
-      const tx = d.transaction("file", "readonly");
-      const store = tx.objectStore("file");
-      const req = store.openCursor();
-      req.onsuccess = () => {
-        const cur = req.result;
-        if (!cur) return;
-        const key = String(cur.key);
-        if (key.startsWith(prefix) && typeof cur.value === "string") {
-          out[key.slice(prefix.length)] = cur.value;
-        }
-        cur.continue();
-      };
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    return Object.keys(out).length ? out : null;
-  } catch {
-    return null;
-  }
-}
-
-async function idbSyncFiles(name: string, files: Record<string, string>, prev: Map<string, string>): Promise<Map<string, string>> {
-  const next = new Map<string, string>();
-  try {
-    const d = await db();
-    if (!d.objectStoreNames.contains("file")) return prev;
-    await new Promise<void>((resolve, reject) => {
-      const tx = d.transaction("file", "readwrite");
-      const store = tx.objectStore("file");
-      for (const [path, content] of Object.entries(files)) {
-        const sig = contentSig(content);
-        next.set(path, sig);
-        if (prev.get(path) === sig) continue;
-        store.put(content, fileKey(name, path));
-      }
-      for (const path of prev.keys()) {
-        if (!(path in files)) store.delete(fileKey(name, path));
-      }
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    void idbDel(`${name}:files`);
-    return next;
-  } catch {
-    void import("./intern").then((m) => m.note("persist", "IndexedDB voll oder gesperrt — Dateien nicht komplett gesichert."));
-    return prev;
-  }
-}
-
 const mem = new Map<string, string>();
 
 function lsGet(key: string): string | null {
@@ -206,7 +110,8 @@ function writeLs(name: string, raw: string) {
   } catch {
     try {
       const parsed = JSON.parse(raw) as { state?: { chat?: unknown[] } };
-      if (parsed.state && Array.isArray(parsed.state.chat)) parsed.state.chat = parsed.state.chat.slice(-12);
+      if (parsed.state && Array.isArray(parsed.state.chat))
+        parsed.state.chat = parsed.state.chat.slice(-12);
       const slim = JSON.stringify(parsed);
       mem.set(name, slim);
       localStorage.setItem(name, slim);
@@ -220,100 +125,193 @@ function writeLs(name: string, raw: string) {
 function preferOf(state: Slice): string[] {
   const open = Array.isArray(state.openPaths) ? (state.openPaths as string[]) : [];
   const recent = Array.isArray(state.recentPaths) ? (state.recentPaths as string[]) : [];
-  const dirty = state.dirty && typeof state.dirty === "object" ? Object.keys(state.dirty as object) : [];
+  const dirty =
+    state.dirty && typeof state.dirty === "object" ? Object.keys(state.dirty as object) : [];
   return [...open, ...dirty, ...recent];
+}
+
+const flushers = new Set<() => Promise<void>>();
+export async function flushPersistence(): Promise<void> {
+  await Promise.all([...flushers].map((flush) => flush()));
+}
+
+function sameSlice(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const left = a as Slice,
+    right = b as Slice;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
+}
+
+function persistenceError(name: string, error: unknown) {
+  if (name === "anvil-intern") return;
+  const detail = error instanceof Error ? error.message : "Speicher voll oder gesperrt.";
+  void import("./intern").then((m) => m.note("persist", `Sicherung unvollständig: ${detail}`));
 }
 
 export function idePersistStorage(): PersistStorage<unknown> | undefined {
   if (typeof window === "undefined") return undefined;
   const bag = new Map<string, StorageValue<unknown>>();
   const seen = new Set<string>();
-  let timer = 0;
-  const written = new Map<string, Map<string, string>>();
+  const latest = new Map<string, StorageValue<unknown>>();
+  const generations = new Map<string, number>();
+  const written = new Map<string, ArchiveSnapshot>();
+  const fileCache = new Map<
+    string,
+    { source: Record<string, string>; preference: string; files: Record<string, string> }
+  >();
+  let timer = 0,
+    deadline = 0;
+  let tail: Promise<void> = Promise.resolve();
   let dropNoted = false;
 
-  function flush() {
-    const entries = [...bag.entries()].filter(([name]) => seen.has(name));
-    for (const [name] of entries) bag.delete(name);
-    for (const [name, value] of entries) {
-      const state = { ...((value.state as Slice) ?? {}) };
-      const files = state.files;
-      delete state.files;
-      if (name === "anvil-ide") snapLlm(state);
-      const packed = JSON.stringify({ ...value, state });
-      const ok = writeLs(name, packed);
-      if (!ok && name !== "anvil-intern") {
-        void import("./intern").then((m) => m.note("persist", `Speichern fehlgeschlagen (${name})`));
-      } else if (ok && name === "anvil-ide") {
-        void import("./intern").then((m) => m.resolveKind("persist"));
-      }
-      if (files && Object.keys(files).length) {
-        const onDisk = typeof state.workspaceCwd === "string" && Boolean(state.workspaceCwd.trim());
-        const prefer = preferOf(state);
-        const slim = shrinkFiles(files, onDisk ? 12_000_000 : PERSIST_TOTAL, prefer);
-        const dropped = persistDropped(files, slim);
-        const lostOpen = prefer.filter((p) => p in files && !(p in slim));
-        if (lostOpen.length && !dropNoted) {
-          dropNoted = true;
-          void import("./intern").then((m) =>
-            m.note("persist", `${lostOpen.length} offene Dateien nicht gesichert. ${onDisk ? "Stand liegt im Ordner." : "Ordner auf der Platte nutzen."}`),
-          );
-        } else if (dropped && !onDisk && !dropNoted) {
-          dropNoted = true;
-          void import("./intern").then((m) =>
-            m.note("persist", `${dropped} Dateien nicht gesichert (${formatBytes(Object.values(files).reduce((n, c) => n + c.length, 0))}). Ordner auf der Platte nutzen.`),
-          );
-        }
-        const prev = written.get(name) ?? new Map();
-        void idbSyncFiles(name, slim, prev).then((next) => written.set(name, next));
-        const blob = JSON.stringify(slim);
-        if (blob.length < LS_FILES) writeLs(`${name}:files`, blob);
-        else {
-          mem.delete(`${name}:files`);
-          try {
-            localStorage.removeItem(`${name}:files`);
-          } catch {
-            /* */
+  function enqueue(work: () => Promise<void>) {
+    const next = tail.catch(() => undefined).then(work);
+    tail = next;
+    void next.catch(() => undefined);
+    return next;
+  }
+
+  function flush(): Promise<void> {
+    window.clearTimeout(timer);
+    window.clearTimeout(deadline);
+    timer = deadline = 0;
+    const entries = [...bag.entries()]
+      .filter(([name]) => seen.has(name))
+      .map(([name, value]) => ({ name, value, generation: generations.get(name) ?? 0 }));
+    for (const { name } of entries) bag.delete(name);
+    if (!entries.length) return tail;
+    return enqueue(async () => {
+      const failures: unknown[] = [];
+      for (const { name, value, generation } of entries) {
+        if ((generations.get(name) ?? 0) !== generation) continue;
+        try {
+          const state = { ...((value.state as Slice) ?? {}) };
+          const source = state.files;
+          const chat = Array.isArray(state.chat) ? (state.chat as ArchiveMessage[]) : undefined;
+          delete state.files;
+          // Keep a small recovery copy. The primary archive retains complete messages.
+          if (chat)
+            state.chat = persistChat(chat).map((m) => ({
+              ...m,
+              steps: m.steps?.map((step) => {
+                if (!step || typeof step !== "object") return step;
+                const { image: _image, ...rest } = step as Record<string, unknown>;
+                return rest;
+              }),
+            }));
+          if (name === "anvil-ide") snapLlm(state);
+          const localOk = writeLs(name, JSON.stringify({ ...value, state }));
+          let files: Record<string, string> | undefined;
+          if (source) {
+            const onDisk =
+              typeof state.workspaceCwd === "string" && Boolean(state.workspaceCwd.trim());
+            const prefer = preferOf(state);
+            const preference = JSON.stringify([onDisk, prefer]);
+            const cached = fileCache.get(name);
+            if (cached?.source === source && cached.preference === preference) files = cached.files;
+            else {
+              files = shrinkFiles(source, onDisk ? 12_000_000 : PERSIST_TOTAL, prefer);
+              const dropped = persistDropped(source, files);
+              if (dropped && !dropNoted) {
+                dropNoted = true;
+                void import("./intern").then((m) =>
+                  m.note(
+                    "persist",
+                    `${dropped} Dateien passen nicht in die Browser-Sicherung. ${onDisk ? "Speicherstatus des Ordners beachten." : "Einen Ordner auf der Platte nutzen."}`,
+                  ),
+                );
+              }
+              fileCache.set(name, { source, preference, files });
+              // Do not stringify a large workspace merely to discover it exceeds this limit.
+              const size = Object.entries(files).reduce(
+                (n, [path, content]) => n + path.length + content.length + 6,
+                2,
+              );
+              const blob = size < LS_FILES ? JSON.stringify(files) : "";
+              if (blob && blob.length < LS_FILES) writeLs(`${name}:files`, blob);
+              else {
+                mem.delete(`${name}:files`);
+                try {
+                  localStorage.removeItem(`${name}:files`);
+                } catch {
+                  /* unavailable */
+                }
+              }
+            }
+          }
+          if (files || chat) {
+            const snapshot = { files, chat };
+            const previous = written.get(name) ?? {};
+            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat)
+              await saveArchive(name, snapshot, previous);
+            written.set(name, snapshot);
+          }
+          if (!localOk) throw new Error("Einstellungen konnten nicht gespeichert werden.");
+        } catch (error) {
+          persistenceError(name, error);
+          failures.push(error);
+          // A later state change or explicit save can retry the latest snapshot.
+          if ((generations.get(name) ?? 0) === generation) {
+            if (!bag.has(name)) bag.set(name, latest.get(name) ?? value);
+            latest.delete(name);
           }
         }
       }
-    }
+      if (failures.length) throw new AggregateError(failures, "Sicherung unvollständig.");
+    });
   }
 
-  window.addEventListener("beforeunload", () => flush());
+  const backgroundFlush = () => {
+    void flush().catch(() => undefined);
+  };
+  flushers.add(flush);
+  window.addEventListener("beforeunload", backgroundFlush);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) flush();
+    if (document.hidden) backgroundFlush();
   });
 
   return {
     getItem: async (name) => {
+      await tail.catch(() => undefined);
       const raw = lsGet(name);
-      if (!raw) {
-        seen.add(name);
-        return bag.get(name) ?? null;
-      }
       try {
-        const parsed = JSON.parse(raw) as StorageValue<Slice>;
-        let files = await idbLoadFiles(name);
-        if (!files) files = await idbGet(`${name}:files`);
-        if (!files) {
-          const ls = lsGet(`${name}:files`);
-          if (ls) {
-            try {
-              files = JSON.parse(ls) as Record<string, string>;
-            } catch {
-              files = null;
-            }
+        let parsed: StorageValue<Slice> | null = null;
+        try {
+          const value = raw ? JSON.parse(raw) : null;
+          if (value?.state && typeof value.state === "object")
+            parsed = value as StorageValue<Slice>;
+        } catch {
+          /* Recover the primary archive even if the compact copy is damaged. */
+        }
+        if (!parsed && name !== "anvil-ide") {
+          seen.add(name);
+          return bag.get(name) ?? null;
+        }
+        const archive = await loadArchive(name).catch((error) => {
+          if (name === "anvil-ide") persistenceError(name, error);
+          return { files: null, chat: null };
+        });
+        const llm = name === "anvil-ide" ? readLlm() : null;
+        if (!parsed && archive.files === null && archive.chat === null && !llm) {
+          seen.add(name);
+          return bag.get(name) ?? null;
+        }
+        parsed ??= { state: {} };
+        let files = archive.files;
+        if (files === null) {
+          const backup = lsGet(`${name}:files`);
+          try {
+            files = backup ? (JSON.parse(backup) as Record<string, string>) : null;
+          } catch {
+            /* legacy recovery */
           }
         }
-        if (!files && parsed.state?.files) files = parsed.state.files;
-        if (files) {
-          const sigs = new Map<string, string>();
-          for (const [p, c] of Object.entries(files)) sigs.set(p, contentSig(c));
-          written.set(name, sigs);
-        }
-        const llm = name === "anvil-ide" ? readLlm() : null;
-        parsed.state = { ...(llm ?? {}), ...(parsed.state ?? {}), files: files ?? parsed.state?.files ?? {} };
+        files ??= parsed.state?.files ?? {};
+        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined });
+        parsed.state = { ...(llm ?? {}), ...(parsed.state ?? {}), files };
+        if (archive.chat !== null) parsed.state.chat = archive.chat;
         seen.add(name);
         return parsed as StorageValue<unknown>;
       } catch {
@@ -323,23 +321,31 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
     },
     setItem: (name, value) => {
       if (!seen.has(name)) return;
+      const previous = latest.get(name);
+      if (previous?.version === value.version && sameSlice(previous?.state, value.state)) return;
+      latest.set(name, value);
       bag.set(name, value);
       window.clearTimeout(timer);
-      timer = window.setTimeout(flush, 480);
+      timer = window.setTimeout(backgroundFlush, 480);
+      deadline ||= window.setTimeout(backgroundFlush, 3000);
     },
     removeItem: (name) => {
+      generations.set(name, (generations.get(name) ?? 0) + 1);
       bag.delete(name);
-      mem.delete(name);
-      mem.delete(`${name}:files`);
-      written.delete(name);
-      try {
+      latest.delete(name);
+      // Queue removal after in-flight writes; no earlier snapshot may reappear afterwards.
+      return enqueue(async () => {
+        await removeArchive(name);
+        written.delete(name);
+        fileCache.delete(name);
+        mem.delete(name);
+        mem.delete(`${name}:files`);
         localStorage.removeItem(name);
         localStorage.removeItem(`${name}:files`);
-      } catch {
-        /* */
-      }
-      void idbDel(`${name}:files`);
-      void idbSyncFiles(name, {}, written.get(name) ?? new Map());
+      }).catch((error) => {
+        persistenceError(name, error);
+        throw error;
+      });
     },
   };
 }

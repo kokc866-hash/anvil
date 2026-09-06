@@ -11,3 +11,4 @@ Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/relea
 | [03-workflow.md](03-workflow.md) | Abläufe Schritt für Schritt |
 | [04-presentation.md](04-presentation.md) | Kurzpräsentation (5 Minuten) |
 | [05-verbindungen.md](05-verbindungen.md) | Local, Cloud, Abo über CLI und Custom |
+| [06-optimierungen.md](06-optimierungen.md) | Speicher, Chat, Anfrageablauf und Schlüsselablage im Entwicklungsstand |

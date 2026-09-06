@@ -14,7 +14,7 @@ Schritt für Schritt. Fenster erklärt: `02-handbuch.md`. Stand: 05.09.2026.
    - URL `http://127.0.0.1:11434/v1` (gleicher PC) oder `http://192.168.x.x:11434/v1` (LAN)
    - Modellname wie in `ollama list`
    - **To-do** auf Auto, wenn der Prompt Schritte vorgibt
-5. **Verbindung prüfen**. Profilname z. B. `Ollama LAN` → Speichern.
+5. **Modellliste laden**. Profilname z. B. `Ollama LAN` → Speichern. Eine geladene Liste bestätigt noch keine Modellantwort.
 6. Eine Datei anlegen, Chat testen: `Sag nur: bereit.`
 
 Ollama-Host im LAN:
@@ -223,4 +223,3 @@ Einstellungen → Companion: Liste grün = gefunden. Token nur wenn Prüfen rot.
 1. `grok.anvil-patch` neben `grok.mjs` (Anvil-Ordner) legen.
 2. `node grok.mjs`
 3. **stop.bat**, dann **start.bat**
-

@@ -38,7 +38,10 @@ import { lanFetch, hasLlmTransport } from "./lan-fetch";
 import { anthropicHeaders, pipeHeaders, responsesNative } from "./llm-headers";
 import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
 import { useIde } from "@/store/ide";
-import { ANVIL_SURFACE, surfaceLabel, surfacePrompt, toolsAllowed, type SurfaceSnap } from "./surface";
+import { ANVIL_SURFACE, toolsAllowed } from "./surface";
+import { surfaceNote } from "./surface-context";
+import { requestPhase } from "./request-state";
+import { withCompanion } from "./companion-life";
 import {
   applyCapToPayload,
   bindCapTarget,
@@ -62,49 +65,6 @@ function isBrowserTarget(spec: ProviderSpec, baseUrl: string): boolean {
   }
 }
 
-async function surfaceNote(): Promise<{ text: string; id: string; mode: SurfaceSnap["mode"] }> {
-  const st = useIde.getState();
-  const id = st.activeSurfaceId || ANVIL_SURFACE;
-  const mode = st.surfaceMode === "bridge" ? "bridge" : "exclusive";
-  const servers = st.mcpServers ?? [];
-  try {
-    if (servers.some((s) => s.enabled && s.url.trim())) {
-      const { mcpRefresh, mcpToolsCached, mcpResourcesCached } = await import("./mcp");
-      await mcpRefresh(servers);
-      const tools = mcpToolsCached();
-      const resources = mcpResourcesCached();
-      const s = servers.find((x) => x.id === id);
-      const snap: SurfaceSnap = {
-        id,
-        mode,
-        label: surfaceLabel(id, servers),
-        tools: id === ANVIL_SURFACE ? tools : tools.filter((t) => t.server === (s?.name || s?.id) || t.server === id),
-        resources: id === ANVIL_SURFACE ? resources : resources.filter((r) => r.server === (s?.name || s?.id)),
-        context: s?.context ?? {},
-        ready: id === ANVIL_SURFACE || Boolean(s?.enabled),
-        view: st.mcpView[id]?.text,
-        error: tools.find((t) => t.name === "(fehler)" && t.server === (s?.name || s?.id))?.description,
-      };
-      if (id !== ANVIL_SURFACE && !s?.enabled) snap.ready = false;
-      return { text: surfacePrompt(snap), id, mode };
-    }
-  } catch {
-    /* */
-  }
-  return {
-    text: surfacePrompt({
-      id: ANVIL_SURFACE,
-      mode,
-      label: "Anvil",
-      tools: [],
-      resources: [],
-      context: {},
-      ready: true,
-    }),
-    id: ANVIL_SURFACE,
-    mode,
-  };
-}
 
 function corsHint(spec: ProviderSpec, baseUrl = ""): string {
   if (spec.kind === "local" || isBrowserTarget(spec, baseUrl)) {
@@ -112,6 +72,7 @@ function corsHint(spec: ProviderSpec, baseUrl = ""): string {
   }
   return `${spec.label} nicht erreichbar. URL und Key prüfen.`;
 }
+
 
 export function pickListedModel(ids: string[], want: string): string {
   if (!ids.length) return want;
@@ -187,8 +148,21 @@ export async function chatWithProvider(opts: {
   locale?: "de" | "en";
   observeOnly?: boolean;
 }): Promise<AgentResult> {
+  const run = agentGen();
+  const original = opts;
+  opts = {
+    ...original,
+    onDelta: (chunk, kind) => {
+      requestPhase(run, kind === "think" ? "thinking" : "answering");
+      original.onDelta?.(chunk, kind);
+    },
+    onToolStart: (info) => { requestPhase(run, "tool", info.name); original.onToolStart?.(info); },
+    onTool: (info) => { original.onTool?.(info); requestPhase(run, "preparing"); },
+  };
   const spec = providerOf(opts.provider);
   const surface = await surfaceNote();
+  throwIfAborted();
+  if (run !== agentGen()) throw new AgentAbortError("Anfrage ersetzt");
   const mcpCatalog = surface.text;
   if (spec.id === "grok") {
     const complete = async (
@@ -197,6 +171,7 @@ export async function chatWithProvider(opts: {
       onDelta?: (s: string, kind?: "text" | "think") => void,
     ): Promise<LlmChoice> => {
       throwIfAborted();
+      requestPhase(run, "waiting");
       const stop = cloudStopMs(useIde.getState().llmHardStopMin);
       const key = (opts.apiKey || keyForProvider("xai")).trim();
       if (key) {
@@ -277,11 +252,17 @@ export async function chatWithProvider(opts: {
     return { ok: false, reply: `API-Key für ${spec.label} unter Einstellungen eintragen.`, error: "no key" };
   }
 
-  const complete = cliKind
+  const transport = cliKind
     ? (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => completeViaCli(cliKind, model, messages, useTools ? toolsForCall(opts.observeOnly) : [], hardStopMs(useIde.getState().llmHardStopMin), onDelta)
     : isBrowserTarget(spec, opts.baseUrl)
     ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly)
     : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly);
+
+  const complete: typeof transport = (messages, tools, onDelta) => {
+    throwIfAborted();
+    requestPhase(run, "waiting");
+    return transport(messages, tools, onDelta);
+  };
 
   try {
     return await runAgentLoop(
@@ -306,6 +287,7 @@ export async function chatWithProvider(opts: {
       { ...clientTools(opts), onHarness: opts.onHarness },
     );
   } catch (err) {
+    requestPhase(run, isAbortLike(err) ? "stopped" : "error");
     const msg = err instanceof Error ? err.message : String(err);
     const blocked =
       msg === "Failed to fetch" ||
@@ -351,7 +333,7 @@ function clientTools(opts: {
   onTool?: (info: { name: string; args: Record<string, unknown>; result: unknown }) => void;
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
 }) {
-  return {
+  const tools = {
     onDelta: opts.onDelta,
     onWorkspace: opts.onWorkspace,
     onTool: opts.onTool,
@@ -613,6 +595,13 @@ function clientTools(opts: {
       }
       return { ok: true, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
+  };
+  return {
+    ...tools,
+    gitStatus: () => withCompanion(tools.gitStatus),
+    gitCommit: (...args: Parameters<typeof tools.gitCommit>) => withCompanion(() => tools.gitCommit(...args)),
+    gitPush: (...args: Parameters<typeof tools.gitPush>) => withCompanion(() => tools.gitPush(...args)),
+    engine: (...args: Parameters<typeof tools.engine>) => withCompanion(() => tools.engine(...args)),
   };
 }
 

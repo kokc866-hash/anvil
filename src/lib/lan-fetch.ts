@@ -1,10 +1,10 @@
 import { DEFAULT_COMPANION } from "./companion";
-import { loadSecrets } from "./secrets";
+import { loadSecrets, credentialHeaders } from "./secrets";
 import { useIde } from "@/store/ide";
 import { hardStopMs } from "./abort";
 export { lanAlts } from "./lan-url";
 
-type PipeInfo = { port: number; token: string };
+type PipeInfo = { port: number; token: string; credentialRefs?: boolean };
 function nativeApi() {
   return typeof window === "undefined" ? undefined : (window as unknown as { anvilNative?: { llmPipe?: () => Promise<PipeInfo> } }).anvilNative;
 }
@@ -23,8 +23,9 @@ export async function lanFetch(url: string, init: RequestInit = {}, customBase =
   if (native?.llmPipe) {
     const info = await native.llmPipe();
     if (!info?.port || !info.token) throw new Error("Native Modellverbindung nicht bereit. Anvil neu starten.");
+    const credentials = info.credentialRefs ? credentialHeaders(headers) : { headers, refs: "" };
     const response = await fetch(`http://127.0.0.1:${info.port}/pipe`, {
-      ...init, headers: { ...headers, "x-anvil-target": url, "x-anvil-pipe": info.token, ...(customBase ? { "x-anvil-custom-base": customBase } : {}) },
+      ...init, headers: { ...credentials.headers, ...(credentials.refs ? { "x-anvil-credentials": credentials.refs } : {}), "x-anvil-target": url, "x-anvil-pipe": info.token, ...(customBase ? { "x-anvil-custom-base": customBase } : {}) },
     });
     if (response.headers.get("x-anvil-pipe-auth") === "invalid") throw new Error("Native Modellverbindung abgelaufen. Anvil neu starten.");
     if (response.headers.get("x-anvil-lan") !== "1") throw new Error("Native Modellverbindung antwortet nicht korrekt.");

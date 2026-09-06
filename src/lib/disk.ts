@@ -35,6 +35,11 @@ export function hasDiskFolder(): boolean {
   return hasLocation("workspace");
 }
 
+/** Capture the destination before a delayed write or an async permission request. */
+export function diskWorkspaceHandle(): FileSystemDirectoryHandle | null {
+  return slots.workspace ?? null;
+}
+
 function picker(): Promise<DirHandle> {
   const w = window as unknown as { showDirectoryPicker: (o?: { mode?: string }) => Promise<DirHandle> };
   return w.showDirectoryPicker({ mode: "readwrite" });
@@ -170,15 +175,14 @@ export async function saveFolder(files: Record<string, string>, dirs: string[] =
   await saveSlot("workspace", files, dirs);
 }
 
-async function workspaceHandle(): Promise<DirHandle | null> {
-  const handle = slots.workspace;
+async function workspaceHandle(handle = diskWorkspaceHandle()): Promise<DirHandle | null> {
   if (!handle) return null;
-  if (!(await ensurePerm(handle, "readwrite"))) return null;
+  if (!(await ensurePerm(handle, "readwrite"))) throw new Error("Keine Schreibrechte für den Workspace-Ordner.");
   return handle;
 }
 
-async function dirFor(path: string, create: boolean): Promise<{ dir: DirHandle; name: string } | null> {
-  const handle = await workspaceHandle();
+async function dirFor(path: string, create: boolean, target = diskWorkspaceHandle()): Promise<{ dir: DirHandle; name: string } | null> {
+  const handle = await workspaceHandle(target);
   if (!handle) return null;
   const parts = path.split("/").filter(Boolean);
   const name = parts.pop();
@@ -190,9 +194,9 @@ async function dirFor(path: string, create: boolean): Promise<{ dir: DirHandle; 
   return { dir, name };
 }
 
-export async function writeDiskFile(path: string, content: string): Promise<void> {
+export async function writeDiskFile(path: string, content: string, target = diskWorkspaceHandle()): Promise<void> {
   if (/^data:image\//i.test(content.trim())) return;
-  const loc = await dirFor(path, true);
+  const loc = await dirFor(path, true, target);
   if (!loc) return;
   const fh = await loc.dir.getFileHandle(loc.name, { create: true });
   const w = await fh.createWritable();
@@ -200,8 +204,8 @@ export async function writeDiskFile(path: string, content: string): Promise<void
   await w.close();
 }
 
-export async function mkdirDisk(path: string): Promise<void> {
-  const handle = await workspaceHandle();
+export async function mkdirDisk(path: string, target = diskWorkspaceHandle()): Promise<void> {
+  const handle = await workspaceHandle(target);
   if (!handle) return;
   let dir = handle;
   for (const part of path.split("/").filter(Boolean)) {
@@ -209,13 +213,13 @@ export async function mkdirDisk(path: string): Promise<void> {
   }
 }
 
-export async function removeDiskPath(path: string): Promise<void> {
-  const loc = await dirFor(path, false);
+export async function removeDiskPath(path: string, target = diskWorkspaceHandle()): Promise<void> {
+  const loc = await dirFor(path, false, target);
   if (!loc) return;
   try {
     await loc.dir.removeEntry(loc.name, { recursive: true });
-  } catch {
-    /* missing */
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error;
   }
 }
 

@@ -16,8 +16,25 @@ const helperPort = Number(helperAuth.port || sync("helper-port-sync", 7847)) || 
 const helperToken = String(helperAuth.token || "");
 const companionToken = String(sync("companion-token-sync", "") || "");
 
+// A locked store still returns status metadata; its error is not an IPC failure.
+let secretState = null;
+try {
+  const state = ipcRenderer.sendSync("secrets-load-sync");
+  if (state?.secrets) secretState = state;
+} catch { /* The renderer can report an unavailable native store. */ }
+ipcRenderer.on("secrets-changed", (_event, state) => {
+  if (!secretState || state.revision >= secretState.revision) secretState = state;
+  window.dispatchEvent(new Event("anvil-secrets-changed"));
+});
+
 contextBridge.exposeInMainWorld("anvilCompanionToken", companionToken);
 contextBridge.exposeInMainWorld("anvilNative", {
+  secretsLoad: () => secretState,
+  secretsSave: async (partial, options) => {
+    const state = await ipcRenderer.invoke("secrets-save", partial, options);
+    if (!secretState || state.revision >= secretState.revision) secretState = state;
+    return state;
+  },
   helperDir: () => ipcRenderer.invoke("helper-dir"),
   helperPort: () => ipcRenderer.invoke("helper-port").catch(() => helperPort),
   helperAuth: () => ipcRenderer.invoke("helper-auth").catch(() => ({ port: helperPort, token: helperToken })),
@@ -55,6 +72,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
   },
   clipboardRead: () => ipcRenderer.invoke("clipboard-read"),
   companionEnsure: () => ipcRenderer.invoke("companion-ensure"),
+  companionIdle: (keep) => ipcRenderer.invoke("companion-idle", keep),
   companionRelease: (keep) => ipcRenderer.invoke("companion-release", keep),
   hwMachine: () => ipcRenderer.invoke("hw-machine"),
   updateCheck: () => ipcRenderer.invoke("update-check"),
