@@ -36,6 +36,9 @@ export function startIdeSync() {
       theme: s.theme,
       inputMap: s.inputMap,
       runHtml: s.runHtml,
+      workspaceCwd: s.workspaceCwd,
+      diskName: s.diskName,
+      githubRepo: s.githubRepo,
     };
   }
 
@@ -58,7 +61,8 @@ export function startIdeSync() {
       s.runPath === prev.runPath &&
       s.theme === prev.theme &&
       s.inputMap === prev.inputMap &&
-      s.runHtml === prev.runHtml
+      s.runHtml === prev.runHtml &&
+      s.workspaceCwd === prev.workspaceCwd && s.diskName === prev.diskName && s.githubRepo === prev.githubRepo
     ) {
       return;
     }
@@ -77,6 +81,7 @@ export function startIdeSync() {
       theme?: ReturnType<typeof useIde.getState>["theme"];
       inputMap?: ReturnType<typeof useIde.getState>["inputMap"];
       runHtml?: boolean;
+      workspaceCwd?: string; diskName?: string; githubRepo?: string;
     } | null;
     if (!d || typeof d !== "object") return;
     if (d.want === 1) {
@@ -95,6 +100,7 @@ export function startIdeSync() {
       theme: d.theme ?? cur.theme,
       inputMap: d.inputMap ?? cur.inputMap,
       runHtml: typeof d.runHtml === "boolean" ? d.runHtml : cur.runHtml,
+      workspaceCwd: d.workspaceCwd ?? cur.workspaceCwd, diskName: d.diskName ?? cur.diskName, githubRepo: d.githubRepo ?? cur.githubRepo,
     });
     echo = false;
   };

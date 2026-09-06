@@ -1,6 +1,9 @@
 import { runJsSandboxed } from "./run-sandbox";
 import { runRemote } from "./run-server";
 import { looksGraphical, wrapJsGame, withEngine } from "./game-host";
+import { prepareHtmlProject, projectHtmlEntry, transpileScript } from "./canvas/project";
+import { canvasScope } from "./canvas/scope";
+import { canvasCommand, findCanvasFrame } from "./canvas/session";
 import { langFromPath, langMeta, type LangId } from "./languages";
 import { compileFiles } from "./compile-files";
 import type { RunResult } from "@/store/ide";
@@ -238,19 +241,7 @@ function isEsm(code: string): boolean {
   return /^\s*(?:import|export)\b/m.test(code);
 }
 
-function htmlHost(path: string, files: Record<string, string>): string | undefined {
-  const base = path.replace(/\\/g, "/").split("/").pop() ?? path;
-  const htmls = Object.keys(files).filter((p) => /\.html?$/i.test(p));
-  return htmls.find((p) => files[p].includes(base)) || htmls.find((p) => /(?:^|\/)index\.html?$/i.test(p));
-}
-
-export function stripTs(code: string): string {
-  return code
-    .replace(/^\s*import\s+type\s+[\s\S]*?;\s*$/gm, "")
-    .replace(/^\s*export\s+type\s+[\s\S]*?;\s*$/gm, "")
-    .replace(/:\s*[A-Za-z_$][\w.<>,\s[\]|&?'"]*(?=[,)=;{}\n])/g, "")
-    .replace(/\bas\s+[A-Za-z_$][\w.<>,[\]|&]*\b/g, "");
-}
+export const stripTs = transpileScript;
 
 function wrapRepl(lang: LangId, code: string): string {
   if (code.includes("func main") || code.includes("fn main") || code.includes("public static void main") || code.includes("static void Main")) {
@@ -338,6 +329,23 @@ export async function runFile(
     duration: (performance.now() - started) / 1000,
     label: path,
   });
+  const graphical = async (page: string, entry = path): Promise<RunResult> => {
+    const st = useIde.getState();
+    let html: string | undefined;
+    const signal = st.agentBusy ? withAgentTimeout(0) : undefined;
+    try {
+      html = withEngine(await prepareHtmlProject(page, files, entry), st.inputMap);
+      st.setRunPath(path);
+      const { ensureCanvasOutput } = await import("./run-window");
+      await ensureCanvasOutput();
+      const frame = await findCanvasFrame(canvasScope(useIde.getState()), 7000, signal);
+      const result = await canvasCommand(frame, "load", { html, restart: true }, signal);
+      return done({ ok: result.ok, stdout: result.ok ? "Ausgabe bereit." : "", stderr: result.error || "", html,
+        stage: { kind: "html", id: result.session, state: result.state } });
+    } catch (error) {
+      return done({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), html, stage: { kind: "html", state: "failed" } });
+    }
+  };
   if (code == null) {
     return done({ ok: false, stdout: "", stderr: `Datei nicht gefunden: ${path}` });
   }
@@ -346,7 +354,7 @@ export async function runFile(
     if (!useIde.getState().runHtml) {
       return done({ ok: false, stdout: "", stderr: "HTML-Run aus (Einstellungen → Ausgabe)." });
     }
-    return done({ ok: true, stdout: "Vorschau.", stderr: "", html: withEngine(code, useIde.getState().inputMap), stage: { kind: "html" } });
+    return graphical(code);
   }
   if (lang === "python") {
     const live = await companionJob("python", path, files, opts);
@@ -355,30 +363,16 @@ export async function runFile(
     return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
   }
   if (lang === "javascript" || lang === "typescript") {
-    const src = lang === "typescript" ? stripTs(code) : code;
+    let src: string;
+    try { src = lang === "typescript" ? await stripTs(code, path) : code; }
+    catch (error) { return done({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) }); }
     const testing = Boolean(opts?.asTest) || isTestFile(path);
     if (!testing && useIde.getState().runHtml) {
-      const host = isEsm(src) ? htmlHost(path, files) : undefined;
-      if (host && host !== path) {
-        const page = files[host];
-        return done({
-          ok: true,
-          stdout: `Vorschau über ${host}.`,
-          stderr: "",
-          html: withEngine(page, useIde.getState().inputMap),
-          stage: { kind: "html" },
-        });
-      }
-      if (looksGraphical(src) || isEsm(src)) {
-        return done({
-          ok: true,
-          stdout: "Vorschau.",
-          stderr: "",
-          html: wrapJsGame(src, useIde.getState().inputMap, { module: isEsm(src) }),
-          stage: { kind: "html" },
-        });
-      }
+      const host = projectHtmlEntry(path, files, isEsm(src));
+      if (host && host !== path) return graphical(files[host], host);
+      if (looksGraphical(src) || isEsm(src)) return graphical(wrapJsGame(src, useIde.getState().inputMap, { module: isEsm(src) }));
     }
+
     const live = await companionJob(lang, path, files, opts);
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runJsSandboxed(src);
@@ -432,7 +426,7 @@ export async function evalSnippet(
     return done({ ok: !stderr, stdout, stderr });
   }
   if (lang === "javascript" || lang === "typescript") {
-    const { stdout, stderr } = await runJsSandboxed(lang === "typescript" ? stripTs(code) : code);
+    const { stdout, stderr } = await runJsSandboxed(lang === "typescript" ? await stripTs(code, hintPath) : code);
     return done({ ok: !stderr, stdout, stderr });
   }
   if (langMeta(lang)?.run === "remote") {

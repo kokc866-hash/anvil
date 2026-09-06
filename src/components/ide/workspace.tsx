@@ -349,16 +349,16 @@ export function Workspace() {
       const path = selectRunTarget(Object.keys(st.files), st.activePath || "");
       if (!path) { st.setNotice("Keine ausführbare Startdatei im Projekt gefunden."); return; }
       st.setRunPath(path);
-      if (/\.html?$/i.test(path) || st.runInWindow || st.runPopout) {
-        openRunWindow();
-        st.setPreviewOpen(false);
-      } else {
-        st.revealOutput();
-        st.setPreviewOpen(false);
-      }
       setRunning(true);
       try {
-        pushOutput(await runFile(path, st.files));
+        // runFile selects and awaits the actual graphical output. Opening another
+        // window here could replace the session after it has already started.
+        const result = await runFile(path, st.files);
+        pushOutput(result);
+        if (result.stage?.kind !== "html" && !result.html) {
+          st.revealOutput();
+          st.setPreviewOpen(false);
+        }
       } catch (err) {
         pushOutput({
           ok: false,

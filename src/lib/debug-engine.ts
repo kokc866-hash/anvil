@@ -663,7 +663,7 @@ export async function startDebug(path: string, files: Record<string, string>, op
         out = await runPyDebug(files, path);
       }
     } else if (lang === "javascript" || lang === "typescript") {
-      const src = lang === "typescript" ? stripTs(files[path] ?? "") : (files[path] ?? "");
+      const src = lang === "typescript" ? await stripTs(files[path] ?? "", path) : (files[path] ?? "");
       out = await runJsDebug(src, path);
     } else if (canDebug(path)) {
       kind = "replay";

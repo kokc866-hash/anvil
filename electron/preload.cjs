@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
   focusChild: (path) => ipcRenderer.invoke("child-focus", path),
   closeChild: (path) => ipcRenderer.invoke("child-close", path),
   childAlive: (path) => ipcRenderer.invoke("child-alive", path),
+  canvasCapture: (rect) => ipcRenderer.invoke("canvas-capture", rect),
   pathsGet: () => ipcRenderer.invoke("paths-get"),
   pathsPick: (kind) => ipcRenderer.invoke("paths-pick", kind),
   pathsWrite: (name, text) => ipcRenderer.invoke("paths-write", name, text),

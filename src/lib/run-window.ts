@@ -91,7 +91,7 @@ export function openRunWindow(opts?: { agent?: boolean }) {
   else agentHeld = false;
   const g = ++gen;
   const { w, h } = savedSize();
-  void enqueue(async () => {
+  return enqueue(async () => {
     if (g !== gen) return;
     const n = native();
     if (n?.openChild) {
@@ -248,4 +248,12 @@ function dropAgentRun() {
 
 export function releaseAgentUi() {
   dropAgentRun();
+}
+
+/** Open the actual output before a Run command waits for its canvas handshake. */
+export async function ensureCanvasOutput() {
+  if (window.location.pathname.startsWith("/run")) return;
+  const st = useIde.getState();
+  if (st.runInWindow || st.runPopout) await openRunWindow({ agent: st.agentBusy });
+  else { st.setPreviewOpen(true); if (st.agentBusy) agentOpenedPreview(); }
 }

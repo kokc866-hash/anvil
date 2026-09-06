@@ -44,6 +44,10 @@ try {
   assert.equal(saved.saved.browserMigrated, true);
   assert.equal(saved.saved.secrets.llmApiKey, fixtureKey);
   assert.match(saved.cli.error, /Ungültige CLI-Anfrage/, "CLI must reach validation after the origin guard");
+  const capture = await page.evaluate(() => window.anvilNative.canvasCapture({ x: 0, y: 0, width: 320, height: 160 }));
+  assert.match(capture, /^data:image\/png;base64,/, "real Electron must capture the output surface");
+  const invalidCapture = await page.evaluate(() => window.anvilNative.canvasCapture({ x: 0, y: 0, width: -1, height: 20 }).then(() => "allowed", error => error.message));
+  assert.match(invalidCapture, /Aufnahmebereich/);
   const encrypted = await readFile(path.join(userData, "secrets.enc"));
   assert.equal(encrypted.includes(Buffer.from(fixtureKey)), false);
   await electron.close();
@@ -61,11 +65,13 @@ try {
   const untrusted = electron.windows().find((window) => window.url().startsWith("data:"));
   assert.ok(untrusted);
   const rejected = await untrusted.evaluate(async () => ({
+    capture: await window.anvilNative.canvasCapture({ x: 0, y: 0, width: 20, height: 20 }).then(() => "allowed", error => error.message),
     loaded: window.anvilNative.secretsLoad(),
     cli: await window.anvilNative.cliProbe({ id: "fixture", kind: "codex" }),
     save: await window.anvilNative.secretsSave({ llmApiKey: "overwrite" }).then(() => "allowed", (error) => error.message),
   }));
   assert.equal(rejected.loaded, null);
+  assert.match(rejected.capture, /Hauptfenster/);
   assert.match(rejected.cli.error, /Hauptfenster/);
   assert.match(rejected.save, /nicht erlaubt/);
   assert.deepEqual(await readFile(path.join(userData, "secrets.enc")), encrypted);

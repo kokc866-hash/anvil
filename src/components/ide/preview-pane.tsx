@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Play, SquareArrowOutUpRight, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Play, Pause, Square, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { previewFor } from "@/lib/preview-doc";
+import { type PreviewView, previewFor } from "@/lib/preview-doc";
 import { cn } from "@/lib/cn";
 import { runFile } from "@/lib/run-client";
 import { closeRunWindow, dockRunWindow, fileForRun, openRunWindow, pickRunPreview } from "@/lib/run-window";
 import { useIde } from "@/store/ide";
+import { registerCanvasFrame } from "@/lib/canvas/session";
+import { canvasScope } from "@/lib/canvas/scope";
+import type { CanvasReply } from "@/lib/canvas/protocol";
+import { nativeHelper } from "@/lib/helper-local";
 
 export function PreviewPane({ popout = false }: { popout?: boolean }) {
   const path = useIde((s) => pickRunPreview(s.files, s.runPath, s.activePath, popout));
@@ -21,10 +25,18 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
   const setPreviewOpen = useIde((s) => s.setPreviewOpen);
   const inputMap = useIde((s) => s.inputMap);
   const runHtml = useIde((s) => s.runHtml);
-  const view = useMemo(
-    () => (path ? previewFor(path, src, files, last, inputMap, runHtml) : null),
-    [path, src, files, last, inputMap, runHtml],
-  );
+  const scope = useIde(canvasScope);
+  const [resolved, setResolved] = useState<{ path: string; view: PreviewView | null }>({ path: "", view: null });
+  const view = resolved.path === path ? resolved.view : null;
+  useEffect(() => {
+    let canceled = false;
+    if (!path) { setResolved({ path: "", view: null }); return; }
+    void previewFor(path, src, files, last, inputMap, runHtml).then(
+      value => { if (!canceled) setResolved({ path, view: value }); },
+      error => { if (!canceled) setResolved({ path, view: { kind: "console", ok: false, label: path, stdout: "", stderr: error instanceof Error ? error.message : String(error) } }); },
+    );
+    return () => { canceled = true; };
+  }, [path, src, files, last, inputMap, runHtml]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
@@ -119,7 +131,7 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
             <pre className="font-mono text-xs text-fg whitespace-pre-wrap">{view.text}</pre>
           </div>
         ) : view.kind === "iframe" ? (
-          <GameFrame srcDoc={view.srcDoc} frozen={!view.live} />
+          <GameFrame key={scope + ":" + path} srcDoc={view.srcDoc} scope={scope} popout={popout} />
         ) : view.kind === "console" ? (
           <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5">
             <p className={cn("mb-2 tabular-nums", view.ok ? "text-ok" : "text-danger")}>
@@ -137,46 +149,50 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
   );
 }
 
-function GameFrame({ srcDoc, frozen }: { srcDoc: string; frozen: boolean }) {
+function GameFrame({ srcDoc, scope, popout }: { srcDoc: string; scope: string; popout: boolean }) {
   const ref = useRef<HTMLIFrameElement>(null);
-  const shown = useRef("");
-  const hold = useRef(0);
-
+  const owner = useRef<ReturnType<typeof registerCanvasFrame> | null>(null);
+  const [state, setState] = useState<CanvasReply | null>(null);
+  const source = useRef(srcDoc);
+  source.current = srcDoc;
   useEffect(() => {
-    if (!srcDoc || shown.current === srcDoc) return;
-    const wait = shown.current ? (Date.now() < hold.current ? hold.current - Date.now() : 400) : 0;
-    const t = window.setTimeout(() => {
-      if (shown.current === srcDoc) return;
-      shown.current = srcDoc;
-      const el = ref.current;
-      if (el) el.srcdoc = srcDoc;
-    }, Math.max(0, wait));
-    return () => window.clearTimeout(t);
-  }, [srcDoc]);
-
+    const frame = ref.current;
+    if (!frame) return;
+    const capture = nativeHelper()?.canvasCapture;
+    const registered = registerCanvasFrame(frame, { scope, priority: popout ? 2 : 1, capture,
+      onState(reply) {
+        setState(reply);
+        if (reply.state === "failed") {
+          const st = useIde.getState();
+          if (st.output.some(o => o.stage?.kind === "html" && o.stage.id === reply.session && o.ok)) {
+            useIde.setState({ output: st.output.map(o => o.stage?.kind === "html" && o.stage.id === reply.session ? { ...o, ok: false, stderr: reply.error || "Canvas-Laufzeitfehler", stage: { ...o.stage, state: "failed" } } : o) });
+          }
+        }
+      }
+    });
+    owner.current = registered;
+    void registered.load(source.current).catch(() => undefined);
+    return () => { registered.dispose(); owner.current = null; };
+  }, [scope, popout]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void owner.current?.load(srcDoc).catch(() => undefined); }, 150);
+    return () => window.clearTimeout(timer);
+  }, [srcDoc, scope, popout]);
+  const labels = { loading: "Lädt…", ready: "Bereit", running: "Läuft", paused: "Pausiert", stopped: "Gestoppt", failed: "Fehler", disposed: "Beendet" };
+  const control = (op: "pause" | "stop", args = {}) => {
+    void owner.current?.command(op, args).catch(error => setState(current => current ? { ...current, ok: false, state: "failed", error: String(error.message || error) } : null));
+  };
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
-      <p className="shrink-0 px-2 py-1 text-[11px] text-subtle">
-        {frozen ? "Letzter Lauf. Play startet neu." : "Live — nach Klick kurz nicht neu laden."}
-      </p>
-      <iframe
-        ref={ref}
-        title="Vorschau"
-        tabIndex={0}
-        sandbox="allow-scripts allow-pointer-lock allow-forms allow-modals allow-downloads"
-        className="min-h-0 w-full flex-1 bg-bg"
-        onMouseDown={() => {
-          hold.current = Date.now() + 60000;
-          ref.current?.focus();
-        }}
-        onLoad={() => {
-          try {
-            ref.current?.contentWindow?.focus();
-          } catch {
-            /* */
-          }
-        }}
-      />
+      <div className="flex shrink-0 items-center gap-2 px-2 py-1 text-[11px] text-subtle">
+        <span role="status" className={cn("flex-1", state?.state === "failed" && "text-danger")}>{state ? labels[state.state] : "Lädt…"}</span>
+        <Button variant="quiet" className="h-6 px-2 text-xs" disabled={!state || !["running", "paused"].includes(state.state)} onClick={() => control("pause", { paused: state?.state !== "paused" })}>
+          {state?.state === "paused" ? <Play className="size-3" /> : <Pause className="size-3" />}{state?.state === "paused" ? "Weiter" : "Pause"}
+        </Button>
+        <Button variant="quiet" className="h-6 px-2 text-xs" disabled={!state || ["stopped", "disposed"].includes(state.state)} onClick={() => control("stop")}><Square className="size-3" />Stop</Button>
+      </div>
+      {state?.error ? <pre role="alert" className="max-h-28 shrink-0 overflow-auto border-b border-border px-2 py-1 text-xs whitespace-pre-wrap text-danger">{state.error}</pre> : null}
+      <iframe ref={ref} title="Vorschau" tabIndex={0} sandbox="allow-scripts allow-pointer-lock allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 bg-bg" />
     </div>
   );
 }

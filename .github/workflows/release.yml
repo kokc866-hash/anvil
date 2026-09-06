@@ -67,6 +67,14 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npx playwright install --with-deps chromium
+      - name: Canvas, Run, inputs and popout
+        run: npm run test:canvas:browser
+      - name: Production Canvas build
+        run: npm run build
+        env:
+          ANVIL_ELECTRON_BUILD: "1"
+      - name: Minified Canvas runtime and TypeScript modules
+        run: npm run test:canvas:release
       - name: Chat send, Stop and retry
         run: npm run test:chat-send
 
@@ -84,7 +92,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:connections
-      - name: Electron credential storage, restart and CLI access
+      - name: Electron storage, restart, CLI access and Canvas capture
         run: node scripts/verify-electron-ipc.mjs
         timeout-minutes: 3
       - uses: actions/setup-python@v6

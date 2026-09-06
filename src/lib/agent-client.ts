@@ -520,13 +520,7 @@ function clientTools(opts: {
         html: r.html,
         stage: r.stage,
       });
-      if (r.graphical || /\.html?$/i.test(path)) {
-        if (st.runHtml) {
-          const { openRunWindow } = await import("./run-window");
-          openRunWindow({ agent: true });
-          st.setPreviewOpen(false);
-        }
-      } else if (r.stage?.kind === "window" || r.stage?.kind === "log" || st.openOutputOnRun) {
+      if (!r.graphical && (r.stage?.kind === "window" || r.stage?.kind === "log" || st.openOutputOnRun)) {
         st.revealOutput();
         if (r.stage?.kind === "window" || r.stage?.kind === "log") st.setPreviewOpen(false);
       }
@@ -540,7 +534,7 @@ function clientTools(opts: {
       if (!st.runHtml) return { ok: false, error: "HTML-Run aus (Einstellungen → Ausgabe)." };
       if (!st.graphLoop) return { ok: false, error: "Graph-Schleife aus" };
       const shot = await playLoop(keys, hold);
-      return { ok: Boolean(shot.image) || keys.length > 0, keys, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
+      return { ok: shot.ok === true, error: shot.error, state: shot.state, keys, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
     see: async () => {
       const { shotLoop } = await import("./run-loop");
@@ -550,7 +544,7 @@ function clientTools(opts: {
       const st = useIde.getState();
       keepAgentRun();
       const last = [...st.output].reverse().find((o) => o.stdout || o.stderr || o.html);
-      if (last?.stage?.id) {
+      if (last?.stage?.id && last.stage.kind !== "html") {
         st.revealOutput();
         const { companionRunStatus } = await import("./companion");
         const current = await companionRunStatus(last.stage.id, st.companionUrl || undefined);
@@ -587,15 +581,10 @@ function clientTools(opts: {
       const src = path ? st.files[path] : "";
       let html = src;
       if (path && src) {
-        const view = previewFor(path, src, st.files, st.output.at(-1), st.inputMap, st.runHtml);
+        const view = await previewFor(path, src, st.files, st.output.at(-1), st.inputMap, st.runHtml);
         if (view.kind === "iframe") html = view.srcDoc;
       }
-      const shot = await Promise.race([
-        shotLoop(html || undefined),
-        new Promise<import("./run-loop").LoopShot>((res) =>
-          setTimeout(() => res({ image: null, logs: ["see_run Zeitlimit"] }), 5000),
-        ),
-      ]);
+      const shot = await shotLoop(html || undefined);
       if (!shot.image) {
         if (last && !last.html) {
           return {
@@ -605,9 +594,9 @@ function clientTools(opts: {
             note: "Kein HTML-Frame. Letzter Compile/Run.",
           };
         }
-        return { ok: false, error: "Kein Frame. Vorschau/Run muss HTML mit Canvas zeigen.", logs: shot.logs };
+        return { ok: false, error: shot.error || "Keine Aufnahme der geöffneten Ausgabe verfügbar.", state: shot.state, logs: shot.logs };
       }
-      return { ok: true, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
+      return { ok: shot.ok === true, error: shot.error, state: shot.state, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
   };
   return {

@@ -11,5 +11,6 @@ export function monacoVsAbs(vsBase: string, origin: string): string {
 export function monacoWorkerBootstrap(vsAbs: string): string {
   const vs = String(vsAbs || "").replace(/\/$/, "");
   const main = `${vs}/base/worker/workerMain.js`;
-  return `self.MonacoEnvironment={baseUrl:${JSON.stringify(`${vs}/`)}};importScripts(${JSON.stringify(main)});`;
+  const base = vs.replace(/\/vs$/, "") + "/";
+  return `self.MonacoEnvironment={baseUrl:${JSON.stringify(base)}};importScripts(${JSON.stringify(main)});`;
 }

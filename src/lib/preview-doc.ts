@@ -4,7 +4,7 @@ import { looksGraphical, wrapJsGame, withEngine } from "./game-host";
 import { renderMarkdown } from "./markdown";
 import { rewriteRefMedia } from "./ref";
 import { stripTs } from "./run-client";
-import { parentDir, cleanPath } from "./fs";
+import { prepareHtmlProject, projectHtmlEntry } from "./canvas/project";
 import type { InputMap } from "./input-map";
 import type { RunResult } from "@/store/ide";
 
@@ -80,53 +80,16 @@ function jsonTable(src: string): { text: string; rows?: string[][]; cols?: strin
   }
 }
 
-function resolveRel(fromFile: string, rel: string): string {
-  const raw = rel.trim().replace(/^['"]|['"]$/g, "");
-  if (!raw || /^(https?:|data:|blob:|javascript:|\/\/|#)/i.test(raw)) return "";
-  const cut = raw.split("?")[0].split("#")[0];
-  const dir = parentDir(fromFile);
-  const parts = [...(dir ? dir.split("/") : []), ...cut.split("/")];
-  const out: string[] = [];
-  for (const p of parts) {
-    if (!p || p === ".") continue;
-    if (p === "..") out.pop();
-    else out.push(p);
-  }
-  return cleanPath(out.join("/"));
-}
+export const inlineHtmlAssets = prepareHtmlProject;
 
-function findFile(files: Record<string, string>, want: string): string | undefined {
-  if (files[want] != null) return want;
-  const low = want.toLowerCase();
-  return Object.keys(files).find((p) => p.toLowerCase() === low);
-}
-
-export function inlineHtmlAssets(html: string, files: Record<string, string>, fromFile: string): string {
-  let out = html;
-  out = out.replace(/<link\b([^>]*?)href\s*=\s*["']([^"']+)["']([^>]*)>/gi, (m, pre, href, post) => {
-    if (!/\bstylesheet\b/i.test(`${pre} ${post}`)) return m;
-    const path = findFile(files, resolveRel(fromFile, href));
-    if (!path) return m;
-    return `<style data-anvil-src="${path}">\n${files[path]}\n</style>`;
-  });
-  out = out.replace(/<script\b([^>]*?)src\s*=\s*["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (m, pre, src, post) => {
-    if (/\btype\s*=\s*["']module["']/i.test(`${pre} ${post}`)) return m;
-    const path = findFile(files, resolveRel(fromFile, src));
-    if (!path) return m;
-    const code = /\.(ts|tsx)$/i.test(path) ? stripTs(files[path]) : files[path];
-    return `<script data-anvil-src="${path}">\n${code}\n</script>`;
-  });
-  return out;
-}
-
-export function previewFor(
+export async function previewFor(
   path: string,
   src: string,
   files: Record<string, string>,
   last: RunResult | undefined,
   inputMap: InputMap,
   allowHtml = true,
-): PreviewView {
+): Promise<PreviewView> {
   const lang: LangId = langFromPath(path);
 
   if (lang === "markdown") {
@@ -142,19 +105,19 @@ export function previewFor(
     const page = Object.keys(files).find((p) => p.endsWith(".html") || p.endsWith(".htm"));
     let html = page ? files[page] : cssDemo(src);
     if (page) {
-      html = inlineHtmlAssets(html, files, page);
+      const link = `<link rel="stylesheet" href="/${encodeURIComponent(path)}">`;
       html = /<\/head>/i.test(html)
-        ? html.replace(/<\/head>/i, `<style>${src}</style></head>`)
-        : `<style>${src}</style>${html}`;
+        ? html.replace(/<\/head>/i, () => link + '</head>')
+        : link + html;
     }
-    return { kind: "iframe", srcDoc: withEngine(rewriteRefMedia(html, files), inputMap), live: true, label: "CSS" };
+    return { kind: "iframe", srcDoc: withEngine(await prepareHtmlProject(rewriteRefMedia(html, files), { ...files, [path]: src }, page || path), inputMap), live: true, label: "CSS" };
   }
 
   if (lang === "html") {
     if (!allowHtml) return { kind: "empty", hint: HTML_RUN_OFF };
     return {
       kind: "iframe",
-      srcDoc: withEngine(inlineHtmlAssets(rewriteRefMedia(src, files), files, path), inputMap),
+      srcDoc: withEngine(await inlineHtmlAssets(rewriteRefMedia(src, files), files, path), inputMap),
       live: true,
       label: "HTML",
     };
@@ -185,20 +148,19 @@ export function previewFor(
       }
       return { kind: "empty", hint: HTML_RUN_OFF };
     }
-    const page = Object.keys(files).find(
-      (p) => /\.html?$/i.test(p) && files[p].includes(path.split("/").pop() ?? "\0"),
-    );
+    const js = lang === "typescript" ? await stripTs(src, path) : src;
+    const module = /^\s*(?:import|export)\b/m.test(js);
+    const page = projectHtmlEntry(path, files, module);
     if (page) {
       return {
         kind: "iframe",
-        srcDoc: withEngine(inlineHtmlAssets(rewriteRefMedia(files[page], files), files, page), inputMap),
+        srcDoc: withEngine(await inlineHtmlAssets(rewriteRefMedia(files[page], files), files, page), inputMap),
         live: true,
         label: page,
       };
     }
-    const js = lang === "typescript" ? stripTs(src) : src;
-    const html = last?.html || (looksGraphical(js) ? wrapJsGame(js, inputMap) : wrapJsLive(js));
-    return { kind: "iframe", srcDoc: html, live: !last?.html, label: langLabel(lang) };
+    const html = looksGraphical(js) || module ? wrapJsGame(js, inputMap, { module }) : withEngine(wrapJsLive(js), inputMap);
+    return { kind: "iframe", srcDoc: withEngine(await prepareHtmlProject(html, files, path), inputMap), live: true, label: langLabel(lang) };
   }
 
   if (last) {

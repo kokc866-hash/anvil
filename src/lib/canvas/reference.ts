@@ -1,0 +1,11 @@
+/** Concise public contract shared by the agent and the Canvas documentation. */
+export const CANVAS_AGENT_GUIDE = `Canvas API (global Anvil, already installed in HTML output):
+- Anvil.run({width:640,height:360,update(dt){...},draw(){this.clear();...}}) creates and starts Canvas2D. Use normal functions/methods for this, not arrow callbacks. Anvil.create(options) creates without starting.
+- game.ctx is the 2D context; game.canvas the element. Helpers: rect(x,y,w,h,color), circle(x,y,r,color), line(x1,y1,x2,y2,color,width), text(text,x,y,color,size,align), image(img,x,y,w,h), sprite(img,sx,sy,sw,sh,dx,dy,dw,dh), grid(positiveStep).
+- game.key.down/pressed/released accepts event.key or event.code. game.input left/right/up/down is held; ok/fire/start is a one-frame action. game.mouse and game.pad belong to this canvas. onInput() runs while paused, so resume/menu controls belong there.
+- game.pause(false) resumes; game.stop() releases listeners; game.start() resumes a stopped instance; game.dispose() releases it completely. Run restarts the document. timeScale=0 freezes simulated time. fixedStep is optional, in seconds.
+- Anvil.attach(canvas) supplies input to an existing loop and updates it automatically; dispose the handle when finished. Anvil.loadImage(path,{signal?}) loads/caches project images; await it before drawing. For several canvases, focus selects the input target.
+- gl:true chooses WebGL instead of 2D; use game.gl directly, not the 2D drawing helpers.
+- HTML may use local scripts with defer or type=module, CSS, fetch(relativePath), and relative module imports. TypeScript is compiled. Bare package imports need an import map/CDN; Anvil does not install npm dependencies inside the preview.
+- run_file waits for the visible output to become ready and reports actual startup errors. see_run observes that same output, including HTML controls. play sends confirmed keyboard events; left/right/up/down/ok/fire/start use the configured bindings, and space is a literal space. Inspect ok/error; never infer success just because a tool returned.
+- Canvas localStorage is isolated per project and persists across Run restarts; sessionStorage is separate. Do not use either for credentials.`;

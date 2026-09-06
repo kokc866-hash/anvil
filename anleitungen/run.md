@@ -2,6 +2,10 @@
 
 Run verwendet die aktive ausführbare Datei. Bei geöffneten Dokumenten oder Headern sucht Anvil einen Programmeinstieg im Projekt, bevorzugt im selben Unterordner. `.anvil/`, `ref/`, Markdown, JSON und Header sind keine Programme.
 
+## HTML und Canvas
+
+HTML, JavaScript und TypeScript verwenden die geöffnete Vorschau oder das Run-Fenster. Ein Run startet das Dokument neu und wartet auf dessen Bereitschaft. Der Agent steuert dieselbe Ausgabe; Startfehler gelten als Fehler. Stop beendet auch selbst geschriebene JavaScript-Schleifen. API, Projektdateien und Aufnahmen: [Canvas-Anleitung](canvas.md).
+
 ## Native Ausgabe
 
 In der Desktop-Anwendung liegen native Run-Dateien neben `Anvil.exe` im Ordner `runs`. Ein Lauf enthält:

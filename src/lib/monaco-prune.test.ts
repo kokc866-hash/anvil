@@ -75,6 +75,6 @@ describe("monaco worker url", () => {
   it("bootstrap importScripts is absolute, not /monaco/vs/...", () => {
     const src = monacoWorkerBootstrap("http://127.0.0.1:8080/monaco/vs");
     assert.match(src, /importScripts\("http:\/\/127\.0\.0\.1:8080\/monaco\/vs\/base\/worker\/workerMain\.js"\)/);
-    assert.match(src, /baseUrl:"http:\/\/127\.0\.0\.1:8080\/monaco\/vs\/"/);
+    assert.match(src, /baseUrl:"http:\/\/127\.0\.0\.1:8080\/monaco\/"/);
   });
 });

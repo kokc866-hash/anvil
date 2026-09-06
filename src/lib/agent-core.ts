@@ -1,3 +1,4 @@
+import { CANVAS_AGENT_GUIDE } from "./canvas/reference";
 import { compactMessages, COMPACT_MARK, type CompactMode } from "./compact.ts";
 import { throwIfAborted, isAbortLike, agentGen, AgentAbortError } from "./abort";
 import { ANVIL_SURFACE, surfaceBlockWrite, toolsAllowed, type SurfaceMode } from "./surface";
@@ -311,7 +312,7 @@ Files:
 Environment:
 - Python/JS/TS: Companion on the PC if the folder is coupled, else Pyodide/sandbox. Go/Rust/Java/C/C++/C#/PHP/Ruby: run_file compiles then runs. The tool result has Compile then Run — that is the check. see_run: HTML snapshot, or last Compile/Run log / native OS window. Never iframe an .exe.
 - HTML preview shows. Native GUI opens a real OS window (Bühne). No game engine inside Anvil. Godot/Unity/Unreal/Bevy: edit scripts, engine_run or mcp_call.
-- Canvas: Anvil.create / Anvil.run / Anvil.attach(canvas) for sketches.
+${CANVAS_AGENT_GUIDE}
 - shell: allowed runners only, not a system terminal.
 - MCP tools are reached through mcp_list and mcp_call. The surface block specifies the available servers and scope. Native Anvil tools are separate and do not need MCP activation. Use available tools as needed for the user's task; never claim they are disabled without a tool error.
 - Markdown, JSON, headers, ref/ and .anvil/ files are context/configuration, not executable entries. Do not run them. The board is a DAG (Plan→Work→Run→Done), then close it.

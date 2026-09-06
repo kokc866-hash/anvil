@@ -158,7 +158,7 @@ export type RunResult = {
   duration: number;
   label: string;
   html?: string;
-  stage?: { kind: "html" | "window" | "log"; out?: string; id?: string };
+  stage?: { kind: "html" | "window" | "log"; out?: string; id?: string; state?: import("@/lib/canvas/protocol").CanvasState };
 };
 
 export type Panels = Record<PanelId, boolean>;

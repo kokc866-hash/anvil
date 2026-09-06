@@ -1,223 +1,137 @@
 import { runFile } from "./run-client";
-import { throwIfAborted } from "./abort";
+import { throwIfAborted, withAgentTimeout } from "./abort";
+import { useIde } from "@/store/ide";
+import { canvasCommand, findCanvasFrame } from "./canvas/session";
+import { canvasScope } from "./canvas/scope";
+import type { CanvasReply } from "./canvas/protocol";
 
-const FRAME_ID = "anvil-loop-frame";
-
-export type LoopShot = { image: string | null; logs: string[]; w?: number; h?: number };
-
+export type LoopShot = Partial<CanvasReply> & { image: string | null; logs: string[] };
 let fails = 0;
-
 export function resetLoopFails() {
   fails = 0;
 }
-
 export function noteLoopFail(ok: boolean, max: number) {
   if (ok) {
     fails = 0;
     return { left: max, again: false };
   }
-  fails += 1;
+  fails++;
   return { left: Math.max(0, max - fails), again: fails < max };
 }
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+function signal() {
+  return useIde.getState().agentBusy ? withAgentTimeout(0) : undefined;
 }
-
-function host(): HTMLIFrameElement {
-  let el = document.getElementById(FRAME_ID) as HTMLIFrameElement | null;
-  if (!el) {
-    el = document.createElement("iframe");
-    el.id = FRAME_ID;
-    el.title = "Run-Loop";
-    el.setAttribute("sandbox", "allow-scripts allow-pointer-lock allow-forms");
-    el.setAttribute("aria-hidden", "true");
-    el.style.cssText = "position:fixed;left:-1200px;top:0;width:960px;height:540px;opacity:0;pointer-events:none;border:0";
-    el.tabIndex = -1;
-    document.body.appendChild(el);
-  }
-  return el;
-}
-
-function targets(): Window[] {
-  const out: Window[] = [];
-  const nodes = document.querySelectorAll("iframe");
-  for (const f of nodes) {
-    const title = (f.getAttribute("title") || f.id || "").toLowerCase();
-    if (title && !/run|spiel|loop|preview/i.test(title) && f.id !== FRAME_ID) continue;
-    try {
-      if (f.contentWindow) out.push(f.contentWindow);
-    } catch {
-      /* cross-origin */
-    }
-  }
-  return out.length ? out : [];
-}
-
-let lastHtml = "";
-
 export async function loadLoop(html: string): Promise<void> {
-  if (html === lastHtml && document.getElementById(FRAME_ID)) {
-    await sleep(80);
-    return;
-  }
-  lastHtml = html;
-  const el = host();
-  await new Promise<void>((res) => {
-    const t = window.setTimeout(res, 2500);
-    el.onload = () => {
-      window.clearTimeout(t);
-      try {
-        el.blur();
-        window.focus();
-      } catch {
-        /* ignore */
-      }
-      res();
-    };
-    try {
-      el.srcdoc = html;
-    } catch {
-      window.clearTimeout(t);
-      res();
-    }
-  });
-  await sleep(200);
+  const frame = await findCanvasFrame(canvasScope(useIde.getState()), 5000, signal());
+  const r = await canvasCommand(frame, "load", { html, restart: true }, signal());
+  if (!r.ok) throw new Error(r.error || "Canvas-Start fehlgeschlagen.");
 }
-
-function grabCanvas(win: Window): string | null {
+export async function shotLoop(html?: string, expectedSession?: string): Promise<LoopShot> {
   try {
-    const nodes = win.document.querySelectorAll("canvas");
-    for (const c of nodes) {
-      if (c.width < 8 || c.height < 8) continue;
-      const url = c.toDataURL("image/png");
-      if (url.length > 80) return url;
-    }
-  } catch {
-    /* cross-origin */
+    const frame = await findCanvasFrame(canvasScope(useIde.getState()), 5000, signal());
+    if (html) await canvasCommand(frame, "load", { html, restart: false }, signal());
+    const shot = await canvasCommand(frame, "shot", { expectedSession }, signal());
+    return { ...shot, image: shot.image || null };
+  } catch (error) {
+    return {
+      ok: false,
+      image: null,
+      logs: [],
+      error: error instanceof Error ? error.message : String(error),
+      state: "failed",
+    };
   }
-  return null;
 }
-
-function ask(op: "shot" | "logs"): Promise<LoopShot> {
-  const wins = targets();
-  for (const w of wins) {
-    const url = grabCanvas(w);
-    if (url) return Promise.resolve({ image: url, logs: [], w: 0, h: 0 });
-  }
-  if (!wins.length) return Promise.resolve({ image: null, logs: [] });
-  return new Promise((res) => {
-    const t = window.setTimeout(() => {
-      window.removeEventListener("message", on);
-      res({ image: null, logs: [] });
-    }, 900);
-    function on(ev: MessageEvent) {
-      if (!wins.includes(ev.source as Window)) return;
-      const d = ev.data as { anvil?: number; op?: string; url?: string; logs?: string[]; w?: number; h?: number };
-      if (d?.anvil !== 1 || (d.op !== "shot" && d.op !== "logs")) return;
-      if (op === "shot" && d.op !== "shot") return;
-      window.clearTimeout(t);
-      window.removeEventListener("message", on);
-      res({
-        image: typeof d.url === "string" && d.url.startsWith("data:image") && d.url.length > 80 ? d.url : null,
-        logs: Array.isArray(d.logs) ? d.logs.map(String).slice(-16) : [],
-        w: d.w,
-        h: d.h,
-      });
-    }
-    window.addEventListener("message", on);
-    for (const w of wins) {
-      try {
-        w.postMessage({ anvil: 1, op }, "*");
-      } catch {
-        /* ignore */
-      }
-    }
-  });
-}
-
-export async function shotLoop(html?: string): Promise<LoopShot> {
-  let shot = await ask("shot");
-  if (shot.image) return shot;
-  if (html) {
-    await loadLoop(html);
-    shot = await ask("shot");
-  }
-  return shot;
-}
-
-const KEY_ALIAS: Record<string, string> = {
-  left: "ArrowLeft",
-  right: "ArrowRight",
-  up: "ArrowUp",
-  down: "ArrowDown",
-  ok: "ArrowUp",
-  fire: " ",
-  start: "Enter",
-  space: " ",
-  a: "a",
-  b: " ",
-  w: "w",
-  s: "s",
-  d: "d",
-};
-
-function mapKeys(raw: string[]): string[] {
+function mapKeys(raw: string[]) {
   return raw
-    .flatMap((k) => k.split(/[,\s]+/))
-    .map((k) => k.trim())
-    .filter(Boolean)
-    .map((k) => KEY_ALIAS[k.toLowerCase()] ?? k)
+    .flatMap((key) => (key === " " ? [" "] : key.split(/[,\s]+/).filter(Boolean)))
     .slice(0, 24);
 }
-
-export async function playLoop(keys: string[], holdMs = 90): Promise<LoopShot> {
-  const wins = targets();
-  const seq = mapKeys(keys);
-  if (!wins.length || !seq.length) return shotLoop();
-  for (const k of seq) {
-    for (const w of wins) {
-      try {
-        w.postMessage({ anvil: 1, op: "keys", keys: [k] }, "*");
-      } catch {
-        /* ignore */
-      }
-    }
-    await sleep(Math.min(400, Math.max(40, holdMs)));
-    for (const w of wins) {
-      try {
-        w.postMessage({ anvil: 1, op: "keys-up", keys: [k] }, "*");
-      } catch {
-        /* ignore */
-      }
-    }
-    await sleep(40);
-  }
-  await sleep(180);
-  return shotLoop();
+function wait(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(new DOMException("Abgebrochen", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
 }
-
-export async function runLoopFile(path: string, files: Record<string, string>, opts?: { graph?: boolean; tries?: number }) {
+export async function playLoop(keys: string[], holdMs = 90): Promise<LoopShot> {
+  const seq = mapKeys(keys),
+    abort = signal();
+  if (!seq.length) return { ok: false, image: null, logs: [], error: "Keine Tasten angegeben." };
+  try {
+    const frame = await findCanvasFrame(canvasScope(useIde.getState()), 1000, abort);
+    const current = await canvasCommand(frame, "ready", {}, abort);
+    if (!current.ok) throw new Error(current.error || "Programm ist nicht bereit.");
+    for (const key of seq) {
+      try {
+        const reply = await canvasCommand(
+          frame,
+          "keys",
+          { keys: [key], expectedSession: current.session },
+          abort,
+        );
+        if (!reply.ok) throw new Error(reply.error || "Eingabe konnte nicht zugestellt werden.");
+        await wait(Math.min(400, Math.max(40, holdMs)), abort);
+      } finally {
+        // Release even when Stop interrupts a held key. Never continue the sequence after abort.
+        await canvasCommand(frame, "keys-up", {
+          keys: [key],
+          expectedSession: current.session,
+        }).catch(() => undefined);
+      }
+      await wait(40, abort);
+    }
+    const shot = await canvasCommand(frame, "shot", { expectedSession: current.session }, abort);
+    return { ...shot, image: shot.image || null };
+  } catch (error) {
+    return {
+      ok: false,
+      image: null,
+      logs: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+export async function runLoopFile(
+  path: string,
+  files: Record<string, string>,
+  opts?: { graph?: boolean; tries?: number },
+) {
   throwIfAborted();
   const r = await runFile(path, files);
-  let shot: LoopShot = { image: null, logs: [] };
-  if (opts?.graph !== false && r.html) {
-    await loadLoop(r.html);
-    shot = await shotLoop();
-  }
-  const budget = noteLoopFail(r.ok, Math.min(5, Math.max(1, opts?.tries ?? 3)));
+  const shot =
+    opts?.graph !== false && r.html && r.ok
+      ? await shotLoop(undefined, r.stage?.id)
+      : ({ image: null, logs: [] } as LoopShot);
+  const ok = r.ok && shot.state !== "failed";
+  const budget = noteLoopFail(ok, Math.min(5, Math.max(1, opts?.tries ?? 3)));
   return {
-    ok: r.ok,
-    stdout: (r.stdout || "").slice(0, 16000),
-    stderr: (r.stderr || shot.logs.filter((l) => l.startsWith("error")).join("\n")).slice(0, 16000),
+    ...r,
+    ok,
+    stdout: r.stdout.slice(0, 16000),
+    stderr: (
+      r.stderr ||
+      (shot.state === "failed" ? shot.error : "") ||
+      shot.logs.filter((l) => l.startsWith("error")).join("\n")
+    ).slice(0, 16000),
     logs: shot.logs,
-    duration: r.duration,
+    capture_error: shot.ok === false && shot.state !== "failed" ? shot.error : undefined,
     graphical: Boolean(r.html),
-    html: r.html,
-    stage: r.stage ?? (r.html ? { kind: "html" as const } : { kind: "log" as const }),
-    image: shot.image ?? undefined,
+    image: shot.image || undefined,
     size: shot.w && shot.h ? `${shot.w}×${shot.h}` : undefined,
     tries_left: budget.left,
-    hint: r.ok ? undefined : budget.again ? "Error. Patch and run_file again." : "No tries left this round.",
+    hint: ok
+      ? undefined
+      : budget.again
+        ? "Error. Patch and run_file again."
+        : "No tries left this round.",
   };
 }

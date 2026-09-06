@@ -1,11 +1,24 @@
 import { BrowserWindow } from "electron";
 import { handleOnce } from "./ipc.mjs";
 import { anvilWebPrefs } from "./session.mjs";
+import { appOrigin } from "./app-origin.mjs";
+import { captureRect } from "./canvas-capture.mjs";
 
 const kids = new Map();
 
 export function bindChildWindows({ root, port, preload, icon }) {
   const origin = `http://127.0.0.1:${port}`;
+  const allowed = appOrigin(port);
+  handleOnce("canvas-capture", async (event, rect) => {
+    if (event.senderFrame !== event.sender.mainFrame || !allowed(event.senderFrame?.url || "")) throw new Error("Canvas-Aufnahme ist nur im Anvil-Hauptfenster erlaubt.");
+    const bounds = BrowserWindow.fromWebContents(event.sender)?.getContentBounds();
+    if (!bounds) throw new Error("Ausgabefenster wurde geschlossen.");
+    const area = captureRect(rect, bounds);
+    const shot = await event.sender.capturePage(area);
+    if (shot.isEmpty()) throw new Error("Ausgabefenster lieferte kein Bild.");
+    const size = shot.getSize(), scale = Math.min(1, 1280 / Math.max(size.width, size.height));
+    return (scale < 1 ? shot.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }) : shot).toDataURL();
+  });
 
   function createChild(path, opts = {}) {
     const key = path.startsWith("/console") ? "console" : "run";
