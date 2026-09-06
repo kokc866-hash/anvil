@@ -18,6 +18,7 @@ try {
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/__editor_audit') return route.fulfill({ contentType: 'text/html', body: '<html><body><div id="root" style="height:850px;display:flex;flex-direction:column"></div></body></html>' });
+    if (url.pathname === '/v1/file') return route.fulfill({ status: 409, json: { ok: false, error: 'Datei extern geändert: fixture' } });
     if (url.pathname === '/v1/ping') return route.fulfill({ json: { ok: true } });
     if (url.pathname === '/v1/format') { formatStarted = true; await new Promise(r => releaseFormat = r); return route.fulfill({ json: { ok: true, via: 'fixture', content: 'FORMATTED_A' } }); }
     if (url.origin !== origin && url.protocol !== 'blob:') return route.abort();
@@ -171,6 +172,13 @@ try {
     await st.getState().discardFile('a.txt');
     return { backupLength: archive.recovery.pendingDiffs[0].before.length, baseLength: archive.recovery.editBases['a.txt'].length, dirtyWithAutosaveOff, afterDiscard: st.getState().files['a.txt'], dirtyAfterDiscard: !!st.getState().dirty['a.txt'] };
   });
+  await report('failed_round_rollback_keeps_review', async () => {
+    window.auditReset({ 'a.txt': 'AFTER' });
+    const st = window.__anvilIde;
+    st.setState({ workspaceCwd: '/fixture', companionUrl: location.origin, dirty: { 'a.txt': true }, pendingDiffs: [{ path: 'a.txt', before: 'BEFORE', after: 'AFTER', existedBefore: true, dirtyBefore: false, source: 'round', backupVersion: 2 }] });
+    await st.getState().rejectDiff('a.txt');
+    return { content: st.getState().files['a.txt'], pending: st.getState().pendingDiffs.length, backup: st.getState().pendingDiffs[0]?.before, dirty: st.getState().dirty['a.txt'] };
+  });
   const result = name => reports.find(r => r.name === name);
   assert.equal(result('goto_same_file').actual.lineNumber, 4);
   assert.deepEqual(result('command_event_cycle').counts, { 'anvil-replace': 1, 'anvil-symbols': 1 });
@@ -194,6 +202,7 @@ try {
   assert.equal(result('replace_all_worker').left, false);
   assert.equal(result('replace_all_worker').look, 'abb abb');
   assert.deepEqual(result('archive_recovery_and_discard'), { name: 'archive_recovery_and_discard', backupLength: 450000, baseLength: 450000, dirtyWithAutosaveOff: true, afterDiscard: 'saved', dirtyAfterDiscard: false });
+  assert.deepEqual(result('failed_round_rollback_keeps_review'), { name: 'failed_round_rollback_keeps_review', content: 'AFTER', pending: 1, backup: 'BEFORE', dirty: true });
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ uncaughtErrors: errors, editorRegressionComplete: true }));
 } catch (error) { console.error(error); process.exitCode = 1; }

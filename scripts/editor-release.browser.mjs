@@ -2,9 +2,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { chromium } from "playwright";
 
 const origin = "http://127.0.0.1:8194";
+const screenshots = process.env.RUNNER_TEMP ? join(process.env.RUNNER_TEMP, "anvil-editor") : "/workspace/screenshots";
 const server = spawn(process.execPath, [".output/server/index.mjs"], {
   env: { ...process.env, PORT: "8194", HOST: "127.0.0.1", NODE_ENV: "production" },
   stdio: ["ignore", "pipe", "pipe"],
@@ -61,14 +63,14 @@ try {
   await page.evaluate(() => window.editor().trigger("regression", "undo"));
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["check.ts"]), "export const value = 42;");
   await page.waitForFunction(() => !window.__anvilIde.getState().compileProblems.some((p) => p.path === "check.ts"));
-  await mkdir("/workspace/screenshots", { recursive: true });
-  await page.screenshot({ path: "/workspace/screenshots/anvil-editor-production.png" });
+  await mkdir(screenshots, { recursive: true });
+  await page.screenshot({ path: join(screenshots, "anvil-editor-production.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("navigation", { name: "Arbeitsbereich" }).waitFor();
   await page.getByRole("navigation", { name: "Arbeitsbereich" }).getByRole("button", { name: "Dateien", exact: true }).click();
   await page.getByRole("button", { name: "Editor", exact: true }).click();
   await page.waitForFunction(() => window.editor()?.getValue() === "export const value = 42;");
-  await page.screenshot({ path: "/workspace/screenshots/anvil-editor-production-mobile.png" });
+  await page.screenshot({ path: join(screenshots, "anvil-editor-production-mobile.png") });
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ productionEditor: true, localFormat: true, compilerWorker: true, workspaceUndoIsolated: true, uncaughtErrors: errors }));
 } catch (error) { console.error(error, log); process.exitCode = 1; }

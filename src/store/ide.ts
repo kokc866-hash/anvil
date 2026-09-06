@@ -936,7 +936,7 @@ export const useIde = create<IdeState>()(
         if (content != null) pushDisk("write", path, content);
         noteLearn("accept", path);
       },
-      rejectDiff: (path) => {
+      rejectDiff: async (path) => {
         const diff = get().pendingDiffs.find((d) => d.path === path);
         if (!diff) return;
         if (get().files[path] !== diff.after) {
@@ -947,8 +947,21 @@ export const useIde = create<IdeState>()(
           get().setNotice("Alte Rücknahme ist möglicherweise gekürzt. Original aus Backup oder Git wiederherstellen.");
           return;
         }
-        const files = { ...get().files };
+        const initial = get(), target = captureDiskTarget();
         const created = diff.existedBefore === false;
+        cancelSyncWrite(path, target);
+        if (diff.source === "round") {
+          // Keep the full review and current buffer until disk rollback succeeds.
+          try {
+            if (created) await syncRemove(path, target);
+            else await syncWrite(path, diff.before, target);
+          } catch (error) {
+            if (get().workspaceEpoch === initial.workspaceEpoch) get().setNotice(error instanceof Error ? error.message : "Rücknahme nicht gespeichert. Änderung bleibt erhalten.");
+            return;
+          }
+          if (get().workspaceEpoch !== initial.workspaceEpoch || get().files[path] !== diff.after || !get().pendingDiffs.includes(diff)) return;
+        }
+        const files = { ...get().files };
         if (created) delete files[path];
         else files[path] = diff.before;
         const dirty = { ...get().dirty };
@@ -961,11 +974,7 @@ export const useIde = create<IdeState>()(
           openPaths: get().openPaths.filter((p) => p in files),
           activePath: get().activePath === path && created ? get().openPaths.find((p) => p in files) ?? null : get().activePath,
         });
-        // Proposals never reached disk. Only an already committed round needs a disk rollback.
-        if (diff.source === "round") {
-          if (created) pushDisk("remove", path);
-          else pushDisk("write", path, diff.before);
-        } else if (diff.dirtyBefore && get().autoSaveDisk) scheduleSyncWrite(path, diff.before);
+        if (diff.source !== "round" && diff.dirtyBefore && get().autoSaveDisk) scheduleSyncWrite(path, diff.before);
         noteLearn("reject", path);
       },
       rejectHunk: (path, hunk) => {
@@ -1008,7 +1017,7 @@ export const useIde = create<IdeState>()(
         });
       },
       discardFile: async (path) => {
-        if (get().pendingDiffs.some((d) => d.path === path)) { get().rejectDiff(path); await flushDiskSync().catch(() => undefined); return; }
+        if (get().pendingDiffs.some((d) => d.path === path)) { await get().rejectDiff(path); await flushDiskSync().catch(() => undefined); return; }
         const s = get();
         if (!(path in s.editBases)) {
           if (s.dirty[path]) s.setNotice("Kein vollständiger Ausgangsstand verfügbar. Datei bleibt erhalten.");
