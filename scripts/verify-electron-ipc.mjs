@@ -58,7 +58,11 @@ try {
       return window.__qaAllowClose;
     });
   });
-  await electron.evaluate(({ app }) => { app.quit(); });
+  const closeAllowed = await electron.evaluate(({ app, ipcMain }) => new Promise((resolve) => {
+    ipcMain.once("editor-close-result", (_event, _ticket, allowed) => resolve(allowed));
+    app.quit();
+  }));
+  assert.equal(closeAllowed, false, "main process must receive the cancellation before a retry");
   await page.waitForFunction(() => window.__qaCloseRequests === 1);
   assert.ok(electron.windows().includes(page), "canceling the save prompt must keep the editor open");
   await page.evaluate(() => { window.__qaAllowClose = true; });

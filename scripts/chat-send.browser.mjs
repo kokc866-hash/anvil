@@ -144,9 +144,19 @@ try {
     return { page, errors };
   }
 
-  async function send(page, prompt) {
+  async function send(page, prompt, frozenClock = false) {
     await page.locator("#anvil-chat").fill(prompt);
+    // Let React commit the controlled input and busy button while helper deadlines
+    // remain frozen. Enter must not read the preceding empty draft on a slow runner.
+    if (frozenClock) await page.clock.runFor(32);
     await page.locator("#anvil-chat").press("Enter");
+    if (frozenClock) {
+      // Dynamic imports use real I/O; wait for preparation without advancing its clock.
+      const deadline = Date.now() + 5000;
+      while (!(await page.evaluate(() => window.__anvilIde.getState().agentBusy)) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      await page.clock.runFor(32);
+    }
   }
   async function answered(page, provider) {
     try {
@@ -221,7 +231,8 @@ try {
   if (!production) {
     const { page, errors } = await openChat("ollama", "agent", true);
     const before = requests.length;
-    await send(page, "analysiere bitte das gesamte Projekt");
+    await send(page, "analysiere bitte das gesamte Projekt", true);
+    assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentBusy), true, "send must enter preparation before Stop");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).dispatchEvent("click");
     await page.clock.resume();
     await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy);
