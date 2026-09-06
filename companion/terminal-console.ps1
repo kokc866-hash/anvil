@@ -11,7 +11,12 @@ using System.Text;
 using System.Runtime.InteropServices;
 public static class AnvilConsole {
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AllocConsole();
-  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
+  public static void CreateOwnConsole() {
+    // A hidden or pseudo console may exist even when GetConsoleWindow returns zero.
+    FreeConsole();
+    if (!AllocConsole()) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+  }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetStdHandle(int kind, IntPtr handle);
@@ -40,9 +45,7 @@ public static class AnvilConsole {
   }
 }
 '@
-  if ([AnvilConsole]::GetConsoleWindow() -eq [IntPtr]::Zero) {
-    if (-not [AnvilConsole]::AllocConsole()) { throw 'Windows-Konsole konnte nicht angelegt werden.' }
-  }
+  [AnvilConsole]::CreateOwnConsole()
   $runInput = [AnvilConsole]::Open('CONIN$')
   $runOutput = [AnvilConsole]::Open('CONOUT$')
   if ($runInput -eq [IntPtr](-1) -or $runOutput -eq [IntPtr](-1)) { throw 'Windows-Konsolenhandles fehlen.' }
