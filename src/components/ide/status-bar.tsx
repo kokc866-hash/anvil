@@ -22,6 +22,8 @@ export function StatusBar() {
   const debug = useIde((s) => s.debug);
   const pluginStatus = useIde((s) => s.pluginStatus);
   const lspN = useIde((s) => s.lspProblems.length);
+  const lspErrors = useIde((s) => s.lspProblems.filter((p) => p.severity === "error").length);
+  const lspWarnings = useIde((s) => s.lspProblems.filter((p) => p.severity === "warning").length);
   const revealOutput = useIde((s) => s.revealOutput);
   const learnOn = useLearn((s) => s.on);
   const skillN = useLearn((s) => s.skills.length);
@@ -130,7 +132,7 @@ export function StatusBar() {
         <Tip label={t("problemsTip")} side="top">
           <button
             type="button"
-            className="text-danger hover:underline"
+            className={`${lspErrors ? "text-danger" : lspWarnings ? "text-warning" : "text-muted"} hover:underline`}
             onClick={() => revealOutput()}
             onContextMenu={(e) => {
               e.preventDefault();

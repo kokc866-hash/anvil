@@ -155,7 +155,7 @@ function relFrom(dir, abs) {
 }
 
 export async function runLint({ files = [], timeoutMs = 40000, enabled = null, lspTimeoutMs = 8000 } = {}) {
-  const list = Array.isArray(files) ? files.slice(0, 48) : [];
+  const list = Array.isArray(files) ? files.slice(0, 64) : [];
   if (!list.length) return { ok: true, diagnostics: [], tools: [] };
   const allow = Array.isArray(enabled) && enabled.length ? new Set(enabled) : null;
   const on = (id) => !allow || allow.has(id);
@@ -188,33 +188,36 @@ export async function runLint({ files = [], timeoutMs = 40000, enabled = null, l
     }
     const tsc = on("typescript") ? findTsc(dir) : null;
     if (tsc && tsFiles.length) {
-      writeFileSync(
-        path.join(dir, "tsconfig.json"),
-        JSON.stringify({
-          compilerOptions: {
-            noEmit: true,
-            allowJs: true,
-            skipLibCheck: true,
-            target: "ES2022",
-            module: "ESNext",
-            moduleResolution: "bundler",
-            jsx: "react-jsx",
-            strict: false,
-          },
-          include: ["**/*"],
-        }),
-      );
-      const file = tsc.endsWith(".js") || tsc.includes("typescript") ? process.execPath : tsc;
-      const args = file === process.execPath ? [tsc, "--noEmit", "--pretty", "false", "-p", dir] : ["--noEmit", "--pretty", "false", "-p", dir];
-      const r = await spawnArgs(file, args, dir, timeoutMs);
-      tools.push({ name: "tsc", ok: r.ok });
-      diagnostics.push(
-        ...parseTsc(r.stdout + "\n" + r.stderr).map((h) => ({
-          ...h,
-          path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path,
-        })),
-      );
+      const projects = new Map();
+      for (const file of tsFiles) {
+        let folder = path.posix.dirname(file), config = "";
+        while (true) {
+          for (const name of ["tsconfig.json", "jsconfig.json"]) {
+            const candidate = path.posix.join(folder, name);
+            if (list.some((f) => f.path === candidate)) { config = candidate; break; }
+          }
+          if (config || folder === ".") break;
+          folder = path.posix.dirname(folder);
+        }
+        const members = projects.get(config) || []; members.push(file); projects.set(config, members);
+      }
+      const deadline = Date.now() + timeoutMs;
+      for (const [config, members] of projects) {
+        const project = config || "tsconfig.anvil-check.json";
+        if (!config) writeFileSync(path.join(dir, project), JSON.stringify({ compilerOptions: {
+          noEmit: true, allowJs: true, skipLibCheck: true, target: "ES2022", module: "ESNext", moduleResolution: "bundler", jsx: "react-jsx", strict: false,
+        }, files: members }));
+        if (Date.now() >= deadline) { tools.push({ name: "tsc", project, ok: false }); break; }
+        const file = tsc.endsWith(".js") || tsc.includes("typescript") ? process.execPath : tsc;
+        const args = [...(file === process.execPath ? [tsc] : []), "--noEmit", "--pretty", "false", "-p", path.join(dir, project)];
+        const r = await spawnArgs(file, args, dir, Math.max(1000, deadline - Date.now()));
+        tools.push({ name: "tsc", project, ok: r.ok });
+        diagnostics.push(...parseTsc(r.stdout + "\n" + r.stderr).map((h) => ({
+          ...h, path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path,
+        })).filter((h) => !/\.[cm]?tsx?$/.test(h.path) || members.includes(h.path)));
+      }
     }
+
     const snapFiles = list
       .map((f) => ({ path: safeRel(f.path), content: String(f.content ?? "") }))
       .filter((f) => f.path);

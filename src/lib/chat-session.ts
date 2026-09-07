@@ -168,6 +168,7 @@ export async function sendChat(
   }
   const my = beginAgent();
   const workspaceEpoch = useIde.getState().workspaceEpoch;
+  let roundVerification: import("./agent-evidence").Verification | undefined;
   setAgentBusy(true);
   await import("@/lib/model-context").then((m) => m.applyCloudContext()).catch(() => null);
   if (my !== agentGen()) return;
@@ -349,7 +350,7 @@ export async function sendChat(
           },
           onTool: ({ name, args, result: out }) => {
             if (my !== agentGen()) return;
-            const err = out && typeof out === "object" && "error" in out;
+            const err = Boolean(out && typeof out === "object" && ((out as { error?: unknown }).error || (out as { isError?: boolean }).isError));
             addAgentStep({
               name,
               detail: toolDetail(name, args, out),
@@ -505,7 +506,7 @@ export async function sendChat(
       },
       onTool: ({ name, args, result: out }) => {
         if (my !== agentGen()) return;
-        const err = out && typeof out === "object" && "error" in out;
+        const err = Boolean(out && typeof out === "object" && ((out as { error?: unknown }).error || (out as { isError?: boolean }).isError));
         const failed =
           Boolean(err) ||
           Boolean(
@@ -584,6 +585,7 @@ export async function sendChat(
       },
     });
     if (my !== agentGen()) return;
+    roundVerification = result.verification;
     if (!result.ok) requestPhase(my, "error");
     if (result.parked && result.ask) {
       parked = true;
@@ -648,11 +650,9 @@ export async function sendChat(
     if (!parked) void brainFollowups(work, result.reply);
     if (!parked && result.runPaths?.length) {
       const st = useIde.getState();
-      const already = result.tools?.includes("run_file");
+      const already = result.tools?.includes("run_file") && result.verification?.state !== "stale";
       if (st.autoRunAgent && !already) {
-        holdUi = true;
-        queueMicrotask(() => {
-          void (async () => {
+        await (async () => {
             if (my !== agentGen()) return;
             const html = result.runPaths!.some((p) => /\.html?$/i.test(p));
             const cur = useIde.getState();
@@ -668,12 +668,20 @@ export async function sendChat(
             try {
               const latest = useIde.getState().files;
               let ok = true;
-              for (const p of result.runPaths!.filter(isExecutablePath)) {
+              const executable = result.runPaths!.filter(isExecutablePath);
+              for (const p of executable) {
                 useIde.getState().setRunPath(p);
                 const r = await runFile(p, latest);
                 if (my !== agentGen()) return;
                 pushOutput(r);
                 if (!r.ok) ok = false;
+                addAgentStep({ name: "run_file", detail: p, status: r.ok ? "ok" : "err" });
+                useIde.getState().setChatLastRun({ ok: r.ok, path: p, stdout: r.stdout, stderr: r.stderr, attempt: 1, max: 1, running: false });
+              }
+              if (executable.length) {
+                roundVerification = { state: !ok ? "failed" : latest !== useIde.getState().files ? "stale" : "passed", detail: ok ? "Automatischer Run nach der letzten Änderung erfolgreich." : "Automatischer Run nach der letzten Änderung fehlgeschlagen." };
+                if (!ok) requestPhase(my, "error");
+                finalizeAssistant(`${result.reply}\n\n${roundVerification.detail}`, result.tools, { replace: true });
               }
               skillOutcome(ok ? "ok" : "fail");
               if (!ok) useLearn.getState().track("fail", result.runPaths![0]);
@@ -681,8 +689,7 @@ export async function sendChat(
               setRunning(false);
               void import("@/lib/run-window").then((m) => m.releaseAgentUi());
             }
-          })();
-        });
+        })();
       }
     }
   } catch (err) {
@@ -717,14 +724,12 @@ export async function sendChat(
         const failed = ["error", "stopped"].includes(useRequestState.getState().phase) || /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test(
           (last?.content || "").trim(),
         );
-        const proved = Boolean(
-          last?.tools?.some((n) => /^(run_file|see_run|play|engine_run|shell)$/.test(n)),
-        );
+        const proved = roundVerification?.state === "passed";
         const fin = planFinish(last?.plan, failed, proved && !failed);
         if (fin) useIde.getState().setChatPlan(fin);
       }
       void idleCompanion().catch(() => undefined);
-      requestPhase(my, "done");
+      if (!["error", "stopped"].includes(useRequestState.getState().phase)) requestPhase(my, "done");
       setAgentBusy(false);
       const phase = useRequestState.getState().phase;
       appLog("agent", `R${my} ${parked ? "wartet auf Rückfrage" : phase === "error" ? "fehlgeschlagen" : phase === "stopped" ? "gestoppt" : "abgeschlossen"}`);

@@ -54,10 +54,11 @@ export async function refreshCompanionLint(): Promise<void> {
   if (!current()) return;
   const max = st.lspMaxFiles || 24;
   const open = new Set(st.openPaths);
+  const config = (p: string) => /\.json$/.test(p) && !p.startsWith(".anvil/");
   const files = Object.entries(st.files)
-    .filter(([p, c]) => wantFile(p) && !isSecretPath(p) && c.length < (open.has(p) ? 1_000_000 : 200_000))
-    .sort(([a], [b]) => Number(open.has(b)) - Number(open.has(a)))
-    .slice(0, Math.max(max, [...open].filter((p) => wantFile(p)).length))
+    .filter(([p, c]) => (wantFile(p) || config(p)) && !isSecretPath(p) && c.length < (open.has(p) ? 1_000_000 : 200_000))
+    .sort(([a], [b]) => Number(config(b)) - Number(config(a)) || Number(open.has(b)) - Number(open.has(a)))
+    .slice(0, Math.min(64, Math.max(max, [...open].filter((p) => wantFile(p)).length) + Object.keys(st.files).filter(config).length))
     .map(([path, content]) => ({ path, content }));
   if (!files.length) {
     st.setCompanionProblems([]);
@@ -70,6 +71,7 @@ export async function refreshCompanionLint(): Promise<void> {
   });
   if (!current()) return;
   if (!r.ok) {
+    st.setCompanionProblems([]);
     st.pushLspLog(false, r.error || "Lint fehlgeschlagen");
     return;
   }

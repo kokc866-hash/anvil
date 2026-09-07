@@ -26,7 +26,7 @@ export async function tsRename(files: Record<string, string>, path: string, offs
   return (await local()).tsRename(files, path, offset, nextName, open);
 }
 
-export async function pyCompileWorkspace(files: Record<string, string>, open: string[] = []): Promise<{ hits: LspHit[]; checked: string[] }> {
+export async function pyCompileWorkspace(files: Record<string, string>, open: string[] = []): Promise<{ hits: LspHit[]; checked: string[]; error?: string }> {
   const prefer = open.filter((p) => p.endsWith(".py"));
   const rest = Object.keys(files).filter((p) => p.endsWith(".py") && !prefer.includes(p));
   const py = [...prefer, ...rest]
@@ -42,8 +42,8 @@ export async function pyCompileWorkspace(files: Record<string, string>, open: st
     const { pythonCheck } = await import("./python-check");
     const list = await pythonCheck(py.map(([path, content]) => ({ path, content })));
     return { hits: list.map((d) => hit(d.path, d.line, d.col, d.message, "py")), checked: py.map(([p]) => p) };
-  } catch {
-    return { hits: [], checked: [] };
+  } catch (error) {
+    return { hits: [], checked: [], error: error instanceof Error ? error.message : "Python-Prüfung nicht verfügbar." };
   }
 }
 

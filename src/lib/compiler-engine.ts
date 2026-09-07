@@ -1,44 +1,5 @@
 import type { LspHit } from "./lsp";
 
-const STUB_NAME = "anvil-lib.d.ts";
-const STUB = `
-interface Array<T> { length: number; push(...a: T[]): number; pop(): T | undefined; map<U>(f: (v: T, i: number) => U): U[]; filter(f: (v: T) => unknown): T[]; forEach(f: (v: T, i: number) => void): void; join(s?: string): string; slice(a?: number, b?: number): T[]; includes(v: T): boolean; find(f: (v: T) => unknown): T | undefined; }
-interface Boolean { valueOf(): boolean; }
-interface Function { apply(this: Function, thisArg: unknown, argArray?: unknown): unknown; call(this: Function, thisArg: unknown, ...argArray: unknown[]): unknown; bind(this: Function, thisArg: unknown, ...argArray: unknown[]): any; prototype: unknown; length: number; arguments: unknown; caller: unknown; }
-interface CallableFunction extends Function {}
-interface NewableFunction extends Function {}
-interface IArguments { length: number; callee: Function; [index: number]: unknown; }
-interface Number { valueOf(): number; toFixed(n?: number): string; }
-interface Object { toString(): string; }
-interface RegExp { test(s: string): boolean; source: string; exec(s: string): string[] | null; }
-interface String { length: number; charAt(i: number): string; slice(a?: number, b?: number): string; split(s: string): string[]; includes(s: string): boolean; indexOf(s: string): number; replace(a: string | RegExp, b: string): string; toLowerCase(): string; toUpperCase(): string; trim(): string; }
-interface Promise<T> { then<U>(f: (v: T) => U | Promise<U>): Promise<U>; catch<U>(f: (e: unknown) => U | Promise<U>): Promise<U | T>; }
-declare const Promise: { new <T>(f: (res: (v: T) => void, rej: (e?: unknown) => void) => void): Promise<T>; resolve<T>(v: T | Promise<T>): Promise<T>; }
-interface Date { getTime(): number; toISOString(): string; }
-declare const Date: { new (): Date; now(): number; }
-declare const console: { log(...a: unknown[]): void; error(...a: unknown[]): void; warn(...a: unknown[]): void; }
-declare const Math: { max(...a: number[]): number; min(...a: number[]): number; abs(n: number): number; floor(n: number): number; ceil(n: number): number; round(n: number): number; random(): number; PI: number; }
-declare const JSON: { parse(s: string): unknown; stringify(v: unknown): string; }
-declare const Object: { keys(o: object): string[]; values(o: object): unknown[]; entries(o: object): [string, unknown][]; assign<T>(a: T, ...b: object[]): T; }
-declare const Array: { isArray(v: unknown): v is unknown[]; from<T>(v: ArrayLike<T>): T[]; }
-interface ArrayLike<T> { length: number; [n: number]: T; }
-declare function parseInt(s: string, r?: number): number;
-declare function parseFloat(s: string): number;
-declare function isNaN(n: number): boolean;
-declare function Number(v?: unknown): number;
-declare function String(v?: unknown): string;
-declare function Boolean(v?: unknown): boolean;
-declare const NaN: number;
-declare const Infinity: number;
-declare const document: { getElementById(id: string): unknown; querySelector(s: string): unknown; body: unknown; }
-declare const window: unknown;
-declare const localStorage: { getItem(k: string): string | null; setItem(k: string, v: string): void; }
-declare function fetch(url: string, init?: unknown): Promise<{ ok: boolean; json(): Promise<unknown>; text(): Promise<string>; status: number }>;
-declare function setTimeout(f: () => void, ms?: number): number;
-declare function clearTimeout(n: number): void;
-declare function requestAnimationFrame(f: (t: number) => void): number;
-`;
-
 const OPEN_MAX = 1_000_000;
 const CLOSED_MAX = 200_000;
 
@@ -58,8 +19,8 @@ function tsRoots(files: Record<string, string>, open: string[] = []): string[] {
 }
 
 type TsMod = typeof import("typescript");
-type Bundle = { revision: number; versions: Map<string, number>; options: import("typescript").CompilerOptions; ls: import("typescript").LanguageService; files: Record<string, string>; roots: string[]; ts: TsMod };
-let bundle: Bundle | null = null;
+type Bundle = { revision: number; versions: Map<string, number>; options: import("typescript").CompilerOptions; ls: import("typescript").LanguageService; files: Record<string, string>; roots: string[]; ts: TsMod; config: string; configErrors: import("typescript").Diagnostic[] };
+const bundles = new Map<string, Bundle>();
 let tsMod: TsMod | null | undefined;
 
 async function loadTs(): Promise<TsMod | null> {
@@ -73,104 +34,125 @@ async function loadTs(): Promise<TsMod | null> {
   }
 }
 
-function readVirtual(files: Record<string, string>, name: string): string | undefined {
-  const p = name.replace(/\\/g, "/").replace(/^\//, "");
-  if (p === STUB_NAME || name.endsWith(STUB_NAME)) return STUB;
-  return files[p] ?? files[name];
-}
-
-function resolveRel(fromPath: string, spec: string, files: Record<string, string>): string | undefined {
-  const raw = spec.replace(/\\/g, "/").replace(/^['"]|['"]$/g, "");
-  if (!raw.startsWith(".")) return undefined;
-  const dir = fromPath.replace(/^\//, "").split("/").slice(0, -1);
-  const stack = [...dir];
-  for (const p of raw.split("/")) {
-    if (p === "." || p === "") continue;
-    if (p === "..") stack.pop();
-    else stack.push(p);
+function normalPath(name: string): string {
+  const parts: string[] = [];
+  for (const part of name.replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop(); else parts.push(part);
   }
-  const joined = stack.join("/");
-  const cands = [joined, `${joined}.ts`, `${joined}.tsx`, `${joined}.js`, `${joined}.jsx`, `${joined}/index.ts`, `${joined}/index.js`];
-  return cands.find((p) => p in files);
+  return parts.join("/");
 }
 
-const standardLibs: Record<string, string> = typeof import.meta.glob === "function"
-  ? Object.fromEntries(Object.entries(import.meta.glob("../../node_modules/typescript/lib/lib*.d.ts", { query: "?raw", import: "default", eager: true })).map(([path, content]) => [path.split("/").pop()!, String(content)])) : {};
+let standardLibs: Record<string, string> = {};
+try {
+  // Vite replaces the call itself. A runtime typeof import.meta.glob guard is false in a built worker.
+  standardLibs = Object.fromEntries(Object.entries(import.meta.glob("../../node_modules/typescript/lib/lib*.d.ts", { query: "?raw", import: "default", eager: true })).map(([path, content]) => [path.split("/").pop()!, String(content)]));
+} catch { /* Direct Node consumers load the same installed TypeScript libraries below. */ }
 
-export function disposeTs(): void { bundle?.ls.dispose(); bundle = null; }
+function configFor(path: string, files: Record<string, string>): string {
+  const parts = path.split("/"); parts.pop();
+  while (true) {
+    const prefix = parts.length ? parts.join("/") + "/" : "";
+    for (const name of ["tsconfig.json", "jsconfig.json"]) if (prefix + name in files) return prefix + name;
+    if (!parts.length) return "";
+    parts.pop();
+  }
+}
+
+function matches(pattern: string, path: string): boolean {
+  const expr = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "@@").replace(/\*\*/g, "##").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/@@/g, "(?:.*/)?").replace(/##/g, ".*");
+  return new RegExp(`^${expr}(?:/.*)?$`).test(path);
+}
+
+export function disposeTs(): void { for (const b of bundles.values()) b.ls.dispose(); bundles.clear(); }
 
 export async function ensureTs(files: Record<string, string>, open: string[] = []): Promise<Bundle | null> {
   const ts = await loadTs();
-  if (!ts) return null;
-  const roots = tsRoots(files, open);
-  let config: Record<string, unknown> = {};
-  const readConfig = (path: string, seen = new Set<string>()): Record<string, unknown> => {
-    if (seen.has(path) || !files[path]) return {};
-    seen.add(path);
-    const parsed = ts.parseConfigFileTextToJson(path, files[path]).config ?? {};
-    const parent = typeof parsed.extends === "string" ? resolveRel(path, parsed.extends, files) ?? (parsed.extends.replace(/^\.\//, "") + ".json") : "";
-    const inherited = parent ? readConfig(parent, seen) : {};
-    return { ...inherited, ...parsed, compilerOptions: { ...(inherited.compilerOptions as object ?? {}), ...parsed.compilerOptions } };
-  };
-  config = readConfig(files["tsconfig.json"] ? "tsconfig.json" : "jsconfig.json");
-  const options: import("typescript").CompilerOptions = {
-    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
-    jsx: ts.JsxEmit.ReactJSX, allowJs: true, checkJs: false, strict: false,
-    ...ts.convertCompilerOptionsFromJson(config.compilerOptions ?? {}, "").options,
-    noEmit: true, skipLibCheck: true, noLib: Object.keys(standardLibs).length === 0,
-  };
-  const glob = (pattern: string, path: string) => {
-    const expr = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "@@").replace(/\*\*/g, "##").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/@@/g, "(?:.*/)?").replace(/##/g, ".*");
-    return new RegExp(`^${expr}(?:/.*)?$`).test(path);
-  };
-  const selected = roots.filter((path) => {
-    if (open.includes(path)) return true;
-    if (Array.isArray(config.files) && !(config.files as string[]).includes(path)) return false;
-    if (Array.isArray(config.exclude) && (config.exclude as string[]).some((p) => glob(p, path))) return false;
-    return !Array.isArray(config.include) || (config.include as string[]).some((p) => glob(p, path));
-  });
-  if (bundle) {
-    const b = bundle;
-    let changed = JSON.stringify(b.roots) !== JSON.stringify(selected) || JSON.stringify(b.options) !== JSON.stringify(options);
-    if (b.files !== files) for (const name of new Set([...Object.keys(b.files), ...Object.keys(files)])) {
-      if (b.files[name] !== files[name]) { b.versions.set(name, (b.versions.get(name) ?? 0) + 1); changed = true; }
+  if (!ts) throw new Error("TypeScript-Sprachdienst nicht verfügbar.");
+  if (!Object.keys(standardLibs).length && ts.sys?.readDirectory) {
+    const dir = ts.getDefaultLibFilePath({}).replace(/[^/\\]+$/, "");
+    for (const path of ts.sys.readDirectory(dir, [".ts"], undefined, ["lib*.d.ts"])) {
+      const content = ts.sys.readFile(path);
+      if (content != null) standardLibs[path.split(/[/\\]/).pop()!] = content;
     }
-    b.files = files; b.roots = selected; b.options = options;
-    if (changed) b.revision++;
-    return b;
   }
-  const b = { revision: 1, versions: new Map(Object.keys(files).map((p) => [p, 1])), files, roots: selected, options, ts } as Bundle;
+  if (!standardLibs["lib.es5.d.ts"]) throw new Error("TypeScript-Standardbibliotheken fehlen. Installation reparieren.");
+  const groups = new Map<string, string[]>();
+  for (const path of tsRoots(files, open)) {
+    const config = configFor(path, files);
+    const roots = groups.get(config) ?? []; roots.push(path); groups.set(config, roots);
+  }
+  for (const [key, b] of bundles) if (!groups.has(key)) { b.ls.dispose(); bundles.delete(key); }
+  for (const [config, roots] of groups) {
+    const defaults: import("typescript").CompilerOptions = {
+      target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
+      jsx: ts.JsxEmit.ReactJSX, allowJs: true, checkJs: false, strict: false,
+    };
+    const errors: import("typescript").Diagnostic[] = [];
+    const parsed = config ? ts.getParsedCommandLineOfConfigFile("/" + config, undefined, {
+      useCaseSensitiveFileNames: true, getCurrentDirectory: () => "/",
+      fileExists: (name) => normalPath(name) in files,
+      readFile: (name) => files[normalPath(name)],
+      onUnRecoverableConfigFileDiagnostic: (d) => errors.push(d),
+      readDirectory: (root, extensions, excludes, includes) => Object.keys(files).filter((name) => {
+        const base = normalPath(root), prefix = base ? base + "/" : "";
+        return name.startsWith(prefix) && extensions.some((ext) => name.endsWith(ext))
+          && !(excludes ?? []).some((p) => matches(normalPath(p.startsWith("/") ? p : root + "/" + p), name))
+          && (includes ?? ["**/*"]).some((p) => matches(normalPath(p.startsWith("/") ? p : root + "/" + p), name));
+      }).map((name) => "/" + name),
+    }) : undefined;
+    errors.push(...(parsed?.errors ?? []));
+    const options = { ...defaults, ...parsed?.options, noEmit: true, skipLibCheck: true };
+    delete (options as import("typescript").CompilerOptions).configFile;
+    const included = new Set(parsed?.fileNames.map(normalPath));
+    const selected = roots.filter((path) => !config || open.includes(path) || included.has(path));
+    const b = bundles.get(config);
+    if (b) {
+      let changed = JSON.stringify(b.roots) !== JSON.stringify(selected) || JSON.stringify(b.options) !== JSON.stringify(options);
+      if (b.files !== files) for (const name of new Set([...Object.keys(b.files), ...Object.keys(files)])) {
+        if (b.files[name] !== files[name]) { b.versions.set(name, (b.versions.get(name) ?? 0) + 1); changed = true; }
+      }
+      b.files = files; b.roots = selected; b.options = options; b.configErrors = errors;
+      if (changed) b.revision++;
+    } else bundles.set(config, createBundle(ts, files, selected, options, errors, config));
+  }
+  return bundles.values().next().value ?? null;
+}
+
+function createBundle(ts: TsMod, files: Record<string, string>, roots: string[], options: import("typescript").CompilerOptions, configErrors: import("typescript").Diagnostic[], config: string): Bundle {
+  const b = { revision: 1, versions: new Map(Object.keys(files).map((p) => [p, 1])), files, roots, options, ts, configErrors, config } as Bundle;
   const read = (name: string) => {
-    const normal = name.replace(/\\/g, "/").replace(/^\//, "");
-    return b.files[normal] ?? standardLibs[normal.split("/").pop()!] ?? (normal === STUB_NAME ? STUB : undefined);
+    const normal = normalPath(name);
+    return normal.startsWith("__anvil_typescript__/") ? standardLibs[normal.split("/").pop()!] : b.files[normal];
   };
   const snapshots = new Map<string, { content: string; snapshot: import("typescript").IScriptSnapshot }>();
   const host: import("typescript").LanguageServiceHost = {
     getCompilationSettings: () => b.options,
     getProjectVersion: () => String(b.revision),
-    getScriptFileNames: () => b.options.noLib ? [STUB_NAME, ...b.roots] : b.roots,
-    getScriptVersion: (fn) => String(b.versions.get(fn.replace(/^\//, "")) ?? 1),
+    getScriptFileNames: () => b.roots,
+    getScriptVersion: (fn) => String(b.versions.get(normalPath(fn)) ?? 1),
     getScriptSnapshot: (fn) => {
       const content = read(fn); if (content == null) { snapshots.delete(fn); return undefined; }
       const old = snapshots.get(fn); if (old?.content === content) return old.snapshot;
       const snapshot = ts.ScriptSnapshot.fromString(content); snapshots.set(fn, { content, snapshot }); return snapshot;
     },
-    getCurrentDirectory: () => "", getDefaultLibFileName: () => ts.getDefaultLibFileName(b.options),
+    getCurrentDirectory: () => "/", getDefaultLibFileName: () => "/__anvil_typescript__/" + ts.getDefaultLibFileName(b.options),
     fileExists: (fn) => read(fn) !== undefined, readFile: read,
-    readDirectory: () => Object.keys(b.files), directoryExists: () => true, getDirectories: () => [],
+    readDirectory: () => Object.keys(b.files), directoryExists: (dir) => normalPath(dir) === "__anvil_typescript__" || Object.keys(b.files).some((p) => p.startsWith(normalPath(dir) + "/")) || !normalPath(dir), getDirectories: () => [],
     useCaseSensitiveFileNames: () => true, getNewLine: () => "\n",
     resolveModuleNameLiterals: (lits, containingFile) => lits.map((lit) => ({
-      resolvedModule: ts.resolveModuleName(lit.text, containingFile, b.options, { fileExists: host.fileExists!, readFile: read }).resolvedModule,
+      resolvedModule: ts.resolveModuleName(lit.text, containingFile, b.options, { fileExists: host.fileExists!, readFile: read, directoryExists: host.directoryExists }).resolvedModule,
     })),
   };
   b.ls = ts.createLanguageService(host);
-  bundle = b;
   return b;
 }
 
+function bundleFor(path: string): Bundle | undefined { return [...bundles.values()].find((b) => b.roots.includes(path)); }
+
 function diagHits(b: Bundle, d: import("typescript").Diagnostic, source: string): LspHit | null {
   const file = d.file;
-  if (!file || file.fileName === STUB_NAME || !(file.fileName.replace(/^\//, "") in b.files)) return null;
+  if (!file || !(file.fileName.replace(/^\//, "") in b.files)) return null;
   const path = file.fileName.replace(/^\//, "");
   const pos = d.start ?? 0;
   const { line, character } = file.getLineAndCharacterOfPosition(pos);
@@ -180,11 +162,12 @@ function diagHits(b: Bundle, d: import("typescript").Diagnostic, source: string)
 }
 
 export async function tscWorkspace(files: Record<string, string>, open: string[] = []): Promise<LspHit[]> {
-  const b = await ensureTs(files, open);
-  if (!b) return [];
+  await ensureTs(files, open);
   const hits: LspHit[] = [];
   const seen = new Set<string>();
-  for (const path of b.roots) {
+  for (const b of bundles.values()) {
+    for (const d of b.configErrors) hits.push(diagHits(b, d, "tsc") ?? hit(b.config, 1, 1, b.ts.flattenDiagnosticMessageText(d.messageText, "\n"), "tsc"));
+    for (const path of b.roots) {
     const list = [...b.ls.getSyntacticDiagnostics(path), ...b.ls.getSemanticDiagnostics(path)];
     for (const d of list) {
       const h = diagHits(b, d, "tsc");
@@ -196,15 +179,17 @@ export async function tscWorkspace(files: Record<string, string>, open: string[]
       if (hits.length > 120) return hits;
     }
   }
+  }
   return hits;
 }
 
 export function tsChecked(): string[] {
-  return bundle?.roots ?? [];
+  return [...new Set([...bundles.values()].flatMap((b) => [...b.roots, ...(b.config ? [b.config] : [])]))];
 }
 
 export function tsQuickInfoSync(path: string, offset: number): string | null {
-  if (!bundle || !bundle.roots.includes(path)) return null;
+  const bundle = bundleFor(path);
+  if (!bundle) return null;
   try {
     const info = bundle.ls.getQuickInfoAtPosition(path, offset);
     const sig = info ? bundle.ts.displayPartsToString(info.displayParts || []) : "";
@@ -230,7 +215,8 @@ export function tsQuickInfoSync(path: string, offset: number): string | null {
 }
 
 export function tsDefinitionSync(path: string, offset: number): { path: string; line: number; col: number; text: string }[] {
-  if (!bundle || !bundle.roots.includes(path)) return [];
+  const bundle = bundleFor(path);
+  if (!bundle) return [];
   try {
     const defs = bundle.ls.getDefinitionAtPosition(path, offset) ?? [];
     const out: { path: string; line: number; col: number; text: string }[] = [];
@@ -256,7 +242,8 @@ export function tsDefinitionSync(path: string, offset: number): { path: string; 
 
 export async function tsRename(files: Record<string, string>, path: string, offset: number, nextName: string, open: string[] = []): Promise<Record<string, string>> {
   if (!/^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u.test(nextName)) throw new Error("Ungültiger Symbolname.");
-  const b = await ensureTs(files, [...new Set([path, ...open])]);
+  await ensureTs(files, [...new Set([path, ...open])]);
+  const b = bundleFor(path);
   if (!b) throw new Error("Sprachdienst nicht verfügbar.");
   const info = b.ls.getRenameInfo(path, offset);
   if (!info.canRename) throw new Error(info.localizedErrorMessage);

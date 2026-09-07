@@ -1,4 +1,5 @@
 /** Real git + source tree on a registered workspace folder. Token-gated by the server. */
+import { fileBytes, sameBytes } from "../scripts/file-content.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync, renameSync, realpathSync, lstatSync } from "node:fs";
 import path from "node:path";
@@ -416,15 +417,14 @@ export function writeRel(cwd, rel, content, expected) {
   const root = resolveCwd(cwd);
   const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean || clean.includes("..")) throw new Error("Pfad ungültig.");
-  if (String(content || "").trim().startsWith("data:image/")) return { ok: true, path: clean, skipped: "image" };
   const full = path.join(root, ...clean.split("/"));
   if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
   if (expected !== undefined) {
-    const actual = existsSync(full) ? readFileSync(full, "utf8") : null;
-    if (actual !== expected && actual !== content) throw new Error(`Datei extern geändert: ${clean}. Neu laden oder Änderungen abgleichen.`);
+    const actual = existsSync(full) ? readFileSync(full) : null;
+    if (!(actual === null ? expected === null : (expected !== null && sameBytes(actual, fileBytes(expected))) || sameBytes(actual, fileBytes(content)))) throw new Error(`Datei extern geändert: ${clean}. Neu laden oder Änderungen abgleichen.`);
   }
   mkdirSync(path.dirname(full), { recursive: true });
-  writeFileSync(full, content, "utf8");
+  writeFileSync(full, fileBytes(content));
   return { ok: true, path: clean };
 }
 

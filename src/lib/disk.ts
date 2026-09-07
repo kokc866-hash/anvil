@@ -1,3 +1,4 @@
+import { fileBytes, sameBytes } from "../../scripts/file-content.mjs";
 import { isSourcePath, skipDirName, skipPath, keepDotName, keepBareFile } from "./ws-skip";
 import { bytesToDataUrl } from "./archive";
 import { isRefPath } from "./ref";
@@ -168,7 +169,6 @@ export async function saveSlot(slot: DiskSlot, files: Record<string, string>, di
     }
   }
   for (const [path, content] of Object.entries(files)) {
-    if (/^data:image\//i.test(content.trim())) continue;
     const parts = path.split("/").filter(Boolean);
     const fileName = parts.pop();
     if (!fileName) continue;
@@ -178,7 +178,7 @@ export async function saveSlot(slot: DiskSlot, files: Record<string, string>, di
     }
     const fh = await dir.getFileHandle(fileName, { create: true });
     const w = await fh.createWritable();
-    await w.write(content);
+    await w.write(new Uint8Array(fileBytes(content)).buffer);
     await w.close();
   }
 }
@@ -207,18 +207,17 @@ async function dirFor(path: string, create: boolean, target = diskWorkspaceHandl
 }
 
 export async function writeDiskFile(path: string, content: string, target = diskWorkspaceHandle(), expected?: string | null): Promise<void> {
-  if (/^data:image\//i.test(content.trim())) return;
   const loc = await dirFor(path, true, target);
   if (!loc) return;
   if (expected !== undefined) {
-    let actual: string | null = null;
-    try { actual = await (await (await loc.dir.getFileHandle(loc.name)).getFile()).text(); }
+    let actual: Uint8Array | null = null;
+    try { actual = new Uint8Array(await (await (await loc.dir.getFileHandle(loc.name)).getFile()).arrayBuffer()); }
     catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; }
-    if (actual !== expected && actual !== content) throw new Error(`Datei extern geändert: ${path}. Neu laden oder Änderungen abgleichen.`);
+    if (!(actual === null ? expected === null : (expected !== null && sameBytes(actual, fileBytes(expected))) || sameBytes(actual, fileBytes(content)))) throw new Error(`Datei extern geändert: ${path}. Neu laden oder Änderungen abgleichen.`);
   }
   const fh = await loc.dir.getFileHandle(loc.name, { create: true });
   const w = await fh.createWritable();
-  await w.write(content);
+  await w.write(new Uint8Array(fileBytes(content)).buffer);
   await w.close();
 }
 

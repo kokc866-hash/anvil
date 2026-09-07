@@ -60,3 +60,5 @@ Der Antwortcache berücksichtigt Modelllaufzeit, Temperatur, Ausgabelimit, Wiede
 `npm run test:helper` prüft Lebenszyklus, Projektzuordnung, Zeitlimits, Cache, Modellwahl sowie simulierte Downloads und die Übernahme älterer Installationen. Enthalten sind auch Unterbrechungen während des Modellupdates, die Wiederherstellung beim Neustart und das Entfernen bei laufender Übernahme oder Manifestabfrage. `npm run test:helper:browser` prüft die Desktop-Bedienung; mit `-- --production` läuft sie gegen den Desktop-Produktionsbuild. Dabei werden keine Modelle heruntergeladen und keine Anbieter angesprochen.
 
 Eine echte Inferenz auf der Windows-GPU ist durch diese Simulationen nicht abgedeckt.
+
+Nach einem festhängenden Abbruch oder GPU-Verlust werden auch der Ladefortschritt und die zuletzt geladene Konfiguration zurückgesetzt. Dadurch erscheinen „bereit“ und „Nicht geladen“ nicht gleichzeitig. Die bereits vorhandenen längeren, auftragsbezogenen Zeitlimits und die Abbruchfrist bleiben erhalten; eine langsame, erfolgreich abgebrochene Anfrage entlädt das Modell nicht pauschal.

@@ -39,14 +39,14 @@ export function noteDiskContents(files: Record<string, string>, target = capture
 async function write(path: string, content: string, target: DiskTarget, baseContent?: string | null) {
   const key = targetKey(target) + path;
   const expected = knownDisk.has(key) ? knownDisk.get(key) : baseContent;
-  if (/^data:image\//i.test(content.trim())) return;
   try {
+    if (target.cwd && target.handle) throw new Error("Zwei Workspace-Ziele aktiv. Ordner erneut öffnen.");
     const jobs: Promise<unknown>[] = [writeDiskFile(path, content, target.handle, expected)];
     if (target.cwd)
       jobs.push(
         withCompanion(
           () => companionWriteChecked(path, content, target.cwd, target.base || undefined, expected),
-          target.base,
+          target.base, target.cwd,
         ),
       );
     // Settle both destinations before a subsequent write can start.
@@ -55,7 +55,7 @@ async function write(path: string, content: string, target: DiskTarget, baseCont
     if (failed?.status === "rejected") throw failed.reason;
     knownDisk.set(key, content);
     const s = useIde.getState();
-    if (s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && diskWorkspaceHandle() === target.handle && !s.pendingDiffs.some((d) => d.path === path)) {
+    if (s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && diskWorkspaceHandle() === target.handle && !s.pendingDiffs.some((d) => d.path === path && d.source !== "round")) {
       const dirty = { ...s.dirty }, editBases = { ...s.editBases };
       if (s.files[path] === content) { delete dirty[path]; delete editBases[path]; }
       else if (path in s.files) editBases[path] = content;
@@ -80,7 +80,7 @@ export async function syncMove(from: string, to: string, target = captureDiskTar
   await queue.run(async () => {
     // A workspace has one authoritative destination. Dual destinations require explicit migration.
     if (target.cwd && target.handle) throw new Error("Zwei Workspace-Ziele aktiv. Ordner erneut öffnen.");
-    if (target.cwd) await withCompanion(() => companionMoveFile(from, to, target.cwd, target.base || undefined), target.base);
+    if (target.cwd) await withCompanion(() => companionMoveFile(from, to, target.cwd, target.base || undefined), target.base, target.cwd);
     else if (target.handle) await moveDiskPath(from, to, target.handle);
     const prefix = targetKey(target);
     for (const [key, content] of [...knownDisk]) if (key === prefix + from || key.startsWith(prefix + from + "/")) {
@@ -121,7 +121,7 @@ export function syncRemove(path: string, target = captureDiskTarget()): Promise<
       target.cwd
         ? withCompanion(
             () => companionDeleteFile(path, target.cwd, target.base || undefined),
-            target.base,
+            target.base, target.cwd,
           ).then((ok) => {
             if (!ok) throw new Error(`Nicht gelöscht: ${path}`);
           })
@@ -145,7 +145,7 @@ export function syncMkdir(path: string, target = captureDiskTarget()): Promise<v
       target.cwd
         ? withCompanion(
             () => companionMkdir(path, target.cwd, target.base || undefined),
-            target.base,
+            target.base, target.cwd,
           ).then((ok) => {
             if (!ok) throw new Error(`Ordner nicht angelegt: ${path}`);
           })

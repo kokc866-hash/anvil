@@ -361,6 +361,19 @@ function clientTools(opts: {
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
 }) {
   const tools = {
+    verify: async (paths: string[]) => {
+      const { refreshProblems } = await import("./problems");
+      const result = await refreshProblems();
+      if (!result.current) return { ok: false, detail: "Dateien während der Diagnose geändert. Prüfung ist überholt." };
+      const hits = result.hits.filter((h) => !paths.length || paths.includes(h.path));
+      const errors = hits.filter((h) => h.severity === "error");
+      const missing = paths.filter((p) => /\.(?:py|[cm]?[jt]sx?)$/.test(p) && !result.checked.includes(p));
+      if (errors.length || missing.length) return { ok: false, detail: [
+        ...errors.slice(0, 20).map((h) => `${h.path}:${h.line} [${h.source}] ${h.message}`),
+        ...(missing.length ? [`Prüfung nicht verfügbar für: ${missing.join(", ")}. ${result.errors.join("; ")}`] : []),
+      ].join("\n") };
+      return { ok: true, detail: hits.length ? `${hits.length} Warnung(en)/Hinweis(e) verbleiben; keine aktuellen Fehler in den betroffenen Dateien.` : "Keine aktuellen Fehler in den betroffenen Dateien." };
+    },
     onDelta: opts.onDelta,
     onWorkspace: opts.onWorkspace,
     onTool: opts.onTool,

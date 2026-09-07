@@ -81,8 +81,8 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
   const last = logs[logs.length - 1];
   const tests = mergeTests(discoverTests(files), Object.values(testResults));
   const problems = [
-    ...lspProblems.map((p) => ({ path: p.path, line: p.line, text: p.message, source: p.source })),
-    ...pluginProblems,
+    ...lspProblems.map((p) => ({ path: p.path, line: p.line, text: p.message, source: p.source, severity: p.severity })),
+    ...pluginProblems.map((p) => ({ ...p, severity: "error" as const })),
   ];
 
   async function runRepl() {
@@ -334,14 +334,14 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
               <button
                 key={i}
                 type="button"
-                className="mb-1 block w-full text-left text-danger hover:underline"
+                className={cn("mb-1 block w-full text-left hover:underline", p.severity === "warning" ? "text-warning" : p.severity === "info" ? "text-muted" : "text-danger")}
                 onClick={() => gotoFile(p.path in files ? p.path : activePath ?? p.path, p.line)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   useIde.getState().pushAgent(problemsPrompt([p], files));
                 }}
               >
-                {p.path}:{p.line} · {p.source && !["syntax", "python", "index", "json", "js", "c"].includes(p.source) ? p.source : t("lintHeur")} · {p.text}
+                {p.path}:{p.line} · {p.severity === "warning" ? "Warnung" : p.severity === "info" ? "Hinweis" : "Fehler"} · {p.source && !["syntax", "python", "index", "json", "js", "c"].includes(p.source) ? p.source : t("lintHeur")} · {p.text}
               </button>
             ))}
             </>

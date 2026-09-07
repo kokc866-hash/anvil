@@ -107,10 +107,9 @@ export function homeOk(resolved) {
   return false;
 }
 
-export function insideRoot(root, full) {
-  const a = path.resolve(root);
-  const b = path.resolve(full);
-  return b === a || b.startsWith(a + path.sep);
+export function insideRoot(root, full, paths = path) {
+  const relative = paths.relative(paths.resolve(root), paths.resolve(full));
+  return relative === "" || (relative !== ".." && !relative.startsWith(".." + paths.sep) && !paths.isAbsolute(relative));
 }
 
 export function runAllowed(bin) {

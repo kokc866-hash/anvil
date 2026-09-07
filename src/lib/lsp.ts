@@ -147,11 +147,11 @@ export function renameSymbol(
 }
 
 export function problemsPrompt(
-  hits: { path: string; line: number; message?: string; text?: string }[],
+  hits: { path: string; line: number; message?: string; text?: string; source?: string; severity?: LspSeverity }[],
   files?: Record<string, string>,
 ): string {
   if (!hits.length) return "";
-  const lines = hits.slice(0, 24).map((h) => `${h.path}:${h.line} ${h.message ?? h.text ?? ""}`);
+  const lines = hits.slice(0, 24).map((h) => `${h.path}:${h.line} [${h.severity ?? "error"} · ${h.source ?? "unbekannte Quelle"}] ${h.message ?? h.text ?? ""}`);
   const paths = [...new Set(hits.map((h) => h.path))].slice(0, 6);
   const bodies = files
     ? paths
@@ -163,5 +163,5 @@ export function problemsPrompt(
         .filter(Boolean)
         .join("\n")
     : "";
-  return `Behebe diese Probleme im Workspace. Nutze write_file oder edit_file — die Tools sind aktiv. Nur die genannten Stellen, dann kurz sagen, was du geändert hast.\n\n${lines.join("\n")}${bodies}`;
+  return `Behebe diese Probleme im Workspace. Nutze write_file oder edit_file — die Tools sind aktiv. Beachte Quelle und Schweregrad: Näherungen sind Hinweise, kein Compilerbeweis. Behalte korrekten Code bei. Prüfe nach der letzten Änderung die betroffenen Diagnosen und gegebenenfalls den Run erneut. Ein fehlgeschlagener oder früherer Run bestätigt keine Korrektur. Nenne offen verbliebene Fehler und nicht mögliche Prüfungen.\n\n${lines.join("\n")}${bodies}`;
 }

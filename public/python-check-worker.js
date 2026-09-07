@@ -8,7 +8,8 @@ self.onmessage = ({ data }) => {
         importScripts("https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js");
         return self.loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/" });
       })();
-      const py = await runtime;
+      let py;
+      try { py = await runtime; } catch (error) { runtime = undefined; throw error; }
       const result = await py.runPythonAsync(`
 import json
 _anvil_syntax_results = []

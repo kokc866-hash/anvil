@@ -106,15 +106,10 @@ export function Workspace() {
 
   useEffect(() => {
     const native = (window as unknown as { anvilNative?: { onBeforeClose?: (fn: () => Promise<boolean>) => () => void } }).anvilNative;
-    return native?.onBeforeClose?.(async () => {
-      const { prepareWorkspaceSwitch } = await import("@/lib/save");
-      if (!(await prepareWorkspaceSwitch())) return false;
-      const { stopAgent } = await import("@/lib/abort"); stopAgent("Anvil wird geschlossen");
-      await import("@/lib/disk-sync").then((d) => d.flushDiskSync());
-      await import("@/lib/secrets").then((s) => s.flushSecrets());
-      await import("@/lib/persist-storage").then((s) => s.flushPersistence());
-      return true;
-    });
+    const off = native?.onBeforeClose?.(async () => (await import("@/lib/save")).prepareAppClose());
+    const failed = (event: Event) => useIde.getState().setNotice(`Beenden fehlgeschlagen: ${(event as CustomEvent<string>).detail}`);
+    window.addEventListener("anvil-close-error", failed);
+    return () => { off?.(); window.removeEventListener("anvil-close-error", failed); };
   }, []);
 
   useEffect(() => {
@@ -285,16 +280,8 @@ export function Workspace() {
       lint = window.setTimeout(() => {
         const st = useIde.getState();
         const current = () => job === generation && st.files === useIde.getState().files && st.workspaceEpoch === useIde.getState().workspaceEpoch;
-        void import("@/lib/compiler-client").then((c) => c.compilerJob("lint", st.files, st.openPaths)).then((deep) => {
-          if (!current()) return;
-          st.setLspProblems(deep.local as import("@/lib/lsp").LspHit[]);
-          void import("@/lib/problems").then((p) => { if (current()) p.noteCompileChecked(deep.checked as string[]); });
-          st.setCompileProblems(deep.hits as import("@/lib/lsp").LspHit[]);
-        }).catch(() => { /* A stale request is superseded by the next revision. */ });
-        if (Object.keys(st.files).some((p) => p.endsWith(".py"))) void import("@/lib/lsp-compile").then((c) => c.pyCompileWorkspace(st.files, st.openPaths)).then((py) => {
-          if (!current() || !py.checked.length) return;
-          const cur = useIde.getState();
-          cur.setCompileProblems([...cur.compileProblems.filter((p) => p.source !== "py"), ...py.hits]);
+        void import("@/lib/problems").then((p) => { if (current()) return p.refreshProblems(); }).catch((error) => {
+          if (current()) st.pushLspLog(false, error instanceof Error ? error.message : String(error));
         });
         void import("@/lib/companion-lint").then((c) => { if (current()) c.scheduleCompanionLint(); });
       }, 600);

@@ -28,6 +28,7 @@ import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
 import {
   allowCorsOrigin,
   blockedCwd,
+  insideRoot,
   homeOk,
   llmHeaders,
   MAX_BODY,
@@ -122,7 +123,7 @@ function safeCwd(cwd) {
   const root = path.resolve(workspace || ROOT);
   const dir = path.resolve(cwd || root);
   if (blockedCwd(dir)) throw new Error("Systemordner gesperrt");
-  if (dir === root || dir.startsWith(root + path.sep)) return dir;
+  if (insideRoot(root, dir)) return dir;
   throw new Error("cwd außerhalb des Workspace");
 }
 

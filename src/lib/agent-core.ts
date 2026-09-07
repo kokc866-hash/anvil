@@ -1,3 +1,4 @@
+import { AgentEvidence, type Verification } from "./agent-evidence.ts";
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { parseTextTool, validateToolCall, isToolStall, toolCallKey, type ToolContract } from "./tool-compat";
 import type { ToolLearningBridge } from "./tool-learning";
@@ -59,6 +60,7 @@ export type AgentCommand =
 
 export type AgentResult = {
   ok: boolean;
+  verification?: Verification;
   reply: string;
   files?: AgentFile[];
   runPaths?: string[];
@@ -581,6 +583,7 @@ export async function runAgentLoop(
   },
   complete: (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => Promise<LlmChoice>,
   opts?: {
+    verify?: (paths: string[]) => Promise<{ ok: boolean; detail: string }>;
     fetchUrl?: (url: string) => Promise<string>;
     onDelta?: (s: string, kind?: "text" | "think") => void;
     onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
@@ -611,6 +614,12 @@ export async function runAgentLoop(
   const dirs = new Set<string>(data.dirs ?? []);
   for (const p of files.keys()) for (const d of parents(p)) dirs.add(d);
   const runPaths: string[] = [];
+  const evidence = new AgentEvidence();
+  const askText = data.messages.filter((m) => m.role === "user").at(-1)?.content ?? "";
+  const diagnosticTask = !data.observeOnly && /Behebe diese Probleme im Workspace/.test(askText);
+  const diagnosticPaths = [...new Set([...askText.matchAll(/^(.+?):\d+ \[/gm)].map((m) => m[1]).filter((path) => files.has(path)))];
+  let diagnosticCheck: { revision: number; ok: boolean; detail: string } | undefined;
+  let verificationNudged = false;
   const used: string[] = [];
   const completedTools: string[] = [];
   const completedChanges = new Set<string>();
@@ -686,18 +695,27 @@ export async function runAgentLoop(
   };
   await pack();
 
-  const packResult = (reply: string, extra: Partial<AgentResult> = {}): AgentResult => ({
-    ok: true,
-    files: [...files.entries()].map(([path, content]) => ({ path, content })),
-    runPaths: [...new Set(runPaths)],
-    tools: used,
-    deleted: [...new Set(deleted)],
-    applied: Boolean(opts?.onWorkspace),
-    usage,
-    compacted,
-    ...extra,
-    reply,
-  });
+  const packResult = (reply: string, extra: Partial<AgentResult> = {}): AgentResult => {
+    let verification = evidence.status();
+    if (diagnosticTask && !extra.parked) {
+      if (!diagnosticCheck || diagnosticCheck.revision !== evidence.revision) verification = { state: "stale", detail: "Aktuelle Diagnosen noch nicht bestätigt." };
+      else if (!diagnosticCheck.ok) verification = { state: "failed", detail: diagnosticCheck.detail };
+      else if (verification.state === "none") verification = { state: "passed", detail: diagnosticCheck.detail };
+    }
+    const failed = verification.state === "failed";
+    const unverified = verification.state === "stale";
+    return {
+      files: [...files.entries()].map(([path, content]) => ({ path, content })),
+      runPaths: [...new Set(runPaths)], tools: used, deleted: [...new Set(deleted)],
+      applied: Boolean(opts?.onWorkspace), usage, compacted, ...extra,
+      ok: (extra.ok ?? true) && !failed && !(diagnosticTask && unverified),
+      verification,
+      error: failed ? verification.detail : extra.error,
+      reply: (failed || unverified) && !extra.parked
+        ? `${failed ? "Nicht abgeschlossen" : "Noch nicht bestätigt"}: ${verification.detail}\n\nModellantwort:\n${reply}`
+        : reply,
+    };
+  };
 
   let nudged = 0;
   let emptyHits = 0;
@@ -778,6 +796,17 @@ export async function runAgentLoop(
     }
     if (!toolCalls.length) {
       const text = choice.content?.trim() || "";
+      if (!observeOnly && diagnosticTask && (!diagnosticCheck || diagnosticCheck.revision !== evidence.revision)) {
+        const checked = opts?.verify ? await opts.verify(diagnosticPaths) : { ok: false, detail: "Diagnoseprüfung in dieser Verbindung nicht verfügbar." };
+        throwIfAborted();
+        diagnosticCheck = { revision: evidence.revision, ...checked };
+      }
+      const verification = evidence.status();
+      if (!observeOnly && !verificationNudged && round + 1 < cap && ((diagnosticCheck && !diagnosticCheck.ok) || verification.state === "failed")) {
+        verificationNudged = true;
+        messages.push({ role: "user", content: `Aktueller Nachweis: ${diagnosticCheck && !diagnosticCheck.ok ? diagnosticCheck.detail : verification.detail}\nBehebe die belegte Ursache, sofern möglich. Ein fehlgeschlagener Run oder verbliebene Diagnosen dürfen nicht als erfolgreich bestätigt beschrieben werden. Bei blockierter Prüfung den Grund offen nennen.` });
+        continue;
+      }
       const ask = String(data.messages.filter((m) => m.role === "user").at(-1)?.content ?? "");
       const open = observeOnly ? false : jobOpen({ ask, used, text });
       const wrote = used.some((n) => /write_file|append_file|edit_file/.test(n));
@@ -996,8 +1025,10 @@ export async function runAgentLoop(
           result = { error: err instanceof Error ? err.message : String(err), result };
         }
       }
+      if ((writes && Object.keys(writes).length) || event) evidence.changed();
       opts?.onTool?.({ name: tc.function.name, args, result: frame ? { ...(result as object), image: frame } : result });
       const rec = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
+      evidence.record(tc.function.name, args, rec);
       if (!blocked && !denied && !batchFail && agentGen() === loopGen) opts?.toolLearning?.after(tc, rec);
       if (args.path && rec.path == null) rec.path = String(args.path);
       if (tc.function.name === "shell" && args.command && rec.command == null) rec.command = String(args.command);

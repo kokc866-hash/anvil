@@ -57,3 +57,30 @@ describe("lsp-compile", () => {
     assert.equal(closed.length, 0);
   });
 });
+
+// Reported desktop regression: DOM and standard arrays disappeared in the packaged worker.
+it("loads actual DOM and ECMAScript libraries and honors nested tsconfig", async () => {
+  const files = {
+    "tsconfig.json": '{"compilerOptions":{"lib":["ES2022"]},"include":["root.ts"]}',
+    "root.ts": "export const root: number = 1;",
+    "snake/tsconfig.json": '{"compilerOptions":{"lib":["ES2017","DOM"]},"include":["./snake.ts"]}',
+    "snake/snake.ts": 'export const canvas = document.createElement("canvas") as HTMLCanvasElement; const ctx: CanvasRenderingContext2D = canvas.getContext("2d")!; const data: Record<string, HTMLImageElement> = {}; const a: [number, number][] = [[1,2]]; a.some(x => x[0]); a.shift();',
+  };
+  assert.deepEqual(await tscWorkspace(files), []);
+  const broken = { ...files, "snake/snake.ts": files["snake/snake.ts"] + ' const wrong: number = "bad";' };
+  assert.ok((await tscWorkspace(broken)).some((h) => h.path === "snake/snake.ts" && /number/.test(h.message)));
+  assert.deepEqual(await tscWorkspace(files), []);
+});
+it("resolves inherited config relative to the nested project and keeps project libraries separate", async () => {
+  const files = {
+    "base.json": '{"compilerOptions":{"lib":["ES2017","DOM"]}}',
+    "web/tsconfig.json": '{"extends":"../base.json","include":["src/**/*.ts"],"exclude":["src/ignored.ts"]}',
+    "web/src/main.ts": 'export const el: HTMLElement = document.body;',
+    "web/src/ignored.ts": 'export const n: number = "wrong";',
+    "server/tsconfig.json": '{"compilerOptions":{"lib":["ES2022"]}}',
+    "server/main.ts": 'export const el = document.body;',
+  };
+  const hits = await tscWorkspace(files);
+  assert.equal(hits.some((h) => h.path.startsWith("web/")), false, JSON.stringify(hits));
+  assert.ok(hits.some((h) => h.path === "server/main.ts" && /document/.test(h.message)));
+});

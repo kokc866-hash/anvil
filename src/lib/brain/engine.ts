@@ -656,12 +656,12 @@ export async function brainGenerate(opts: {
       await Promise.race([finished, new Promise<void>((resolve) => { timer = setTimeout(resolve, 1500); })]);
       clearTimeout(timer);
       if (!settled && engine === loadedEngine) {
-        useBrain.getState().setStatus({ status: "error", loadedId: "", error: "Helfer reagiert nicht auf Abbruch. Unter Einstellungen erneut laden." });
+        useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: "Helfer reagiert nicht auf Abbruch. Unter Einstellungen erneut laden." });
         await disposeBrainEngine();
       }
     }
     if (engine === loadedEngine && /device lost|out of memory|oom/i.test(String(error))) {
-      useBrain.getState().setStatus({ status: "error", loadedId: "", error: String(error) });
+      useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: String(error) });
       await disposeBrainEngine();
     }
     throw error;

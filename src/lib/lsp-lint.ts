@@ -55,23 +55,51 @@ function lintJson(path: string, src: string): LspHit[] {
   }
 }
 
+/** Mask strings and comments while retaining line/column positions and Python's // operator. */
+function pythonMask(src: string): { code: string; unclosed: number } {
+  const out = src.split("");
+  let i = 0, line = 1, unclosed = 0;
+  const mask = () => { if (src[i] === "\n") line++; else out[i] = " "; i++; };
+  while (i < src.length) {
+    if (src[i] === "#") { while (i < src.length && src[i] !== "\n") mask(); }
+    else if (src[i] === "'" || src[i] === '"') {
+      const quote = src[i], delimiter = src.startsWith(quote.repeat(3), i) ? quote.repeat(3) : quote;
+      const start = line;
+      for (let n = 0; n < delimiter.length; n++) mask();
+      let closed = false;
+      while (i < src.length) {
+        if (src[i] === "\\") { mask(); if (i < src.length) mask(); continue; }
+        if (src.startsWith(delimiter, i)) { for (let n = 0; n < delimiter.length; n++) mask(); closed = true; break; }
+        if (delimiter.length === 1 && src[i] === "\n") break;
+        mask();
+      }
+      if (!closed) unclosed ||= start;
+    } else { if (src[i] === "\n") line++; i++; }
+  }
+  return { code: out.join(""), unclosed };
+}
+
 function lintPython(path: string, src: string): LspHit[] {
   const hits: LspHit[] = [];
-  const lines = src.split("\n");
-  let indent = 0;
+  const { code } = pythonMask(src);
+  const lines = code.split("\n"), rawLines = src.split("\n");
+  let depth = 0, statement = "", start = 1, colon = false;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    if (!raw.trim() || raw.trim().startsWith("#")) continue;
-    const m = raw.match(/^(\s*)/);
-    const spaces = (m?.[1] ?? "").replace(/\t/g, "    ").length;
-    if (raw.includes("\t") && raw.startsWith(" ")) {
-      hits.push(hit(path, i + 1, "Mischung Tab/Leerzeichen", "python", "warning"));
+    if (!raw.trim()) continue;
+    if (!statement) start = i + 1;
+    const indent = rawLines[i].match(/^[ \t]*/)?.[0] ?? "";
+    if (indent.includes("\t") && indent.includes(" ")) hits.push(hit(path, i + 1, "Mischung Tab/Leerzeichen", "python", "warning"));
+    for (const c of raw) {
+      if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c)) depth = Math.max(0, depth - 1);
+      else if (c === ":" && depth === 0) colon = true;
     }
-    if (/^\s*(def|class|if|elif|else|for|while|try|except|finally|with|async def)\b/.test(raw) && !raw.trimEnd().endsWith(":") && !raw.trimEnd().endsWith("\\")) {
-      hits.push(hit(path, i + 1, "Blockkopf ohne Doppelpunkt", "python"));
-    }
-    if (spaces > indent + 8) hits.push(hit(path, i + 1, "Sprung in der Einrückung", "python", "warning"));
-    indent = spaces;
+    statement += " " + raw.trim();
+    if (depth || raw.trimEnd().endsWith("\\")) continue;
+    if (/^\s*(?:(?:async\s+)?(?:def|for|with)|class|if|elif|else|while|try|except|finally)\b/.test(statement) && !colon)
+      hits.push(hit(path, start, "Blockkopf ohne Doppelpunkt", "python"));
+    statement = ""; colon = false;
   }
   hits.push(...lintBraces(path, src, "py"));
   return hits;
@@ -79,6 +107,10 @@ function lintPython(path: string, src: string): LspHit[] {
 
 function lintBraces(path: string, src: string, mode: "js" | "c" | "py"): LspHit[] {
   const hits: LspHit[] = [];
+  if (mode === "py") {
+    const masked = pythonMask(src); src = masked.code;
+    if (masked.unclosed) hits.push(hit(path, masked.unclosed, "String nicht geschlossen", "python"));
+  }
   const stack: { ch: string; line: number }[] = [];
   const open: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
   const close = new Set([")", "]", "}"]);
@@ -114,7 +146,7 @@ function lintBraces(path: string, src: string, mode: "js" | "c" | "py"): LspHit[
       while (i < src.length && src[i] !== "\n") i += 1;
       continue;
     }
-    if ((c === "/" && src[i + 1] === "/") || (mode !== "py" && c === "/" && src[i + 1] === "*")) {
+    if (mode !== "py" && c === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
       if (src[i + 1] === "/") {
         while (i < src.length && src[i] !== "\n") i += 1;
         continue;

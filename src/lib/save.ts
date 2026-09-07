@@ -42,13 +42,17 @@ async function saveCurrent(request: SaveRequest, path: string | null, target: Re
     emitPlugin("save", path ?? "");
     for (const p of paths) if (p in files) scheduleSyncWrite(p, files[p], target);
     await flushDiskSync();
-    await Promise.all([flushPersistence(), flushSecrets()]);
+    const secondary = await Promise.allSettled([flushPersistence(), flushSecrets()]);
+    const errors = secondary.flatMap((r, i) => r.status === "rejected" ? [`${i ? "Schlüssel" : "Einstellungen und Verlauf"}: ${saveError(r.reason)}`] : []);
+    if (errors.length) throw new Error(`Projektdateien verarbeitet. Weitere Sicherung fehlgeschlagen:\n${errors.join("\n")}`);
     if (hasLocation("backup")) await saveSlot("backup", files, st.dirs);
     if (!sameTarget()) return false;
     useIde.getState().setNotice(note);
-    return !paths.some((p) => Boolean(useIde.getState().dirty[p]));
+    const remaining = (request.all ? Object.keys(useIde.getState().dirty) : paths).filter((p) => Boolean(useIde.getState().dirty[p]));
+    if (remaining.length) { useIde.getState().setNotice(`Noch ungespeichert: ${remaining.join(", ")}. Änderungen abgleichen und erneut speichern.`); return false; }
+    return true;
   } catch (error) {
-    useIde.getState().setNotice(error instanceof Error ? error.message : "Speichern fehlgeschlagen");
+    useIde.getState().setNotice(saveError(error));
     return false;
   }
 }
@@ -92,4 +96,54 @@ export function focusAgent() {
   window.setTimeout(() => {
     document.getElementById("anvil-chat")?.focus();
   }, 30);
+}
+
+function saveError(error: unknown): string {
+  if (error instanceof AggregateError) return [...new Set(error.errors.map(saveError))].join("\n") || error.message;
+  return error instanceof Error ? error.message : String(error || "Speichern fehlgeschlagen.");
+}
+
+let closing: Promise<boolean> | undefined;
+export function prepareAppClose(): Promise<boolean> {
+  return closing ??= closeCurrentApp().finally(() => { closing = undefined; });
+}
+
+async function closeCurrentApp(): Promise<boolean> {
+  const { saveChoice, closeFailureChoice, confirmApp } = await import("./confirm");
+  const before = useIde.getState();
+  const dirty = Object.keys(before.dirty).filter((p) => before.dirty[p]);
+  const choice = dirty.length ? await saveChoice(`${dirty.length} Datei(en) vor dem Beenden speichern?`) : "save";
+  if (choice === "cancel" || before.workspaceEpoch !== useIde.getState().workspaceEpoch) return false;
+  if (choice === "discard" && dirty.some((p) => before.files[p] !== useIde.getState().files[p])) {
+    useIde.getState().setNotice("Dateien inzwischen geändert. Beenden erneut wählen."); return false;
+  }
+  const { stopAgent } = await import("./abort");
+  if (useIde.getState().agentBusy) stopAgent("Anvil wird geschlossen");
+  const native = (window as unknown as { anvilNative?: { saveRecovery?: (s: { files: Record<string, string>; dirs: string[] }) => Promise<{ path?: string; canceled?: boolean }> } }).anvilNative;
+  let discard = choice === "discard";
+  while (before.workspaceEpoch === useIde.getState().workspaceEpoch) {
+    let failure = "";
+    try {
+      if (discard) {
+        for (const path of dirty) await useIde.getState().discardFile(path);
+        if (Object.values(useIde.getState().dirty).some(Boolean)) throw new Error(useIde.getState().notice || "Änderungen konnten nicht zurückgenommen werden.");
+        discard = false;
+      }
+      if (await saveNow({ all: true })) return true;
+      failure = useIde.getState().notice || "Speichern konnte nicht abgeschlossen werden.";
+    } catch (error) { failure = saveError(error); }
+    const action = await closeFailureChoice(failure, Boolean(native?.saveRecovery));
+    if (action === "cancel") return false;
+    if (action === "copy" && native?.saveRecovery) {
+      const snapshot = useIde.getState();
+      try {
+        const result = await native.saveRecovery({ files: snapshot.files, dirs: snapshot.dirs });
+        if (!result.path) continue;
+        if (snapshot.files !== useIde.getState().files || snapshot.workspaceEpoch !== useIde.getState().workspaceEpoch) { useIde.getState().setNotice("Projekt inzwischen geändert. Neue Änderungen erneut sichern."); continue; }
+        if (await confirmApp(`Projektdateien vollständig gesichert unter ${result.path}. Noch fehlgeschlagene Einstellungen oder Schlüssel wurden damit nicht gesichert. Anvil jetzt beenden?`, { title: "Projektsicherung erstellt", ok: "Beenden", cancel: "Offen lassen" })) return true;
+        return false;
+      } catch (error) { useIde.getState().setNotice(saveError(error)); await confirmApp(saveError(error), { title: "Sicherung fehlgeschlagen", ok: "Zurück", cancel: "" }); }
+    }
+  }
+  return false;
 }

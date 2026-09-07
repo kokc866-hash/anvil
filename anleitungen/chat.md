@@ -9,3 +9,8 @@ Interner Entwicklungsstand nach 1.3.19. Die folgenden Ergänzungen sind noch nic
 - Ein verspäteter Abschluss von „Stop“ greift nicht in einen danach gestarteten Auftrag ein. Wird die aktive Antwort gelöscht, endet auch die dazugehörige Anfrage.
 
 Die gezielten Chat-Regressionen verwenden simulierte Anbieterantworten. Sie prüfen die Reihenfolge, Chatwechsel, Stream-Zuordnung, Stop/Neustart und die Statusanzeige; dafür sind keine echten Modellanfragen erforderlich.
+
+- Run-Nachweise gelten für den tatsächlich geprüften Dateistand. Ein anderer erfolgreicher Befehl hebt einen fehlgeschlagenen Run nicht auf. Spätere Dateiänderungen machen frühere Run-Nachweise veraltet.
+- „Probleme beheben“ übergibt Quelle und Schweregrad an den Agenten. Vor dem Abschluss werden aktuelle Diagnosen herangezogen; verbliebene Fehler gehen einmal als konkreter Korrekturhinweis zurück. Blockierte Prüfungen und Fehler bleiben sichtbar.
+- Ein Werkzeugaufruf allein hakt keine vollständige To-do-Liste ab. Fehlerzustände bleiben auch nach dem Ende des Streams erhalten. Automatische Runs werden vor dem endgültigen Abschluss abgewartet.
+- Fettdruck, Inline-Code und Listen in Agentenantworten werden formatiert angezeigt. Codeblöcke behalten ihre bisherigen Aktionen.

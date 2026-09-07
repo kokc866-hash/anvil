@@ -38,7 +38,7 @@ describe("plan", () => {
     assert.equal(plan[2]?.status, "err");
     assert.equal(plan[3]?.status, "todo");
   });
-  it("überarbeiten matches write, round end closes leftover todos", () => {
+  it("überarbeiten matches write, run evidence never closes unrelated todos", () => {
     let plan: PlanStep[] = [
       { text: "Referenzen und bestehendes UI prüfen", status: "ok" },
       { text: "Layout, Farben und Interaktionen überarbeiten", status: "todo" },
@@ -46,8 +46,8 @@ describe("plan", () => {
     ];
     plan = planFromTool("write_file", plan)!;
     assert.equal(plan[1]?.status, "ok");
-    plan = planFinish(plan, false, true)!;
-    assert.equal(plan.every((s) => s.status === "ok"), true);
+    assert.equal(planFinish(plan, false, true), null);
+    assert.equal(plan[2]?.status, "todo");
   });
   it("unproved finish leaves leftover todos", () => {
     const left = planFinish(

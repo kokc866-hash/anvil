@@ -622,9 +622,11 @@ export function installCanvasRuntime(win: Window & typeof globalThis, inputs: Ca
   ) {
     if (disposed)
       return Promise.reject(new win.DOMException("Canvas-Laufzeit wurde beendet.", "AbortError"));
-    src =
-      (win as unknown as { __ANVIL_ASSET__?: (path: string) => string }).__ANVIL_ASSET__?.(src) ??
-      src;
+    const originalSource = src;
+    const label = /^data:/i.test(src) ? "eingebettetes Bild" : src.slice(0, 180);
+    let sourceError: unknown;
+    try { src = (win as unknown as { __ANVIL_ASSET__?: (path: string) => string }).__ANVIL_ASSET__?.(src) ?? src; }
+    catch (error) { sourceError = error; }
     const key = (options?.crossOrigin ?? "anonymous") + ":" + src;
     if (!options?.signal && images.has(key)) return images.get(key)!;
     const promise = new Promise<HTMLImageElement>((resolve, reject) => {
@@ -636,9 +638,14 @@ export function installCanvasRuntime(win: Window & typeof globalThis, inputs: Ca
         finished = true;
         cancelImages.delete(abort);
         signal?.removeEventListener("abort", abort);
+        win.document.removeEventListener("securitypolicyviolation", policyBlocked);
         image.onload = image.onerror = null;
         if (error) reject(error);
         else resolve(image);
+      };
+      const policyBlocked = (event: SecurityPolicyViolationEvent) => {
+        if ((event.effectiveDirective === "img-src" || event.effectiveDirective === "default-src") && (event.blockedURI === src || event.blockedURI === originalSource || (event.blockedURI === "data" && src.startsWith("data:"))))
+          finish(new Error(`Bild durch Content-Security-Policy (${event.effectiveDirective}) blockiert: ${label}`));
       };
       const abort = () => {
         finish(new win.DOMException("Bildladen abgebrochen", "AbortError"));
@@ -650,15 +657,29 @@ export function installCanvasRuntime(win: Window & typeof globalThis, inputs: Ca
         return;
       }
       signal?.addEventListener("abort", abort, { once: true });
-      image.crossOrigin = options?.crossOrigin ?? "anonymous";
+      if (sourceError) { finish(sourceError instanceof Error ? sourceError : new Error(String(sourceError))); return; }
+      try {
+        if (/^data:image\/svg\+xml[;,]/i.test(src)) {
+          const comma = src.indexOf(",");
+          const xml = /;base64/i.test(src.slice(0, comma))
+            ? new win.TextDecoder().decode(Uint8Array.from(win.atob(src.slice(comma + 1)), (c) => c.charCodeAt(0)))
+            : decodeURIComponent(src.slice(comma + 1));
+          const doc = new win.DOMParser().parseFromString(xml, "image/svg+xml");
+          if (doc.querySelector("parsererror") || doc.documentElement.localName !== "svg") throw new Error(`SVG ist kein gültiges XML: ${label}`);
+          if (!doc.documentElement.namespaceURI) doc.documentElement.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+          src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new win.XMLSerializer().serializeToString(doc));
+        }
+      } catch (error) { finish(new Error(`SVG-Daten konnten nicht gelesen werden: ${error instanceof Error ? error.message : error}`)); return; }
+      win.document.addEventListener("securitypolicyviolation", policyBlocked);
+      if (/^(https?:)?\/\//i.test(src)) image.crossOrigin = options?.crossOrigin ?? "anonymous";
       image.onload = () => {
         void image.decode().then(
           () => finish(),
-          () => finish(new Error("Bild konnte nicht dekodiert werden: " + src)),
+          () => finish(new Error("Bild konnte nicht dekodiert werden: " + label)),
         );
       };
       image.onerror = () =>
-        finish(new Error("Bild konnte nicht geladen werden (Pfad/CORS prüfen): " + src));
+        finish(new Error("Bild konnte nicht geladen werden: " + label + (/^data:/i.test(src) ? " (Bildformat oder Sicherheitsrichtlinie)" : " (Adresse, Serverantwort oder Zugriffsrichtlinie)")));
       image.src = src;
     });
     pending.add(promise);

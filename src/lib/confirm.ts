@@ -41,3 +41,8 @@ export function saveChoice(body: string): Promise<"save" | "discard" | "cancel">
   return askApp(body, { title: "Ungespeicherte Änderungen", ok: "Speichern", secondary: "Verwerfen", cancel: "Abbrechen" })
     .then((answer) => answer === true ? "save" : answer === "secondary" ? "discard" : "cancel");
 }
+
+export function closeFailureChoice(body: string, canCopy: boolean): Promise<"retry" | "copy" | "cancel"> {
+  return askApp(body, { title: "Beenden: Speichern fehlgeschlagen", ok: "Erneut versuchen", secondary: canCopy ? "Sicherung erstellen" : undefined, cancel: "Zurück zu Anvil" })
+    .then((answer) => answer === true ? "retry" : answer === "secondary" ? "copy" : "cancel");
+}

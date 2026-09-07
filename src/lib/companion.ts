@@ -257,7 +257,7 @@ export async function companionLint(
       method: "POST",
       headers: headers(),
       body: JSON.stringify({
-        files: files.slice(0, max),
+        files: files.slice(0, Math.min(64, max + 16)),
         timeoutMs: opts?.timeoutMs ?? 40000,
         enabled: opts?.enabled,
         lspTimeoutMs: opts?.lspTimeoutMs ?? 8000,

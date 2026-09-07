@@ -43,21 +43,48 @@ export function dropStaleRun(run: LspHit[], local: LspHit[]): LspHit[] {
   });
 }
 
-export async function refreshProblems(): Promise<void> {
+export type ProblemRefresh = { current: boolean; hits: LspHit[]; checked: string[]; errors: string[] };
+let refreshId = 0;
+let refreshJob: { files: Record<string, string>; epoch: number; open: string; promise: Promise<ProblemRefresh> } | undefined;
+
+/** One snapshot per request. TS and Python publish independently without replacing each other. */
+export async function refreshProblems(): Promise<ProblemRefresh> {
   const { useIde } = await import("@/store/ide");
-  const st = useIde.getState();
-  const { rebuildIndex } = await import("./ws-index");
-  const { lintWorkspace } = await import("./lsp");
-  rebuildIndex(st.files);
-  const local = lintWorkspace(st.files, st.openPaths);
-  st.setLspProblems(local);
-  try {
-    const { lintDeep } = await import("./lsp-compile");
-    const deep = await lintDeep(st.files, st.openPaths);
-    if (st.files !== useIde.getState().files || st.workspaceEpoch !== useIde.getState().workspaceEpoch) return;
-    noteCompileChecked(deep.checked);
-    useIde.getState().setCompileProblems(deep.hits);
-  } catch {
-    /* */
-  }
+  const st = useIde.getState(), open = JSON.stringify(st.openPaths);
+  if (refreshJob?.files === st.files && refreshJob.epoch === st.workspaceEpoch && refreshJob.open === open) return refreshJob.promise;
+  const id = ++refreshId;
+  const promise = (async (): Promise<ProblemRefresh> => {
+    const current = () => id === refreshId && st.files === useIde.getState().files && st.workspaceEpoch === useIde.getState().workspaceEpoch;
+    const { lintWorkspace } = await import("./lsp");
+    if (!current()) return { current: false, hits: [], checked: [], errors: [] };
+    const local = lintWorkspace(st.files, st.openPaths);
+    noteCompileChecked([]);
+    st.setCompileProblems([]);
+    st.setCompanionProblems([]);
+    st.setLspProblems(local);
+    const results: { hits: LspHit[]; checked: string[] }[] = [];
+    const errors: string[] = [];
+    const publish = (result: { hits: LspHit[]; checked: string[]; error?: string }) => {
+      results.push(result);
+      if (result.error) errors.push(result.error);
+      if (!current()) return;
+      noteCompileChecked(results.flatMap((r) => r.checked));
+      st.setLspProblems(local);
+      st.setCompileProblems(results.flatMap((r) => r.hits));
+      if (result.error) st.pushLspLog(false, result.error);
+    };
+    const failed = (e: unknown) => publish({ hits: [], checked: [], error: e instanceof Error ? e.message : String(e) });
+    const c = await import("./lsp-compile");
+    await Promise.all([
+      (typeof Worker !== "undefined" && typeof window !== "undefined"
+        ? import("./compiler-client").then((w) => w.compilerJob("lint", st.files, st.openPaths)).then((r) => ({ hits: r.hits as LspHit[], checked: r.checked as string[] }))
+        : c.tscWorkspace(st.files, st.openPaths).then((hits) => ({ hits, checked: c.tsChecked() })))
+        .then(publish, failed),
+      c.pyCompileWorkspace(st.files, st.openPaths).then(publish, failed),
+    ]);
+    return { current: current(), hits: current() ? useIde.getState().lspProblems : [], checked: results.flatMap((r) => r.checked), errors };
+  })();
+  refreshJob = { files: st.files, epoch: st.workspaceEpoch, open, promise };
+  try { return await promise; }
+  finally { if (refreshJob?.promise === promise) refreshJob = undefined; }
 }

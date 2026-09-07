@@ -29,10 +29,11 @@ ipcRenderer.on("secrets-changed", (_event, state) => {
 
 contextBridge.exposeInMainWorld("anvilCompanionToken", companionToken);
 contextBridge.exposeInMainWorld("anvilNative", {
+  saveRecovery: (snapshot) => ipcRenderer.invoke("workspace-recovery", snapshot),
   onBeforeClose: (fn) => {
     const receive = async (_event, ticket) => {
       let ok = false;
-      try { ok = Boolean(await fn()); } catch { /* Keep the window open on failed saves. */ }
+      try { ok = Boolean(await fn()); } catch (error) { window.dispatchEvent(new CustomEvent("anvil-close-error", { detail: String(error?.message || error) })); }
       ipcRenderer.send("editor-close-result", ticket, ok);
     };
     ipcRenderer.on("editor-before-close", receive);

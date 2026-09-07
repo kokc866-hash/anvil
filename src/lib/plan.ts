@@ -58,7 +58,7 @@ function mark(next: PlanStep[], pred: (s: PlanStep) => boolean, status: PlanStep
   } else if (status === "err") {
     i = next.findIndex((s) => (s.status === "run" || s.status === "todo") && pred(s));
   } else {
-    i = next.findIndex((s) => s.status === "todo" && pred(s));
+    i = next.findIndex((s) => (s.status === "todo" || s.status === "err") && pred(s));
   }
   if (i < 0) return;
   if ((status === "ok" || status === "err") && next[i].status === "run") {
@@ -112,7 +112,8 @@ export function planFinish(plan: PlanStep[] | undefined, failed = false, proved 
       changed = true;
       return s.status === "run" ? { ...s, status: "err" as const } : s;
     }
-    if (!proved) return s;
+    // Execution evidence cannot certify unrelated tasks (or all problem rows) at once.
+    if (!proved || s.status !== "run" || !/^(run|ausführ|prüf|check|test)\b/i.test(s.text)) return s;
     changed = true;
     return { ...s, status: "ok" as const };
   });

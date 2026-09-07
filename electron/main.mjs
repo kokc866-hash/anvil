@@ -12,6 +12,7 @@ import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
 import { bindHwIpc } from "./hw.mjs";
 import { bindAccountIpc } from "./account-auth.mjs";
 import { bindCliIpc, stopCliJobs } from "./cli-ipc.mjs";
+import { bindRecoveryIpc } from "./recovery.mjs";
 import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -484,6 +485,7 @@ if (!gotLock) {
     bindAccountIpc();
     bindCliIpc(isAppUrl);
     bindUpdateIpc();
+    bindRecoveryIpc(isAppUrl);
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());
     handleOnce("companion-ensure", () => ensureCompanion());

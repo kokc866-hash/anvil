@@ -1,3 +1,4 @@
+import { renderMarkdown } from "@/lib/markdown";
 import { memo, useMemo, type RefObject } from "react";
 import { useIde, type ChatMsg } from "@/store/ide";
 import { useT } from "@/lib/i18n";
@@ -155,9 +156,7 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
               <CodeBlock code={part.text} lang={part.lang} path={part.path} />
             </div>
           ) : (
-            <span key={i} className="whitespace-pre-wrap">
-              {part.text}
-            </span>
+            m.role === "assistant" ? <div key={i} className="chat-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(part.text) }} /> : <span key={i} className="whitespace-pre-wrap">{part.text}</span>
           ),
         )}
       </div>

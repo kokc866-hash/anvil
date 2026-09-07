@@ -360,7 +360,7 @@ function installProjectFetch(
       new win.URL(rel, "https://anvil-project.invalid/" + entry).pathname.slice(1),
     );
     const file = files[path];
-    if (!file) return rel;
+    if (!file) throw new Error("Bilddatei nicht im Projekt gefunden: " + path);
     if (file.body.startsWith("data:")) return file.body;
     return `data:${file.type};charset=utf-8,${encodeURIComponent(file.body)}`;
   };
