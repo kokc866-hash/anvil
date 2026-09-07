@@ -698,8 +698,10 @@ export async function runAgentLoop(
   const packResult = (reply: string, extra: Partial<AgentResult> = {}): AgentResult => {
     let verification = evidence.status();
     if (diagnosticTask && !extra.parked) {
-      if (!diagnosticCheck || diagnosticCheck.revision !== evidence.revision) verification = { state: "stale", detail: "Aktuelle Diagnosen noch nicht bestätigt." };
-      else if (!diagnosticCheck.ok) verification = { state: "failed", detail: diagnosticCheck.detail };
+      if (!diagnosticCheck || diagnosticCheck.revision !== evidence.revision) {
+        if (verification.state !== "failed") verification = { state: "stale", detail: "Aktuelle Diagnosen noch nicht bestätigt." };
+      }
+      else if (!diagnosticCheck.ok) verification = { state: "failed", detail: verification.state === "failed" ? `${verification.detail}\n${diagnosticCheck.detail}` : diagnosticCheck.detail };
       else if (verification.state === "none") verification = { state: "passed", detail: diagnosticCheck.detail };
     }
     const failed = verification.state === "failed";

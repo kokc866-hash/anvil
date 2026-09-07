@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lintWorkspace } from "./lsp-lint.ts";
-import { AgentEvidence } from "./agent-evidence.ts";
+import { AgentEvidence, automaticRunVerification } from "./agent-evidence.ts";
 import { WriteQueue } from "./write-queue.ts";
 
 test("Python floor division, inline suites, comments and multiline strings do not invent syntax errors", () => {
@@ -55,6 +55,29 @@ test("a failed write retries explicitly and retains the concrete cause", async (
   assert.equal(attempts, 2);
   await q.flush();
   assert.equal(attempts, 2);
+});
+
+test("shell metadata and echoed commands do not prove a run, real project commands do", () => {
+  for (const command of ["npm --version", "node -v", "python --help", "javac -version", "tsc --showConfig", "npm install", "echo npm test", '"C:\\Program Files\\nodejs\\node.exe" --version']) {
+    const e = new AgentEvidence();
+    e.record("shell", { command }, { ok: true });
+    assert.equal(e.status().state, "none", command);
+  }
+  for (const command of ["npm run build", "npm test", "pytest", "pytest -v", "gcc -v snake.c", "tsc", "python3.12 snake.py", '"C:\\Program Files\\nodejs\\node.exe" --test tests.mjs']) {
+    const e = new AgentEvidence();
+    e.record("shell", { command }, { ok: true });
+    assert.equal(e.status().state, "passed", command);
+  }
+});
+
+test("automatic runs cannot hide failed writes or certify changed files", () => {
+  const failed = automaticRunVerification({ state: "failed", detail: "Speichern: Zugriff verweigert" }, true, true);
+  assert.equal(failed.state, "failed");
+  assert.match(failed.detail, /Zugriff verweigert/);
+  const stale = automaticRunVerification(undefined, true, false);
+  assert.equal(stale.state, "stale");
+  assert.match(stale.detail, /noch nicht bestätigt/);
+  assert.equal(automaticRunVerification(undefined, true, true).state, "passed");
 });
 
 test("canceling a failed or in-flight write prevents resurrection and allows closing", async () => {

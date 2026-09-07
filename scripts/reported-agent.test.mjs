@@ -33,5 +33,16 @@ test("agent completion follows tool outcomes and fresh diagnostic results", asyn
       const r = await runAgentLoop(data(), script([[call("write_file", { path: "snake.ts", content: "const n = 2;" })]]), { onWorkspace: async () => { throw new Error("cwd außerhalb des Workspace"); } });
       assert.equal(r.ok, false); assert.match(r.reply, /cwd außerhalb/);
     });
+    await t.test("diagnostic failures retain the concrete save error", async () => {
+      beginAgent();
+      const r = await runAgentLoop(data("Behebe diese Probleme im Workspace.\nsnake.ts:1 [error · tsc] bad type"), script([[call("write_file", { path: "snake.ts", content: "const n = 2;" })]]), {
+        onWorkspace: async () => { throw new Error("Speichern: Zugriff verweigert"); },
+        verify: async () => ({ ok: false, detail: "tsc: bad type" }),
+      });
+      assert.equal(r.ok, false);
+      assert.equal(r.verification.state, "failed");
+      assert.match(r.error, /Zugriff verweigert/);
+      assert.match(r.error, /tsc: bad type/);
+    });
   } finally { await server.close(); }
 });

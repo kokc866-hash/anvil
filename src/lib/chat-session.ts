@@ -1,4 +1,5 @@
 import { isExecutablePath } from "./run-target";
+import { automaticRunVerification } from "./agent-evidence";
 import { chatWithProvider } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
 import { toolCode, toolDetail } from "@/lib/llm-options";
@@ -679,7 +680,7 @@ export async function sendChat(
                 useIde.getState().setChatLastRun({ ok: r.ok, path: p, stdout: r.stdout, stderr: r.stderr, attempt: 1, max: 1, running: false });
               }
               if (executable.length) {
-                roundVerification = { state: !ok ? "failed" : latest !== useIde.getState().files ? "stale" : "passed", detail: ok ? "Automatischer Run nach der letzten Änderung erfolgreich." : "Automatischer Run nach der letzten Änderung fehlgeschlagen." };
+                roundVerification = automaticRunVerification(roundVerification, ok, latest === useIde.getState().files);
                 if (!ok) requestPhase(my, "error");
                 finalizeAssistant(`${result.reply}\n\n${roundVerification.detail}`, result.tools, { replace: true });
               }
