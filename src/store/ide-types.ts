@@ -1,4 +1,5 @@
 import type { ToolCompatibility } from "@/lib/tool-compat";
+import type { IdeSettings } from "@/lib/settings-schema";
 import type { ToolLearning, ToolLearningState } from "@/lib/tool-learning";
 import { type LlmProvider } from "@/lib/providers";
 
@@ -510,4 +511,5 @@ export type IdeState = {
   revertFile: (path: string) => void;
   resetWorkspace: () => void;
   resetSettings: () => void;
+  applySettings: (patch: IdeSettings) => void;
 };

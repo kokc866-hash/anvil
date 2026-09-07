@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { SettingsSection, Row as SettingsRow, Toggle } from "./settings/fields";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -18,27 +19,18 @@ import { useModelLib } from "@/lib/model-lib";
 import { nativeHelper } from "@/lib/helper-local";
 import { ModelPick } from "./model-pick";
 
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      className={`relative h-6 w-10 rounded-full border ${on ? "border-accent bg-accent" : "border-border"}`}
-      onClick={() => onChange(!on)}
-    >
-      <span className={`ui-switch-knob absolute top-0.5 left-0.5 size-4 rounded-full bg-fg ${on ? "translate-x-4 bg-accent-fg" : ""}`} />
-    </button>
-  );
-}
 
-export function BrainSection() {
+
+export function BrainSection({ q = "" }: { q?: string }) {
   const on = useBrain((s) => s.on);
   const autoLoad = useBrain((s) => s.autoLoad);
   const autoUpdate = useBrain((s) => s.autoUpdate);
   const modelId = useBrain((s) => s.modelId);
   const customId = useBrain((s) => s.customId);
   const status = useBrain((s) => s.status);
+  const checkingUpdate = useBrain((s) => s.checkingUpdate);
+  const cacheEpoch = useBrain((s) => s.cacheEpoch);
+  const loadedConfig = useBrain((s) => s.loadedConfig);
   const progress = useBrain((s) => s.progress);
   const progressText = useBrain((s) => s.progressText);
   const error = useBrain((s) => s.error);
@@ -73,20 +65,21 @@ export function BrainSection() {
   const [helperPath, setHelperPath] = useState("");
 
   useEffect(() => {
+    if (q) return;
     void gpuInfo().then((g) => setGpuNow(g.ok ? g.info : g.info));
-    void Promise.all(BRAIN_MODELS.map(async (m) => [m.id, await modelCached(m.id)] as const)).then((rows) => {
+    void Promise.all(BRAIN_MODELS.map(async (m) => [m.id, await modelCached(m.id) || Boolean(m.alt && await modelCached(m.alt))] as const)).then((rows) => {
       setCached(Object.fromEntries(rows));
     });
     void nativeHelper()?.helperDir?.().then((p) => setHelperPath(p)).catch(() => undefined);
-  }, [status, loadedId]);
+  }, [cacheEpoch, loadedId, gpuPower, q]);
 
   const busy = status === "downloading" || status === "checking";
 
   return (
-    <section className="py-3">
+    <SettingsSection q={q} className="py-3">
       <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Lokaler Helfer</h3>
       <p className="mb-3 text-xs text-muted">
-        Optional, lokal, schnell. Kurzbefehle, Titel, Commit-Zeile, Folge-Chips. Nach einer Runde schreibt der Helfer kurze Notizen an den Agenten (Spur: „Helfer · …“). Code, Plan und Chat immer das Hauptmodell. Der Helfer wartet nicht vor der ersten Agent-Antwort und bricht nach wenigen Sekunden ab.
+        Optional, lokal, schnell. Kurzbefehle, Titel, Commit-Zeile, Folge-Chips. Nach einer Runde schreibt der Helfer kurze Notizen an den Agenten (Spur: „Helfer · …“). Code, Plan und Chat immer das Hauptmodell. Hintergrundaufgaben blockieren das Senden nicht. Bei Zeitlimits wird die Aufgabe abgebrochen; ein reagierendes Modell bleibt geladen.
       </p>
       <Row label="Helfer an" hint="Mini-Modell nur, wenn die Heuristik unsicher ist">
         <Toggle on={on} onChange={setOn} />
@@ -147,6 +140,7 @@ export function BrainSection() {
       <label className="block py-2">
         <span className="text-xs text-muted">Autonomie</span>
         <select
+          aria-label="Autonomie"
           value={autonomy}
           className="mt-1 h-9 w-full rounded-md border border-border bg-bg px-2 text-sm text-fg"
           onChange={(e) => useBrain.getState().setAutonomy(e.target.value as "off" | "quiet" | "on")}
@@ -165,7 +159,7 @@ export function BrainSection() {
           {blog.slice(0, 8).map((l, i) => (
             <li key={i}>
               {l.src} {l.job}
-              {l.ms ? ` ${l.ms}ms` : ""}
+              {l.ms ? ` ${l.ms}ms` : ""}{l.reason ? ` · ${l.reason}` : ""}
             </li>
           ))}
         </ul>
@@ -176,7 +170,7 @@ export function BrainSection() {
       <Row label="Update prüfen" hint="Runtime + HuggingFace-Stempel">
         <Toggle on={autoUpdate} onChange={useBrain.getState().setAutoUpdate} />
       </Row>
-      <Row label="GPU High-Performance" hint="Discrete GPU statt Sparmodus">
+      <Row label="GPU High-Performance" hint="Adapter-Präferenz beim nächsten Laden; die verfügbare GPU bestimmt das System">
         <Toggle
           on={gpuPower === "high-performance"}
           onChange={(v) => useBrain.getState().setGpuPower(v ? "high-performance" : "low-power")}
@@ -185,10 +179,10 @@ export function BrainSection() {
       <Row label="GPU-Worker" hint="Inferenz nicht im UI-Thread">
         <Toggle on={useWorker} onChange={useBrain.getState().setUseWorker} />
       </Row>
-      <Row label="GPU warm halten" hint="Kurzer Ping alle 70 s, damit WebGPU nicht einschläft">
+      <Row label="GPU warm halten" hint="Nach 70 s Leerlauf ein kurzer Ping. Pausiert bei Agent-Arbeit, verborgenem Fenster und Autonomie Aus.">
         <Toggle on={gpuKeepAlive} onChange={useBrain.getState().setGpuKeepAlive} />
       </Row>
-      <Row label="Puffer anpassen" hint="KV-Cache und Context an maxStorageBuffer der GPU kappen. Helfer hält nur 8 Runden.">
+      <Row label="Puffer anpassen" hint="Context vorsichtig an GPU-Puffergrenze anpassen; keine Messung des freien VRAM. Modellgrenzen bleiben erhalten.">
         <Toggle on={gpuFitBuffer} onChange={useBrain.getState().setGpuFitBuffer} />
       </Row>
       <Row label="Shader vorwärmen" hint="Nach dem Laden Prefill+Decode einmal kompilieren, erster Job wird schneller">
@@ -255,8 +249,8 @@ export function BrainSection() {
         >
           {status === "ready" ? "Neu laden" : "Laden"}
         </Button>
-        <Button variant="quiet" disabled={!loadedId} onClick={() => void unloadBrain()}>
-          Entladen
+        <Button variant="quiet" disabled={!loadedId && !busy} onClick={() => void unloadBrain()}>
+          {busy ? "Laden abbrechen" : "Entladen"}
         </Button>
         <Button variant="quiet" disabled={!loadedId || busy} onClick={() => {
           setPing("prüfe GPU…");
@@ -270,19 +264,19 @@ export function BrainSection() {
             pri: 0,
             job: "ping",
           })
-            .then((t) => setPing(`Antwort: ${t.trim() || "(leer)"} — Modell läuft.`))
+            .then((t) => setPing(`Antwort: ${t.trim()} — Modell antwortet.`))
             .catch((err) => setPing(err instanceof Error ? err.message : "kein Ping"));
         }}>
           Testen
         </Button>
-        <Button variant="quiet" disabled={busy} onClick={() => void checkBrainUpdate()}>
-          Update prüfen
+        <Button variant="quiet" disabled={checkingUpdate} onClick={() => void checkBrainUpdate()}>
+          {checkingUpdate ? "Prüft Revision…" : "Update prüfen"}
         </Button>
         <Button
           variant="quiet"
           onClick={() => {
             if (useModelLib.getState().keepHelperCache && !window.confirm("Lokal behalten ist an. Cache trotzdem löschen?")) return;
-            void clearBrainCache(undefined, { force: true });
+            void clearBrainCache(undefined, { force: true }).catch((err) => setPing(err instanceof Error ? err.message : "Cache konnte nicht gelöscht werden"));
           }}
         >
           Cache löschen
@@ -319,10 +313,11 @@ export function BrainSection() {
           {gpu || gpuNow ? ` · ${gpu || gpuNow}` : ""}
           {fp16 && status === "ready" ? " · fp16" : ""}
         </p>
+        {loadedConfig && loadedId ? <p className="text-[11px] text-subtle">Geladen: {loadedConfig}. Context, Sliding und GPU-Änderungen gelten nach Neu laden.</p> : null}
         {ping ? <p className="mt-1 font-mono text-[11px] text-fg">{ping}</p> : null}
         {error ? <p className="text-[11px] text-danger">{error}</p> : null}
         {updateHint && updateHint !== "Aktuell" ? (
-          <p className="text-[11px] text-subtle">{updateHint === "Modell-Gewichte aktualisiert. Neu laden." ? "Neuere Dateien online — nur bei Bedarf Neu laden." : updateHint}</p>
+          <p className="text-[11px] text-subtle">{updateHint}</p>
         ) : null}
       </div>
 
@@ -413,18 +408,10 @@ export function BrainSection() {
           <Toggle on={jobs[k]} onChange={(v) => setJob(k, v)} />
         </Row>
       ))}
-    </section>
+    </SettingsSection>
   );
 }
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center gap-3 py-1.5">
-      <div className="min-w-0 flex-1">
-        <p className="text-sm text-fg">{label}</p>
-        {hint ? <p className="text-[11px] text-subtle">{hint}</p> : null}
-      </div>
-      {children}
-    </div>
-  );
+function Row(props: { label: string; hint?: string; children: ReactNode }) {
+  return <SettingsRow {...props} compact />;
 }

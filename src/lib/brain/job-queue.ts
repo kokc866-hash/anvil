@@ -27,7 +27,8 @@ export class BrainJobQueue {
     this.onDone = onDone;
   }
 
-  enqueue<T>(pri: BrainPri, key: string, ms: number, fn: (signal: AbortSignal) => Promise<T>, waitMs = ms): Promise<T> {
+  enqueue<T>(pri: BrainPri, key: string, ms: number, fn: (signal: AbortSignal) => Promise<T>, waitMs = ms, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     if (this.held) return Promise.reject(new Error("Helfer pausiert"));
     if (this.active?.ctrl.signal.aborted) return Promise.reject(unavailable());
     for (const job of this.pending.filter((j) => j.key === key)) {
@@ -42,6 +43,12 @@ export class BrainJobQueue {
           this.cancel(job, error);
         }, waitMs),
       };
+      const abort = () => this.cancel(job, signal?.reason ?? new Error("Abgebrochen"));
+      signal?.addEventListener("abort", abort, { once: true });
+      const resolveJob = job.resolve;
+      const rejectJob = job.reject;
+      job.resolve = (value) => { signal?.removeEventListener("abort", abort); resolveJob(value); };
+      job.reject = (error) => { signal?.removeEventListener("abort", abort); rejectJob(error); };
       this.pending.push(job);
       this.pending.sort((a, b) => a.pri - b.pri);
       this.pump();

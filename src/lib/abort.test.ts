@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { getEventListeners } from "node:events";
 import {
   abortAgent,
   agentGen,
@@ -16,6 +17,8 @@ import {
   SSE_FIRST_MS,
   SSE_IDLE_MS,
   AgentAbortError,
+  raceAbort,
+  withAgentTimeout,
 } from "./abort.ts";
 
 describe("abort", () => {
@@ -38,6 +41,29 @@ describe("abort", () => {
     const g = beginAgent();
     abortAgent("Stop");
     assert.notEqual(agentGen(), g);
+  });
+  it("removes the abort listener when a pending request times out", async (t) => {
+    beginAgent();
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const signal = withAgentTimeout(0);
+    const pending = raceAbort(new Promise<never>(() => {}), 100);
+    assert.equal(getEventListeners(signal, "abort").length, 1);
+    const rejected = assert.rejects(pending, /Keine Antwort/);
+    t.mock.timers.tick(100);
+    await rejected;
+    assert.equal(getEventListeners(signal, "abort").length, 0);
+  });
+  it("cleans up successful requests and preserves the canceled parent's reason", async () => {
+    beginAgent();
+    const parent = withAgentTimeout(0);
+    assert.equal(await raceAbort(Promise.resolve("ok"), 1000), "ok");
+    assert.equal(getEventListeners(parent, "abort").length, 0);
+    const child = withAgentTimeout(1000);
+    beginAgent();
+    assert.equal(child.aborted, true);
+    assert.equal(child.reason, "replaced");
+    assert.equal(withAgentTimeout(0).aborted, false);
+    assert.equal(getEventListeners(parent, "abort").length, 0);
   });
   it("maps anthropic billing json", () => {
     const raw =

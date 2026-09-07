@@ -13,7 +13,7 @@ function labelOf(p: string): string {
 }
 
 export function HelperPrompts({ where }: { where: "chat" | "output" }) {
-  const on = useBrain((s) => s.on);
+  const on = useBrain((s) => s.on && s.autonomy !== "off");
   const job = useBrain((s) => s.jobs.prompts !== false);
   const prompts = useBrain((s) => s.prompts);
   const path = useIde((s) => s.activePath);

@@ -471,7 +471,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
                   const hit: Suggestion = { text: snap.prefix + rest, rest, kind: "snip", insert: snap.prefix + rest };
                   return [hit, ...prevHints.filter((h) => h.insert !== rest)].slice(0, 4);
                 });
-              });
+              }).catch(() => undefined);
             }, 450);
           }
         };

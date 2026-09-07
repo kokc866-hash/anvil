@@ -34,8 +34,6 @@ import { JobAskBar } from "./job-ask-bar";
 import { prepareAttachmentHints } from "@/lib/attachment-hints";
 import { selectFileKeys } from "@/lib/workspace-index";
 
-import { RequestStatus } from "./request-status";
-
 export function ChatPane() {
   const t = useT();
   const chat = useIde((s) => s.chat);
@@ -71,6 +69,16 @@ export function ChatPane() {
   const scroller = useRef<HTMLDivElement>(null);
   const pin = useRef(true);
   const [away, setAway] = useState(false);
+
+  useEffect(() => {
+    if (chat.length) return;
+    setTitle("");
+    setImages([]);
+    setMention(null);
+    setMenu(null);
+    pin.current = true;
+    setAway(false);
+  }, [chat.length]);
 
   useEffect(() => {
     if (!pin.current) return;
@@ -141,25 +149,19 @@ export function ChatPane() {
   }, [mention, fileKeys]);
 
   const agentInbox = useIde((s) => s.agentInbox);
-  const clearAgentInbox = useIde((s) => s.clearAgentInbox);
 
   useEffect(() => {
-    if (!agentInbox || agentBusy) return;
-    const text = agentInbox;
-    clearAgentInbox();
-    void send(text);
+    // Read the current busy flag: another effect may already have started work
+    // since this render. Inbox and queue must share one consumer.
+    const st = useIde.getState();
+    if (st.agentBusy) return;
+    const text = st.agentInbox || st.agentQueue[0];
+    if (!text) return;
+    const queued = !st.agentInbox;
+    useIde.setState(st.agentInbox ? { agentInbox: null } : { agentQueue: st.agentQueue.slice(1) });
+    void send(text, { queued });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentInbox]);
-
-  useEffect(() => {
-    if (agentBusy) return;
-    if (useIde.getState().agentInbox) return;
-    const q = useIde.getState().agentQueue;
-    if (!q.length) return;
-    useIde.setState({ agentQueue: q.slice(1) });
-    void send(q[0], { queued: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentBusy, agentQueue.length]);
+  }, [agentBusy, agentInbox, agentQueue.length]);
 
   function stop() {
     stopAgent("Gestoppt");
@@ -281,12 +283,7 @@ export function ChatPane() {
           className="h-8 w-8 p-0"
           title={t("newChat")}
           aria-label={t("newChat")}
-          onClick={() => {
-            if (useIde.getState().agentBusy || useIde.getState().agentJob) stopAgent("Neuer Chat");
-            clearChat();
-            setTitle("");
-            setDraft("");
-          }}
+          onClick={() => clearChat()}
         >
           <Plus className="size-3.5" />
         </Button>
@@ -344,7 +341,6 @@ export function ChatPane() {
           </div>
         ) : (
           <div className="flex min-w-0 flex-col gap-8 pt-8">
-            <RequestStatus />
             <ChatHistory
               chat={chat}
               busy={agentBusy}

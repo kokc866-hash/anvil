@@ -55,8 +55,11 @@ export function helperHeld(): boolean {
   return queue.isHeld();
 }
 
-export function enqueueBrain<T>(pri: BrainPri, key: string, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  return queue.enqueue(pri, key, jobMs(key), fn, Math.min(jobMs(key), 2500));
+export function enqueueBrain<T>(pri: BrainPri, key: string, fn: (signal: AbortSignal) => Promise<T>, opts?: { maxTokens?: number; deadlineMs?: number; signal?: AbortSignal }): Promise<T> {
+  // Old sub-second budgets measured UI latency, not GPU execution. Short UI
+  // deadlines are explicit; other jobs get a bounded token-dependent budget.
+  const executionMs = opts?.deadlineMs ?? Math.min(60_000, Math.max(jobMs(key), 6000 + (opts?.maxTokens ?? 64) * 60));
+  return queue.enqueue(pri, key, executionMs, fn, Math.min(opts?.deadlineMs ?? 6000, executionMs), opts?.signal);
 }
 
 export function cacheGet(key: string): string | null {
@@ -79,10 +82,8 @@ export function cacheSet(key: string, v: string) {
 }
 
 export function cacheKey(parts: string[]) {
-  let h = 0;
-  const s = parts.join("\n");
-  for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) | 0;
-  return `${parts[0] ?? "j"}:${h}`;
+  // Exact bounded keys avoid 32-bit collisions between code edits or facts.
+  return JSON.stringify(parts);
 }
 
 export function clearBrainQueue() {

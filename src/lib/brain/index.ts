@@ -4,6 +4,8 @@ export {
   loadBrain,
   unloadBrain,
   clearBrainCache,
+  updateBrainModel,
+  deleteBrainModel,
   checkBrainUpdate,
   gpuInfo,
   modelCached,

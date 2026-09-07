@@ -53,6 +53,7 @@ type Slice = { files?: Record<string, string>; [k: string]: unknown };
 const LLM_SNAP = "anvil-llm";
 const LLM_KEYS = [
   "llmProvider",
+  "llmAuthMode",
   "llmBaseUrl",
   "llmModel",
   "llmContext",

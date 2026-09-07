@@ -444,10 +444,7 @@ function clientTools(opts: {
       const cut = blob.slice(0, 8000);
       if (!brainReady()) return cut;
       try {
-        return await Promise.race([
-          brainCompact(blob),
-          new Promise<string>((res) => setTimeout(() => res(cut), 2500)),
-        ]);
+        return await brainCompact(blob);
       } catch {
         return cut;
       }

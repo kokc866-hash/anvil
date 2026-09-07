@@ -8,7 +8,7 @@ import { confirmApp } from "@/lib/confirm";
 
 import { appLogOn, appLogLines, clearAppLog, copyAppLog, exportAppLog, setAppLogOn, subscribeAppLog } from "@/lib/app-log";
 
-import { Head, Vis, Row, Toggle } from "./fields";
+import { SettingsSection, Head, Vis, Row, Toggle } from "./fields";
 
 export function InternSection({ q }: { q: string }) {
   const prefs = useIntern((s) => s.prefs);
@@ -20,7 +20,7 @@ export function InternSection({ q }: { q: string }) {
   const open = faults.filter((f) => f.open).length;
   const t = useT();
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>{t("intern")}</Head>
       <p className="mb-2 text-xs text-muted">{t("internIntro")}</p>
       <Vis q={q} label="Intern an Auto-heilen Weich">
@@ -66,7 +66,7 @@ export function InternSection({ q }: { q: string }) {
         </div>
       </Vis>
       <AppLogSettings q={q} />
-    </section>
+    </SettingsSection>
   );
 }
 

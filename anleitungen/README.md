@@ -15,3 +15,6 @@ Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/relea
 | [canvas.md](canvas.md) | Canvas-API, Eingaben, HTML-Projekte und gemeinsame Run-Ausgabe |
 | [tool-learning.md](tool-learning.md) | Gelernte Tool-Aufrufe, Bestätigungen und Grenzen |
 | [editor.md](editor.md) | Sicheres Bearbeiten, Speichern, Navigation, Suche und Sprachdienst |
+| [chat.md](chat.md) | Interne Ergänzungen: Statusanzeige, Chatwechsel, Warteschlange und Stop |
+| [einstellungen.md](einstellungen.md) | Interne Ergänzungen: Sicherung, Bereichsreset, Desktop-Suche und Projektvorgaben |
+| [helfer.md](helfer.md) | Interne Ergänzungen: Helfer-Lebenszyklus, Modellablage, Aufgaben und Desktop-Bedienung |

@@ -1,38 +1,19 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { SettingsSection, Row as SettingsRow, Toggle } from "./settings/fields";
 import { Button } from "@/components/ui/button";
-import { BRAIN_MODELS, HELPER_GROUPS, clearBrainCache, modelCached, prefetchBrain } from "@/lib/brain";
+import { BRAIN_MODELS, HELPER_GROUPS, deleteBrainModel, updateBrainModel, modelCached, prefetchBrain } from "@/lib/brain";
 import { useBrain } from "@/lib/brain/store";
-import { downloadHelperLocal, nativeHelper } from "@/lib/helper-local";
+import { nativeHelper } from "@/lib/helper-local";
 import { fmtBytes, storageQuota, useModelLib, type CacheBackendPref } from "@/lib/model-lib";
 import { confirmApp } from "@/lib/confirm";
 
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      className={`relative h-6 w-10 rounded-full border ${on ? "border-accent bg-accent" : "border-border"}`}
-      onClick={() => onChange(!on)}
-    >
-      <span className={`ui-switch-knob absolute top-0.5 left-0.5 size-4 rounded-full bg-fg ${on ? "translate-x-4 bg-accent-fg" : ""}`} />
-    </button>
-  );
+
+
+function Row(props: { label: string; hint?: string; children: ReactNode }) {
+  return <SettingsRow {...props} compact />;
 }
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-2">
-      <div className="min-w-0">
-        <p className="text-sm text-fg">{label}</p>
-        {hint ? <p className="text-[11px] text-subtle">{hint}</p> : null}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-export function ModelLibSection() {
+export function ModelLibSection({ q = "" }: { q?: string }) {
   const cacheBackend = useModelLib((s) => s.cacheBackend);
   const keepHelperCache = useModelLib((s) => s.keepHelperCache);
   const prefetchOnStart = useModelLib((s) => s.prefetchOnStart);
@@ -40,20 +21,25 @@ export function ModelLibSection() {
   const lastQuota = useModelLib((s) => s.lastQuota);
   const desk = Boolean(nativeHelper());
   const loadedId = useBrain((s) => s.loadedId);
+  const cacheEpoch = useBrain((s) => s.cacheEpoch);
   const helperOn = useBrain((s) => s.status === "ready" && Boolean(s.loadedId));
   const [local, setLocal] = useState<Record<string, { ready: boolean; bytes: number; mark: string }>>({});
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
   const [pct, setPct] = useState(0);
   const [dir, setDir] = useState("");
+  const refreshGeneration = useRef(0);
 
   async function refresh() {
+    const generation = ++refreshGeneration.current;
     await storageQuota();
     const n = nativeHelper();
     const loaded = useBrain.getState().loadedId;
     const disk: Record<string, { ready: boolean; bytes: number }> = {};
     if (n) {
-      setDir(await n.helperDir());
+      const path = await n.helperDir();
+      if (generation !== refreshGeneration.current) return;
+      setDir(path);
       const rows = await n.helperList();
       for (const r of rows) disk[r.id] = { ready: r.ready, bytes: r.bytes };
     }
@@ -70,15 +56,16 @@ export function ModelLibSection() {
       const run = Boolean(loaded && (loaded === m.id || loaded === m.alt));
       const inCache = Boolean(cached[m.id]);
       const ready = run || d.ready || inCache;
-      const mark = run ? "läuft" : d.ready ? "auf der Festplatte" : inCache ? "im Cache" : d.bytes ? "teilweise" : "fehlt";
+      const mark = run ? "läuft" : d.ready ? "auf der Festplatte" : inCache ? "im Cache" : (disk[m.id] || disk[m.alt]) ? "teilweise" : "fehlt";
       next[m.id] = { ready, bytes: d.bytes, mark };
     }
-    setLocal(next);
+    if (generation === refreshGeneration.current) setLocal(next);
   }
 
   useEffect(() => {
-    void refresh();
-  }, [loadedId]);
+    if (!q) void refresh().catch((err) => setNote(err instanceof Error ? err.message : "Modelle konnten nicht gelesen werden"));
+    return () => { refreshGeneration.current++; };
+  }, [loadedId, cacheEpoch, q]);
 
   const usedPct = lastQuota.quota ? Math.min(100, Math.round((lastQuota.used / lastQuota.quota) * 100)) : 0;
   const rank: Record<string, number> = { läuft: 0, "auf der Festplatte": 1, "im Cache": 2, teilweise: 3, fehlt: 4 };
@@ -112,16 +99,9 @@ export function ModelLibSection() {
           disabled={Boolean(busy)}
           onClick={() => {
             setBusy(m.id);
-            const job = desk
-              ? downloadHelperLocal(m.id, (p) => {
-                  setPct(p.total ? p.done / p.total : 0);
-                  setNote(`${p.rel} (${p.done}/${p.total})`);
-                })
-              : prefetchBrain(m.id, (p) => {
-                  setPct(p.progress ?? 0);
-                  setNote(p.text);
-                });
-            setNote(ready ? "Prüfe…" : "Einmal laden, danach lokal.");
+            const report = (p: { progress: number; text: string }) => { setPct(p.progress); setNote(p.text); };
+            const job = ready ? updateBrainModel(m.id, report) : prefetchBrain(m.id, report);
+            setNote(ready ? "Aktualisiere Modelldateien…" : "Einmal laden, danach lokal.");
             void job
               .then(() => refresh())
               .catch((err) => setNote(err instanceof Error ? err.message : "Download fehlgeschlagen"))
@@ -133,12 +113,13 @@ export function ModelLibSection() {
         <Button
           variant="quiet"
           className="h-7 px-2 text-[11px]"
-          disabled={!ready || Boolean(busy)}
+          disabled={(!ready && mark !== "teilweise") || Boolean(busy)}
           onClick={() => {
             const go = () => {
-              const n = nativeHelper();
-              if (n) void n.helperDelete(m.id).then(() => refresh());
-              else void clearBrainCache(m.id, { force: true }).then(() => refresh());
+              setBusy(m.id);
+              void deleteBrainModel(m.id).then(refresh)
+                .catch((err) => setNote(err instanceof Error ? err.message : "Entfernen fehlgeschlagen"))
+                .finally(() => setBusy(""));
             };
             if (useModelLib.getState().keepHelperCache) {
               void confirmApp(`${m.label} wirklich entfernen?`, { danger: true, ok: "Weg" }).then((ok) => {
@@ -156,7 +137,7 @@ export function ModelLibSection() {
   }
 
   return (
-    <section className="py-3">
+    <SettingsSection q={q} className="py-3">
       <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Helfer lokal</h3>
       <p className="mb-3 text-xs text-muted">
         Agent-Modelle bleiben beim gewählten Anbieter. Hier nur der Helfer: einmal aus dem Netz auf die Festplatte, danach startet er ohne HuggingFace.
@@ -227,6 +208,6 @@ export function ModelLibSection() {
           Ohne Anvil-Fenster kein Ordner auf der Festplatte — nur Browser-Cache. start.bat nutzen.
         </p>
       ) : null}
-    </section>
+    </SettingsSection>
   );
 }

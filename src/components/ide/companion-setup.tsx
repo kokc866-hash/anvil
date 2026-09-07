@@ -39,7 +39,7 @@ type Ping = {
   packages?: { home: string; toolchains: string; lsp: string };
 };
 
-export function CompanionSetup({ compact }: { compact?: boolean }) {
+export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boolean; probeOnMount?: boolean }) {
   const t = useT();
   const url = useIde((s) => s.companionUrl);
   const setUrl = useIde((s) => s.setCompanionUrl);
@@ -74,6 +74,7 @@ export function CompanionSetup({ compact }: { compact?: boolean }) {
   const port = portOf(url);
 
   useEffect(() => {
+    if (!probeOnMount) return;
     void nativeHelper()?.companionToken?.().then((n) => {
       if (n && !tok) {
         setTok(n);
@@ -82,7 +83,7 @@ export function CompanionSetup({ compact }: { compact?: boolean }) {
     });
     void check(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [probeOnMount]);
 
   useEffect(() => {
     if (!installing) {

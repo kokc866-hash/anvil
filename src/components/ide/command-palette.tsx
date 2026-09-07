@@ -125,7 +125,7 @@ export function CommandPalette() {
         { id: "board", label: t("cmdBoard"), run: () => useIde.getState().setHarnessBoardOpen(true) },
         { id: "ask", label: t("cmdAsk"), run: () => useIde.getState().setAgentMode("ask") },
         { id: "agentmode", label: t("cmdAgentMode"), run: () => useIde.getState().setAgentMode("agent") },
-        { id: "newchat", label: t("newChat"), run: () => { void import("@/lib/abort").then((m) => m.stopAgent("Neuer Chat")); useIde.getState().clearChat(); } },
+        { id: "newchat", label: t("newChat"), run: () => useIde.getState().clearChat() },
         { id: "helper-comment", label: t("cmdHelperComment"), run: () => window.dispatchEvent(new Event("anvil-helper-comment")) },
         { id: "helper-i18n", label: t("cmdHelperI18n"), run: () => {
           const s = useIde.getState();
@@ -237,7 +237,7 @@ export function CommandPalette() {
     let alive = true;
     void brainPalette(q, labels).then((hit) => {
       if (alive) setBrainHit(hit);
-    });
+    }).catch(() => { if (alive) setBrainHit(null); });
     return () => {
       alive = false;
     };

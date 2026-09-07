@@ -10,7 +10,7 @@ import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
 import { langFromPath } from "@/lib/languages";
-import { modelForProvider, providerOf, connectionMode, connectionSlot, connectionDefaults, type LlmProvider } from "@/lib/providers";
+import { modelForProvider, providerOf, connectionMode, connectionSlot, type LlmProvider } from "@/lib/providers";
 import { ancestorDirs, autoCollapsePaths, cleanPath, dropRecord, dupPath, isInside, joinPath, parentDir, remapList, remapPath, remapRecord } from "@/lib/fs";
 import { DEFAULT_INPUT_MAP, normalizeInputMap, type InputMap } from "@/lib/input-map";
 import { KEY_DEFAULTS, normalizeKeyMap } from "@/lib/keymap";
@@ -29,13 +29,14 @@ import { rejectHunk as rejectHunkLines } from "@/lib/diff";
 import { parseRunTrace } from "@/lib/parse-run";
 import type { AfterWrite } from "@/lib/harness";
 import { normalizePlanWho, type PlanWho } from "@/lib/plan";
-import { abortReason } from "@/lib/abort";
+import { abortReason, stopAgent } from "@/lib/abort";
 import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
 import { EMPTY_JOURNAL, normalizeJournal } from "@/lib/session";
 import { normalizeJob, type AgentJob } from "@/lib/agent-ask";
 import { AGENT_MIN, AGENT_MAX, SIDE_MIN, SIDE_MAX, TRAIL_MIN, TRAIL_MAX } from "@/lib/layout";
-import { fitCloudAbo } from "@/lib/llm-fit";
+import { connectionSettings, connectionValues as slotOf } from "@/lib/connection-settings";
+import { IDE_SETTINGS_KEYS, pickSettings } from "@/lib/settings-schema";
 
 import { pushUndo } from "@/lib/document";
 import { planMove } from "@/lib/move-plan";
@@ -44,10 +45,23 @@ const THINK_CAP = 64_000;
 
 let liveThink = "";
 let liveText = "";
+type LiveChatTarget = { id: string; workspaceEpoch: number };
+let liveTarget: LiveChatTarget | null = null;
 let livePump: ReturnType<typeof setTimeout> | 0 = 0;
 let liveFlush: (() => void) | null = null;
 
-function queueLive(kind: "think" | "text", s: string) {
+function resetLiveChat() {
+  if (livePump) globalThis.clearTimeout(livePump);
+  livePump = 0;
+  liveThink = "";
+  liveText = "";
+  liveTarget = null;
+}
+
+function queueLive(kind: "think" | "text", s: string, target: LiveChatTarget) {
+  if (!s) return;
+  if (liveTarget && (liveTarget.id !== target.id || liveTarget.workspaceEpoch !== target.workspaceEpoch)) flushLiveChat();
+  liveTarget = target;
   if (kind === "think") liveThink += s;
   else liveText += s;
   if (livePump || !liveFlush) return;
@@ -82,30 +96,6 @@ function pushDisk(kind: "write" | "remove" | "mkdir", path: string, content = ""
   void job.catch(() => undefined);
 }
 import { shrinkFiles } from "@/lib/persist-storage";
-
-function slotOf(s: {
-  llmAuthMode: "abo" | "key";
-  llmContextAuto: boolean;
-  llmBaseUrl: string;
-  llmModel: string;
-  llmContext: number;
-  llmThinking: ThinkingMode;
-  llmCompact: CompactMode;
-  llmTemperature: number;
-  llmMaxOut: number;
-}): LlmSlot {
-  return {
-    authMode: s.llmAuthMode,
-    contextAuto: s.llmContextAuto,
-    baseUrl: s.llmBaseUrl,
-    model: s.llmModel,
-    context: s.llmContext,
-    thinking: s.llmThinking,
-    compact: s.llmCompact,
-    temperature: s.llmTemperature,
-    maxOut: s.llmMaxOut,
-  };
-}
 
 function noteLearn(k: string, d?: string) {
   if (typeof window === "undefined") return;
@@ -167,18 +157,19 @@ export const useIde = create<IdeState>()(
       liveFlush = () => {
         const t = liveThink;
         const x = liveText;
-        liveThink = "";
-        liveText = "";
-        if (!t && !x) return;
+        const target = liveTarget;
+        resetLiveChat();
+        if ((!t && !x) || !target || target.workspaceEpoch !== get().workspaceEpoch) return;
         const chat = [...get().chat];
-        const last = chat[chat.length - 1];
+        const index = chat.findIndex((m) => m.id === target.id);
+        const last = chat[index];
         if (last?.role !== "assistant") return;
         let thinking = last.thinking ?? "";
         if (t) {
           thinking += t;
           if (thinking.length > THINK_CAP) thinking = thinking.slice(-THINK_CAP);
         }
-        chat[chat.length - 1] = {
+        chat[index] = {
           ...last,
           content: x ? last.content + x : last.content,
           thinking: t ? thinking : last.thinking,
@@ -384,38 +375,11 @@ export const useIde = create<IdeState>()(
       setSplitMode: (splitMode) => set({ splitMode }),
       setLlmProvider: (llmProvider, mode) => {
         const cur = get();
-        const d = providerOf(llmProvider);
-        const slots = { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur) };
         const leaving = providerOf(cur.llmProvider);
         if (!leaving.needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
-        const authMode = connectionMode(d.id, mode ?? (d.id === cur.llmProvider ? cur.llmAuthMode : "key"));
-        const defaults = connectionDefaults(d.id, authMode);
-        const legacy = slots[d.id];
-        const saved = slots[connectionSlot(d.id, authMode)] ?? (connectionMode(d.id, legacy?.authMode) === authMode ? legacy : undefined);
-        const key = keyForProvider(d.id);
-        let url = saved?.baseUrl ?? defaults.baseUrl;
-        let model = modelForProvider(d.id, saved?.model || defaults.model);
-        if (d.id === "github") { url = ""; model = model.replace(/^openai\//, ""); }
-        const fit = saved ? null : fitCloudAbo(d.id, model, authMode);
-        set({
-          llmSlots: slots,
-          llmProvider: d.id,
-          llmAuthMode: authMode,
-          llmBaseUrl: url,
-          llmModel: model,
-          llmApiKey: key,
-          llmCompact: saved?.compact ?? cur.llmCompact,
-          ...(fit
-            ? fit
-            : {
-                llmContext: saved?.context ?? cur.llmContext,
-                llmThinking: saved?.thinking ?? cur.llmThinking,
-                llmTemperature: saved?.temperature ?? cur.llmTemperature,
-                llmMaxOut: saved?.maxOut ?? cur.llmMaxOut,
-                llmContextAuto: saved?.contextAuto ?? (d.kind === "local" || d.id === "custom" ? cur.llmContextAuto : true),
-              }),
-        });
-        if (fit || get().llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
+        const next = connectionSettings(cur, llmProvider, mode);
+        set({ ...next, llmApiKey: keyForProvider(next.llmProvider) });
+        if (get().llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
       },
       setLlmAuthMode: (mode) => get().setLlmProvider(get().llmProvider, mode),
       setLlmBaseUrl: (llmBaseUrl) => {
@@ -433,13 +397,12 @@ export const useIde = create<IdeState>()(
       setLlmModel: (llmModel) => {
         const cur = get();
         const next = modelForProvider(cur.llmProvider, llmModel);
-        const fit = fitCloudAbo(cur.llmProvider, next, cur.llmAuthMode);
+        if (next === cur.llmModel) return;
         set({
           llmModel: next,
           llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), model: next } },
-          ...(fit ?? {}),
         });
-        if (fit || cur.llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
+        if (cur.llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
       },
       setLlmApiKey: (llmApiKey) => {
         saveKeyForProvider(get().llmProvider, llmApiKey);
@@ -451,7 +414,8 @@ export const useIde = create<IdeState>()(
         set({ llmContext, llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), context: llmContext } } });
       },
       setLlmContextAuto: (llmContextAuto) => {
-        set({ llmContextAuto });
+        const cur = get();
+        set({ llmContextAuto, llmSlots: { ...cur.llmSlots, [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: { ...slotOf(cur), contextAuto: llmContextAuto } } });
         if (llmContextAuto) void import("@/lib/model-context").then((m) => m.applyCloudContext());
       },
       setLlmThinking: (v) => {
@@ -496,21 +460,18 @@ export const useIde = create<IdeState>()(
         const cur = get();
         const p = cur.llmProfiles.find((x) => x.id === id);
         if (!p) return;
-        if (!providerOf(cur.llmProvider).needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
-        set({
-          llmSlots: { ...(cur.llmSlots ?? {}), [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur), [connectionSlot(p.provider, p.authMode)]: p },
+        get().applySettings({
           ...(p.toolMode ? { llmToolModes: { ...cur.llmToolModes, [toolTargetKey(p.provider, modelForProvider(p.provider, p.model), p.baseUrl || providerOf(p.provider).baseUrl)]: toolCompatibility(p.toolMode) } } : {}),
           llmProvider: p.provider,
           llmAuthMode: connectionMode(p.provider, p.authMode),
-          llmBaseUrl: p.provider === "codex" || p.provider === "github" ? "" : p.baseUrl,
-          llmModel: modelForProvider(p.provider, p.provider === "github" ? p.model.replace(/^openai\//, "") : p.model),
+          llmBaseUrl: p.baseUrl,
+          llmModel: p.model,
           llmContext: p.context,
           llmContextAuto: p.contextAuto ?? false,
           llmThinking: p.thinking,
           llmCompact: p.compact,
           llmTemperature: p.temperature ?? 0.3,
           llmMaxOut: p.maxOut ?? 0,
-          llmApiKey: keyForProvider(p.provider),
         });
       },
       deleteLlmProfile: (id) => set({ llmProfiles: get().llmProfiles.filter((p) => p.id !== id) }),
@@ -697,6 +658,7 @@ export const useIde = create<IdeState>()(
         set({ chat });
       },
       failRunningSteps: () => {
+        flushLiveChat();
         const chat = [...get().chat];
         const last = chat[chat.length - 1];
         if (last?.role !== "assistant") return;
@@ -923,8 +885,29 @@ export const useIde = create<IdeState>()(
         } finally { set({ pathOperation: null }); }
       },
       renameFile: (from, to) => { void get().relocatePath(from, to); },
-      clearChat: () => set({ chat: [], sessionTokens: { prompt: 0, completion: 0 }, agentJob: null }),
-      removeChat: (id) => set({ chat: get().chat.filter((m) => m.id !== id) }),
+      clearChat: () => {
+        const wasBusy = get().agentBusy;
+        stopAgent("Neuer Chat");
+        resetLiveChat();
+        set({
+          chat: [], sessionTokens: { prompt: 0, completion: 0 }, agentJob: null,
+          agentBusy: false, agentStartedAt: 0, agentInbox: null, agentQueue: [],
+          agentDraft: "", pendingAsk: null,
+          ...(wasBusy ? { running: false, testsRunning: false } : {}),
+        });
+      },
+      removeChat: (id) => {
+        const active = get().agentBusy && get().chat.at(-1)?.id === id;
+        if (active) {
+          stopAgent("Nachricht entfernt");
+          get().failRunningSteps();
+        }
+        if (liveTarget?.id === id) resetLiveChat();
+        set({
+          chat: get().chat.filter((m) => m.id !== id),
+          ...(active ? { agentJob: null, agentBusy: false, agentStartedAt: 0, running: false, testsRunning: false } : {}),
+        });
+      },
       proposeFiles: (next) => {
         get().patchFiles(next);
       },
@@ -1215,6 +1198,7 @@ export const useIde = create<IdeState>()(
         if (msg.role === "user") noteLearn("ask", msg.content);
       },
       startAssistant: (opts) => {
+        flushLiveChat();
         const chat = [...get().chat];
         const last = chat[chat.length - 1];
         if (last?.role === "assistant") {
@@ -1236,10 +1220,12 @@ export const useIde = create<IdeState>()(
         set({ chat: [...chat, { id: nid(), role: "assistant", voice: opts?.voice ?? "agent", content: "", at: Date.now() }] });
       },
       appendAssistant: (s) => {
-        queueLive("text", s);
+        const st = get(), last = st.chat.at(-1);
+        if (last?.role === "assistant") queueLive("text", s, { id: last.id, workspaceEpoch: st.workspaceEpoch });
       },
       appendThinking: (s) => {
-        queueLive("think", s);
+        const st = get(), last = st.chat.at(-1);
+        if (last?.role === "assistant") queueLive("think", s, { id: last.id, workspaceEpoch: st.workspaceEpoch });
       },
       addAgentStep: (step) => {
         const chat = [...get().chat];
@@ -1445,80 +1431,42 @@ export const useIde = create<IdeState>()(
           checkpoints: [],
           attached: [],
         }),
-      resetSettings: () =>
-        set({
-          theme: "dark",
-          locale: "de",
-          motion: "full",
-          fontSize: 13,
-          tabSize: 2,
-          lineNumbers: true,
-          wordWrap: false,
-          editorMinimap: false,
-          editorSticky: true,
-          editorGuides: true,
-          editorWheelZoom: true,
-          suggestOn: true,
-          insertSpaces: true,
-          formatOnSave: false,
-          autoPreview: true,
-          autoAcceptDiffs: false,
-          autoRunAgent: true,
-          planWho: "auto" as PlanWho,
-          runLoop: true,
-          testLoop: true,
-          graphLoop: true,
-          engineLoop: false,
-          loopTries: 3,
-          harnessAfterWrite: "run",
-          harnessMaxRounds: 24,
-          graphSees: 4,
-          harnessBoardGrid: true,
-          harnessBoardSnap: true,
-          liveRun: true,
-          liveEditor: true,
-          mcpStream: true,
-          showStatusBar: true,
-          openOutputOnRun: true,
-          runInWindow: true,
-          runHtml: true,
-          autoUpdate: true,
-          splitMode: "auto",
-          outputDock: "bottom",
-          trailWidth: 300,
-          trailThinkH: 200,
-          trailInChat: false,
-          autoHw: false,
-          hwNote: "",
-          agentMode: "agent",
-          agentRules: "",
-          llmContext: 32768,
-          llmContextAuto: true,
-          llmThinking: "auto",
-          llmCompact: "auto",
-          llmTemperature: 0.3,
-          llmMaxOut: 0,
-          llmRetries: 3,
-          llmHardStopMin: 0,
-          llmProvider: "ollama",
-          llmAuthMode: "key",
-          llmBaseUrl: "http://127.0.0.1:11434/v1",
-          llmModel: "llama3.1",
-          llmToolModes: {},
-          llmToolLearning: {},
-          companionUrl: "http://127.0.0.1:7845",
-          companionKeep: false,
-          netCompiler: true,
-          lspEnabled: {},
-          lspTimeout: 8,
-          lspMaxFiles: 24,
-          storageMode: "browser",
-          autoSaveDisk: false,
-          loadOnStart: false,
-          inputMap: normalizeInputMap(DEFAULT_INPUT_MAP),
-          keyMap: { ...KEY_DEFAULTS },
-          panels: { files: true, code: true, agent: true, trail: true, output: false },
-        }),
+      applySettings: (patch) => {
+        const cur = get();
+        const rebind = ["llmProvider", "llmAuthMode", "llmBaseUrl", "llmModel"].some((key) => Object.hasOwn(patch, key));
+        let next = { ...cur, ...patch };
+        if (rebind) {
+          if (!providerOf(cur.llmProvider).needsSub || cur.llmApiKey.trim()) saveKeyForProvider(cur.llmProvider, cur.llmApiKey);
+          const target = patch.llmProvider ?? cur.llmProvider;
+          const mode = connectionMode(target, patch.llmAuthMode ?? (target === cur.llmProvider ? cur.llmAuthMode : "key"));
+          const changed = target !== cur.llmProvider || mode !== cur.llmAuthMode;
+          next = { ...cur, ...(changed ? connectionSettings(cur, target, mode) : {}), ...patch, llmProvider: target, llmAuthMode: mode };
+          next.llmModel = modelForProvider(target, target === "github" ? next.llmModel.replace(/^openai\//, "") : next.llmModel);
+          if (target === "github" || target === "codex") next.llmBaseUrl = "";
+          next.llmApiKey = keyForProvider(target);
+          next.llmSlots = {
+            ...cur.llmSlots,
+            [connectionSlot(cur.llmProvider, cur.llmAuthMode)]: slotOf(cur),
+            ...patch.llmSlots,
+            [connectionSlot(target, mode)]: slotOf(next),
+          };
+        }
+        if (next.activeSurfaceId !== ANVIL_SURFACE && !next.mcpServers.some((server) => server.id === next.activeSurfaceId && server.enabled)) {
+          next.activeSurfaceId = ANVIL_SURFACE;
+        }
+        // Publish the complete connection with its own key in a single update.
+        set(next);
+        if (next.llmContextAuto && (rebind || Object.hasOwn(patch, "llmContextAuto"))) {
+          void import("@/lib/model-context").then((m) => m.applyCloudContext());
+        }
+      },
+      resetSettings: () => {
+        const defaults = structuredClone(pickSettings(useIde.getInitialState(), IDE_SETTINGS_KEYS));
+        const cur = get();
+        get().applySettings({ ...defaults, llmProfiles: cur.llmProfiles, llmSlots: cur.llmSlots,
+          llmToolLearning: cur.llmToolLearning, mcpServers: cur.mcpServers });
+        set({ hwNote: "" });
+      },
       };
     },
     {

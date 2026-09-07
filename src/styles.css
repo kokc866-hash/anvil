@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+.settings-filtered:not(:has([data-settings-match="true"])) {
+  display: none;
+}
+.settings-results:has([data-settings-match="true"]) .settings-empty {
+  display: none;
+}
+
 @theme {
   --color-bg: #0a0a0b;
   --color-surface: #121214;
@@ -568,7 +575,7 @@ html[data-theme="light"] .tok-text { color: #1c1c1f; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  max-width: 16rem;
+  max-width: min(16rem, calc(100vw - 16px));
   padding: 0.28rem 0.5rem;
   border-radius: 6px;
   border: 1px solid var(--color-border);
@@ -694,5 +701,4 @@ input[type="range"]:focus-visible {
 input[type="range"]:disabled {
   opacity: 0.4;
 }
-
 

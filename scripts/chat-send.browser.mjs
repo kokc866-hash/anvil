@@ -169,6 +169,115 @@ try {
     if (!production) await page.waitForFunction(() => !window.fixtureBrain.getState().busy);
   }
 
+  if (!production) {
+    const { page, errors } = await openChat("ollama");
+    const before = requests.length;
+    // Pause the composer while exercising store transitions in one browser task.
+    await page.evaluate(() => {
+      const st = window.__anvilIde;
+      st.setState({ panels: { ...st.getState().panels, agent: false } });
+    });
+    await page.locator("#anvil-chat").waitFor({ state: "detached" });
+    const state = await page.evaluate(async () => {
+      const { flushLiveChat } = await import("/src/store/ide.ts");
+      const { beginAgent, stopAgent, agentAborted } = await import("/src/lib/abort.ts");
+      await import("/src/lib/companion-life.ts");
+      await import("/src/lib/run-window.ts");
+      const st = window.__anvilIde;
+      st.setState({ chat: [], agentInbox: "old inbox", agentQueue: ["old queued job"], agentDraft: "old draft", pendingAsk: { path: "old.ts", text: "old selection" } });
+      st.getState().startAssistant();
+      st.getState().appendAssistant("OLD BUFFER");
+      st.getState().clearChat();
+      st.getState().startAssistant();
+      flushLiveChat();
+      const cleared = { text: st.getState().chat.at(-1).content, inbox: st.getState().agentInbox, queue: st.getState().agentQueue, draft: st.getState().agentDraft, ask: st.getState().pendingAsk };
+
+      st.setState({ chat: [] });
+      st.getState().startAssistant();
+      const original = st.getState().chat.at(-1).id;
+      st.getState().appendAssistant("first answer");
+      st.getState().appendThinking("first thought");
+      st.getState().addChat({ role: "user", content: "next question" });
+      st.getState().startAssistant();
+      st.getState().appendAssistant("second answer");
+      flushLiveChat();
+      const originalMessage = st.getState().chat.find((m) => m.id === original);
+      const separated = { first: originalMessage.content, thought: originalMessage.thinking, second: st.getState().chat.at(-1).content };
+      st.getState().appendAssistant("wrong workspace");
+      st.setState({ workspaceEpoch: st.getState().workspaceEpoch + 1 });
+      flushLiveChat();
+      const afterWorkspace = st.getState().chat.at(-1).content;
+
+      beginAgent(); st.getState().setAgentBusy(true);
+      stopAgent("previous stop");
+      beginAgent(); st.getState().setAgentBusy(true);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const restartedBusy = st.getState().agentBusy;
+      const active = st.getState().chat.at(-1).id;
+      st.getState().appendAssistant("pending before deletion");
+      st.getState().removeChat(active);
+      flushLiveChat();
+      const removed = { busy: st.getState().agentBusy, aborted: agentAborted(), first: st.getState().chat.find((m) => m.id === original).content };
+      return { cleared, separated, afterWorkspace, restartedBusy, removed };
+    });
+    assert.deepEqual(state.cleared, { text: "", inbox: null, queue: [], draft: "", ask: null });
+    assert.deepEqual(state.separated, { first: "first answer", thought: "first thought", second: "second answer" });
+    assert.equal(state.afterWorkspace, "second answer");
+    assert.equal(state.restartedBusy, true, "a previous Stop must not stop the new request");
+    assert.deepEqual(state.removed, { busy: false, aborted: true, first: "first answer" });
+
+    const label = "Werkzeug läuft · read_file · " + "long-path/".repeat(16);
+    await page.evaluate(async (label) => {
+      const st = window.__anvilIde;
+      const { beginAgent } = await import("/src/lib/abort.ts");
+      const { useRequestState } = await import("/src/lib/request-state.ts");
+      beginAgent();
+      useRequestState.setState({ phase: "tool", detail: label.replace("Werkzeug läuft · ", "") });
+      st.setState({ locale: "de", agentBusy: true, agentStartedAt: Date.now(), panels: { ...st.getState().panels, agent: true, trail: false }, chat: [{ id: "status-fixture", role: "assistant", content: "Current answer", at: Date.now() }] });
+    }, label);
+    const status = page.getByRole("status", { name: label, exact: true });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      if (width === 390) await page.getByRole("navigation", { name: "Arbeitsbereich" }).getByRole("button", { name: "Agent", exact: true }).click();
+      await status.focus();
+      await page.getByRole("tooltip").filter({ hasText: label }).waitFor();
+      const layout = await status.evaluate((el) => {
+        const time = el.previousElementSibling.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        const tip = document.getElementById(el.getAttribute("aria-describedby"));
+        const t = tip.getBoundingClientRect();
+        return { inMessage: Boolean(el.closest("[data-chat-msg]")), afterTime: r.left >= time.right && Math.abs(r.top - time.top) < 3, static: getComputedStyle(el).position === "static", fits: t.left >= 7 && t.right <= innerWidth - 7 && tip.scrollWidth <= tip.clientWidth + 1 };
+      });
+      assert.deepEqual(layout, { inMessage: true, afterTime: true, static: true, fits: true });
+      await page.keyboard.press("Escape");
+      await page.getByRole("tooltip").waitFor({ state: "detached" });
+      await status.evaluate((el) => el.blur());
+    }
+    assert.equal(requests.length, before, "chat state checks must not invoke a model");
+    assert.deepEqual(errors, []);
+    console.log("CHAT_RESET_STREAM_STOP_STATUS_OK");
+    await page.close();
+  }
+
+  {
+    const { page, errors } = await openChat("ollama");
+    const before = requests.length;
+    await page.evaluate(() => {
+      const st = window.__anvilIde.getState();
+      st.pushAgent("hi wer bist du fixture-queue-first");
+      st.pushAgent("hi wer bist du fixture-queue-second");
+    });
+    await page.waitForFunction(() => {
+      const st = window.__anvilIde.getState();
+      return !st.agentBusy && !st.agentInbox && !st.agentQueue.length && st.chat.filter((m) => m.role === "assistant" && m.content.includes("LAN-Antwort angekommen")).length === 2;
+    }, undefined, { timeout: 20_000 });
+    assert.deepEqual(await page.evaluate(() => window.__anvilIde.getState().chat.filter((m) => m.role === "user").map((m) => m.content)), ["hi wer bist du fixture-queue-first", "hi wer bist du fixture-queue-second"]);
+    assert.equal(requests.length, before + 2, "each queued instruction must reach the model exactly once");
+    assert.deepEqual(errors, []);
+    console.log(`${production ? "PRODUCTION" : "DEV"}_CHAT_FIFO_OK`);
+    await page.close();
+  }
+
   for (const [provider, label, mode] of [["ollama", "LAN", "agent"], ["openai", "API", "agent"], ["openai", "API", "ask"]]) {
     const { page, errors } = await openChat(provider, mode);
     const before = requests.length;

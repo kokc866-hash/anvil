@@ -8,6 +8,7 @@ import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { hasTrailMsg } from "@/lib/trail-filter";
 import { CopyMini } from "@/components/ui/copy-btn";
 import { AgentPulse } from "./agent-pulse";
+import { RequestStatus } from "./request-status";
 import { ThinkBlock, Trail } from "./chat-trail";
 import type { ChatMenu } from "./chat-menu";
 import { VirtualMessage } from "./virtual-message";
@@ -49,7 +50,7 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
       }}
     >
       {m.role !== "user" ? (
-        <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium justify-start text-muted">
+        <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] font-medium justify-start text-muted">
           {m.voice === "helper" ? (
             <>
               <span className="flex size-5 items-center justify-center rounded-full border border-ok/40 bg-surface text-[10px] font-semibold text-ok">
@@ -61,16 +62,17 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
             </>
           ) : (
             <>
-              <span className="flex size-5 items-center justify-center rounded-full border border-border bg-surface text-[10px] font-semibold text-fg">
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-[10px] font-semibold text-fg">
                 A
               </span>
-              <span className="text-fg">{t("agent")}</span>
+              <span className="shrink-0 text-fg">{t("agent")}</span>
               {liveThink ? <AgentPulse className="ml-0.5 shrink-0" /> : null}
               {liveThink || m.ms ? (
                 <span className="shrink-0 font-mono tabular-nums text-subtle">
                   · {formatElapsed(liveThink ? busyMs : m.ms || 0)}
                 </span>
               ) : null}
+              {liveThink ? <RequestStatus /> : null}
             </>
           )}
         </div>

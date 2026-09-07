@@ -1,24 +1,27 @@
-import { type ReactNode } from "react";
+import { createContext, useContext, useId, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
+import { matchesSettings } from "./search";
+export { SettingsHeading as Head, SettingsSection } from "./search";
 
-export function Head({ children }: { children: ReactNode }) {
-  return <p className="pt-4 pb-1 text-xs font-medium tracking-wide text-subtle uppercase">{children}</p>;
-}
+const Description = createContext<{ label: string; hint?: string } | undefined>(undefined);
 
 export function Vis({ q, label, children }: { q: string; label: string; children: ReactNode }) {
-  if (q && !label.toLowerCase().includes(q)) return null;
-  return <>{children}</>;
+  if (!matchesSettings(q, children, label)) return null;
+  return <div className="contents" data-settings-match={q ? "true" : undefined}>{children}</div>;
 }
 
-export function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Row({ label, hint, children, compact = false }: { label: string; hint?: string; children: ReactNode; compact?: boolean }) {
+  const id = useId();
   return (
-    <div className="flex items-start justify-between gap-4 py-3">
+    <div className={cn("flex items-start justify-between gap-4", compact ? "py-1.5" : "py-3")}>
       <div className="min-w-0">
-        <p className="text-sm text-fg">{label}</p>
-        {hint ? <p className="mt-0.5 text-xs text-muted text-pretty">{hint}</p> : null}
+        <p id={id} className="text-sm text-fg">{label}</p>
+        {hint ? <p id={`${id}-hint`} className="mt-0.5 text-xs text-muted text-pretty">{hint}</p> : null}
       </div>
-      <div className="shrink-0">{children}</div>
+      <Description.Provider value={{ label: id, hint: hint ? `${id}-hint` : undefined }}>
+        <div className="shrink-0">{children}</div>
+      </Description.Provider>
     </div>
   );
 }
@@ -32,12 +35,14 @@ export function Seg<T extends string>({
   options: { id: T; label: string }[];
   onChange: (v: T) => void;
 }) {
+  const description = useContext(Description);
   return (
-    <div className="flex flex-wrap rounded-md border border-border bg-bg p-0.5">
+    <div role="group" aria-labelledby={description?.label} aria-describedby={description?.hint} className="flex flex-wrap rounded-md border border-border bg-bg p-0.5">
       {options.map((o) => (
         <button
           key={o.id}
           type="button"
+          aria-pressed={value === o.id}
           onClick={() => onChange(o.id)}
           className={cn(
             "h-8 rounded-sm px-2.5 text-xs font-medium",
@@ -79,11 +84,14 @@ export function Field({
 }
 
 export function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  const description = useContext(Description);
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
+      aria-labelledby={description?.label}
+      aria-describedby={description?.hint}
       onClick={() => onChange(!on)}
       className={cn(
         "relative h-7 w-11 rounded-full border transition-colors duration-150",

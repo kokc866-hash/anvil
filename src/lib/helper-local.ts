@@ -8,10 +8,11 @@ type Native = {
   helperDir: () => Promise<string>;
   helperPort: () => Promise<number>;
   helperAuth?: () => Promise<{ port: number; token: string }>;
-  helperList: () => Promise<{ id: string; bytes: number; ready: boolean }[]>;
-  helperHas: (id: string) => Promise<boolean>;
+  helperList: () => Promise<{ id: string; bytes: number; ready: boolean; revision?: string }[]>;
+  helperHas: (id: string, wasmName?: string) => Promise<boolean>;
   helperDelete: (id: string) => Promise<boolean>;
-  helperDownload: (job: { id: string; files: { url: string; rel: string; lib?: boolean }[] }) => Promise<{ ok: boolean }>;
+  helperCancel?: (id: string) => Promise<boolean>;
+  helperDownload: (job: { id: string; update?: boolean; files: { url: string; rel: string; lib?: boolean }[] }) => Promise<{ ok: boolean }>;
   helperJson?: (url: string) => Promise<string>;
   onHelperProgress: (fn: (p: { id: string; rel: string; done: number; total: number }) => void) => () => void;
   openChild?: (path: string, opts?: { w?: number; h?: number; title?: string }) => Promise<number>;
@@ -50,39 +51,27 @@ type Native = {
 
 export function nativeHelper(): Native | null {
   if (typeof window === "undefined") return null;
-  const n = (window as unknown as { anvilNative?: Native }).anvilNative;
-  if (n?.helperAuth) {
-    void n.helperAuth().then((a) => {
-      if (Number(a?.port) > 0) helperPort = Number(a.port);
-      if (a?.token) helperToken = String(a.token);
-    });
-  } else if (n?.helperPort) {
-    void n.helperPort().then((p) => {
-      if (Number(p) > 0) helperPort = Number(p);
-    });
-  }
-  return n ?? null;
+  return (window as unknown as { anvilNative?: Native }).anvilNative ?? null;
 }
 
-export async function syncHelperAuth(): Promise<{ port: number; token: string }> {
+let authOwner: Native | null = null;
+let authPromise: Promise<{ port: number; token: string }> | null = null;
+export function syncHelperAuth(): Promise<{ port: number; token: string }> {
   const n = nativeHelper();
-  if (n?.helperAuth) {
-    try {
+  if (authOwner === n && authPromise) return authPromise;
+  authOwner = n;
+  authPromise = (async () => {
+    if (n?.helperAuth) {
       const a = await n.helperAuth();
       if (Number(a?.port) > 0) helperPort = Number(a.port);
-      if (a?.token) helperToken = String(a.token);
-    } catch {
-      /* */
-    }
-  } else if (n?.helperPort) {
-    try {
+      helperToken = String(a?.token || "");
+    } else if (n?.helperPort) {
       const p = await n.helperPort();
       if (Number(p) > 0) helperPort = Number(p);
-    } catch {
-      /* */
     }
-  }
-  return { port: helperPort, token: helperToken };
+    return { port: helperPort, token: helperToken };
+  })().catch((err) => { authPromise = null; throw err; });
+  return authPromise;
 }
 
 function helperBase() {
@@ -90,7 +79,7 @@ function helperBase() {
 }
 
 function hfFile(repoUrl: string, file: string): string {
-  return `${repoUrl.replace(/\/+$/, "")}/resolve/main/${file}`;
+  return `${repoUrl.replace(/\/+$/, "").replace(/\/resolve\/[^/]+$/, "")}/resolve/main/${file}`;
 }
 
 async function readJson(url: string): Promise<unknown> {
@@ -112,20 +101,27 @@ async function readJson(url: string): Promise<unknown> {
   return JSON.parse(text);
 }
 
-export async function helperFileList(id: string): Promise<{ url: string; rel: string; lib?: boolean }[]> {
+export async function helperFileList(id: string, signal?: AbortSignal): Promise<{ url: string; rel: string; lib?: boolean }[]> {
+  signal?.throwIfAborted();
   const llm = await import("@mlc-ai/web-llm");
+  signal?.throwIfAborted();
   const rec = llm.prebuiltAppConfig.model_list.find((m: { model_id: string }) => m.model_id === id);
   if (!rec) throw new Error(`Unbekanntes Modell: ${id}`);
   const base = String(rec.model).replace(/\/+$/, "");
+  let manifestUrl = hfFile(base, "tensor-cache.json");
+  let cache: { records?: { dataPath: string }[] };
+  try { cache = await readJson(manifestUrl) as typeof cache; }
+  catch { signal?.throwIfAborted(); manifestUrl = hfFile(base, "ndarray-cache.json"); cache = await readJson(manifestUrl) as typeof cache; }
+  signal?.throwIfAborted();
   const files: { url: string; rel: string; lib?: boolean }[] = [
-    { url: hfFile(base, "ndarray-cache.json"), rel: "ndarray-cache.json" },
+    { url: manifestUrl, rel: "tensor-cache.json" },
     { url: hfFile(base, "mlc-chat-config.json"), rel: "mlc-chat-config.json" },
   ];
   const cfg = (await readJson(hfFile(base, "mlc-chat-config.json"))) as { tokenizer_files?: string[] };
-  for (const t of cfg.tokenizer_files ?? ["tokenizer.json"]) {
+  signal?.throwIfAborted();
+  for (const t of cfg.tokenizer_files?.length ? cfg.tokenizer_files : ["tokenizer.json"]) {
     files.push({ url: hfFile(base, t), rel: t });
   }
-  const cache = (await readJson(hfFile(base, "ndarray-cache.json"))) as { records?: { dataPath: string }[] };
   for (const r of cache.records ?? []) {
     files.push({ url: hfFile(base, r.dataPath), rel: r.dataPath });
   }
@@ -143,20 +139,67 @@ export async function helperFileList(id: string): Promise<{ url: string; rel: st
   });
 }
 
+type LocalProgress = { done: number; total: number; rel: string };
+const downloading = new Map<string, { promise: Promise<void>; ctrl: AbortController; consumers: number; listeners: Set<(p: LocalProgress) => void> }>();
+const fileGenerations = new Map<string, number>();
+/** Includes work before native IPC starts, such as reading model manifests. */
+export function captureHelperLocal(id: string): () => void {
+  const generation = fileGenerations.get(id);
+  return () => {
+    if (fileGenerations.get(id) !== generation) throw new DOMException("Modellablage geändert; vorheriger Auftrag abgebrochen.", "AbortError");
+  };
+}
+export function cancelHelperLocal(id: string): void {
+  fileGenerations.set(id, (fileGenerations.get(id) || 0) + 1);
+  downloading.get(id)?.ctrl.abort();
+}
 export async function downloadHelperLocal(
-  id: string,
-  onProgress?: (p: { done: number; total: number; rel: string }) => void,
+  id: string, onProgress?: (p: LocalProgress) => void, options: { update?: boolean; signal?: AbortSignal } = {},
 ): Promise<void> {
   const native = nativeHelper();
-  if (!native) throw new Error("Lokale Bibliothek nur im Anvil-Fenster (start.bat), nicht im Browser.");
-  const files = await helperFileList(id);
-  const off = native.onHelperProgress((p) => {
-    if (p.id === id) onProgress?.({ done: p.done, total: p.total, rel: p.rel });
+  if (!native) throw new Error("Lokale Bibliothek nur im Anvil-Desktopprogramm.");
+  const check = captureHelperLocal(id);
+  options.signal?.throwIfAborted();
+  let task = downloading.get(id);
+  if (task?.ctrl.signal.aborted) {
+    await task.promise.catch(() => undefined);
+    check();
+    options.signal?.throwIfAborted();
+    return downloadHelperLocal(id, onProgress, options);
+  }
+  if (!task) {
+    const ctrl = new AbortController();
+    const listeners = new Set<(p: LocalProgress) => void>();
+    const off = native.onHelperProgress((p) => { if (p.id === id) listeners.forEach((fn) => fn(p)); });
+    const promise = (async () => {
+      const files = await helperFileList(id, ctrl.signal);
+      ctrl.signal.throwIfAborted();
+      const cancel = () => { void native.helperCancel?.(id).catch(() => undefined); };
+      ctrl.signal.addEventListener("abort", cancel, { once: true });
+      try {
+        const result = await native.helperDownload({ id, files, update: options.update });
+        if (!result.ok) throw new Error("Helfer-Download fehlgeschlagen");
+        ctrl.signal.throwIfAborted();
+        const { invalidateModelCache } = await import("./brain/engine");
+        await invalidateModelCache(id);
+      } finally { ctrl.signal.removeEventListener("abort", cancel); }
+    })().finally(() => { off(); downloading.delete(id); });
+    task = { promise, ctrl, consumers: 0, listeners };
+    downloading.set(id, task);
+  }
+  const owned = task;
+  owned.consumers++;
+  if (onProgress) owned.listeners.add(onProgress);
+  let abort: () => void = () => {};
+  const canceled = new Promise<never>((_, reject) => {
+    abort = () => reject(options.signal?.reason ?? new DOMException("Abgebrochen", "AbortError"));
+    options.signal?.addEventListener("abort", abort, { once: true });
   });
-  try {
-    await native.helperDownload({ id, files });
-  } finally {
-    off();
+  try { await Promise.race([owned.promise, canceled]); }
+  finally {
+    options.signal?.removeEventListener("abort", abort);
+    if (onProgress) owned.listeners.delete(onProgress);
+    if (--owned.consumers === 0 && options.signal?.aborted) owned.ctrl.abort();
   }
 }
 
@@ -164,13 +207,20 @@ export async function helperLocalReady(id: string): Promise<boolean> {
   return Boolean(await helperLocalId(id));
 }
 
-export async function helperLocalId(id: string): Promise<string | null> {
+export async function helperLocalId(id: string, adopt = false): Promise<string | null> {
   const native = nativeHelper();
   if (!native) return null;
+  const check = captureHelperLocal(id);
   try {
-    if (await native.helperHas(id)) return id;
+    const record = adopt ? (await import("@mlc-ai/web-llm")).prebuiltAppConfig.model_list.find((m) => m.model_id === id) : undefined;
+    check();
+    const ready = await native.helperHas(id, record?.model_lib.split("/").pop());
+    check();
+    if (ready) return id;
   } catch {
-    /* */
+    // A cancelled adoption is not a cache miss: callers must not start a new
+    // download after the user has removed this model.
+    if (adopt) check();
   }
   return null;
 }
@@ -180,7 +230,7 @@ export function helperLocalUrls(id: string, modelLibUrl: string): { model: strin
   const auth = helperToken ? `/t/${helperToken}` : "";
   return {
     model: `${helperBase()}${auth}/${id}`,
-    model_lib: `${helperBase()}${auth}/libs/${wasm}`,
+    model_lib: `${helperBase()}${auth}/${id}/${wasm}`,
   };
 }
 

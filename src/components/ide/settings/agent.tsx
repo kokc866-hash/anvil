@@ -18,15 +18,13 @@ import { ModelPick } from "../model-pick";
 
 import { loadSecrets, saveSecrets } from "@/lib/secrets";
 import {
-  dumpGraph,
-  dumpHarness,
-  GRAPH_PATH,
+  mergeOpts,
   HARNESS_PATH,
   guessProjectHarness,
   loadProjectGraph,
   loadProjectHarness,
 } from "@/lib/harness-project";
-import { BOARD_PATH, filesFromBoard, rebuildBoardFromGraph } from "@/lib/harness-board";
+import { projectSettingsWrites } from "@/lib/project-settings";
 import type { AfterWrite } from "@/lib/harness";
 import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 
@@ -40,7 +38,7 @@ import { capLabel, getCap, resetCap } from "@/lib/model-caps";
 import { cliKindFor, probeCli, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
 import { ProviderPick } from "../provider-pick";
 
-import { Head, Vis, Row, Seg, Field, Toggle } from "./fields";
+import { SettingsSection, Head, Vis, Row, Seg, Field, Toggle } from "./fields";
 
 export function AgentSection({ q }: { q: string }) {
   const t = useT();
@@ -156,7 +154,7 @@ export function AgentSection({ q }: { q: string }) {
     setModels([]);
     setModelsBusy(false);
     setSubMsg("");
-    if (llmProvider === "grok") return;
+    if (q || llmProvider === "grok") return;
     if (!aboOn && spec.needsKey && !llmApiKey.trim()) return;
     const timer = window.setTimeout(() => void probeLocal(true), 400);
     return () => {
@@ -165,7 +163,7 @@ export function AgentSection({ q }: { q: string }) {
     };
     // Each request reads a fresh store snapshot and rejects stale results.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [llmProvider, llmBaseUrl, llmApiKey, llmAuthMode]);
+  }, [llmProvider, llmBaseUrl, llmApiKey, llmAuthMode, q]);
 
   useEffect(
     () => () => {
@@ -203,12 +201,12 @@ export function AgentSection({ q }: { q: string }) {
   }
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>Agent</Head>
       <p className="mb-2 text-xs text-muted">
         {ANVIL_ROLES.model} Die App handelt selbst (Run, Git, Dateien). {ANVIL_ROLES.helper}
       </p>
-      <Vis q={q} label="Anbieter Modell Key">
+      <Vis q={q} label="Anbieter Provider Verbindung Connection Modell Model API URL Key Lokal Local Cloud Abo CLI Custom Profil Profile">
         <ProviderPick
           value={llmProvider}
           via={llmAuthMode}
@@ -364,6 +362,7 @@ export function AgentSection({ q }: { q: string }) {
                 type="button"
                 role="switch"
                 aria-checked={llmContextAuto}
+                aria-label="Kontext automatisch"
                 className={`relative h-5 w-8 rounded-full border ${llmContextAuto ? "border-accent bg-accent" : "border-border bg-bg"}`}
                 onClick={() => setLlmContextAuto(!llmContextAuto)}
               >
@@ -567,8 +566,8 @@ export function AgentSection({ q }: { q: string }) {
           </span>
         </label>
       </Vis>
-      <McpFields />
-    </section>
+      <Vis q={q} label="MCP Server Tools Werkzeuge verbinden aktiv Kontext Context Bearer Token"><McpFields /></Vis>
+    </SettingsSection>
   );
 }
 
@@ -594,46 +593,22 @@ function HarnessFields({ q }: { q: string }) {
   const setNotice = useIde((s) => s.setNotice);
   const proj = loadProjectHarness(files);
   const graph = loadProjectGraph(files);
+  const [suggestion, setSuggestion] = useState<ReturnType<typeof guessProjectHarness> | undefined>();
+  const workspaceEpoch = useIde((s) => s.workspaceEpoch);
+  useEffect(() => setSuggestion(undefined), [workspaceEpoch]);
+  const effective = mergeOpts({ runLoop, testLoop, graphLoop, engineLoop, loopTries, maxRounds, afterWrite, graphSees }, proj);
 
   function saveProject() {
-    const harness = {
-      name: proj?.name ?? "app",
-      when: proj?.when ?? "Nach Write",
-      runLoop,
-      graphLoop,
-      testLoop,
-      engineLoop,
-      loopTries,
-      maxRounds,
-      afterWrite,
-      graphSees,
-    };
-    const edges = graph?.edges ?? guessProjectHarness(files).graph.edges;
-    const g = { name: graph?.name ?? "app", edges };
-    writeFile(HARNESS_PATH, dumpHarness(harness));
-    writeFile(GRAPH_PATH, dumpGraph(g));
-    const board = rebuildBoardFromGraph(edges ?? [], {
-      runLoop,
-      graphLoop,
-      testLoop,
-      engineLoop: Boolean(engineLoop) || afterWrite === "engine",
-      afterWrite: afterWrite ?? "run",
-      loopTries,
-      maxRounds: maxRounds ?? 12,
-    });
-    writeFile(
-      BOARD_PATH,
-      filesFromBoard(board, {
-        runLoop,
-        graphLoop,
-        testLoop,
-        engineLoop: Boolean(engineLoop) || afterWrite === "engine",
-        afterWrite: afterWrite ?? "run",
-        loopTries,
-        maxRounds: maxRounds ?? 12,
-      })[BOARD_PATH],
-    );
-    setNotice("Harness ins Projekt geschrieben");
+    try {
+      const writes = projectSettingsWrites(useIde.getState().files, {
+        runLoop, graphLoop, testLoop, engineLoop, loopTries, maxRounds, afterWrite, graphSees,
+      }, suggestion);
+      for (const [path, content] of Object.entries(writes)) writeFile(path, content);
+      setSuggestion(undefined);
+      setNotice("Einstellungen ins Projekt übernommen. Vorhandene Tafel und zusätzliche Projektwerte bleiben erhalten.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Projekteinstellungen konnten nicht gespeichert werden");
+    }
   }
 
   function loadProject() {
@@ -652,6 +627,7 @@ function HarnessFields({ q }: { q: string }) {
       if (proj.afterWrite) setAfter(proj.afterWrite);
       if (proj.graphSees != null) setSees(proj.graphSees);
     }
+    setSuggestion(undefined);
     setNotice("Aus Projekt geladen");
   }
 
@@ -663,28 +639,18 @@ function HarnessFields({ q }: { q: string }) {
     setEngineLoop(Boolean(g.harness.engineLoop) || g.harness.afterWrite === "engine");
     setLoopTries(g.harness.loopTries ?? 3);
     setAfter(g.harness.afterWrite ?? "run");
-    const s = {
-      runLoop: g.harness.runLoop ?? true,
-      graphLoop: Boolean(g.harness.graphLoop),
-      testLoop: Boolean(g.harness.testLoop),
-      engineLoop: Boolean(g.harness.engineLoop) || g.harness.afterWrite === "engine",
-      afterWrite: g.harness.afterWrite ?? ("run" as const),
-      loopTries: g.harness.loopTries ?? 3,
-      maxRounds: g.harness.maxRounds ?? 12,
-    };
-    writeFile(HARNESS_PATH, dumpHarness(g.harness));
-    writeFile(GRAPH_PATH, dumpGraph(g.graph));
-    writeFile(BOARD_PATH, filesFromBoard(rebuildBoardFromGraph(g.graph.edges ?? [], s), s)[BOARD_PATH]);
-    setNotice(`Geraten: ${g.harness.name ?? "app"}`);
+    setRounds(g.harness.maxRounds ?? 24);
+    setSuggestion(g);
+    setNotice(`Vorschlag: ${g.harness.name ?? "app"}. Mit „Ins Projekt“ übernehmen; vorhandene Kanten bleiben erhalten.`);
   }
 
   return (
-    <>
+    <SettingsSection q={q}>
       <Vis q={q} label="Harness Loop Run-Schleife nach write patch Tests Runde">
         <Head>Harness-Loop</Head>
         <Row
           label="An"
-          hint="Nach Write: in derselben Runde ausführen. Fehler → Patch. Projektdatei hat Vorrang, wenn vorhanden."
+          hint="Anvil-Vorgabe: Nach Write in derselben Runde ausführen. Fehler → Patch. Aus bleibt aus, auch mit Projektdatei."
         >
           <Toggle on={runLoop} onChange={setRunLoop} />
         </Row>
@@ -706,7 +672,7 @@ function HarnessFields({ q }: { q: string }) {
             ]}
           />
         </Row>
-        <Row label="Versuche" hint="Patch und Run bei Fehler.">
+        <Row label="Versuche" hint={`Patch und Run bei Fehler. Wirksam: ${effective.loopTries} · ${proj?.loopTries != null ? "Projekt" : "Anvil"}.`}>
           <Seg
             value={String(loopTries)}
             onChange={(v) => setLoopTries(Number(v))}
@@ -761,7 +727,27 @@ function HarnessFields({ q }: { q: string }) {
         </Row>
         <BoardToggles />
       </Vis>
-      <Vis q={q} label="Harness Projekt Datei graph.json raten">
+      <Vis q={q} label="Harness Projekt Datei graph.json raten wirksam Vorrang Vorgaben effective settings source">
+        {proj ? (
+          <details className="my-2 rounded-md border border-border px-2 py-2">
+            <summary className="cursor-pointer text-xs text-muted">Wirksame Einstellungen im Projekt</summary>
+            <p className="py-2 text-xs text-subtle">Run-, Test-, Graph- und Engine-Schalter sowie Runden gelten aus Anvil. Die Versuchszahl kann das Projekt vorgeben. „Laden“ übernimmt Projektwerte in die Anvil-Vorgaben.</p>
+            <table className="w-full text-left text-xs">
+              <thead><tr><th className="py-1">Einstellung</th><th>Wirksam</th><th>Quelle</th></tr></thead>
+              <tbody>{[
+                ["Run-Schleife", effective.runLoop ? "An" : "Aus", "Anvil"],
+                ["Tests", effective.testLoop ? "An" : "Aus", "Anvil"],
+                ["Graph", effective.graphLoop ? "An" : "Aus", "Anvil"],
+                ["Engine", effective.engineLoop ? "An" : "Aus", "Anvil"],
+                ["Nach Write", effective.afterWrite ?? "none", "Anvil-Schalter"],
+                ["Versuche", effective.loopTries, proj.loopTries != null ? "Projekt" : "Anvil"],
+                ["Runden", effective.maxRounds, "Anvil"],
+                ["Frames", effective.graphSees, "Anvil"],
+              ].map(([label, value, source]) => <tr key={label}><td className="py-1">{label}</td><td>{value}</td><td className="text-muted">{source}</td></tr>)}</tbody>
+            </table>
+          </details>
+        ) : null}
+        {suggestion ? <p className="py-2 text-xs text-muted">Vorschlag: {suggestion.harness.name} · {suggestion.graph.edges?.length ?? 0} Kanten. „Ins Projekt“ ergänzt fehlende Kanten und übernimmt die angezeigten Vorgaben.</p> : null}
         <p className="py-1 text-[11px] text-subtle">
           {proj
             ? `.anvil/harness.json · ${proj.name ?? "app"} · ${proj.afterWrite ?? "run"}`
@@ -776,11 +762,11 @@ function HarnessFields({ q }: { q: string }) {
             Laden
           </Button>
           <Button className="h-8" variant="quiet" onClick={guess}>
-            Raten
+            Raten · Vorschlag
           </Button>
         </div>
       </Vis>
-    </>
+    </SettingsSection>
   );
 }
 

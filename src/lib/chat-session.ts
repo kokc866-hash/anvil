@@ -146,7 +146,7 @@ export async function sendChat(
   }
   let holdUi = false;
   let parked = false;
-  if (!asking && useIde.getState().agentBusy && !opts?.queued) {
+  if (!asking && useIde.getState().agentBusy) {
     useIde.getState().pushAgent(text);
     setDraft("");
     setImages([]);
@@ -160,10 +160,12 @@ export async function sendChat(
   }
   const forceAsk = Boolean(pending) && (!typed || useIde.getState().agentMode === "ask");
   if (scrub.n) useIde.getState().setNotice(t("secretsN", { n: scrub.n }));
-  else
+  else {
+    const warningEpoch = useIde.getState().workspaceEpoch;
     void brainSecretWarn(text).then((w) => {
-      if (w) useIde.getState().setNotice(w);
+      if (w && warningEpoch === useIde.getState().workspaceEpoch) useIde.getState().setNotice(w);
     });
+  }
   const my = beginAgent();
   const workspaceEpoch = useIde.getState().workspaceEpoch;
   setAgentBusy(true);
@@ -291,11 +293,11 @@ export async function sendChat(
       if (helperAsk) {
         requestPhase(my, "waiting");
         try {
-          reply = await brainAsk([memory, user].filter(Boolean).join("\n\n"), (chunk) => {
+          reply = await brainAsk(user, (chunk) => {
             if (my !== agentGen()) return;
             requestPhase(my, "answering");
             appendAssistant(chunk);
-          });
+          }, memory);
         } catch {
           if (my !== agentGen()) return;
           requestPhase(my, "waiting");
@@ -639,8 +641,8 @@ export async function sendChat(
           for (const [p, c] of Object.entries(map)) st.writeFile(p, c, { quiet: true });
         } else patchFiles(map);
       }
-      void brainReview(result.files.map((f) => f.path)).then((t) => {
-        if (t && my === agentGen()) addAgentStep({ name: "review", detail: t, status: "ok" });
+      void brainReview(result.files.map((f) => ({ path: f.path, before: s.files[f.path] ?? "", after: f.content }))).then((t) => {
+        if (t && my === agentGen()) addAgentStep({ name: "Helfer-Hinweis", detail: t, status: "ok" });
       });
     }
     if (!parked) void brainFollowups(work, result.reply);

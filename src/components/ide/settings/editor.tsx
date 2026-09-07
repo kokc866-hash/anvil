@@ -4,7 +4,7 @@ import { Slider } from "@/components/ui/slider";
 import { PRESETS, useIde, type MotionLevel, type OutputDock, type SplitMode, type ThemeName } from "@/store/ide";
 import { applyLang, useT, type Locale } from "@/lib/i18n";
 
-import { Head, Vis, Row, Seg, Toggle } from "./fields";
+import { SettingsSection, Head, Vis, Row, Seg, Toggle } from "./fields";
 
 export function EditorSection({ q }: { q: string }) {
   const theme = useIde((s) => s.theme);
@@ -32,7 +32,7 @@ export function EditorSection({ q }: { q: string }) {
   const t = useT();
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>{t("editor")}</Head>
       <Vis q={q} label="Sprache Language Deutsch English">
         <Row label={t("language")} hint={t("languageHint")}>
@@ -138,7 +138,7 @@ export function EditorSection({ q }: { q: string }) {
           <Toggle on={liveRun} onChange={setLiveRun} />
         </Row>
       </Vis>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -164,7 +164,7 @@ export function LayoutSection({ q }: { q: string }) {
   const presetKey: Record<string, string> = { ide: "presetIde", pair: "presetPair", focus: "presetFocus", run: "presetRun" };
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>{t("layout")}</Head>
       <Vis q={q} label="Preset IDE Code Agent">
         <p className="pt-1 text-xs text-muted">{t("layout")}</p>
@@ -251,7 +251,7 @@ export function LayoutSection({ q }: { q: string }) {
           />
         </Row>
       </Vis>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -267,7 +267,7 @@ export function OutputSection({ q }: { q: string }) {
   const t = useT();
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>{t("output")}</Head>
       <Vis q={q} label="Konsole docken unten seite fenster console">
         <Row label={t("consoleDock")} hint={t("consoleDockHint")}>
@@ -296,6 +296,6 @@ export function OutputSection({ q }: { q: string }) {
           <Toggle on={runHtml} onChange={setRunHtml} />
         </Row>
       </Vis>
-    </section>
+    </SettingsSection>
   );
 }

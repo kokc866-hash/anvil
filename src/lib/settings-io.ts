@@ -1,189 +1,101 @@
-import { useBrain } from "@/lib/brain";
+import { useBrain } from "@/lib/brain/store";
 import { useIntern } from "@/lib/intern";
-import { LEARN_DEFAULTS, useLearn } from "@/lib/learn";
-import { normalizeKeyMap } from "@/lib/keymap";
-import { normalizeInputMap } from "@/lib/input-map";
+import { useLearn } from "@/lib/learn";
+import { useModelLib } from "@/lib/model-lib";
 import { useIde } from "@/store/ide";
+import { applyLang } from "./i18n";
+import { appLogOn, setAppLogOn } from "./app-log";
+import { connectionMode, providerOf } from "./providers";
 import { sanitizeToolLearning } from "./tool-learning";
+import { IDE_SETTINGS_GROUPS, type SettingsCategory } from "./settings-groups";
+import { BRAIN_SETTINGS_KEYS, IDE_SETTINGS_KEYS, MODEL_SETTINGS_KEYS, parseSettingsPack, pickSettings, type IdeSettings } from "./settings-schema";
 
-const IDE_KEYS = [
-  "theme",
-  "locale",
-  "motion",
-  "fontSize",
-  "tabSize",
-  "lineNumbers",
-  "wordWrap",
-  "editorMinimap",
-  "editorSticky",
-  "editorGuides",
-  "editorWheelZoom",
-  "insertSpaces",
-  "suggestOn",
-  "formatOnSave",
-  "autoPreview",
-  "liveRun",
-  "liveEditor",
-  "mcpStream",
-  "autoAcceptDiffs",
-  "autoRunAgent",
-  "planWho",
-  "runLoop",
-  "testLoop",
-  "graphLoop",
-  "engineLoop",
-  "loopTries",
-  "harnessAfterWrite",
-  "harnessMaxRounds",
-  "graphSees",
-  "harnessBoardGrid",
-  "harnessBoardSnap",
-  "showStatusBar",
-  "openOutputOnRun",
-  "runInWindow",
-  "runHtml",
-  "autoUpdate",
-  "splitMode",
-  "outputDock",
-  "trailWidth",
-  "trailInChat",
-  "autoHw",
-  "llmProvider",
-  "llmBaseUrl",
-  "llmModel",
-  "llmContext",
-  "llmContextAuto",
-  "llmThinking",
-  "llmCompact",
-  "llmTemperature",
-  "llmMaxOut",
-  "llmRetries",
-  "llmHardStopMin",
-  "agentMode",
-  "agentRules",
-  "storageMode",
-  "autoSaveDisk",
-  "loadOnStart",
-  "companionUrl",
-  "companionKeep",
-  "lspEnabled",
-  "lspTimeout",
-  "lspMaxFiles",
-  "mcpServers",
-  "activeSurfaceId",
-  "surfaceMode",
-  "inputMap",
-  "keyMap",
-  "llmProfiles",
-  "llmToolModes",
-  "llmToolLearning",
-] as const;
+function mergeProfiles<T extends { id: string }>(existing: T[], incoming?: T[]): T[] {
+  return incoming ? [...new Map([...existing, ...incoming].map((p) => [p.id, p])).values()] : existing;
+}
 
 export function exportSettingsPack(): Record<string, unknown> {
-  const s = useIde.getState();
-  const ide: Record<string, unknown> = {};
-  for (const k of IDE_KEYS) ide[k] = s[k as keyof typeof s];
-  const b = useBrain.getState();
-  const l = useLearn.getState();
-  const i = useIntern.getState();
+  const ide = useIde.getState(), brain = useBrain.getState(), learn = useLearn.getState();
   return {
-    v: 1,
-    ide,
-    brain: {
-      on: b.on,
-      autoLoad: b.autoLoad,
-      autoUpdate: b.autoUpdate,
-      modelId: b.modelId,
-      customId: b.customId,
-      context: b.context,
-      temperature: b.temperature,
-      maxTokens: b.maxTokens,
-      systemExtra: b.systemExtra,
-      jobs: b.jobs,
-      autonomy: b.autonomy,
-      sliding: b.sliding,
-      repeatPenalty: b.repeatPenalty,
-      gpuPower: b.gpuPower,
-      useWorker: b.useWorker,
-      gpuKeepAlive: b.gpuKeepAlive,
-      gpuFitBuffer: b.gpuFitBuffer,
-      gpuWarmShaders: b.gpuWarmShaders,
-    },
-    learn: { on: l.on, prefs: l.prefs, facts: l.facts, skills: l.skills, negs: l.negs, forgotten: l.forgotten },
-    intern: { prefs: i.prefs },
+    v: 2,
+    ide: pickSettings(ide, IDE_SETTINGS_KEYS),
+    brain: pickSettings(brain, BRAIN_SETTINGS_KEYS),
+    models: pickSettings(useModelLib.getState(), MODEL_SETTINGS_KEYS),
+    learn: { on: learn.on, prefs: learn.prefs, facts: learn.facts, skills: learn.skills, negs: learn.negs, forgotten: learn.forgotten },
+    intern: { prefs: useIntern.getState().prefs, appLog: appLogOn() },
   };
 }
 
-export function applySettingsPack(data: Record<string, unknown>): void {
-  const ide = (data.ide && typeof data.ide === "object" ? data.ide : data) as Record<string, unknown>;
-  const patch: Record<string, unknown> = {};
-  for (const k of IDE_KEYS) {
-    if (k in ide) patch[k] = ide[k];
+function restoreConnectionMode(patch: IdeSettings) {
+  if (!patch.llmProvider) return;
+  const provider = patch.llmProvider;
+  if (patch.llmAuthMode !== undefined) {
+    patch.llmAuthMode = connectionMode(provider, patch.llmAuthMode);
+    return;
   }
-  if (patch.inputMap) patch.inputMap = normalizeInputMap(patch.inputMap);
-  if (patch.keyMap) patch.keyMap = normalizeKeyMap(patch.keyMap);
-  if ("llmToolLearning" in patch) patch.llmToolLearning = sanitizeToolLearning(patch.llmToolLearning, true);
-  useIde.setState(patch as Partial<ReturnType<typeof useIde.getState>>);
-  const brain = data.brain as Record<string, unknown> | undefined;
-  if (brain && typeof brain === "object") {
-    const st = useBrain.getState();
-    if (typeof brain.on === "boolean") st.setOn(brain.on);
-    if (typeof brain.autoLoad === "boolean") st.setAutoLoad(brain.autoLoad);
-    if (typeof brain.modelId === "string") st.setModelId(brain.modelId);
-    if (typeof brain.customId === "string") st.setCustomId(brain.customId);
-    if (typeof brain.context === "number") st.setContext(brain.context);
-    if (typeof brain.temperature === "number") st.setTemperature(brain.temperature);
-    if (typeof brain.maxTokens === "number") st.setMaxTokens(brain.maxTokens);
-    if (typeof brain.systemExtra === "string") st.setSystemExtra(brain.systemExtra);
-    if (typeof brain.autonomy === "string") st.setAutonomy(brain.autonomy as "off" | "quiet" | "on");
-    if (typeof brain.sliding === "boolean") st.setSliding(brain.sliding);
-    if (typeof brain.repeatPenalty === "number") st.setRepeatPenalty(brain.repeatPenalty);
-    if (typeof brain.gpuPower === "string") st.setGpuPower(brain.gpuPower as "high-performance" | "low-power");
-    if (typeof brain.useWorker === "boolean") st.setUseWorker(brain.useWorker);
-    if (typeof brain.gpuKeepAlive === "boolean") st.setGpuKeepAlive(brain.gpuKeepAlive);
-    if (typeof brain.gpuFitBuffer === "boolean") st.setGpuFitBuffer(brain.gpuFitBuffer);
-    if (typeof brain.gpuWarmShaders === "boolean") st.setGpuWarmShaders(brain.gpuWarmShaders);
-    if (brain.jobs && typeof brain.jobs === "object") {
-      for (const [k, v] of Object.entries(brain.jobs as Record<string, boolean>)) {
-        if (typeof v === "boolean") st.setJob(k as keyof ReturnType<typeof useBrain.getState>["jobs"], v);
-      }
-    }
+  if (!providerOf(provider).needsSub || provider === "codex" || provider === "github") {
+    patch.llmAuthMode = connectionMode(provider);
+    return;
   }
-  const learn = data.learn as {
-    on?: boolean;
-    prefs?: Record<string, unknown>;
-    facts?: unknown;
-    skills?: unknown;
-    negs?: unknown;
-    forgotten?: unknown;
-  } | undefined;
-  if (learn) {
-    if (typeof learn.on === "boolean") useLearn.getState().setOn(learn.on);
-    if (learn.prefs) {
-      const l = useLearn.getState();
-      for (const [k, v] of Object.entries(learn.prefs)) l.setPref(k as keyof typeof LEARN_DEFAULTS, v as never);
+  const modes = new Set((patch.llmProfiles ?? []).filter((p) => p.provider === provider && p.model === patch.llmModel && p.baseUrl === patch.llmBaseUrl && p.authMode).map((p) => p.authMode));
+  if (modes.size === 1) patch.llmAuthMode = [...modes][0];
+  else if (provider === useIde.getState().llmProvider) patch.llmAuthMode = useIde.getState().llmAuthMode;
+  else throw new Error(`Die ältere Sicherung enthält keinen API-/Abo-Modus für ${providerOf(provider).label}. Wähle den Anbieter mit API oder Abo unter Agent und lade die Sicherung erneut. Es wurde nichts übernommen.`);
+}
+
+export function applySettingsPack(data: unknown): void {
+  // Validate every section before touching any store, including memory and helper preferences.
+  const pack = parseSettingsPack(data);
+  const ide = { ...pack.ide };
+  restoreConnectionMode(ide);
+  const cur = useIde.getState();
+  if (ide.llmProfiles) ide.llmProfiles = mergeProfiles(cur.llmProfiles, ide.llmProfiles);
+  if (ide.llmToolLearning) ide.llmToolLearning = { ...cur.llmToolLearning, ...sanitizeToolLearning(ide.llmToolLearning, true) };
+  if (ide.mcpServers) ide.mcpServers = mergeProfiles(cur.mcpServers, ide.mcpServers);
+  const brain = pack.brain;
+  if (brain) {
+    const current = useBrain.getState();
+    const jobs = { ...current.jobs };
+    for (const key of Object.keys(jobs) as (keyof typeof jobs)[]) {
+      if (brain.jobs?.[key] !== undefined) jobs[key] = brain.jobs[key];
     }
-    if (learn.facts || learn.skills || learn.negs || learn.forgotten) {
-      useLearn.getState().importDump({
-        facts: learn.facts as never,
-        skills: learn.skills as never,
-        negs: learn.negs as never,
-        forgotten: learn.forgotten as never,
-      });
-    }
+    useBrain.setState({ ...brain, jobs,
+      helperProfiles: mergeProfiles(current.helperProfiles, brain.helperProfiles),
+      helperSlots: { ...current.helperSlots, ...brain.helperSlots },
+    });
   }
-  const intern = data.intern as { prefs?: Record<string, unknown> } | undefined;
-  if (intern?.prefs) useIntern.getState().setPrefs(intern.prefs as Partial<ReturnType<typeof useIntern.getState>["prefs"]>);
+  if (pack.models) useModelLib.setState(pack.models);
+  if (pack.learn) useLearn.getState().importDump({ ...pack.learn,
+    prefs: pack.learn.prefs ? { ...useLearn.getState().prefs, ...pack.learn.prefs } : undefined,
+  });
+  if (pack.intern?.prefs) useIntern.getState().setPrefs(pack.intern.prefs);
+  if (pack.intern?.appLog !== undefined) setAppLogOn(pack.intern.appLog);
+  if (Object.keys(ide).length) useIde.getState().applySettings(ide);
+  applyLang(useIde.getState().locale);
+}
+
+function resetHelperSettings() {
+  const current = useBrain.getState();
+  const defaults = structuredClone(pickSettings(useBrain.getInitialState(), BRAIN_SETTINGS_KEYS));
+  useBrain.setState({ ...defaults, helperProfiles: current.helperProfiles, helperSlots: current.helperSlots });
+}
+
+export function resetSettingsCategory(category: SettingsCategory): void {
+  if (category === "brain") resetHelperSettings();
+  else if (category === "models") useModelLib.setState(structuredClone(pickSettings(useModelLib.getInitialState(), MODEL_SETTINGS_KEYS)));
+  else if (category === "learn") useLearn.getState().resetPrefs();
+  else if (category === "intern") {
+    useIntern.getState().setPrefs({ ...useIntern.getInitialState().prefs });
+    setAppLogOn(true);
+  } else {
+    const patch = structuredClone(pickSettings(useIde.getInitialState(), IDE_SETTINGS_GROUPS[category]));
+    useIde.getState().applySettings(patch);
+  }
+  applyLang(useIde.getState().locale);
 }
 
 export function resetAllSettings(): void {
   useIde.getState().resetSettings();
-  useLearn.getState().resetPrefs();
-  useIntern.getState().setPrefs({ on: true, autoHeal: true, autoSoft: false });
-  const b = useBrain.getState();
-  b.setAutonomy("quiet");
-  b.setContext(8192);
-  b.setMaxTokens(512);
-  b.setTemperature(0.3);
-  b.setRepeatPenalty(1.12);
+  for (const category of ["brain", "models", "learn", "intern"] as const) resetSettingsCategory(category);
+  applyLang(useIde.getState().locale);
 }

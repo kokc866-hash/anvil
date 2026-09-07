@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { DEFAULT_BRAIN_MODEL, migrateBrainModel } from "./models";
+import { helperText } from "./text";
 
 export type BrainAutonomy = "off" | "quiet" | "on";
 export type BrainStatus = "idle" | "checking" | "downloading" | "ready" | "error";
@@ -72,7 +73,7 @@ const JOBS: BrainJobs = {
   logTrim: false,
 };
 
-export type BrainLog = { t: number; job: string; src: "heur" | "llm" | "cache"; ms: number };
+export type BrainLog = { t: number; job: string; src: "heur" | "llm" | "cache" | "timeout" | "cancel" | "error"; ms: number; reason?: string };
 
 export type LaneKind = "brief" | "risk" | "error" | "next" | "review";
 export type LaneNote = { t: number; kind: LaneKind; text: string };
@@ -121,6 +122,10 @@ type BrainState = {
   loadedId: string;
   libVersion: string;
   modelStamp: string;
+  modelStamps: Record<string, string>;
+  checkingUpdate: boolean;
+  cacheEpoch: number;
+  loadedConfig: string;
   updateHint: string;
   fp16: boolean;
   gpu: string;
@@ -152,7 +157,7 @@ type BrainState = {
   setAutoUpdate: (v: boolean) => void;
   setModelId: (v: string) => void;
   setCustomId: (v: string) => void;
-  setStatus: (s: Partial<Pick<BrainState, "status" | "progress" | "progressText" | "error" | "loadedId" | "libVersion" | "gpu" | "fp16" | "modelStamp" | "updateHint">>) => void;
+  setStatus: (s: Partial<Pick<BrainState, "status" | "progress" | "progressText" | "error" | "loadedId" | "libVersion" | "gpu" | "fp16" | "modelStamp" | "modelStamps" | "checkingUpdate" | "cacheEpoch" | "loadedConfig" | "updateHint">>) => void;
   setContext: (n: number) => void;
   setTemperature: (n: number) => void;
   setMaxTokens: (n: number) => void;
@@ -176,7 +181,7 @@ type BrainState = {
   saveHelperProfile: (name: string) => void;
   applyHelperProfile: (id: string) => void;
   deleteHelperProfile: (id: string) => void;
-  logJob: (job: string, src: BrainLog["src"], ms: number) => void;
+  logJob: (job: string, src: BrainLog["src"], ms: number, reason?: string) => void;
 };
 
 export const useBrain = create<BrainState>()(
@@ -194,6 +199,10 @@ export const useBrain = create<BrainState>()(
       loadedId: "",
       libVersion: "",
       modelStamp: "",
+      modelStamps: {},
+      checkingUpdate: false,
+      cacheEpoch: 0,
+      loadedConfig: "",
       updateHint: "",
       fp16: true,
       gpu: "",
@@ -297,7 +306,7 @@ export const useBrain = create<BrainState>()(
         });
       },
       setAutonomy: (autonomy) => set({ autonomy }),
-      setLastAuto: (lastAuto) => set({ lastAuto: lastAuto.replace(/<\/?think>/gi, "").trim().slice(0, 40) }),
+      setLastAuto: (lastAuto) => set({ lastAuto: helperText(lastAuto).slice(0, 40) }),
       pushLane: (n) => set({ lane: [...get().lane, n].slice(-5) }),
       clearLane: () => set({ lane: [] }),
       setBusy: (busy) => set({ busy }),
@@ -336,7 +345,7 @@ export const useBrain = create<BrainState>()(
         });
       },
       deleteHelperProfile: (id) => set({ helperProfiles: get().helperProfiles.filter((p) => p.id !== id) }),
-      logJob: (job, src, ms) =>
+      logJob: (job, src, ms, reason) =>
         set((s) => ({
           stats: {
             jobs: s.stats.jobs + 1,
@@ -344,7 +353,7 @@ export const useBrain = create<BrainState>()(
             llm: s.stats.llm + (src === "llm" ? 1 : 0),
             heur: s.stats.heur + (src === "heur" ? 1 : 0),
           },
-          log: [{ t: Date.now(), job, src, ms }, ...s.log].slice(0, 24),
+          log: [{ t: Date.now(), job, src, ms, ...(reason ? { reason: reason.slice(0, 180) } : {}) }, ...s.log].slice(0, 24),
         })),
     }),
     {
@@ -357,7 +366,8 @@ export const useBrain = create<BrainState>()(
           ...current,
           ...p,
           modelId: migrateBrainModel(p?.modelId),
-          customId: p?.customId && /[-.]4B-q4f/i.test(p.customId) ? "" : (p?.customId ?? current.customId),
+          customId: p?.customId ?? current.customId,
+          modelStamps: p?.modelStamps ?? {},
           jobs: { ...JOBS, ...p?.jobs },
           helperSlots: p?.helperSlots ?? {},
           helperProfiles: p?.helperProfiles ?? [],
@@ -389,6 +399,7 @@ export const useBrain = create<BrainState>()(
         autonomy: s.autonomy,
         libVersion: s.libVersion,
         modelStamp: s.modelStamp,
+        modelStamps: s.modelStamps,
         helperSlots: s.helperSlots ?? {},
         helperProfiles: s.helperProfiles ?? [],
         autoProfile: s.autoProfile !== false,

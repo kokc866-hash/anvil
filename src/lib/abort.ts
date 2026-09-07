@@ -114,17 +114,23 @@ export function throwIfAborted(): void {
 
 export function stopAgent(reason = "Gestoppt"): void {
   abortAgent(reason);
+  const stopped = agentGen();
   void import("./app-log").then((m) => m.appLog("stop", reason));
   void import("@/store/ide").then(({ useIde }) => {
+    if (stopped !== agentGen()) return;
     const st = useIde.getState();
+    if (st.agentBusy) st.failRunningSteps();
     st.setAgentBusy(false);
-    st.failRunningSteps();
     st.setTestsRunning(false);
     st.setNotice(reason);
     if (st.agentJob) st.setAgentJob(null);
-    void import("./companion-life").then((m) => m.idleCompanion()).catch(() => undefined);
+    void import("./companion-life").then((m) => {
+      if (stopped === agentGen()) return m.idleCompanion();
+    }).catch(() => undefined);
   });
-  void import("./run-window").then((m) => m.releaseAgentUi());
+  void import("./run-window").then((m) => {
+    if (stopped === agentGen()) m.releaseAgentUi();
+  });
 }
 
 export function hardStopMs(min = 0): number {
@@ -223,9 +229,12 @@ export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {
   const signal = ctrl.signal;
   return new Promise((resolve, reject) => {
     let done = false;
+    let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
     const finish = (fn: () => void) => {
       if (done) return;
       done = true;
+      if (timer) globalThis.clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
       fn();
     };
     const onAbort = () => finish(() => reject(new AgentAbortError(abortReason() || "Gestoppt")));
@@ -234,31 +243,22 @@ export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {
       return;
     }
     signal.addEventListener("abort", onAbort, { once: true });
-    const timer =
+    timer =
       ms > 0
         ? globalThis.setTimeout(() => {
             finish(() => reject(new AgentAbortError(`Keine Antwort seit ${Math.round(ms / 1000)}s. Stop oder nochmal.`)));
           }, ms)
-        : 0;
+        : undefined;
     p.then(
-      (v) =>
-        finish(() => {
-          if (timer) globalThis.clearTimeout(timer);
-          signal.removeEventListener("abort", onAbort);
-          resolve(v);
-        }),
-      (e) =>
-        finish(() => {
-          if (timer) globalThis.clearTimeout(timer);
-          signal.removeEventListener("abort", onAbort);
-          reject(e);
-        }),
+      (v) => finish(() => resolve(v)),
+      (e) => finish(() => reject(e)),
     );
   });
 }
 
 export function withAgentTimeout(ms: number): AbortSignal {
-  if (ms <= 0) return ctrl.signal;
+  const parent = ctrl.signal;
+  if (ms <= 0) return parent;
   const c = new AbortController();
   const fire = (reason: unknown) => {
     if (c.signal.aborted) return;
@@ -268,8 +268,8 @@ export function withAgentTimeout(ms: number): AbortSignal {
       c.abort();
     }
   };
-  if (ctrl.signal.aborted) {
-    fire(ctrl.signal.reason || why || "Abgebrochen");
+  if (parent.aborted) {
+    fire(parent.reason || why || "Abgebrochen");
     return c.signal;
   }
   const timer =
@@ -280,14 +280,14 @@ export function withAgentTimeout(ms: number): AbortSignal {
       : 0;
   const onParent = () => {
     if (timer) globalThis.clearTimeout(timer);
-    fire(ctrl.signal.reason || why || "Abgebrochen");
+    fire(parent.reason || "Abgebrochen");
   };
-  ctrl.signal.addEventListener("abort", onParent, { once: true });
+  parent.addEventListener("abort", onParent, { once: true });
   c.signal.addEventListener(
     "abort",
     () => {
       if (timer) globalThis.clearTimeout(timer);
-      ctrl.signal.removeEventListener("abort", onParent);
+      parent.removeEventListener("abort", onParent);
     },
     { once: true },
   );

@@ -27,7 +27,7 @@ import { checkAppUpdate, setupAppUpdate, zipAppUpdate } from "@/lib/app-update";
 
 import { loadAccountFromNative, loginAccountFromNative } from "@/lib/account-auth";
 
-import { Head, Vis, Row, Seg, Toggle } from "./fields";
+import { SettingsSection, Head, Vis, Row, Seg, Toggle } from "./fields";
 
 export function StorageSection({ q }: { q: string }) {
   const storageMode = useIde((s) => s.storageMode);
@@ -53,8 +53,8 @@ export function StorageSection({ q }: { q: string }) {
   } | null>(null);
 
   useEffect(() => {
-    void native?.pathsGet?.().then(setPaths);
-  }, [native]);
+    if (!q) void native?.pathsGet?.().then(setPaths).catch(() => undefined);
+  }, [native, q]);
 
   async function pickNative(kind: "data" | "helper" | "logs" | "packages") {
     if (!native?.pathsPick) return;
@@ -154,7 +154,7 @@ export function StorageSection({ q }: { q: string }) {
   }
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>Speicher</Head>
       <Vis q={q} label="Speicherort Browser Ordner">
         <Row label="Arbeitskopie" hint="Browser bleibt immer. Ordner zusätzlich auf der Platte.">
@@ -260,7 +260,7 @@ export function StorageSection({ q }: { q: string }) {
           gehen hier.
         </p>
       )}
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -461,8 +461,8 @@ export function DataSection({ q }: { q: string }) {
           const loc = useIde.getState().locale;
           applyLang(loc === "en" || loc === "de" ? loc : "de");
           setNotice("Einstellungen importiert");
-        } catch {
-          setNotice("Ungültige Datei");
+        } catch (err) {
+          setNotice(err instanceof Error ? err.message : "Ungültige Datei");
         }
       });
     };
@@ -470,7 +470,7 @@ export function DataSection({ q }: { q: string }) {
   }
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>Daten</Head>
       <p className="py-2 font-mono text-[11px] text-muted">
         Anvil {ANVIL_VERSION} · {ANVIL_BUILD}
@@ -524,8 +524,9 @@ export function DataSection({ q }: { q: string }) {
         </div>
         {go ? <p className="pb-2 font-mono text-[11px] text-muted">{go}</p> : null}
       </Vis>
-      <VaultFields />
-      <Vis q={q} label="Einstellungen exportieren importieren">
+      <Vis q={q} label="Tresor Vault Secrets Geheimnisse Zugangsdaten"><VaultFields /></Vis>
+      <Vis q={q} label="Einstellungen exportieren importieren Settings export import">
+        <p className="py-2 text-xs text-muted">Sicherung mit Anbieterzuständen, API-/Abo-Modus, Profilen und Gedächtnisinhalten. API-Keys und CLI-Anmeldungen bleiben separat auf diesem Rechner.</p>
         <div className="flex flex-wrap gap-2 py-3">
           <Button className="h-8" onClick={exportSettings}>
             Exportieren
@@ -542,7 +543,8 @@ export function DataSection({ q }: { q: string }) {
           </Button>
         </div>
       </Vis>
-      <Vis q={q} label="Einstellungen zurücksetzen">
+      <Vis q={q} label="Einstellungen zurücksetzen Settings reset defaults">
+        <p className="py-2 text-xs text-muted">Setzt alle Bedien- und Laufzeiteinstellungen einschließlich Helfer, Modelle und Layout auf Standard. Benannte Profile, MCP-Verbindungen, gelernte Tools, Zugangsdaten, Projektdateien und Gedächtnisinhalte bleiben erhalten. Einzelne Bereiche lassen sich links unten zurücksetzen.</p>
         <div className="py-2">
           <Button
             className="h-8"
@@ -574,6 +576,6 @@ export function DataSection({ q }: { q: string }) {
           </Button>
         </div>
       </Vis>
-    </section>
+    </SettingsSection>
   );
 }

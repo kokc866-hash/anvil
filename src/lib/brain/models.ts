@@ -271,12 +271,6 @@ export const BRAIN_MODELS: BrainModel[] = [
 
 export const DEFAULT_BRAIN_MODEL = "Qwen3.5-0.8B-q4f16_1-MLC";
 export const HELPER_SMALL = ["Qwen3.5-0.8B-q4f16_1-MLC"] as const;
-const OLD_DEFAULTS = [
-  "Qwen2.5-Coder-0.5B-Instruct-q4f16_1-MLC",
-  "Qwen2.5-Coder-0.5B-Instruct-q4f32_1-MLC",
-  "SmolLM2-360M-Instruct-q4f16_1-MLC",
-  "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
-];
 
 /** WebLLM-IDs zum Eintippen (Custom). Katalog zuerst, dann weitere Mini-Modelle. */
 export const WEBLLM_SUGGESTIONS: string[] = [
@@ -292,8 +286,7 @@ export const WEBLLM_SUGGESTIONS: string[] = [
 ].filter((id, i, arr) => arr.indexOf(id) === i);
 
 export function migrateBrainModel(id: string | undefined): string {
-  if (!id || OLD_DEFAULTS.includes(id) || /[-.]4B-q4f/i.test(id)) return DEFAULT_BRAIN_MODEL;
-  return id;
+  return typeof id === "string" && id.trim() ? id.trim() : DEFAULT_BRAIN_MODEL;
 }
 
 export function brainModelOf(id: string): BrainModel | undefined {

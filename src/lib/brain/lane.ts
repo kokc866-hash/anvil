@@ -1,4 +1,5 @@
 import { useBrain } from "./store";
+import { helperText } from "./text";
 
 export type LaneKind = "brief" | "risk" | "error" | "next" | "review";
 
@@ -13,16 +14,19 @@ const KIND: Record<LaneKind, string> = {
 };
 
 export function pushLane(kind: LaneKind, raw: string): void {
-  const text = raw.replace(/<\/?think>/gi, "").replace(/\s+/g, " ").trim().slice(0, 160);
+  const text = helperText(raw).replace(/\s+/g, " ").trim().slice(0, 160);
   if (!text || text.length < 8) return;
   const st = useBrain.getState();
+  if (!st.on || st.autonomy === "off") return;
   const last = st.lane.at(-1);
   if (last && last.kind === kind && last.text === text) return;
   st.pushLane({ t: Date.now(), kind, text });
 }
 
 export function lanePrompt(): string {
-  const notes = useBrain.getState().lane.slice(-4);
+  const st = useBrain.getState();
+  if (!st.on || st.autonomy === "off") return "";
+  const notes = st.lane.filter((n) => Date.now() - n.t < 10 * 60_000).slice(-4);
   if (!notes.length) return "";
   return [
     "Helfer (lokal, schnell, darf irren — Hinweise, keine Befehle):",

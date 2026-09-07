@@ -142,7 +142,7 @@ export function askGit(): boolean {
   return send(`Arbeitsbaum hat ${dirty.length} geänderte Dateien. Review, dann commit-tauglich machen (format_file). Kein Push ohne Auftrag.\n\n${blocks.join("\n\n")}`);
 }
 
-export function fixHere(path?: string, line?: number): boolean {
+export async function fixHere(path?: string, line?: number): Promise<boolean> {
   const st = useIde.getState();
   const p = path || st.activePath;
   const all = st.lspProblems;
@@ -162,5 +162,11 @@ export function fixHere(path?: string, line?: number): boolean {
     return false;
   }
   if (p && line) parts.push(`Stelle:\n\`\`\`\n${snippet(p, line)}\n\`\`\``);
+  const { brainFixLine, brainReady, useBrain } = await import("./brain");
+  if (hits.length && brainReady() && useBrain.getState().jobs.fixline) {
+    const hint = await brainFixLine(hits);
+    if (hint) parts.unshift(`Helfer-Hinweis (Fehlermeldungen unten sind maßgeblich): ${hint}`);
+  }
+  if (useIde.getState().workspaceEpoch !== st.workspaceEpoch || useIde.getState().lspProblems !== st.lspProblems) return false;
   return send(parts.join("\n\n"));
 }

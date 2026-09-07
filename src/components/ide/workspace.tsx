@@ -177,10 +177,8 @@ export function Workspace() {
         b.startBrainAuto();
         const ml = lib.useModelLib.getState();
         if (ml.prefetchOnStart && ml.pinHelper.length) {
-          const local = await import("@/lib/helper-local");
           for (const id of ml.pinHelper) {
-            if (local.nativeHelper()) void local.downloadHelperLocal(id).catch(() => undefined);
-            else void b.prefetchBrain(id).catch(() => undefined);
+            await b.prefetchBrain(id).catch(() => undefined);
           }
         }
       });

@@ -3,6 +3,8 @@ import { useIde } from "@/store/ide";
 import { expandIntent, heuristicPalette, heuristicUsageFacts } from "./heuristics";
 import { brainGenerate, brainSystem, extractJson, firstUsefulLine } from "./engine";
 import { brainReady, useBrain } from "./store";
+import { brainJobAllowed, captureBrainScope } from "./scope";
+import { helperQuestion } from "./text";
 
 const KINDS = ["agent", "run", "debug", "search", "git", "settings", "preview", "learn", "file", "output", "save", "help", "newfile"] as const;
 export type IntentKind = (typeof KINDS)[number];
@@ -76,11 +78,10 @@ export async function resolveIntent(text: string): Promise<BrainIntent> {
   const h = heuristicIntent(text);
   if (h.conf >= 0.9) return h;
   if (h.kind === "agent" && text.trim().split(/\s+/).length > 4) return { kind: "agent", conf: 0.2 };
-  if (!brainReady() || !useBrain.getState().jobs.intent) return { kind: "agent", conf: 0.2 };
+  if (!brainReady() || !brainJobAllowed("intent")) return { kind: "agent", conf: 0.2 };
   if (text.trim().length > 40) return { kind: "agent", conf: 0.2 };
   try {
-    const raw = await Promise.race([
-      brainGenerate({
+    const raw = await brainGenerate({
         messages: [
           { role: "system", content: brainSystem("intent JSON. One object, nothing else.") },
           {
@@ -94,9 +95,8 @@ export async function resolveIntent(text: string): Promise<BrainIntent> {
         stop: ["\n\n"],
         pri: 0,
         job: "intent",
-      }),
-      new Promise<string>((_, rej) => setTimeout(() => rej(new Error("intent-timeout")), 700)),
-    ]);
+        deadlineMs: 700,
+      });
     const j = extractJson(raw) as BrainIntent | null;
     if (!j || !KINDS.includes(j.kind as IntentKind)) return { kind: "agent", conf: 0.2 };
     if (j.kind === "help") {
@@ -166,7 +166,9 @@ function validFact(text: string) {
 }
 
 export async function brainDistill(user: string, reply: string): Promise<void> {
-  if (!useBrain.getState().on || !useBrain.getState().jobs.distill) return;
+  const valid = captureBrainScope("distill");
+  const learning = () => valid() && useLearn.getState().on && useLearn.getState().prefs.distill;
+  if (!learning()) return;
   if (!brainReady()) return;
   try {
     const raw = await brainGenerate({
@@ -185,7 +187,7 @@ export async function brainDistill(user: string, reply: string): Promise<void> {
       job: "distill",
     });
     const j = extractJson(raw) as { facts?: { kind?: string; text?: string }[] } | null;
-    if (!j?.facts?.length) return;
+    if (!j?.facts?.length || !learning()) return;
     const learn = useLearn.getState();
     for (const f of j.facts.slice(0, 2)) {
       if (!f.text || !validFact(f.text)) continue;
@@ -198,7 +200,9 @@ export async function brainDistill(user: string, reply: string): Promise<void> {
 }
 
 export async function brainUsage(): Promise<void> {
-  if (!useBrain.getState().jobs.usage) return;
+  const valid = captureBrainScope("usage");
+  const learning = () => valid() && useLearn.getState().on && useLearn.getState().prefs.distill;
+  if (!learning()) return;
   if (brainReady()) {
     const ev = useLearn.getState().events.slice(0, 24);
     if (ev.length < 8) return;
@@ -219,8 +223,9 @@ export async function brainUsage(): Promise<void> {
         job: "usage",
       });
       const j = extractJson(raw) as { facts?: { kind?: string; text?: string }[] } | null;
+      if (!learning()) return;
       const learn = useLearn.getState();
-      for (const f of j?.facts ?? []) {
+      for (const f of (j?.facts ?? []).slice(0, 2)) {
         if (f.text && validFact(f.text)) learn.addFact(f.kind === "project" ? "project" : "user", f.text, 0.6);
       }
       return;
@@ -228,6 +233,7 @@ export async function brainUsage(): Promise<void> {
       /* fallback */
     }
   }
+  if (!learning()) return;
   const heur = heuristicUsageFacts();
   if (heur.length) {
     const learn = useLearn.getState();
@@ -237,7 +243,7 @@ export async function brainUsage(): Promise<void> {
 }
 
 export async function brainCompleteCode(opts: { lang: string; prefix: string; before: string }): Promise<string> {
-  if (!brainReady() || !useBrain.getState().jobs.complete) return "";
+  if (!brainReady() || !brainJobAllowed("complete")) return "";
   if (opts.prefix.length < 3) return "";
   const raw = await brainGenerate({
     messages: [
@@ -249,7 +255,7 @@ export async function brainCompleteCode(opts: { lang: string; prefix: string; be
     stop: ["\n", "```"],
     pri: 0,
     job: "complete",
-  });
+  }).catch(() => "");
   let line = firstUsefulLine(raw, 72);
   if (line.toLowerCase().startsWith(opts.prefix.toLowerCase())) line = line.slice(opts.prefix.length);
   if (!line || /https?:|als ki|hier ist/i.test(line)) return "";
@@ -257,7 +263,7 @@ export async function brainCompleteCode(opts: { lang: string; prefix: string; be
 }
 
 export async function brainPalette(q: string, labels: string[]): Promise<string | null> {
-  if (!brainReady() || !useBrain.getState().jobs.palette || q.trim().length < 3) return null;
+  if (!brainReady() || !brainJobAllowed("palette") || q.trim().length < 3) return null;
   const h = heuristicPalette(q, labels);
   if (h) {
     useBrain.getState().logJob("palette", "heur", 0);
@@ -273,7 +279,7 @@ export async function brainPalette(q: string, labels: string[]): Promise<string 
     stop: ["\n"],
     pri: 0,
     job: "palette",
-  });
+  }).catch(() => "");
   const t = firstUsefulLine(raw, 40);
   if (!t || /^nein/i.test(t)) return null;
   return labels.find((l) => l.toLowerCase() === t.toLowerCase()) ?? null;
@@ -298,6 +304,7 @@ export async function brainCompact(blob: string): Promise<string> {
       stop: ["\n\n\n"],
       pri: 2,
       job: "compact",
+      deadlineMs: 2500,
     });
     const clean = raw
       .split("\n")
@@ -310,11 +317,12 @@ export async function brainCompact(blob: string): Promise<string> {
   }
 }
 
-export async function brainAsk(prompt: string, onDelta?: (s: string) => void): Promise<string> {
+export async function brainAsk(question: string, onDelta?: (s: string) => void, context = ""): Promise<string> {
+  const prompt = helperQuestion(question, context);
   if (!brainReady() || !useBrain.getState().jobs.ask) throw new Error("Ask lokal aus");
   if (useBrain.getState().jobs.help) {
-    const h = helpFor(prompt);
-    if (h && prompt.length < 100) {
+    const h = helpFor(question);
+    if (h && question.length < 100) {
       onDelta?.(h);
       return h;
     }
@@ -323,7 +331,7 @@ export async function brainAsk(prompt: string, onDelta?: (s: string) => void): P
   const raw = await brainGenerate({
     messages: [
       { role: "system", content: brainSystem("Max 5 short sentences. Do not invent files. No code except 1 line if asked.") },
-      { role: "user", content: prompt.slice(0, 2000) },
+      { role: "user", content: prompt },
     ],
     maxTokens: st.maxTokens,
     temperature: st.temperature,

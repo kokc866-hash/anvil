@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
-import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { randomUUID, createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -29,7 +30,7 @@ export function hfAllowed(url) {
     h.endsWith(".hf-mirror.com") ||
     h === "github.com" ||
     h.endsWith(".github.com") ||
-    h.endsWith("githubusercontent.com")
+    h === "githubusercontent.com" || h.endsWith(".githubusercontent.com")
   );
 }
 
@@ -87,7 +88,7 @@ export function parseHelperPath(pathname, token) {
   return { ok: false, rest: "", reason: "token" };
 }
 
-export function nodeReq(url, hops = 0) {
+export function nodeReq(url, hops = 0, options = {}) {
   return new Promise((resolve, reject) => {
     if (hops > MAX_REDIRECTS) return reject(new Error("zu viele Redirects"));
     let u;
@@ -100,13 +101,13 @@ export function nodeReq(url, hops = 0) {
     const lib = u.protocol === "http:" ? http : https;
     const req = lib.get(
       u,
-      { headers: { "User-Agent": UA, Accept: "*/*" } },
+      { headers: { "User-Agent": UA, Accept: "*/*" }, signal: options.signal },
       (res) => {
         const code = res.statusCode || 0;
         if (code >= 300 && code < 400 && res.headers.location) {
           res.resume();
           const next = new URL(res.headers.location, u).href;
-          nodeReq(next, hops + 1).then(resolve, reject);
+          nodeReq(next, hops + 1, options).then(resolve, reject);
           return;
         }
         if (code >= 400) {
@@ -156,44 +157,51 @@ export async function fetchJsonText(url) {
   throw last instanceof Error ? last : new Error("JSON nicht lesbar");
 }
 
-export async function downloadFile(url, dest, jsonOk) {
+export async function downloadFile(url, dest, jsonOk, options = {}) {
   mkdirSync(dirname(dest), { recursive: true });
   let last;
-  const alts = jsonAlts(url);
-  for (const a of alts) {
+  for (const a of jsonAlts(url)) {
+    const tmp = `${dest}.${randomUUID()}.part`;
     try {
-      const res = await nodeReq(a);
+      options.signal?.throwIfAborted();
+      const res = await (options.request || nodeReq)(a, 0, { signal: options.signal });
       const len = Number(res.headers["content-length"] || 0);
-      if (len > MAX_FILE) {
-        res.resume();
-        throw new Error("Datei zu groß");
+      const etag = String(res.headers.etag || "");
+      if (len > MAX_FILE) { res.destroy(); throw new Error("Datei zu groß"); }
+      let prior;
+      try { prior = JSON.parse(readFileSync(`${dest}.http.json`, "utf8")); } catch { /* first download */ }
+      // Length alone cannot identify a revision. Explicit updates revalidate
+      // against a server ETag; missing validators require a fresh download.
+      if (etag && prior?.etag === etag && prior.url === url && prior.sha256 && existsSync(dest)
+          && statSync(dest).size === prior.bytes && (!len || len === prior.bytes)
+          && (!dest.endsWith(".json") || jsonOk(dest))) {
+        res.destroy();
+        return { bytes: prior.bytes, sha256: prior.sha256, etag, skipped: true };
       }
-      if (existsSync(dest) && len && statSync(dest).size === len) {
-        res.resume();
-        if (!dest.endsWith(".json") || jsonOk(dest)) return { bytes: len, skipped: true };
-      }
-      const tmp = `${dest}.part`;
       let n = 0;
+      const hash = createHash("sha256");
       const cap = new Transform({
         transform(chunk, _enc, cb) {
           n += chunk.length;
           if (n > MAX_FILE) cb(new Error("Datei zu groß"));
-          else cb(null, chunk);
+          else { hash.update(chunk); cb(null, chunk); }
         },
       });
-      await pipeline(res, cap, createWriteStream(tmp));
+      await pipeline(res, cap, createWriteStream(tmp, { flags: "wx" }), { signal: options.signal });
+      if (!n || (len && len !== n)) throw new Error("Datei unvollständig");
+      if (dest.endsWith(".json") && !jsonOk(tmp)) throw new Error(`unvollständige JSON: ${dest}`);
+      options.signal?.throwIfAborted();
+      const sha256 = hash.digest("hex");
       renameSync(tmp, dest);
-      if (dest.endsWith(".json") && !jsonOk(dest)) {
-        try {
-          unlinkSync(dest);
-        } catch {
-          /* */
-        }
-        throw new Error(`unvollständige JSON: ${dest}`);
-      }
-      return { bytes: existsSync(dest) ? statSync(dest).size : 0, skipped: false };
+      writeFileSync(`${tmp}.http.json`, JSON.stringify({ url, bytes: n, etag, sha256 }));
+      renameSync(`${tmp}.http.json`, `${dest}.http.json`);
+      return { bytes: n, sha256, etag, skipped: false };
     } catch (err) {
+      options.signal?.throwIfAborted();
       last = err;
+    } finally {
+      try { unlinkSync(tmp); } catch { /* already committed */ }
+      try { unlinkSync(`${tmp}.http.json`); } catch { /* already committed */ }
     }
   }
   throw last instanceof Error ? last : new Error("Download fehlgeschlagen");

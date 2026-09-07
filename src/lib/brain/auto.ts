@@ -1,3 +1,4 @@
+import { captureBrainScope, onBrainScopeReset } from "./scope";
 import { useIde } from "@/store/ide";
 import { brainCommitMessage, brainExplainError, brainNextAction } from "./apps";
 import { brainUsage } from "./tasks";
@@ -22,6 +23,7 @@ function active(): boolean {
 }
 
 let lastSaid = "";
+onBrainScopeReset(() => { cool.clear(); lastSaid = ""; });
 
 function say(text: string) {
   const t = text.trim().slice(0, 180);
@@ -34,6 +36,7 @@ function say(text: string) {
 async function tick() {
   if (!active() || document.hidden) return;
   if (useIde.getState().agentBusy) return;
+  const valid = captureBrainScope("auto", true);
   const ide = useIde.getState();
   const next = brainNextAction();
   if (next) useBrain.getState().setLastAuto(next);
@@ -43,10 +46,11 @@ async function tick() {
     if (voice() && useBrain.getState().jobs.errors) {
       if (brainReady()) {
         const t = await brainExplainError(last.stderr || last.stdout, last.label);
+        if (!valid()) return;
         if (t) {
           say(t);
           const { pushLane } = await import("./lane");
-          pushLane("error", t);
+          if (valid()) pushLane("error", t);
         }
       } else say(`Fehler in ${last.label}`);
     }
@@ -56,6 +60,7 @@ async function tick() {
   if (dirty.length >= 2 && due("dirty", 180_000) && voice() && useBrain.getState().jobs.commit) {
     if (brainReady()) {
       const msg = await brainCommitMessage(dirty, dirty.slice(0, 4).join(", "));
+      if (!valid()) return;
       say(`${dirty.length} Dateien · ${msg}`);
     } else say(`${dirty.length} Dateien uncommitted`);
   }
@@ -82,7 +87,7 @@ export function startBrainAuto() {
   let t = 0;
   const kick = () => {
     window.clearTimeout(t);
-    t = window.setTimeout(() => void tick(), 1600);
+    t = window.setTimeout(() => void tick().catch(() => undefined), 1600);
   };
   useIde.subscribe((s, p) => {
     if (s.output !== p.output || s.dirty !== p.dirty || s.pendingDiffs !== p.pendingDiffs || s.debug !== p.debug) kick();

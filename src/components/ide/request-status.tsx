@@ -1,4 +1,5 @@
 import { useElapsed } from "@/lib/elapsed";
+import { Tip } from "@/components/ui/tooltip";
 import { useIde } from "@/store/ide";
 import { requestPhaseLabel, useRequestState } from "@/lib/request-state";
 
@@ -8,15 +9,19 @@ export function RequestStatus() {
   const phase = useRequestState((s) => s.phase);
   const detail = useRequestState((s) => s.detail);
   if (!busy) return null;
+  const label = `${requestPhaseLabel(phase, locale)}${detail ? ` · ${detail}` : ""}`;
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="sticky top-0 z-10 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted"
-    >
-      {requestPhaseLabel(phase, locale)}
-      {detail ? ` · ${detail}` : ""}
-    </div>
+    <Tip label={label}>
+      <span
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        tabIndex={0}
+        className="min-w-0 truncate font-normal text-subtle"
+      >
+        · {label}
+      </span>
+    </Tip>
   );
 }
 

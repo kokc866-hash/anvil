@@ -76,7 +76,7 @@ export const useModelLib = create<ModelLibState>()(
       merge: (persisted, current) => {
         const p = (persisted || {}) as Partial<ModelLibState>;
         const pin = Array.isArray(p.pinHelper)
-          ? p.pinHelper.filter((id) => !/[-.]4B-q4f/i.test(id))
+          ? p.pinHelper.filter((id) => typeof id === "string" && id.trim())
           : current.pinHelper;
         return {
           ...current,

@@ -10,7 +10,7 @@ import { useT } from "@/lib/i18n";
 
 import { chordFromEvent, chordOwner, formatChord, KEY_DEFAULTS, KEY_GROUPS, KEY_LABEL, type KeyId } from "@/lib/keymap";
 
-import { Head, Vis, Row, Toggle } from "./fields";
+import { SettingsSection, Head, Vis, Row, Toggle } from "./fields";
 
 export function InputSection({ q }: { q: string }) {
   const inputMap = useIde((s) => s.inputMap);
@@ -69,7 +69,7 @@ export function InputSection({ q }: { q: string }) {
   }
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>Eingabe</Head>
       <p className="py-2 text-xs text-muted text-pretty">
         Belegt Tastatur und Controller für die Spiel-Engine. Danach Play, damit das Spiel die neue Belegung lädt.
@@ -144,7 +144,7 @@ export function InputSection({ q }: { q: string }) {
           Standardbelegung
         </Button>
       </div>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -183,7 +183,7 @@ export function KeysSection({ q }: { q: string }) {
   const qn = q.trim().toLowerCase();
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>{t("keys")}</Head>
       <p className="py-1 text-[11px] text-subtle">{t("keyHint")}</p>
       {KEY_GROUPS.map((g) => {
@@ -232,6 +232,6 @@ export function KeysSection({ q }: { q: string }) {
       >
         {t("keyReset")}
       </Button>
-    </section>
+    </SettingsSection>
   );
 }

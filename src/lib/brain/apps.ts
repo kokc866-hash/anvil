@@ -1,14 +1,14 @@
 import { heuristicAttach, heuristicCommit, heuristicError, heuristicTitle, heuristicTabHint, heuristicStopNote, heuristicLogTrim, heuristicI18nKey, heuristicMention, heuristicComment, leftoverSecretHints } from "./heuristics";
 import { useIde } from "@/store/ide";
+import { isExecutablePath, selectRunTarget } from "../run-target";
 import { scrubRunError } from "@/lib/run-error";
 import { brainGenerate, brainSystem, extractJson, firstUsefulLine } from "./engine";
 import { brainReady, useBrain } from "./store";
 import { pushLane } from "./lane";
+import { brainJobAllowed, captureBrainCommit, captureBrainScope, onBrainScopeReset } from "./scope";
+import { helperDiffContext, type HelperDiff } from "./diff-context";
 
-function job(k: keyof ReturnType<typeof useBrain.getState>["jobs"]) {
-  const j = useBrain.getState().jobs as Record<string, boolean | undefined>;
-  return useBrain.getState().on && j[k] !== false;
-}
+const job = brainJobAllowed;
 
 import { redactSecrets } from "@/lib/vault";
 
@@ -68,10 +68,8 @@ export async function brainDiffSummary(items: { path: string; before: string; af
   if (!brainReady() || !job("diffs")) {
     return `${items.length} Datei(en): ${items.map((i) => i.path).slice(0, 4).join(", ")}`;
   }
-  const blob = items
-    .slice(0, 6)
-    .map((i) => `${i.path} ${i.after.length - i.before.length >= 0 ? "+" : ""}${i.after.length - i.before.length}`)
-    .join("\n");
+  const blob = helperDiffContext(items);
+  if (!blob) return "";
   const raw = await brainGenerate({
     messages: [
       { role: "system", content: brainSystem("One sentence what the diff does. No code.") },
@@ -139,7 +137,7 @@ export async function brainChatTitle(user: string): Promise<string> {
   }
   const raw = await brainGenerate({
     messages: [
-      { role: "system", content: brainSystem("Title 3–6 words, no quotes. User-visible: German.") },
+      { role: "system", content: brainSystem("Title 3–6 words, no quotes.") },
       { role: "user", content: user.slice(0, 240) },
     ],
     maxTokens: 14,
@@ -205,9 +203,10 @@ export function heuristicPrompts(): string[] {
 }
 
 export async function brainSuggestPrompts(): Promise<string[]> {
+  const valid = captureBrainCommit("prompts");
   const heur = heuristicPrompts();
   const st = useBrain.getState();
-  if (!st.on || st.jobs.prompts === false) {
+  if (!valid()) {
     st.setPrompts([]);
     return [];
   }
@@ -221,7 +220,7 @@ export async function brainSuggestPrompts(): Promise<string[]> {
     const fail = [...ide.output].reverse().find((r) => !r.ok);
     const raw = await brainGenerate({
       messages: [
-        { role: "system", content: brainSystem("JSON {\"prompts\":[\"...\"]} max 3. Each is an order to the agent, German, under 80 chars.") },
+        { role: "system", content: brainSystem("JSON {\"prompts\":[\"...\"]} max 3. Each is an order to the agent, under 80 chars.") },
         {
           role: "user",
           content: `Datei: ${ide.activePath || "—"}\nFehler: ${fail ? `${fail.label} ${scrubRunError(fail.stderr || "").slice(0, 200)}` : "keiner"}\nProbleme: ${ide.lspProblems.length}\nDiffs: ${ide.pendingDiffs.length}`,
@@ -239,9 +238,11 @@ export async function brainSuggestPrompts(): Promise<string[]> {
       .filter((s) => s.length >= 8 && s.length <= 120)
       .slice(0, 3);
     const next = list.length ? list : heur;
+    if (!valid()) return [];
     st.setPrompts(next);
     return next;
   } catch {
+    if (!valid()) return [];
     st.setPrompts(heur);
     return heur;
   }
@@ -260,9 +261,10 @@ export function heuristicFollowups(): string[] {
 }
 
 export async function brainFollowups(user: string, reply: string): Promise<string[]> {
+  const valid = captureBrainCommit("followup");
   const heur = heuristicFollowups();
   const st = useBrain.getState();
-  if (!st.on || st.jobs.followup === false) {
+  if (!valid()) {
     st.setFollowups([]);
     return [];
   }
@@ -274,7 +276,7 @@ export async function brainFollowups(user: string, reply: string): Promise<strin
   try {
     const raw = await brainGenerate({
       messages: [
-        { role: "system", content: brainSystem("JSON {\"next\":[\"...\"]} max 3 follow-up orders to the agent. German, under 70 chars, concrete.") },
+        { role: "system", content: brainSystem("JSON {\"next\":[\"...\"]} max 3 follow-up orders to the agent. Under 70 chars, concrete.") },
         { role: "user", content: `Auftrag: ${user.slice(0, 220)}\nAntwort: ${reply.slice(0, 280)}` },
       ],
       maxTokens: 90,
@@ -289,44 +291,38 @@ export async function brainFollowups(user: string, reply: string): Promise<strin
       .filter((s) => s.length >= 8 && s.length <= 100)
       .slice(0, 3);
     const next = list.length ? list : heur;
+    if (!valid()) return [];
     st.setFollowups(next);
     if (next[0]) {
-      const { pushLane } = await import("./lane");
       pushLane("next", next[0]);
     }
     return next;
   } catch {
+    if (!valid()) return [];
     st.setFollowups(heur);
     return heur;
   }
 }
 
-export async function brainReview(paths: string[]): Promise<string> {
-  if (!paths.length) return "";
-  const heur = `${paths.length} Datei(en): ${paths.slice(0, 3).join(", ")}`;
-  const { pushLane } = await import("./lane");
-  if (!brainReady() || !job("review")) {
-    useBrain.getState().logJob("review", "heur", 0);
-    return heur;
-  }
+export async function brainReview(items: HelperDiff[]): Promise<string> {
+  const valid = captureBrainCommit("review");
+  if (!valid() || !brainReady()) return "";
+  const context = helperDiffContext(items);
+  if (!context) return "";
   try {
     const raw = await brainGenerate({
       messages: [
-        { role: "system", content: brainSystem("One sentence: what the change does, plus one risk. No code. For the main model.") },
-        { role: "user", content: paths.slice(0, 8).join(", ") },
+        { role: "system", content: brainSystem("Review these limited diff excerpts. One concrete risk supported by changed code, or NO. This is a hint, not a completed verification.") },
+        { role: "user", content: context },
       ],
-      maxTokens: 48,
-      temperature: 0.1,
-      stop: ["\n\n"],
-      pri: 2,
-      job: "review",
+      maxTokens: 100, temperature: 0.1, pri: 2, job: "review",
     });
-    const out = firstUsefulLine(raw, 160) || heur;
+    if (!valid()) return "";
+    const out = firstUsefulLine(raw, 240);
+    if (!out || /^(NO|NEIN)[.!]?$/i.test(out)) return "";
     pushLane("review", out);
     return out;
-  } catch {
-    return heur;
-  }
+  } catch { return ""; }
 }
 
 function slugName(s: string, ext: string): string {
@@ -363,27 +359,17 @@ export async function brainRename(hint: string, ext: string): Promise<string> {
 }
 
 export function heuristicRunPick(files: string[], active: string): string {
-  if (active && /\.(html?|py|js|ts|go|rs)$/i.test(active)) return active;
-  const rank = (p: string) => {
-    const b = p.split("/").pop() ?? p;
-    if (/^index\.html?$/i.test(b)) return 0;
-    if (/^main\.(py|js|ts)$/i.test(b)) return 1;
-    if (/^app\.(py|js|ts)$/i.test(b)) return 2;
-    if (/\.html?$/i.test(b)) return 3;
-    if (/\.(py|js|ts)$/i.test(b) && !/test|spec/i.test(b)) return 4;
-    return 9;
-  };
-  return [...files].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))[0] ?? active;
+  return selectRunTarget(files, active);
 }
 
 export async function brainRunPick(files: string[], active: string): Promise<string> {
   const heur = heuristicRunPick(files, active);
-  if (active && /\.(html?|py|js|ts)$/i.test(active)) return active;
+  if (files.includes(active) && isExecutablePath(active)) return active;
   if (!brainReady() || !job("runpick") || files.length < 2) {
     useBrain.getState().logJob("runpick", "heur", 0);
     return heur;
   }
-  const cand = files.filter((p) => /\.(html?|py|js|ts|go)$/i.test(p)).slice(0, 40);
+  const cand = files.filter(isExecutablePath).slice(0, 40);
   const raw = await brainGenerate({
     messages: [
       { role: "system", content: brainSystem("One path from the list. Path only.") },
@@ -394,13 +380,14 @@ export async function brainRunPick(files: string[], active: string): Promise<str
     stop: ["\n", " "],
     pri: 1,
     job: "runpick",
+    deadlineMs: 1600,
   }).catch(() => "");
   const line = firstUsefulLine(raw, 80);
   return cand.includes(line) ? line : heur;
 }
 
-export async function brainFixLine(): Promise<string> {
-  const hits = useIde.getState().lspProblems.slice(0, 6);
+export async function brainFixLine(problems = useIde.getState().lspProblems): Promise<string> {
+  const hits = problems.slice(0, 6);
   if (!hits.length) return "";
   const heur = `${hits[0].path}:${hits[0].line} — ${hits[0].message.slice(0, 80)}`;
   if (!brainReady() || !job("fixline")) {
@@ -409,7 +396,7 @@ export async function brainFixLine(): Promise<string> {
   }
   const raw = await brainGenerate({
     messages: [
-      { role: "system", content: brainSystem("One order to the agent: which squiggles to fix. One line, German.") },
+      { role: "system", content: brainSystem("One order to the agent: which squiggles to fix. One line.") },
       { role: "user", content: hits.map((h) => `${h.path}:${h.line} ${h.message}`).join("\n").slice(0, 500) },
     ],
     maxTokens: 40,
@@ -417,6 +404,7 @@ export async function brainFixLine(): Promise<string> {
     stop: ["\n\n"],
     pri: 1,
     job: "fixline",
+    deadlineMs: 1600,
   }).catch(() => "");
   return firstUsefulLine(raw, 120) || heur;
 }
@@ -425,8 +413,14 @@ const TAB: Record<string, string> = {};
 const tabSubs = new Set<() => void>();
 let tabGen = 0;
 
+onBrainScopeReset(() => {
+  for (const path of Object.keys(TAB)) delete TAB[path];
+  tabGen++;
+  tabSubs.forEach((fn) => fn());
+});
+
 export function getTabHint(path: string): string {
-  return TAB[path] ?? "";
+  return job("tabHint") ? TAB[path] ?? "" : "";
 }
 
 export function tabHintSnap(): number {
@@ -448,6 +442,9 @@ function setTabHint(path: string, hint: string) {
 }
 
 export async function brainTabHint(path: string, src: string): Promise<string> {
+  const scope = captureBrainCommit("tabHint", `tab:${path}`);
+  const valid = () => scope() && useIde.getState().files[path] === src;
+  if (!valid()) return "";
   const heur = heuristicTabHint(path, src);
   if (!job("tabHint") || !brainReady() || src.length < 40) {
     setTabHint(path, heur);
@@ -467,15 +464,18 @@ export async function brainTabHint(path: string, src: string): Promise<string> {
       job: "tabHint",
     });
     const line = firstUsefulLine(raw, 72) || heur;
+    if (!valid()) return "";
     setTabHint(path, line);
     return line;
   } catch {
+    if (!valid()) return "";
     setTabHint(path, heur);
     return heur;
   }
 }
 
 export async function brainSecretWarn(text: string): Promise<string> {
+  const valid = captureBrainScope("secrets");
   const hits = leftoverSecretHints(text);
   if (!hits.length) return "";
   const heur = `Sieht nach Geheimnis aus (${hits.length}). Kommt nicht in den Prompt.`;
@@ -499,6 +499,7 @@ export async function brainSecretWarn(text: string): Promise<string> {
     });
     const line = firstUsefulLine(raw, 100);
     if (!line || /^nein/i.test(line)) return heur;
+    if (!valid()) return "";
     pushLane("risk", line);
     return line;
   } catch {

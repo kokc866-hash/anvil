@@ -137,10 +137,7 @@ export function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) =
     const items: CtxItem[] = [
       {
         label: t("newChat"),
-        onClick: () => {
-          stopAgent("Neuer Chat");
-          st.clearChat();
-        },
+        onClick: () => st.clearChat(),
       },
       { label: t("ask"), onClick: () => st.setAgentMode("ask") },
       { label: t("agent"), onClick: () => st.setAgentMode("agent") },

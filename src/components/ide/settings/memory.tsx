@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 
 import { LEARN_DEFAULTS, useLearn, type LearnPrefs } from "@/lib/learn";
 
-import { Head, Vis, Row, Seg, Toggle } from "./fields";
+import { SettingsSection, Head, Vis, Row, Seg, Toggle } from "./fields";
 
 export function LearnSection({ q }: { q: string }) {
   const on = useLearn((s) => s.on);
@@ -15,7 +15,7 @@ export function LearnSection({ q }: { q: string }) {
   const negs = useLearn((s) => s.negs);
 
   return (
-    <section>
+    <SettingsSection q={q}>
       <Head>Gedächtnis</Head>
       <p className="mb-2 text-xs text-muted">
         {facts.length} Fakten · {skills.length} Skills · {negs.length} Verbote · {events.length} Log
@@ -117,6 +117,6 @@ export function LearnSection({ q }: { q: string }) {
           </Button>
         </div>
       </Vis>
-    </section>
+    </SettingsSection>
   );
 }
