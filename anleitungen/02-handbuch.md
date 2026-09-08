@@ -131,10 +131,10 @@ Neues Plugin: unten **Neues Plugin** → `plugins/mein-plugin.js`. Befehle stehe
 
 ### MCP (Stecker)
 
-HTTP-Server in der Unplug-Leiste, nicht stdio.
+Server im MCP-Bereich. Ab Anvil 1.3.20 sind native HTTP-/stdio-Verbindungen, OAuth und Ressourcen verfügbar; siehe [MCP-Anleitung](mcp.md).
 
-- **An/Aus** verbindet. **Hier arbeiten** macht den Server zur Fläche.
-- **Eine Fläche** — Agent nur `mcp_call` / `mcp_list` / Plan. Anvil-Dateien aus.
+- **An/Aus** aktiviert den Server; **Tools laden** lädt seinen Katalog. **Hier arbeiten** macht ihn zur Arbeitsfläche.
+- **Eine Fläche** — Agent arbeitet über MCP-Tools, Ressourcen und Plan auf diesem Server.
 - **Brücke** — MCP und Anvil-Dateien in einer Runde.
 - Kontextzeile (`scene=overworld`) landet in Tool-Args, wenn das Tool den Key kennt.
 - Open VSX ist Erweiterungen, nicht MCP. Companion unter `/mcp` liefert Engine-Detect/Run und den Workspace-Pfad.

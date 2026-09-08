@@ -11,6 +11,7 @@ import { bindSecretsIpc, resolveCredentialHeaders } from "./secrets.mjs";
 import { bindPathsIpc, logFile, loadPaths } from "./paths.mjs";
 import { bindHwIpc } from "./hw.mjs";
 import { bindAccountIpc } from "./account-auth.mjs";
+import { bindMcpIpc, stopMcpConnections } from "./mcp-ipc.mjs";
 import { bindCliIpc, stopCliJobs } from "./cli-ipc.mjs";
 import { bindRecoveryIpc } from "./recovery.mjs";
 import { bindUpdateIpc } from "./update.mjs";
@@ -484,6 +485,7 @@ if (!gotLock) {
     bindHwIpc();
     bindAccountIpc();
     bindCliIpc(isAppUrl);
+  bindMcpIpc(isAppUrl);
     bindUpdateIpc();
     bindRecoveryIpc(isAppUrl);
     onSync("companion-token-sync", () => readCompanionToken());
@@ -531,8 +533,19 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
+let mcpShutdown = false, mcpShutdownDone = false;
 app.on("before-quit", (event) => {
   if (win && !closingApproved) { event.preventDefault(); quitRequested = true; win.close(); return; }
+  if (!mcpShutdownDone) {
+    event.preventDefault();
+    if (!mcpShutdown) {
+      mcpShutdown = true;
+      const finish = () => { if (!mcpShutdownDone) { mcpShutdownDone = true; app.quit(); } };
+      const deadline = setTimeout(finish, 6000);
+      void stopMcpConnections().finally(() => { clearTimeout(deadline); finish(); });
+    }
+    return;
+  }
   stopCliJobs();
   stopCompanion();
   stopServer();

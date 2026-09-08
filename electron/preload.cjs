@@ -74,6 +74,14 @@ contextBridge.exposeInMainWorld("anvilNative", {
   workspacePick: () => ipcRenderer.invoke("workspace-pick"),
   accountLoad: (kind) => ipcRenderer.invoke("account-load", kind),
   accountLogin: (kind) => ipcRenderer.invoke("account-login", kind),
+  mcpRequest: (request) => ipcRenderer.invoke("mcp-request", request),
+  mcpCancel: (id) => ipcRenderer.invoke("mcp-cancel", id),
+  mcpClose: (id) => ipcRenderer.invoke("mcp-close", id),
+  onMcpEvent: (fn) => {
+    const wrap = (_e, value) => fn(value);
+    ipcRenderer.on("mcp-event", wrap);
+    return () => ipcRenderer.removeListener("mcp-event", wrap);
+  },
   cliProbe: (request) => ipcRenderer.invoke("cli-probe", request),
   cliLogin: (request) => ipcRenderer.invoke("cli-login", request),
   cliRun: (request) => ipcRenderer.invoke("cli-run", request),

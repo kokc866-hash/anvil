@@ -1,21 +1,10 @@
 import { readMcpSse } from "./mcp-stream";
-export type McpServer = {
-  id: string;
-  name: string;
-  url: string;
-  enabled: boolean;
-  context?: Record<string, string>;
-  timeoutMs?: number;
-};
-
-export type { McpTool, McpResource } from "./mcp-parse";
 import { ANVIL_VERSION } from "./version";
 import {
   parseMcpBody,
   unwrapMcp,
   mcpCatalogText,
   catalogServerKey,
-  isMcpLoopback,
   parseMcpUrl,
   serversFingerprint,
   nextListCursor,
@@ -23,10 +12,12 @@ import {
   type McpTool,
   type McpResource,
 } from "./mcp-parse";
-import { loadSecrets } from "./secrets";
-import { mergeMcpArgs } from "./surface";
+import { loadSecrets, saveSecrets } from "./secrets";
+import { mcpArguments } from "./mcp-schema";
+import { forgetMcpOutputs, modelMcpResult, readMcpOutput } from "./mcp-results";
 import { withCompanion } from "./companion-life";
-
+import { useIde } from "@/store/ide";
+export type { McpTool, McpResource } from "./mcp-parse";
 export {
   parseMcpBody,
   unwrapMcp,
@@ -39,438 +30,666 @@ export {
   schemaHint,
   mcpIsError,
 } from "./mcp-parse";
+export { modelMcpResult } from "./mcp-results";
 
-type Rpc = { jsonrpc: "2.0"; id: number; method: string; params?: unknown };
+export type McpServer = {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  context?: Record<string, string>;
+  timeoutMs?: number;
+  transport?: "http" | "stdio";
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  auth?: "bearer" | "oauth";
+  oauthClientId?: string;
+};
+type NativeEvent = { id?: string; server: string; kind: string; params?: Record<string, unknown> };
+type Native = {
+  mcpRequest: (r: unknown) => Promise<{ ok: boolean; value?: unknown; error?: string }>;
+  mcpCancel: (id: string) => Promise<unknown>;
+  mcpClose: (id: string) => Promise<unknown>;
+  onMcpEvent: (fn: (e: NativeEvent) => void) => () => void;
+};
+function native(): Native | undefined {
+  return typeof window === "undefined"
+    ? undefined
+    : (window as unknown as { anvilNative?: Native }).anvilNative;
+}
+export function hasMcpNative() {
+  return typeof native()?.mcpRequest === "function";
+}
+export function mcpConfigured(s: McpServer) {
+  return s.enabled && Boolean(s.transport === "stdio" ? s.command?.trim() : s.url.trim());
+}
 
-type Sess = { url: string; sid: string; inited: boolean; caps: string[]; proto: string };
-
-const sessions = new Map<string, Sess>();
-const listErrors = new Map<string, string>();
-let catalog: McpTool[] = [];
-let catalogAt = 0;
-let catalogFp = "";
-let resources: McpResource[] = [];
-const caps = new Map<string, string[]>();
-let rpcSeq = 1;
-let catalogGeneration = 0;
-const catalogServers = new Map<string, string>();
-const resourceKeys = new Map<string, Set<string>>();
-const requestedServers = new Map<string, string>();
-type ServerCatalog = { tools: McpTool[]; resources: McpResource[] };
-const serverRequests = new Map<string, { fingerprint: string; promise: Promise<ServerCatalog> }>();
-let refresh: { fingerprint: string; promise: Promise<McpTool[]> } | null = null;
+type Entry = {
+  fp: string;
+  generation: number;
+  tools: McpTool[];
+  resources: McpResource[];
+  caps: string[];
+  at: number;
+  error?: string;
+  pending?: Promise<void>;
+  pendingSignal?: AbortSignal;
+  controller: AbortController;
+};
+type Session = { sid: string; proto: string; caps: string[]; ready: Promise<void> };
+const entries = new Map<string, Entry>();
+const sessions = new Map<string, Session>();
+const configured = new Map<string, string>();
+const listeners = new Set<() => void>();
+let revision = 0,
+  sequence = 0,
+  generation = 0;
+export const mcpSubscribe = (fn: () => void) => {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+};
+export const mcpRevision = () => revision;
+function changed() {
+  revision++;
+  for (const listener of listeners) listener();
+}
+function companionTarget(s: McpServer) {
+  if (s.transport === "stdio") return false;
+  try {
+    const base = new URL(useIde.getState().companionUrl || "http://127.0.0.1:7845");
+    const url = parseMcpUrl(s.url);
+    return (
+      url.origin === base.origin &&
+      url.pathname.replace(/\/$/, "") === `${base.pathname.replace(/\/$/, "")}/mcp` &&
+      !url.search
+    );
+  } catch {
+    return false;
+  }
+}
+function credentials(s: McpServer): Record<string, string> {
+  const secrets = loadSecrets();
+  const headers: Record<string, string> = {};
+  if (companionTarget(s) && secrets.companionToken.trim())
+    headers["x-anvil-token"] = secrets.companionToken.trim();
+  const token = secrets.keys[`mcp:${s.id}`]?.trim() || secrets.keys[`mcp:${s.name}`]?.trim();
+  const bound = secrets.keys[`mcp-target:${s.id}`];
+  if (s.auth !== "oauth" && token && (!bound || bound === s.url.trim()))
+    headers.authorization = `Bearer ${token}`;
+  return headers;
+}
+function fingerprint(s: McpServer) {
+  return `${serversFingerprint([s])}|${JSON.stringify([s.context, s.timeoutMs, credentials(s), loadSecrets().keys[`mcp-env:${s.id}`]])}`;
+}
+function entryFor(s: McpServer): Entry {
+  const fp = fingerprint(s);
+  let entry = entries.get(s.id);
+  if (entry && entry.fp !== fp) {
+    mcpForget(s.id);
+    entry = undefined;
+  }
+  if (!entry) {
+    entry = {
+      fp,
+      generation: ++generation,
+      tools: [],
+      resources: [],
+      caps: [],
+      at: 0,
+      controller: new AbortController(),
+    };
+    entries.set(s.id, entry);
+  }
+  return entry;
+}
+function sync() {
+  const servers = useIde.getState().mcpServers || [];
+  const next = new Map(servers.filter(mcpConfigured).map((s) => [s.id, fingerprint(s)]));
+  for (const [id, fp] of configured) if (next.get(id) !== fp) mcpForget(id);
+  configured.clear();
+  for (const [id, fp] of next) configured.set(id, fp);
+}
+useIde.subscribe((state, previous) => {
+  if (state.mcpServers !== previous.mcpServers || state.companionUrl !== previous.companionUrl)
+    sync();
+});
+if (typeof window !== "undefined") {
+  window.addEventListener("anvil-secrets-changed", sync);
+  window.addEventListener("anvil-secret-status", sync);
+  native()?.onMcpEvent?.((event) => {
+    if (event.kind !== "catalog" && event.kind !== "closed") return;
+    const entry = entries.get(event.server);
+    if (entry) {
+      entry.at = 0;
+      if (event.kind === "closed") {
+        sessions.delete(event.server);
+        entry.error = "MCP-Verbindung beendet. Katalog erneut laden.";
+        entry.tools = [];
+        entry.resources = [];
+      }
+      changed();
+    }
+  });
+}
+sync();
 
 export function mcpSnapshot(servers: McpServer[]) {
-  const valid = servers.filter(
-    (s) => s.enabled && catalogServers.get(s.id) === serversFingerprint([s]),
-  );
-  const ids = new Set(valid.map((s) => s.id));
-  const names = new Set(valid.flatMap((s) => [s.id, s.name]));
-  return {
-    tools: catalog.filter((tool) => ids.has(tool.serverId ?? tool.server)),
-    resources: resources.filter((resource) => names.has(resource.server)),
-    ready: ids,
-  };
+  const live = servers.filter(mcpConfigured);
+  const ready = new Set<string>(),
+    tools: McpTool[] = [],
+    resources: McpResource[] = [];
+  for (const s of live) {
+    const e = entries.get(s.id);
+    if (!e || e.fp !== fingerprint(s) || e.error || !e.at) continue;
+    ready.add(s.id);
+    tools.push(...e.tools);
+    resources.push(...e.resources);
+  }
+  return { ready, tools, resources };
 }
-
-function nextRpcId(): number {
-  rpcSeq = (rpcSeq % 1_000_000_000) + 1;
-  return rpcSeq;
-}
-
-export function mcpToolsCached(): McpTool[] {
-  return catalog;
-}
-
-export function mcpResourcesCached(): McpResource[] {
-  return resources;
-}
-
-export function mcpCaps(id: string): string[] {
-  return caps.get(id) ?? [];
-}
-
-export function mcpListError(id: string): string | undefined {
-  return listErrors.get(id);
-}
-
-export function mcpCatalogNow(): string {
-  return mcpCatalogText(catalog);
-}
-
-export function mcpForget(id: string): void {
-  catalogServers.delete(id);
+export const mcpToolsCached = () => mcpSnapshot(useIde.getState().mcpServers).tools;
+export const mcpResourcesCached = () => mcpSnapshot(useIde.getState().mcpServers).resources;
+export const mcpCaps = (id: string) => entries.get(id)?.caps || [];
+export const mcpListError = (id: string) => entries.get(id)?.error;
+export const mcpCatalogNow = () => mcpCatalogText(mcpToolsCached());
+export function mcpForget(id: string, closeNative = true) {
+  entries
+    .get(id)
+    ?.controller.abort(new Error("MCP-Konfiguration geändert oder Verbindung beendet."));
+  entries.delete(id);
   sessions.delete(id);
-  caps.delete(id);
-  listErrors.delete(id);
+  forgetMcpOutputs(id);
+  const currentViews = useIde.getState().mcpView;
+  if (Object.hasOwn(currentViews, id)) {
+    const mcpView = { ...currentViews };
+    delete mcpView[id];
+    useIde.setState({ mcpView });
+  }
+  if (closeNative)
+    void native()
+      ?.mcpClose?.(id)
+      .catch(() => {});
+  changed();
 }
-
-function findServer(servers: McpServer[], want: string): McpServer | undefined {
-  const enabled = servers.filter((x) => x.enabled);
-  const exactId = enabled.find((x) => x.id === want);
-  if (exactId) return exactId;
-  const named = enabled.filter((x) => x.name === want);
-  if (named.length === 1) return named[0];
-  if (named.length > 1) return named[0];
-  return enabled.find((x) => x.name === want || x.id === want);
+export async function mcpClose(s: McpServer) {
+  const session = sessions.get(s.id);
+  mcpForget(s.id, false);
+  if (hasMcpNative()) {
+    await native()!.mcpClose(s.id);
+    return;
+  }
+  if (session?.sid && s.transport !== "stdio") {
+    try {
+      await fetch(parseMcpUrl(s.url), {
+        method: "DELETE",
+        headers: {
+          ...credentials(s),
+          "mcp-session-id": session.sid,
+          "mcp-protocol-version": session.proto,
+        },
+        signal: AbortSignal.timeout(4000),
+        redirect: "error",
+      });
+    } catch {
+      /* best effort */
+    }
+  }
 }
-
+function findServer(servers: McpServer[], want: string): McpServer {
+  const enabled = servers.filter(mcpConfigured);
+  const id = enabled.find((s) => s.id === want);
+  if (id) return id;
+  const named = enabled.filter((s) => s.name === want);
+  if (named.length > 1)
+    throw new Error(`MCP-Servername mehrdeutig: ${want}. Server-Id aus mcp_list verwenden.`);
+  if (!named.length) throw new Error(`MCP-Server nicht gefunden oder deaktiviert: ${want}`);
+  return named[0];
+}
+export function mcpEventText(value: unknown): string {
+  const o = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const p = o.params && typeof o.params === "object" ? (o.params as Record<string, unknown>) : o;
+  const text = typeof p.message === "string" ? p.message : typeof p.text === "string" ? p.text : "";
+  const progress =
+    typeof p.progress === "number"
+      ? typeof p.total === "number" && p.total > 0
+        ? `${Math.round((p.progress / p.total) * 100)}%`
+        : String(p.progress)
+      : "";
+  return [text, progress].filter(Boolean).join(" ");
+}
+async function nativeRpc(
+  s: McpServer,
+  method: string,
+  params: unknown,
+  signal: AbortSignal,
+  onChunk?: (text: string) => void,
+) {
+  const api = native()!,
+    id = crypto.randomUUID();
+  signal.throwIfAborted();
+  let env;
+  const envText = loadSecrets().keys[`mcp-env:${s.id}`];
+  if (s.transport === "stdio" && envText?.trim()) {
+    try {
+      env = JSON.parse(envText);
+    } catch {
+      throw new Error("MCP-Umgebung muss ein JSON-Objekt sein.");
+    }
+  }
+  const off = api.onMcpEvent((event) => {
+    if (event.id === id && !signal.aborted) {
+      const text = mcpEventText(event.params);
+      if (text) onChunk?.(text);
+    }
+  });
+  const abort = () => {
+    void api.mcpCancel(id).catch(() => {});
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const pending = api.mcpRequest({
+      id,
+      server: { ...s, headers: credentials(s), env },
+      method,
+      params,
+    });
+    if (signal.aborted) abort();
+    const result = await pending;
+    signal.throwIfAborted();
+    if (!result.ok) throw new Error(result.error || "MCP fehlgeschlagen.");
+    return result.value;
+  } finally {
+    off();
+    signal.removeEventListener("abort", abort);
+  }
+}
 async function rpc(
   s: McpServer,
   method: string,
-  params?: unknown,
-  onChunk?: (t: string) => void,
+  params: unknown = {},
+  signal?: AbortSignal,
+  onChunk?: (text: string) => void,
 ): Promise<unknown> {
-  const parsed = parseMcpUrl(s.url);
-  const loopback = isMcpLoopback(parsed.hostname);
-  const headers: Record<string, string> = {
+  if (s.transport !== "stdio" && s.auth !== "oauth") {
+    const keys = loadSecrets().keys;
+    const token = keys[`mcp:${s.id}`]?.trim() || keys[`mcp:${s.name}`]?.trim();
+    if (token && keys[`mcp-target:${s.id}`] && keys[`mcp-target:${s.id}`] !== s.url.trim())
+      throw new Error(
+        "MCP-URL geändert. Bearer für diese Adresse im MCP-Bereich erneut eintragen.",
+      );
+    if (token && !keys[`mcp-target:${s.id}`])
+      saveSecrets({ keys: { [`mcp-target:${s.id}`]: s.url.trim() } });
+  }
+  const entry = entryFor(s);
+  const timeout = AbortSignal.timeout(Math.min(600000, Math.max(8000, s.timeoutMs || 120000)));
+  const combined = AbortSignal.any([entry.controller.signal, timeout, ...(signal ? [signal] : [])]);
+  if (hasMcpNative()) return nativeRpc(s, method, params, combined, onChunk);
+  if (s.transport === "stdio" || s.auth === "oauth")
+    throw new Error("MCP über stdio und OAuth benötigt die Anvil-Desktop-App.");
+  const url = parseMcpUrl(s.url),
+    session = sessions.get(s.id);
+  const headers = {
+    ...credentials(s),
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
-    "mcp-protocol-version": sessions.get(s.id)?.proto || MCP_PROTOCOL_PREFER,
+    "mcp-protocol-version": session?.proto || MCP_PROTOCOL_PREFER,
+    ...(session?.sid ? { "mcp-session-id": session.sid } : {}),
   };
-  const sess = sessions.get(s.id);
-  if (sess?.sid && sess.url === parsed.toString()) headers["mcp-session-id"] = sess.sid;
-  if (loopback) {
-    const t = loadSecrets().companionToken.trim();
-    if (t) headers["x-anvil-token"] = t;
-  }
-  const bearer =
-    loadSecrets().keys[`mcp:${s.id}`]?.trim() || loadSecrets().keys[`mcp:${s.name}`]?.trim();
-  if (bearer) headers.authorization = `Bearer ${bearer}`;
-  const isNote = method.startsWith("notifications/");
-  const id = nextRpcId();
-  const body = isNote
-    ? { jsonrpc: "2.0" as const, method, params }
-    : ({ jsonrpc: "2.0", id, method, params } satisfies Rpc);
-  let res: Response;
-  try {
-    res = await fetch(parsed.toString(), {
+  const note = method.startsWith("notifications/"),
+    id = ++sequence;
+  const payload = { jsonrpc: "2.0", ...(note ? {} : { id }), method, params };
+  const cancel = () => {
+    if (note) return;
+    void fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(Math.max(8_000, s.timeoutMs || 120_000)),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: id, reason: "Anvil: Stop" },
+      }),
+      signal: AbortSignal.timeout(2000),
+      redirect: "error",
+    }).catch(() => {});
+  };
+  combined.addEventListener("abort", cancel, { once: true });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: combined,
+      redirect: "error",
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/Failed to fetch|NetworkError|Load failed|ECONNREFUSED/i.test(msg)) {
-      throw new Error(
-        loopback
-          ? "Companion-MCP nicht erreichbar. Helfer starten, in Einstellungen koppeln, dann erneut pingen."
-          : "MCP nicht erreichbar (Netz/CORS).",
-      );
+    if (!response.ok) {
+      if (response.status === 404) sessions.delete(s.id);
+      throw new Error(`MCP ${response.status}: ${(await response.text()).slice(0, 300)}`);
     }
-    throw e;
+    const sid = response.headers.get("mcp-session-id");
+    if (sid && session) session.sid = sid;
+    if (note) {
+      await response.body?.cancel();
+      return {};
+    }
+    if (response.headers.get("content-type")?.includes("text/event-stream"))
+      return await readMcpSse(
+        response,
+        (event) => {
+          const text = mcpEventText(event);
+          if (text) onChunk?.(text);
+        },
+        id,
+      );
+    const body = parseMcpBody(await response.text());
+    if (body.id !== id || (!Object.hasOwn(body, "result") && !body.error))
+      throw new Error("MCP lieferte keine gültige JSON-RPC-Antwort zur Anfrage.");
+    if (body.error) throw new Error(body.error.message || "MCP-Protokollfehler");
+    return body.result;
+  } finally {
+    combined.removeEventListener("abort", cancel);
   }
-  const nextSid = res.headers.get("mcp-session-id");
-  if (nextSid) {
-    const prev = sessions.get(s.id);
-    sessions.set(s.id, {
-      url: parsed.toString(),
-      sid: nextSid,
-      inited: prev?.inited ?? false,
-      caps: prev?.caps ?? [],
-      proto: prev?.proto || MCP_PROTOCOL_PREFER,
-    });
-  }
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("text/event-stream")) {
-    return readMcpSse(res, (event) => { const text = mcpEventText(event); if (text) onChunk?.(text); }, isNote ? undefined : id);
-  }
-  const text = await res.text();
-  if (isNote) return {};
-  if (!res.ok) {
-    if (res.status === 404 || res.status === 400) mcpForget(s.id);
-    throw new Error(`MCP ${res.status}: ${text.slice(0, 200)}`);
-  }
-  const json = parseMcpBody(text);
-  if (json.error) throw new Error(json.error.message || "MCP error");
-  return json.result;
 }
-
-async function initialize(s: McpServer): Promise<void> {
-  const url = parseMcpUrl(s.url).toString();
-  const prev = sessions.get(s.id);
-  if (prev?.inited && prev.url === url) {
-    caps.set(s.id, prev.caps);
+async function initialize(s: McpServer, signal?: AbortSignal) {
+  entryFor(s);
+  const prior = sessions.get(s.id);
+  if (prior) {
+    await prior.ready;
+    signal?.throwIfAborted();
     return;
   }
-  if (prev && prev.url !== url) mcpForget(s.id);
-  const init = (await rpc(s, "initialize", {
-    protocolVersion: MCP_PROTOCOL_PREFER,
-    capabilities: { resources: {}, tools: {} },
-    clientInfo: { name: "anvil", version: ANVIL_VERSION },
-  })) as { capabilities?: Record<string, unknown>; protocolVersion?: string };
-  const capKeys = Object.keys(init?.capabilities ?? {});
-  const proto = String(init?.protocolVersion || MCP_PROTOCOL_PREFER);
-  const cur = sessions.get(s.id);
-  sessions.set(s.id, {
-    url,
-    sid: cur?.sid || "",
-    inited: true,
-    caps: capKeys,
-    proto,
-  });
-  caps.set(s.id, capKeys);
-  try {
-    await rpc(s, "notifications/initialized", {});
-  } catch {
-    /* notification */
-  }
-}
-
-async function listPaged<T>(s: McpServer, method: string, key: string): Promise<T[]> {
-  const out: T[] = [];
-  let cursor = "";
-  for (let i = 0; i < 8; i++) {
-    const r = (await rpc(s, method, cursor ? { cursor } : {})) as Record<string, unknown>;
-    const rows = r?.[key];
-    if (Array.isArray(rows)) out.push(...(rows as T[]));
-    cursor = nextListCursor(r);
-    if (!cursor) break;
-  }
-  return out;
-}
-
-export async function mcpClose(s: McpServer): Promise<void> {
-  const sess = sessions.get(s.id);
-  const sid = sess?.sid;
-  mcpForget(s.id);
-  if (!sid || !s.url.trim()) return;
-  try {
-    const parsed = parseMcpUrl(s.url);
-    await fetch(parsed.toString(), {
-      method: "DELETE",
-      headers: {
-        "mcp-session-id": sid,
-        "mcp-protocol-version": sess?.proto || MCP_PROTOCOL_PREFER,
+  const session: Session = {
+    sid: "",
+    proto: MCP_PROTOCOL_PREFER,
+    caps: [],
+    ready: Promise.resolve(),
+  };
+  sessions.set(s.id, session);
+  session.ready = (async () => {
+    const value = (await rpc(
+      s,
+      "initialize",
+      {
+        protocolVersion: MCP_PROTOCOL_PREFER,
+        capabilities: {},
+        clientInfo: { name: "anvil", version: ANVIL_VERSION },
       },
-      signal: AbortSignal.timeout(4000),
-    });
-  } catch {
-    /* best-effort */
-  }
+      signal,
+    )) as { capabilities?: Record<string, unknown>; protocolVersion?: string };
+    if (!value?.capabilities || !value.protocolVersion)
+      throw new Error("Ungültige MCP-Initialisierung.");
+    session.caps = Object.keys(value.capabilities);
+    session.proto = value.protocolVersion;
+    if (!hasMcpNative()) {
+      if (!["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"].includes(session.proto))
+        throw new Error("MCP-Protokoll benötigt die native Desktop-Verbindung.");
+      await rpc(s, "notifications/initialized", {}, signal);
+    }
+    entryFor(s).caps = session.caps;
+  })().catch((error) => {
+    if (sessions.get(s.id) === session) sessions.delete(s.id);
+    throw error;
+  });
+  await session.ready;
 }
-
-async function loadServer(s: McpServer, live: McpServer[]): Promise<ServerCatalog> {
-  const key = catalogServerKey(s, live);
-  const toolsOut: McpTool[] = [];
-  const resOut: McpResource[] = [];
-  await initialize(s);
-  const tools = await listPaged<{
-    name: string;
-    description?: string;
-    inputSchema?: McpTool["inputSchema"];
-  }>(s, "tools/list", "tools");
-  for (const t of tools) {
-    toolsOut.push({
-      server: key,
-      serverId: s.id,
-      name: t.name,
-      description: t.description ?? "",
-      inputSchema: t.inputSchema,
-    });
+async function listPaged(
+  s: McpServer,
+  method: string,
+  key: string,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [],
+    seen = new Set<string>();
+  let cursor = "";
+  for (let page = 0; page < 128; page++) {
+    const result = (await rpc(s, method, cursor ? { cursor } : {}, signal)) as Record<
+      string,
+      unknown
+    >;
+    if (!Array.isArray(result?.[key])) throw new Error(`MCP ${method}: ungültige Liste.`);
+    rows.push(...(result[key] as Record<string, unknown>[]));
+    cursor = nextListCursor(result);
+    if (!cursor) return rows;
+    if (seen.has(cursor)) throw new Error(`MCP ${method}: Server wiederholt denselben Cursor.`);
+    seen.add(cursor);
   }
-  const cap = caps.get(s.id) ?? [];
-  if (cap.includes("resources") || cap.length === 0) {
-    try {
-      const rr = await listPaged<{ uri: string; name?: string; mimeType?: string }>(
-        s,
-        "resources/list",
-        "resources",
-      );
-      for (const x of rr) {
-        resOut.push({
+  throw new Error(`MCP ${method}: mehr als 128 Seiten. Katalog am Server eingrenzen.`);
+}
+function withServer<T>(s: McpServer, fn: () => Promise<T>, cwd?: string) {
+  return companionTarget(s) ? withCompanion(fn, s.url, cwd) : fn();
+}
+function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+export async function mcpProbe(
+  s: McpServer,
+  all: McpServer[],
+  signal?: AbortSignal,
+): Promise<McpTool[]> {
+  if (!mcpConfigured(s)) throw new Error("MCP-Server deaktiviert oder unvollständig konfiguriert.");
+  return withServer(s, async () => {
+    const entry = entryFor(s);
+    if (!entry.pending) {
+      entry.error = undefined;
+      entry.pendingSignal = signal;
+      entry.pending = (async () => {
+        await initialize(s, signal);
+        const key = catalogServerKey(s, all);
+        const tools = entry.caps.includes("tools")
+          ? await listPaged(s, "tools/list", "tools", signal)
+          : [];
+        const resources = entry.caps.includes("resources")
+          ? await listPaged(s, "resources/list", "resources", signal)
+          : [];
+        let templates: Record<string, unknown>[] = [];
+        if (entry.caps.includes("resources")) {
+          try {
+            templates = await listPaged(s, "resources/templates/list", "resourceTemplates", signal);
+          } catch (error) {
+            if (!/method.*(not found|not supported|nicht|unbekannt)|-32601/i.test(String(error)))
+              throw error;
+          }
+        }
+        signal?.throwIfAborted();
+        if (entries.get(s.id) !== entry) return;
+        entry.tools = tools
+          .filter((t) => typeof t.name === "string")
+          .map((tool) => ({
+            ...tool,
+            server: key,
+            serverId: s.id,
+            name: String(tool.name),
+            description: String(tool.description || ""),
+          })) as McpTool[];
+        entry.resources = [...resources, ...templates].map((r) => ({
+          ...r,
           server: key,
-          uri: x.uri,
-          name: x.name || x.uri,
-          mimeType: x.mimeType,
+          serverId: s.id,
+          uri: String(r.uri || r.uriTemplate),
+          name: String(r.name || r.uri || r.uriTemplate),
+        })) as McpResource[];
+        entry.at = Date.now();
+      })()
+        .catch((error) => {
+          if (entries.get(s.id) === entry) {
+            entry.at = 0;
+            entry.tools = [];
+            entry.resources = [];
+            entry.error = error instanceof Error ? error.message : String(error);
+          }
+          throw error;
+        })
+        .finally(() => {
+          if (entries.get(s.id) === entry) {
+            entry.pending = undefined;
+            changed();
+          }
         });
+      changed();
+    }
+    const ownerSignal = entry.pendingSignal;
+    try {
+      await waitFor(entry.pending, signal);
+    } catch (error) {
+      // A remounted pane/new agent may have joined a catalog request owned by
+      // an already canceled caller. Retry only this read-only catalog build.
+      if (
+        !signal?.aborted &&
+        ownerSignal?.aborted &&
+        entries.get(s.id) === entry &&
+        !entry.controller.signal.aborted
+      ) {
+        await waitFor(entry.pending?.catch(() => {}) || Promise.resolve(), signal);
+        return mcpProbe(s, all, signal);
       }
-    } catch {
-      /* */
+      throw error;
     }
-  }
-  return { tools: toolsOut, resources: resOut };
+    signal?.throwIfAborted();
+    return mcpSnapshot(all).tools;
+  });
 }
-
-async function ingestServer(s: McpServer, live: McpServer[]): Promise<ServerCatalog> {
-  const fingerprint = `${serversFingerprint([s])}|${catalogServerKey(s, live)}`;
-  const pending = serverRequests.get(s.id);
-  if (pending?.fingerprint === fingerprint) return pending.promise;
-  const promise = withCompanion(() => loadServer(s, live), s.url);
-  serverRequests.set(s.id, { fingerprint, promise });
-  try {
-    return await promise;
-  } finally {
-    if (serverRequests.get(s.id)?.promise === promise) serverRequests.delete(s.id);
-  }
-}
-
-function clearCatalog(id: string) {
-  const keys = new Set(catalog.filter((t) => t.serverId === id).map((t) => t.server));
-  for (const key of resourceKeys.get(id) ?? []) keys.add(key);
-  keys.add(id);
-  catalog = catalog.filter((t) => t.serverId !== id);
-  resources = resources.filter((r) => !keys.has(r.server));
-  catalogServers.delete(id);
-  resourceKeys.delete(id);
-}
-
-function acceptCatalog(s: McpServer, got: ServerCatalog) {
-  clearCatalog(s.id);
-  catalogServers.set(s.id, serversFingerprint([s]));
-  resourceKeys.set(s.id, new Set(got.resources.map((r) => r.server)));
-  listErrors.delete(s.id);
-  catalog = [...catalog, ...got.tools];
-  resources = [...resources, ...got.resources];
-}
-
-export async function mcpList(servers: McpServer[]): Promise<McpTool[]> {
-  const generation = ++catalogGeneration;
-  const live = servers.filter((s) => s.enabled && s.url.trim());
-  const ids = new Set(live.map((s) => s.id));
-  for (const id of requestedServers.keys())
-    if (!ids.has(id)) {
-      requestedServers.delete(id);
-      clearCatalog(id);
-      mcpForget(id);
-    }
-  for (const server of live) requestedServers.set(server.id, serversFingerprint([server]));
-  const results: { tools: McpTool[]; resources: McpResource[]; error?: string }[] = new Array(
-    live.length,
-  );
+export async function mcpList(servers: McpServer[], signal?: AbortSignal): Promise<McpTool[]> {
+  const queue = servers.filter(mcpConfigured);
   let index = 0;
-  // Independent servers share a bounded pool, not a serial chain of timeouts.
   await Promise.all(
-    Array.from({ length: Math.min(4, live.length) }, async () => {
-      while (index < live.length) {
-        const i = index++;
+    Array.from({ length: Math.min(4, queue.length) }, async () => {
+      while (index < queue.length) {
+        signal?.throwIfAborted();
+        const server = queue[index++];
         try {
-          results[i] = await ingestServer(live[i], live);
-        } catch (error) {
-          results[i] = {
-            tools: [],
-            resources: [],
-            error: error instanceof Error ? error.message : String(error),
-          };
+          await mcpProbe(server, servers, signal);
+        } catch (e) {
+          if (signal?.aborted) throw e;
         }
       }
     }),
   );
-  if (generation !== catalogGeneration) return catalog;
-  for (let i = 0; i < live.length; i++) {
-    const server = live[i];
-    if (requestedServers.get(server.id) !== serversFingerprint([server])) continue;
-    if (results[i].error) {
-      clearCatalog(server.id);
-      mcpForget(server.id);
-      listErrors.set(server.id, results[i].error!);
-    } else acceptCatalog(server, results[i]);
-  }
-  catalogAt = Date.now();
-  catalogFp = live.every((s) => requestedServers.get(s.id) === serversFingerprint([s]))
-    ? serversFingerprint(servers)
-    : "";
-  return catalog;
+  return mcpSnapshot(servers).tools;
 }
-
-export async function mcpProbe(s: McpServer, all: McpServer[]): Promise<McpTool[]> {
-  const fingerprint = serversFingerprint([s]);
-  requestedServers.set(s.id, fingerprint);
-  listErrors.delete(s.id);
-  try {
-    const got = await ingestServer(
-      s,
-      all.filter((x) => x.enabled && x.url.trim()),
-    );
-    if (requestedServers.get(s.id) !== fingerprint) return got.tools;
-    acceptCatalog(s, got);
-    catalogAt = Date.now();
-    catalogFp = "";
-    return catalog;
-  } catch (e) {
-    if (requestedServers.get(s.id) === fingerprint) {
-      clearCatalog(s.id);
-      mcpForget(s.id);
-      listErrors.set(s.id, e instanceof Error ? e.message : String(e));
-    }
-    throw e;
-  }
+export async function mcpRefresh(servers: McpServer[], maxAgeMs = 60000, signal?: AbortSignal) {
+  const stale = servers.filter((s) => {
+    const e = entries.get(s.id);
+    return mcpConfigured(s) && (!e || e.fp !== fingerprint(s) || Date.now() - e.at >= maxAgeMs);
+  });
+  await mcpList(stale, signal);
+  return mcpSnapshot(servers).tools;
 }
-
-export async function mcpReadResource(
+export async function mcpCatalogPage(
   servers: McpServer[],
-  server: string,
-  uri: string,
-): Promise<unknown> {
-  const s = findServer(servers, server);
-  if (!s) throw new Error(`MCP-Server nicht gefunden: ${server}`);
-  return withCompanion(async () => {
-    await initialize(s);
-    return unwrapMcp(await rpc(s, "resources/read", { uri }));
-  }, s.url);
-}
-
-export async function mcpRefresh(servers: McpServer[], maxAgeMs = 60_000): Promise<McpTool[]> {
-  const fp = serversFingerprint(servers);
-  if (catalogFp === fp && Date.now() - catalogAt < maxAgeMs) return catalog;
-  if (refresh?.fingerprint === fp) return refresh.promise;
-  const promise = mcpList(servers);
-  refresh = { fingerprint: fp, promise };
-  try {
-    return await promise;
-  } finally {
-    if (refresh?.promise === promise) refresh = null;
+  options: Record<string, unknown> = {},
+  signal?: AbortSignal,
+) {
+  const selected = options.server ? [findServer(servers, String(options.server))] : servers;
+  await mcpRefresh(selected, 60000, signal);
+  const snap = mcpSnapshot(selected),
+    query = String(options.query || "").toLowerCase();
+  const tools = snap.tools.filter((t) =>
+    `${t.name} ${t.description} ${t.server}`.toLowerCase().includes(query),
+  );
+  const resources = snap.resources.filter((r) =>
+    `${r.name} ${r.uri} ${r.server}`.toLowerCase().includes(query),
+  );
+  const rows = [...tools.map((t) => ({ tool: t })), ...resources.map((r) => ({ resource: r }))];
+  const cursor = String(options.cursor || "");
+  let offset = 0;
+  if (cursor) {
+    const parts = cursor.split(":");
+    if (parts.length !== 2 || Number(parts[0]) !== revision || !/^\d+$/.test(parts[1]))
+      throw new Error(
+        "MCP-Katalog geändert oder Cursor ungültig. mcp_list ohne cursor wiederholen.",
+      );
+    offset = Number(parts[1]);
   }
-}
-
-function mcpEventText(obj: unknown): string {
-  if (!obj || typeof obj !== "object") return typeof obj === "string" ? obj : "";
-  const o = obj as Record<string, unknown>;
-  const bits: string[] = [];
-  const take = (v: unknown) => {
-    if (typeof v === "string" && v.trim()) bits.push(v);
+  const limit = Math.max(1, Math.min(40, Math.floor(Number(options.limit) || 12)));
+  const page = rows.slice(offset, offset + limit);
+  const nextCursor =
+    offset + page.length < rows.length ? `${revision}:${offset + page.length}` : undefined;
+  return {
+    tools: page.flatMap((r) => ("tool" in r ? [r.tool] : [])),
+    resources: page.flatMap((r) => ("resource" in r ? [r.resource] : [])),
+    total: rows.length,
+    nextCursor,
+    servers: selected
+      .filter((s) => s.enabled)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        ready: snap.ready.has(s.id),
+        error: mcpListError(s.id),
+      })),
+    hint: "mcp_call: server=Id, name=exakter Toolname, arguments=Objekt nach inputSchema. Ressourcen: mcp_read_resource. Weitere Ergebnisse: nextCursor an mcp_list übergeben.",
   };
-  take(o.message);
-  take(o.text);
-  const params =
-    o.params && typeof o.params === "object" ? (o.params as Record<string, unknown>) : null;
-  if (params) {
-    take(params.message);
-    take(params.text);
-    if (typeof params.progress === "number") bits.push(`${Math.round(params.progress * 100)}%`);
-  }
-  const content = o.content ?? params?.content;
-  if (Array.isArray(content)) {
-    for (const c of content) {
-      if (c && typeof c === "object") take((c as { text?: string }).text);
-      else take(c);
-    }
-  } else take(content);
-  const result = o.result;
-  if (result && typeof result === "object") bits.push(mcpEventText(result));
-  return bits.filter(Boolean).join("");
 }
-
 export async function mcpCall(
   servers: McpServer[],
   server: string,
   name: string,
   args: unknown,
-  onChunk?: (t: string) => void,
-  extra?: { cwd?: string },
+  onChunk?: (text: string) => void,
+  extra?: { cwd?: string; signal?: AbortSignal },
 ): Promise<unknown> {
   const s = findServer(servers, server);
-  if (!s) throw new Error(`MCP-Server nicht gefunden: ${server}`);
-  return withCompanion(async () => {
-    await initialize(s);
-    const merged = mergeMcpArgs(s.context, args);
-    if (extra?.cwd && merged.cwd == null) merged.cwd = extra.cwd;
-    const raw = await rpc(s, "tools/call", { name, arguments: merged }, onChunk);
-    return unwrapMcp(raw);
-  }, s.url);
+  return withServer(
+    s,
+    async () => {
+      await mcpRefresh([s], 60000, extra?.signal);
+      const tool = mcpSnapshot([s]).tools.find((t) => t.name === name);
+      if (!tool)
+        throw new Error(
+          mcpListError(s.id) || `MCP-Tool nicht im aktuellen Katalog: ${name}. mcp_list verwenden.`,
+        );
+      const checked = mcpArguments(
+        tool.inputSchema,
+        args,
+        s.context,
+        companionTarget(s) ? extra?.cwd : undefined,
+      );
+      return unwrapMcp(
+        await rpc(s, "tools/call", { name, arguments: checked }, extra?.signal, onChunk),
+      );
+    },
+    extra?.cwd,
+  );
 }
-
-export function newMcpId(): string {
-  return `mcp-${Date.now().toString(36)}`;
+export async function mcpReadResource(
+  servers: McpServer[],
+  server: string,
+  uri: string,
+  signal?: AbortSignal,
+) {
+  const s = findServer(servers, server);
+  if (!uri.trim()) throw new Error("MCP-Ressourcen-URI fehlt.");
+  return withServer(s, async () => {
+    await initialize(s, signal);
+    return unwrapMcp(await rpc(s, "resources/read", { uri }, signal));
+  });
+}
+export function mcpReadOutput(servers: McpServer[], args: Record<string, unknown>) {
+  return readMcpOutput(
+    String(args.id || ""),
+    servers.filter(mcpConfigured).map((s) => s.id),
+    Number(args.offset),
+    Number(args.limit),
+  );
+}
+export async function mcpLogin(s: McpServer, signal?: AbortSignal) {
+  if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
+  await mcpClose(s);
+  return nativeRpc(s, "oauth/login", {}, signal || AbortSignal.timeout(180000));
+}
+export async function mcpLogout(s: McpServer) {
+  if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
+  await mcpClose(s);
+  return nativeRpc(s, "oauth/logout", {}, AbortSignal.timeout(8000));
+}
+export function newMcpId() {
+  return `mcp-${crypto.randomUUID()}`;
 }

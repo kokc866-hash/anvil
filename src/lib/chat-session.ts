@@ -482,8 +482,7 @@ export async function sendChat(
         if (
           name === "run_file" ||
           name === "engine_run" ||
-          name === "shell" ||
-          name === "mcp_call"
+          name === "shell"
         ) {
           const max = useIde.getState().loopTries;
           const prev = useIde.getState().chat.at(-1)?.lastRun;
@@ -546,8 +545,7 @@ export async function sendChat(
         if (
           (name === "run_file" ||
             name === "engine_run" ||
-            name === "shell" ||
-            name === "mcp_call") &&
+            name === "shell") &&
           out &&
           typeof out === "object"
         ) {

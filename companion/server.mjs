@@ -322,12 +322,13 @@ async function handleMcp(msg) {
     return reply({
       protocolVersion: mcpProtocol(params?.protocolVersion),
       capabilities: { tools: {}, resources: {} },
-      serverInfo: { name: "anvil-companion", version: "1.3.2" },
+      serverInfo: { name: "anvil-companion", version: JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version },
     });
   }
   if (method === "notifications/initialized" || method === "initialized") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") return reply({ tools: TOOLS });
+  if (method === "resources/templates/list") return reply({ resourceTemplates: [] });
   if (method === "resources/list") {
     return reply({
       resources: [{ uri: "anvil://workspace", name: "workspace", mimeType: "text/plain" }],

@@ -30,7 +30,7 @@ describe("mcp", () => {
     assert.equal(mcpIsError(bad), true);
     assert.equal((bad as { text: string }).text, "boom");
   });
-  it("catalog lists server.tool and schema", () => {
+  it("catalog separates server id, tool name and schema", () => {
     const t = mcpCatalogText([
       {
         server: "docs",
@@ -39,7 +39,7 @@ describe("mcp", () => {
         inputSchema: { properties: { q: {}, n: {} }, required: ["q"] },
       },
     ]);
-    assert.match(t, /docs\.search/);
+    assert.match(t, /server=docs name=search/);
     assert.match(t, /mcp_call/);
     assert.match(t, /q\*/);
   });
@@ -67,8 +67,8 @@ describe("mcp", () => {
       { id: "a", name: "A", url: "http://127.0.0.1/mcp", enabled: true },
       { id: "b", name: "B", url: "http://x/mcp", enabled: false },
     ]);
-    assert.match(fp, /a\t/);
-    assert.equal(fp.includes("b\t"), false);
+    assert.match(fp, /\["a","A"/);
+    assert.equal(fp.includes('["b","B"'), false);
     assert.equal(nextListCursor({ nextCursor: "abc" }), "abc");
     assert.equal(nextListCursor({ nextCursor: "" }), "");
   });

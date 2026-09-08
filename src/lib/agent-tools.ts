@@ -125,12 +125,20 @@ export const AGENT_TOOLS = [
     recommended: { type: "string" },
     blocking: { type: "string", description: "hard | soft" },
   }, ["prompt"]),
-  tool("mcp_list", "List tools from configured MCP HTTP servers.", {}),
+  tool("mcp_list", "Discover configured MCP servers, tools with argument schemas, and resources. Use query/server and next_cursor to narrow or continue a large catalog.", {
+    server: { type: "string" }, query: { type: "string" }, cursor: { type: "string" }, limit: { type: "number" },
+  }),
   tool("mcp_call", "Call a tool on a configured MCP server.", {
     server: { type: "string" },
     name: { type: "string" },
     arguments: { type: "object", additionalProperties: true },
   }, ["server", "name"]),
+  tool("mcp_read_resource", "Read an MCP resource URI from a configured server, including concrete URIs from resource templates.", {
+    server: { type: "string" }, uri: { type: "string" },
+  }, ["server", "uri"]),
+  tool("mcp_read_output", "Read a retained large MCP result in character pages. Continue with next_offset; never repeat the external action just to read its output.", {
+    id: { type: "string" }, offset: { type: "number" }, limit: { type: "number" },
+  }, ["id"]),
   tool("engine_detect", "Detect Godot/Unity/Unreal/Bevy/… in the workspace. Games run in those engines, not inside Anvil.", {}),
   tool("engine_status", "Ping the local engine companion (HTTP). Returns binaries if running.", {}),
   tool("engine_run", "Run play/check/editor on the detected engine via companion. action: play|check|editor|test or cmd.", {

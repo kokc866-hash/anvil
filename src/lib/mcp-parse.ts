@@ -3,25 +3,42 @@ export type McpTool = {
   serverId?: string;
   name: string;
   description: string;
-  inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
+  inputSchema?: {
+    type?: string;
+    properties?: Record<string, unknown>;
+    required?: string[];
+    [key: string]: unknown;
+  };
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
 };
 
 export type McpResource = {
   server: string;
+  serverId?: string;
   uri: string;
   name: string;
   mimeType?: string;
+  uriTemplate?: string;
 };
 
 export const MCP_PROTOCOL_PREFER = "2025-03-26";
 export const MCP_PROTOCOL_FALLBACK = "2024-11-05";
 
-export function parseMcpBody(text: string): { result?: unknown; error?: { message?: string }; id?: unknown } {
+export function parseMcpBody(text: string): {
+  result?: unknown;
+  error?: { message?: string };
+  id?: unknown;
+} {
   const trimmed = text.trim();
   if (!trimmed) return {};
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return JSON.parse(trimmed) as { result?: unknown; error?: { message?: string }; id?: unknown };
+      return JSON.parse(trimmed) as {
+        result?: unknown;
+        error?: { message?: string };
+        id?: unknown;
+      };
     } catch {
       /* SSE */
     }
@@ -35,7 +52,9 @@ export function parseMcpBody(text: string): { result?: unknown; error?: { messag
       .join("");
     if (!data) continue;
     try {
-      payloads.push(JSON.parse(data) as { result?: unknown; error?: { message?: string }; id?: unknown });
+      payloads.push(
+        JSON.parse(data) as { result?: unknown; error?: { message?: string }; id?: unknown },
+      );
     } catch {
       /* skip */
     }
@@ -49,22 +68,21 @@ export function unwrapMcp(result: unknown): unknown {
     content?: { type?: string; text?: string; data?: string; mimeType?: string; url?: string }[];
     structuredContent?: unknown;
     isError?: boolean;
+    contents?: { text?: string }[];
   };
   const texts = (r.content ?? []).map((c) => c.text).filter(Boolean) as string[];
-  const img = (r.content ?? []).find((c) => c.type === "image" && (c.data || c.url));
-  const image = img?.url
-    ? img.url
-    : img?.data
-      ? `data:${img.mimeType || "image/png"};base64,${img.data}`
-      : undefined;
-  if (texts.length || image) {
-    return { text: texts.join("\n").slice(0, 12_000), image, isError: Boolean(r.isError) };
-  }
-  if (r.isError) {
-    return { text: JSON.stringify(r.structuredContent ?? r).slice(0, 12_000), isError: true };
-  }
-  if (r.structuredContent != null) return r.structuredContent;
-  return result;
+  const images = (r.content ?? [])
+    .filter((c) => c.type === "image" && (c.data || c.url))
+    .map((c) => c.url || `data:${c.mimeType || "image/png"};base64,${c.data}`);
+  const text = [...texts, ...(r.contents ?? []).map((c) => c.text).filter(Boolean)].join("\n");
+  // Preserve the protocol envelope. The model adapter may page it, but must not
+  // discard structured results merely because the server also supplied text.
+  return {
+    ...r,
+    text,
+    ...(images.length ? { image: images[0], images } : {}),
+    isError: Boolean(r.isError),
+  };
 }
 
 export function mcpIsError(r: unknown): r is { isError: true; text?: string } {
@@ -88,9 +106,9 @@ export function mcpCatalogText(tools: McpTool[]): string {
     const hint = schemaHint(t.inputSchema);
     const desc = t.description ? ` — ${t.description.slice(0, 140)}` : "";
     const args = hint ? ` [${hint}]` : "";
-    return `- ${t.server}.${t.name}${desc}${args}`;
+    return `- server=${t.serverId || t.server} name=${t.name}${desc}${args}`;
   });
-  return `MCP-Tools (mcp_call: server = Name oder Id, name = Tool. Pflicht-Args mit *):\n${lines.join("\n")}`;
+  return `MCP-Tools (mcp_call: server = Id, name = Tool. Pflicht-Args mit *. Vor unbekannten Argumenten Schema mit mcp_list abrufen):\n${lines.join("\n")}${tools.length > ok.length ? `\nWeitere ${tools.length - ok.length} Tools: mcp_list mit query/server/cursor.` : ""}`;
 }
 
 export function encodeMcpPick(serverId: string, tool: string): string {
@@ -105,7 +123,11 @@ export function decodeMcpPick(pick: string): { server: string; name: string } {
   return { server: pick.slice(0, dot), name: pick.slice(dot + 1) };
 }
 
-export function uniqueMcpName(servers: Array<{ id: string; name: string }>, want: string, id: string): string {
+export function uniqueMcpName(
+  servers: Array<{ id: string; name: string }>,
+  want: string,
+  id: string,
+): string {
   const base = want.trim() || "MCP";
   const taken = new Set(servers.filter((s) => s.id !== id).map((s) => s.name));
   if (!taken.has(base)) return base;
@@ -139,13 +161,40 @@ export function parseMcpUrl(raw: string): URL {
   const url = new URL(String(raw ?? "").trim());
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("MCP nur http(s)");
   if (!url.hostname) throw new Error("MCP-Host fehlt");
+  if (url.username || url.password || url.hash)
+    throw new Error("MCP-URL ohne Zugangsdaten oder Fragment eintragen.");
   return url;
 }
 
-export function serversFingerprint(servers: Array<{ id: string; name: string; url: string; enabled: boolean }>): string {
+export function serversFingerprint(
+  servers: Array<{
+    id: string;
+    name: string;
+    url: string;
+    enabled: boolean;
+    transport?: string;
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    auth?: string;
+    oauthClientId?: string;
+  }>,
+): string {
   return servers
-    .filter((s) => s.enabled && s.url.trim())
-    .map((s) => `${s.id}\t${s.url.trim()}\t${s.name}`)
+    .filter((s) => s.enabled && (s.transport === "stdio" ? s.command?.trim() : s.url.trim()))
+    .map((s) =>
+      JSON.stringify([
+        s.id,
+        s.name,
+        s.transport || "http",
+        s.url.trim(),
+        s.command,
+        s.args,
+        s.cwd,
+        s.auth,
+        s.oauthClientId,
+      ]),
+    )
     .sort()
     .join("\n");
 }

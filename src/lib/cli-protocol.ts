@@ -13,6 +13,9 @@ export function cliKindFor(provider: string, mode: "abo" | "key"): CliKind | nul
 }
 
 export function cliPrompt(messages: Record<string, unknown>[], tools: unknown[]): string {
+  messages = messages.map((m) => m.mcpResult && Array.isArray(m.content)
+    ? { ...m, content: m.content.filter((part) => part?.type !== "image_url" && part?.type !== "image").concat([{ type: "text", text: "MCP-Bilder liegen in Anvil vor. Über diese CLI nur Text/structuredContent auswerten; keine Bildsicht behaupten." }]) }
+    : m);
   if (
     messages.some(
       (m) =>

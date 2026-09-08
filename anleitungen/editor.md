@@ -1,6 +1,6 @@
 # Editor: Bearbeiten, Speichern und Wiederherstellen
 
-Interner Entwicklungsstand nach Anvil 1.3.19; noch nicht als neuer Installer veröffentlicht. Bestehende Editor-, Agent-, Canvas- und Tool-Funktionen bleiben verfügbar.
+Stand: Anvil 1.3.20. Bestehende Editor-, Agent-, Canvas- und Tool-Funktionen bleiben verfügbar.
 
 ## Dateien und Vorschläge
 

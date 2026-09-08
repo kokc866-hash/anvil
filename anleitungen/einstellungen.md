@@ -1,6 +1,6 @@
 # Einstellungen
 
-Interner Entwicklungsstand nach **1.3.19**. Noch nicht veröffentlicht. Die Bedienung ist für das Desktop-Programm ausgelegt.
+Stand: Anvil **1.3.20**. Die Bedienung ist für das Desktop-Programm ausgelegt.
 
 ## Sichern und wiederherstellen
 

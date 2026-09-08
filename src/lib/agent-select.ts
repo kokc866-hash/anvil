@@ -20,6 +20,8 @@ const OBSERVE_NAMES = new Set([
   "harness_read",
   "board_read",
   "mcp_list",
+  "mcp_read_resource",
+  "mcp_read_output",
   "skill_list",
   "skill_read",
   "engine_detect",

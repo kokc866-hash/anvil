@@ -1,7 +1,7 @@
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, surfaceLabel, surfacePrompt, type SurfaceSnap } from "./surface";
-import { mcpProbe, mcpRefresh, mcpSnapshot, mcpListError } from "./mcp";
-import { agentGen, raceAbort, throwIfAborted } from "./abort";
+import { mcpProbe, mcpRefresh, mcpSnapshot, mcpListError, mcpConfigured } from "./mcp";
+import { agentGen, raceAbort, throwIfAborted, withAgentTimeout } from "./abort";
 import { requestPhase } from "./request-state";
 
 export async function surfaceNote(): Promise<{ text: string; id: string; mode: SurfaceSnap["mode"] }> {
@@ -13,10 +13,10 @@ export async function surfaceNote(): Promise<{ text: string; id: string; mode: S
   let snapshot = mcpSnapshot(servers);
   if (id !== ANVIL_SURFACE && selected?.enabled && !snapshot.ready.has(selected.id)) {
     requestPhase(agentGen(), "catalog", selected.name || selected.id);
-    await raceAbort(mcpProbe(selected, servers));
+    await raceAbort(mcpProbe(selected, servers, withAgentTimeout(0)));
     throwIfAborted();
     snapshot = mcpSnapshot(servers);
-  } else if (servers.some((s) => s.enabled && s.url.trim())) {
+  } else if (servers.some(mcpConfigured)) {
     // Refresh alongside the model request. A stale server does not block ordinary chat.
     void mcpRefresh(servers).catch(() => undefined);
   }
@@ -33,7 +33,7 @@ export async function surfaceNote(): Promise<{ text: string; id: string; mode: S
     ready: id === ANVIL_SURFACE || Boolean(selected?.enabled && snapshot.ready.has(id)),
     view: st.mcpView[id]?.text,
     error: selected ? mcpListError(selected.id) : undefined,
-    servers: servers.filter((s) => s.enabled && s.url.trim()).map((s) => ({ id: s.id, name: s.name, ready: snapshot.ready.has(s.id), error: mcpListError(s.id) })),
+    servers: servers.filter(mcpConfigured).map((s) => ({ id: s.id, name: s.name, ready: snapshot.ready.has(s.id), error: mcpListError(s.id) })),
   };
   return { text: surfacePrompt(snap), id, mode };
 }

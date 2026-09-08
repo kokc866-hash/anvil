@@ -70,7 +70,7 @@ export type McpCallLog = {
   image?: string;
 };
 
-export type McpView = { text: string; image?: string; at: number };
+export type McpView = { text: string; image?: string; images?: string[]; at: number };
 
 export type DebugState = {
   active: boolean;

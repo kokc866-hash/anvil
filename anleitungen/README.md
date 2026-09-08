@@ -1,6 +1,6 @@
 # Anleitungen
 
-Anvil **1.3.19** (06.09.2026)
+Anvil **1.3.20** (08.09.2026)
 
 Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/releases) — Setup-exe oder ZIP (Ordner wählen, `Anvil.exe`). Kein Portable-Exe.
 
@@ -11,10 +11,11 @@ Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/relea
 | [03-workflow.md](03-workflow.md) | Abläufe Schritt für Schritt |
 | [04-presentation.md](04-presentation.md) | Kurzpräsentation (5 Minuten) |
 | [05-verbindungen.md](05-verbindungen.md) | Local, Cloud, Abo über CLI und Custom |
-| [06-optimierungen.md](06-optimierungen.md) | Speicher, Chat, Anfrageablauf und Schlüsselablage im Entwicklungsstand |
+| [06-optimierungen.md](06-optimierungen.md) | Speicher, Chat, Anfrageablauf und Schlüsselablage |
 | [canvas.md](canvas.md) | Canvas-API, Eingaben, HTML-Projekte und gemeinsame Run-Ausgabe |
 | [tool-learning.md](tool-learning.md) | Gelernte Tool-Aufrufe, Bestätigungen und Grenzen |
 | [editor.md](editor.md) | Sicheres Bearbeiten, Speichern, Navigation, Suche und Sprachdienst |
-| [chat.md](chat.md) | Interne Ergänzungen: Statusanzeige, Chatwechsel, Warteschlange und Stop |
-| [einstellungen.md](einstellungen.md) | Interne Ergänzungen: Sicherung, Bereichsreset, Desktop-Suche und Projektvorgaben |
-| [helfer.md](helfer.md) | Interne Ergänzungen: Helfer-Lebenszyklus, Modellablage, Aufgaben und Desktop-Bedienung |
+| [chat.md](chat.md) | Statusanzeige, Chatwechsel, Warteschlange und Stop |
+| [einstellungen.md](einstellungen.md) | Sicherung, Bereichsreset, Desktop-Suche und Projektvorgaben |
+| [helfer.md](helfer.md) | Helfer-Lebenszyklus, Modellablage, Aufgaben und Desktop-Bedienung |
+| [mcp.md](mcp.md) | MCP: HTTP, stdio, OAuth, Ressourcen, Katalog und Stop |

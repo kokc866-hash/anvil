@@ -74,6 +74,8 @@ export const ideSettingsSchema = z.object({
   lspEnabled: z.record(recordKey, bool), lspTimeout: number(1, 60), lspMaxFiles: count(1, 200),
   mcpServers: z.array(z.object({
     id: recordKey.min(1), name: text, url: text, enabled: bool,
+    transport: z.enum(["http", "stdio"]).optional(), command: text.optional(), args: z.array(text).optional(), cwd: text.optional(),
+    auth: z.enum(["bearer", "oauth"]).optional(), oauthClientId: text.optional(),
     context: z.record(recordKey, text).optional(), timeoutMs: number(1, 3_600_000).optional(),
   })).refine((servers) => new Set(servers.map((s) => s.id)).size === servers.length, "Doppelte MCP-ID"),
   activeSurfaceId: text, surfaceMode: z.enum(["exclusive", "bridge"]),

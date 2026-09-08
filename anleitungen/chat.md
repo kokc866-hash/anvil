@@ -1,6 +1,6 @@
 # Agent und Chat
 
-Interner Entwicklungsstand nach 1.3.19. Die folgenden Ergänzungen sind noch nicht als Installer veröffentlicht.
+Stand: Anvil 1.3.20.
 
 - Die laufende Anfrage zeigt ihren Status rechts neben der Zeit an der Agentenblase. Die frühere feste Statusleiste entfällt. Lange Angaben bleiben per Tooltip vollständig lesbar, auch am Fensterrand. Escape, Scrollen oder eine Größenänderung schließen den Tooltip.
 - „Neuer Chat“ beendet den laufenden Agentenauftrag und leert auch dessen Warteschlange, ausstehende Übergabe, Entwurf und ausgewählte Rückfrage. Der Befehl verhält sich über die Schaltfläche, das Kontextmenü und die Befehlspalette gleich.

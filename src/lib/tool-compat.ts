@@ -111,7 +111,8 @@ export class ToolSession {
   tools(available: typeof AGENT_TOOLS): typeof AGENT_TOOLS {
     this.available = available;
     if (this.mode === "standard") return available;
-    const priorities = [...this.selected, ...RELEVANCE.filter(([re]) => re.test(this.task)).flatMap(([, names]) => names), ...BASE];
+    const exclusiveMcp = available.some((t) => t.function.name === "mcp_call") && !available.some((t) => t.function.name === "read_file");
+    const priorities = [...(exclusiveMcp ? ["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output"] : []), ...this.selected, ...RELEVANCE.filter(([re]) => re.test(this.task)).flatMap(([, names]) => names), ...BASE];
     const names = new Set(["select_tools", "ask_user", ...[...new Set(priorities)].filter((name) => name !== "ask_user" && name !== "select_tools" && available.some((t) => t.function.name === name)).slice(0, 6)]);
     return shrinkTools(available.filter((t) => names.has(t.function.name))) || [];
   }

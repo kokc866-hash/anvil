@@ -1,3 +1,4 @@
+import { modelSeesImages } from "./ref";
 import { ToolSession, toolTargetKey, toolCompatibility } from "./tool-compat";
 import { ToolLearningSession } from "./tool-learning";
 import { grokRound } from "./agent";
@@ -39,7 +40,7 @@ export { normalizeBaseUrl } from "./connection";
 import { lanFetch, hasLlmTransport } from "./lan-fetch";
 import { localChatUrl, sanitizeLocalPayload, wrapOllamaResponse } from "./local-wire";
 import { anthropicHeaders, pipeHeaders, responsesNative } from "./llm-headers";
-import { throwIfAborted, AgentAbortError, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
+import { throwIfAborted, AgentAbortError, agentBeat, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, toolsAllowed } from "./surface";
 import { surfaceNote } from "./surface-context";
@@ -360,6 +361,11 @@ function clientTools(opts: {
   onTool?: (info: { name: string; args: Record<string, unknown>; result: unknown }) => void;
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
 }) {
+  const mcpStart = useIde.getState();
+  const mcpGeneration = agentGen();
+  const mcpSignal = withAgentTimeout(0);
+  const mcpScope = new Set((mcpStart.mcpServers || []).filter((s) => mcpStart.surfaceMode === "bridge" || !mcpStart.activeSurfaceId || mcpStart.activeSurfaceId === ANVIL_SURFACE || s.id === mcpStart.activeSurfaceId).map((s) => s.id));
+  const mcpCurrent = () => { mcpSignal.throwIfAborted(); if (agentGen() !== mcpGeneration) throw new AgentAbortError("Anfrage ersetzt"); };
   const tools = {
     verify: async (paths: string[]) => {
       const { refreshProblems } = await import("./problems");
@@ -462,59 +468,41 @@ function clientTools(opts: {
         return cut;
       }
     },
-    mcp: async (action: "list" | "call", server?: string, name?: string, args?: unknown) => {
-      const { mcpList, mcpCall, mcpListError, mcpSnapshot } = await import("./mcp");
-      const { useIde } = await import("@/store/ide");
+    mcp: async (action: "list" | "call" | "read" | "output", server?: string, name?: string, args?: unknown) => {
+      const { mcpCatalogPage, mcpCall, mcpReadResource, mcpReadOutput, modelMcpResult } = await import("./mcp");
+      mcpCurrent();
       const st = useIde.getState();
-      const servers = (st.mcpServers ?? []).filter((s) => st.surfaceMode === "bridge" || !st.activeSurfaceId || st.activeSurfaceId === ANVIL_SURFACE || s.id === st.activeSurfaceId);
-      const active = st.activeSurfaceId;
-      const want = server?.trim() || (active !== ANVIL_SURFACE ? active : "");
+      const servers = (st.mcpServers ?? []).filter((s) => mcpScope.has(s.id));
+      const want = server?.trim() || (mcpStart.activeSurfaceId !== ANVIL_SURFACE ? mcpStart.activeSurfaceId : "");
+      const options = args && typeof args === "object" ? args as Record<string, unknown> : {};
+      if (action === "output") return mcpReadOutput(servers, options);
       if (action === "list") {
-        await mcpList(servers);
-        const snapshot = mcpSnapshot(servers);
-        return {
-          tools: snapshot.tools,
-          resources: snapshot.resources,
-          servers: servers.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.name, ready: snapshot.ready.has(s.id), error: mcpListError(s.id) || undefined })),
-          hint: servers.some((s) => s.enabled) ? "Call mcp_call with server=id and the exact tool name. Native Anvil tools are separate." : "No enabled MCP server is configured. Native Anvil tools are available independently.",
-        };
+        const page = await mcpCatalogPage(servers, options, mcpSignal);
+        mcpCurrent();
+        return modelMcpResult(servers.filter((s) => s.enabled).map((s) => s.id), page);
       }
       const t0 = Date.now();
+      const sid = servers.find((s) => s.id === want || s.name === want)?.id || want;
       try {
-        const r = await mcpCall(
-          servers,
-          want,
-          name ?? "",
-          args,
-          st.mcpStream
-          ? (chunk) => {
-              const sid = servers.find((s) => s.id === want || s.name === want)?.id || want;
+        const raw = action === "read"
+          ? await mcpReadResource(servers, want, name || "", mcpSignal)
+          : await mcpCall(servers, want, name ?? "", args,
+            st.mcpStream ? (chunk) => {
+              if (mcpSignal.aborted || agentGen() !== mcpGeneration) return;
+              agentBeat();
               const prev = useIde.getState().mcpView[sid]?.text ?? "";
               useIde.getState().setMcpView(sid, { text: (prev + chunk).slice(-8000), at: Date.now() });
-              void import("./live-write").then((m) => m.applyMcpLive(sid, name ?? "", args, chunk));
-            }
-          : undefined,
-          { cwd: st.workspaceCwd || undefined },
-        );
-        const rec = r && typeof r === "object" ? (r as { text?: string; image?: string; isError?: boolean }) : null;
-        const text = rec?.text || (typeof r === "string" ? r : JSON.stringify(r).slice(0, 800));
-        const image = rec?.image;
-        const sid = servers.find((s) => s.id === want || s.name === want)?.id || want;
-        st.pushMcpLog({
-          at: t0,
-          server: sid,
-          name: name ?? "",
-          ok: !rec?.isError,
-          detail: String(text).slice(0, 400),
-          image,
-        });
-        if (text || image) st.setMcpView(sid, { text: String(text).slice(0, 2000), image, at: Date.now() });
-        return r;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const sid = servers.find((s) => s.id === want || s.name === want)?.id || want;
-        st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: false, detail: msg.slice(0, 400) });
-        throw err;
+              void import("./live-write").then((m) => { if (!mcpSignal.aborted && agentGen() === mcpGeneration) m.applyMcpLive(sid, name ?? "", args, chunk); });
+            } : undefined, { cwd: mcpStart.workspaceCwd || undefined, signal: mcpSignal });
+        mcpCurrent();
+        const rec = raw && typeof raw === "object" ? raw as { text?: string; image?: string; images?: string[]; isError?: boolean } : null;
+        const text = rec?.text || (typeof raw === "string" ? raw : JSON.stringify(raw));
+        st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: !rec?.isError, detail: String(text).slice(0, 400), image: rec?.image });
+        st.setMcpView(sid, { text: String(text), image: rec?.image, images: rec?.images, at: Date.now() });
+        return modelMcpResult(sid, raw, { images: modelSeesImages(mcpStart.llmProvider, mcpStart.llmModel) });
+      } catch (error) {
+        if (!mcpSignal.aborted && agentGen() === mcpGeneration) st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: false, detail: String(error instanceof Error ? error.message : error).slice(0, 400) });
+        throw error;
       }
     },
     engine: async (action: "status" | "run", args?: Record<string, unknown>) => {

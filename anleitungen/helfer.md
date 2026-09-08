@@ -1,6 +1,6 @@
-# Helfer – interne Verbesserungen
+# Helfer
 
-Dieser Stand ergänzt die Desktop-Anwendung nach 1.3.19. Er ist noch nicht veröffentlicht. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
+Stand: Anvil 1.3.20. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
 
 ## Verlässliche Zuordnung
 

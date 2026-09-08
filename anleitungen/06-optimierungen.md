@@ -1,6 +1,6 @@
-# Optimierungen im Entwicklungsstand
+# Optimierungen
 
-Stand: 6. September 2026, auf Basis von Anvil 1.3.13. Diese Änderungen gehören zum Quellcode nach diesem Release; ein bestehender Installer enthält sie erst mit einer später gebauten Version.
+Diese Übersicht beschreibt die nach Anvil 1.3.13 eingeführten Optimierungen. Sie sind in Anvil 1.3.20 enthalten; neuere Einzelheiten stehen in den Anleitungen zu Editor, Chat, Helfer und MCP.
 
 ## Umgesetzte Änderungen
 
@@ -36,4 +36,4 @@ Diese Änderung schützt die Ablage auf dem Datenträger. Schlüssel bleiben fü
 
 ## Technische Einordnung
 
-Die Integration wurde mit `npm run typecheck -- --pretty false` statisch kompiliert. Es wurden für diese Änderung keine Testläufe, Browserläufe, Modellanfragen oder Benchmarks durchgeführt. Windows-Verschlüsselung, tatsächliche LAN-Antworten und Laufzeitgewinne sind damit nicht praktisch nachgewiesen. Ein neuer Installer oder ein Release wird durch diese Dokumentation nicht erzeugt.
+Die Integration wurde mit `npm run typecheck -- --pretty false` statisch kompiliert. Es wurden für diese Änderung keine Testläufe, Browserläufe, Modellanfragen oder Benchmarks durchgeführt. Windows-Verschlüsselung, tatsächliche LAN-Antworten und Laufzeitgewinne sind damit nicht praktisch nachgewiesen. Die Aussage bezieht sich auf die damalige Optimierungsrunde; spätere Release-Prüfungen sind separat dokumentiert.
