@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -84,17 +84,26 @@ describe("tree", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-  it("loads ref png as data url, skips other png, skips data-url writes", () => {
+  it("loads ref png as data URLs and saves image bytes without overwriting external changes", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-img-"));
     try {
       mkdirSync(path.join(dir, "ref"), { recursive: true });
-      writeFileSync(path.join(dir, "ref", "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-      writeFileSync(path.join(dir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1cAAAAASUVORK5CYII=", "base64");
+      writeFileSync(path.join(dir, "ref", "shot.png"), png);
+      writeFileSync(path.join(dir, "logo.png"), png);
       const t = listTree(dir);
       assert.match(t.files["ref/shot.png"] ?? "", /^data:image\/png;base64,/);
       assert.equal("logo.png" in t.files, false);
-      const w = writeRel(dir, "ref/x.png", "data:image/png;base64,aaa");
-      assert.equal(w.skipped, "image");
+      const image = t.files["ref/shot.png"];
+      const w = writeRel(dir, "ref/x.png", image, null);
+      assert.equal(w.ok, true);
+      assert.deepEqual(readFileSync(path.join(dir, "ref", "x.png")), png);
+      assert.equal(listTree(dir).files["ref/x.png"], image);
+      assert.equal(writeRel(dir, "ref/x.png", image, image).ok, true);
+      const external = Buffer.from("external image change");
+      writeFileSync(path.join(dir, "ref", "x.png"), external);
+      assert.throws(() => writeRel(dir, "ref/x.png", image, image), /extern geändert/);
+      assert.deepEqual(readFileSync(path.join(dir, "ref", "x.png")), external);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
