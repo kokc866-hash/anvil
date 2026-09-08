@@ -134,7 +134,9 @@ try {
           jobs: { ...useBrain.getState().jobs, attach: true, intent: true, title: true, planText: false },
         });
         window.fixtureBrain = useBrain;
-        void brainGenerate({ messages: [{ role: "user", content: "stalled" }], job: "title" }).catch(() => {});
+        // Explicit fixture work is allowed with autonomy off; automatic title
+        // generation is correctly blocked by the helper's scope guard.
+        void brainGenerate({ messages: [{ role: "user", content: "stalled" }], job: "title", automatic: false }).catch(() => {});
       });
       assert.equal(await page.evaluate(() => window.fixtureBrain.getState().busy), true);
     }
