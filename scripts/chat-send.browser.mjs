@@ -54,6 +54,11 @@ try {
           name: "stalled-helper-fixture",
           enforce: "pre",
           transform(code, id) {
+            if (id.endsWith("/src/lib/model-context.ts")) {
+              const declaration = "export async function applyCloudContext(): Promise<string | null> {";
+              assert.ok(code.includes(declaration), "preparation fixture must hold the context lookup boundary");
+              return code.replace(declaration, declaration + "\nif ((globalThis as any).fixturePrepareContext) await (globalThis as any).fixturePrepareContext();");
+            }
             if (!id.endsWith("/src/lib/brain/engine.ts")) return;
             const declaration = "let engine: Engine | null = null;";
             assert.ok(code.includes(declaration), "helper fixture must replace the engine, not skip the queue");
@@ -122,8 +127,8 @@ try {
     await page.locator("#anvil-chat").waitFor();
     if (!production) {
       if (pauseHelper) {
-        // Keep preparation pending while Playwright locates Stop; its click must
-        // happen before the helper deadline, independently of CI rendering speed.
+        // Freeze helper deadlines while the explicit preparation gate below
+        // holds the context lookup independently of CI rendering speed.
         await page.clock.pauseAt(Date.now() + 1000);
       }
       await page.evaluate(async () => {
@@ -155,7 +160,7 @@ try {
     if (frozenClock) {
       // Dynamic imports use real I/O; wait for preparation without advancing its clock.
       const deadline = Date.now() + 5000;
-      while (!(await page.evaluate(() => window.__anvilIde.getState().agentBusy)) && Date.now() < deadline)
+      while (!(await page.evaluate(() => window.__anvilIde.getState().agentBusy && window.fixturePreparationEntered)) && Date.now() < deadline)
         await new Promise((resolve) => setTimeout(resolve, 20));
       await page.clock.runFor(32);
     }
@@ -342,9 +347,24 @@ try {
   if (!production) {
     const { page, errors } = await openChat("ollama", "agent", true);
     const before = requests.length;
+    // The helper is optional and must not hold up the agent. Hold an actual
+    // asynchronous preparation boundary so Stop cannot race an already sent request.
+    await page.evaluate(() => {
+      window.fixturePreparationEntered = false;
+      window.fixturePrepareContext = () => new Promise((resolve) => {
+        window.fixturePreparationEntered = true;
+        window.fixtureReleasePreparation = resolve;
+      });
+    });
     await send(page, "analysiere bitte das gesamte Projekt", true);
+    assert.equal(await page.evaluate(() => window.fixturePreparationEntered), true, "send must reach context preparation");
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentBusy), true, "send must enter preparation before Stop");
+    assert.equal(requests.length, before, "preparation must still be pending before Stop");
     await page.getByRole("button", { name: "Abbrechen", exact: true }).dispatchEvent("click");
+    await page.evaluate(() => {
+      delete window.fixturePrepareContext;
+      window.fixtureReleasePreparation();
+    });
     await page.clock.resume();
     await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy);
     await page.waitForFunction(() => !window.fixtureBrain.getState().busy);
