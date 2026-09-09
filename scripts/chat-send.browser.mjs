@@ -73,9 +73,8 @@ try {
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--disable-gpu"],
   });
 
-  async function openChat(provider, mode = "agent", pauseHelper = false) {
+  async function openChat(provider, mode = "agent") {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    if (pauseHelper) await page.clock.install();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     // Keep OpenAI's real provider/URL/Responses serializer, intercept only the
@@ -126,11 +125,6 @@ try {
     await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
     await page.locator("#anvil-chat").waitFor();
     if (!production) {
-      if (pauseHelper) {
-        // Freeze helper deadlines while the explicit preparation gate below
-        // holds the context lookup independently of CI rendering speed.
-        await page.clock.pauseAt(Date.now() + 1000);
-      }
       await page.evaluate(async () => {
         const { useBrain } = await import("/src/lib/brain/store.ts");
         const { brainGenerate } = await import("/src/lib/brain/engine.ts");
@@ -151,19 +145,9 @@ try {
     return { page, errors };
   }
 
-  async function send(page, prompt, frozenClock = false) {
+  async function send(page, prompt) {
     await page.locator("#anvil-chat").fill(prompt);
-    // Let React commit the controlled input and busy button while helper deadlines
-    // remain frozen. Enter must not read the preceding empty draft on a slow runner.
-    if (frozenClock) await page.clock.runFor(32);
     await page.locator("#anvil-chat").press("Enter");
-    if (frozenClock) {
-      // Dynamic imports use real I/O; wait for preparation without advancing its clock.
-      const deadline = Date.now() + 5000;
-      while (!(await page.evaluate(() => window.__anvilIde.getState().agentBusy && window.fixturePreparationEntered)) && Date.now() < deadline)
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      await page.clock.runFor(32);
-    }
   }
   async function answered(page, provider) {
     try {
@@ -345,7 +329,7 @@ try {
   }
 
   if (!production) {
-    const { page, errors } = await openChat("ollama", "agent", true);
+    const { page, errors } = await openChat("ollama", "agent");
     const before = requests.length;
     // The helper is optional and must not hold up the agent. Hold an actual
     // asynchronous preparation boundary so Stop cannot race an already sent request.
@@ -356,7 +340,8 @@ try {
         window.fixtureReleasePreparation = resolve;
       });
     });
-    await send(page, "analysiere bitte das gesamte Projekt", true);
+    await send(page, "analysiere bitte das gesamte Projekt");
+    await page.waitForFunction(() => window.fixturePreparationEntered, undefined, { timeout: 5000 });
     assert.equal(await page.evaluate(() => window.fixturePreparationEntered), true, "send must reach context preparation");
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentBusy), true, "send must enter preparation before Stop");
     assert.equal(requests.length, before, "preparation must still be pending before Stop");
@@ -365,7 +350,6 @@ try {
       delete window.fixturePrepareContext;
       window.fixtureReleasePreparation();
     });
-    await page.clock.resume();
     await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy);
     await page.waitForFunction(() => !window.fixtureBrain.getState().busy);
     assert.equal(requests.length, before, "stopped preparation must not call the model");
