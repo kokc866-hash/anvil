@@ -7,7 +7,8 @@ export type BrainModel = {
   label: string;
   size: string;
   vramMb: number;
-  ctx: number;
+  /** Explicit model limit, when known; runtime allocation defaults are not limits. */
+  ctx?: number;
   kind: BrainKind;
   group: BrainGroup;
   hint: string;
@@ -28,7 +29,7 @@ function m(
   kind: BrainKind,
   group: BrainGroup,
   hint: string,
-  ctx = 8192,
+  ctx?: number,
 ): BrainModel {
   return { id, alt, label, size, vramMb, ctx, kind, group, hint };
 }

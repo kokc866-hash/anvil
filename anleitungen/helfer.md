@@ -43,7 +43,9 @@ Explizit gewählte kleine und 4B-Modelle, Custom-IDs und Pins werden beim Neusta
 
 **GPU warm halten** sendet bei eingeschalteter Option nach 70 Sekunden Leerlauf einen kurzen Ping. Während Agent-Arbeit, einer anderen Helferaufgabe, einer Pause, im verborgenen Fenster und bei Autonomie Aus bleibt er aus. Ausschalten oder Entladen entfernt den Timer.
 
-Die Context-Anpassung respektiert die Grenzen aus dem Modellkatalog und den Runtime-Vorgaben. Die GPU-Puffergrenze ist keine Messung des freien VRAM. Modellspezifische RNN-History-Vorgaben werden nicht mehr pauschal überschrieben. Qwen3-Vorlagen nutzen für kurze Helferaufgaben den von WebLLM unterstützten Modus ohne zusätzliche Thinking-Ausgabe. Thinking-Blöcke werden nicht als Titel, Fakten oder Codevorschläge ausgegeben.
+Der gewählte Context überschreibt die Standardbelegung der Runtime (zum Beispiel 4K); ausdrücklich hinterlegte Modellgrenzen bleiben erhalten. Es gibt keine pauschale 8K-Grenze oder vorsorgliche Kürzung anhand der GPU-Puffergröße. Mit **Puffer anpassen** wird nur nach einem GPU-Speicherfehler einmal mit 2K erneut geladen. Dein gewählter Wert und dein Modellprofil bleiben dabei erhalten. Die Statusanzeige nennt bei einer Anpassung den geladenen und gewünschten Context sowie den Grund. Auch ein erneuter Versuch ohne nicht unterstütztes Sliding verändert die gespeicherte Einstellung nicht.
+
+Modellspezifische RNN-History-Vorgaben bleiben erhalten. Qwen3-Vorlagen nutzen für kurze Helferaufgaben den von WebLLM unterstützten Modus ohne zusätzliche Thinking-Ausgabe. Thinking-Blöcke werden nicht als Titel, Fakten oder Codevorschläge ausgegeben.
 
 ## Integration
 

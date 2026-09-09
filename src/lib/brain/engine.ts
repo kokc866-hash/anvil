@@ -103,23 +103,11 @@ export async function gpuInfo(): Promise<{
   return v;
 }
 
-function fitContext(want: number, maxBuffer: number, vramMb: number): number {
-  let ctx = Math.max(1024, Math.round(want / 1024) * 1024);
-  const st = useBrain.getState();
-  if (!st.gpuFitBuffer || maxBuffer <= 0) return Math.min(32768, ctx);
-  const perTok = vramMb >= 1600 ? 12_288 : 8_192;
-  const cap = Math.floor((maxBuffer * 0.32) / perTok);
-  if (cap >= 1024) ctx = Math.min(ctx, Math.floor(cap / 1024) * 1024);
-  return Math.min(32768, Math.max(1024, ctx));
-}
+type LoadContext = { context: number; sliding: boolean };
 
-function chatOpts(id: string, overrides?: { context_window_size?: number; sliding_window_size?: number }) {
+function chatOpts({ context: ctx, sliding }: LoadContext) {
   const st = useBrain.getState();
-  const spec = brainModelOf(id);
-  const limit = overrides?.context_window_size && overrides.context_window_size > 0 ? overrides.context_window_size : 32768;
-  const want = Math.min(st.context || 8192, spec?.ctx ?? 32768, limit);
-  const ctx = fitContext(want, gpuCache?.v.maxBuffer ?? 0, spec?.vramMb ?? 1000);
-  if (st.sliding) {
+  if (sliding) {
     return {
       context_window_size: -1,
       sliding_window_size: ctx,
@@ -145,7 +133,7 @@ function chatOpts(id: string, overrides?: { context_window_size?: number; slidin
 
 function oomish(err: unknown) {
   const m = err instanceof Error ? err.message : String(err);
-  return /oom|out of memory|device lost|exceeds|vram|buffer/i.test(m);
+  return /\boom\b|out of memory|device[\s_-]*lost|vram|(?:buffer|allocat).*(?:exceed|limit|fail|size|memory)|(?:exceed|fail).*buffer/i.test(m);
 }
 
 type CacheBackend = "opfs" | "indexeddb" | "cache";
@@ -160,14 +148,16 @@ function nativeRecord(m: { model_id: string; model: string; model_lib: string },
   return { ...m, model: root, model_lib: `${root}${m.model_lib.split("/").pop()}` };
 }
 
-async function createEngine(id: string, onProgress: (p: { progress: number; text: string }) => void, ticket: LoadTicket): Promise<{ engine: Engine; worker: Worker | null; config: string }> {
+async function createEngine(id: string, onProgress: (p: { progress: number; text: string }) => void, ticket: LoadTicket, context: LoadContext): Promise<{ engine: Engine; worker: Worker | null; config: string }> {
   const check = () => ticket.ctrl.signal.throwIfAborted();
   const llm = await webllm();
   check();
   const st = useBrain.getState();
   const record = llm.prebuiltAppConfig.model_list.find((m) => m.model_id === id);
   if (!record) throw new Error(`Unbekanntes WebLLM-Modell: ${id}`);
-  const opts = chatOpts(id, record.overrides);
+  // WebLLM merges these options over model-record defaults, retaining other
+  // model-specific settings such as the hybrid RNN history allocation.
+  const opts = chatOpts(context);
   let local = Boolean(await helperLocalId(id, true));
   check();
   if (!local && nativeHelper()) {
@@ -220,7 +210,7 @@ async function createEngine(id: string, onProgress: (p: { progress: number; text
         // until its unload acknowledgement, so two GPU loads never overlap.
         await Promise.race([candidate.reload!(id, opts), aborted]);
         check();
-        return { engine: candidate, worker: candidateWorker, config: `${opts.context_window_size > 0 ? opts.context_window_size : opts.sliding_window_size} Context · ${st.gpuPower === "high-performance" ? "Leistung" : "Sparsam"} · ${candidateWorker ? "Worker" : "GPU"}` };
+        return { engine: candidate, worker: candidateWorker, config: `${context.context} Context${context.sliding ? " · Sliding" : ""} · ${st.gpuPower === "high-performance" ? "Leistung" : "Sparsam"} · ${candidateWorker ? "Worker" : "GPU"}` };
       } catch (err) {
         if (candidateWorker) candidateWorker.terminate();
         else await candidate?.unload?.().catch(() => undefined);
@@ -294,11 +284,14 @@ export function loadBrain(force = false): Promise<void> {
     useBrain.getState().setStatus({ gpu: gpu.info, fp16: gpu.fp16 });
     if (!gpu.ok) throw new Error(gpu.info);
     const id = resolveBrainId(wanted, gpu.fp16);
+    const requestedContext = st.context || 8192;
+    const context: LoadContext = { context: Math.min(requestedContext, brainModelOf(id)?.ctx ?? 32768), sliding: st.sliding };
+    const adjustments: string[] = context.context < requestedContext ? ["Modellgrenze"] : [];
     try { await navigator.storage?.persist?.(); } catch { /* optional quota */ }
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!current()) return;
       try {
-        const result = await createEngine(id, onProgress, ticket);
+        const result = await createEngine(id, onProgress, ticket, context);
         if (!current()) {
           result.worker?.terminate();
           if (!result.worker) await result.engine.unload?.();
@@ -308,7 +301,8 @@ export function loadBrain(force = false): Promise<void> {
         worker = result.worker;
         session++;
         lastUse = Date.now();
-        useBrain.getState().setStatus({ status: "ready", loadedId: id, loadedConfig: result.config, progress: 1, progressText: "geladen · Antwort wird geprüft", error: "", cacheEpoch: useBrain.getState().cacheEpoch + 1 });
+        const adjustment = adjustments.length ? ` · Gewünscht: ${requestedContext}${st.sliding ? " mit Sliding" : ""}; ${adjustments.join(", ")}` : "";
+        useBrain.getState().setStatus({ status: "ready", loadedId: id, loadedConfig: result.config + adjustment, progress: 1, progressText: "geladen · Antwort wird geprüft", error: "", cacheEpoch: useBrain.getState().cacheEpoch + 1 });
         // This check records the previous runtime version before updating it.
         if (st.autoUpdate) void checkBrainUpdate();
         void warmShaders(useBrain.getState().gpuWarmShaders);
@@ -322,16 +316,18 @@ export function loadBrain(force = false): Promise<void> {
         return;
       } catch (err) {
         if (!current()) return;
-        if (!attempt && oomish(err) && useBrain.getState().context > 2048) {
-          useBrain.getState().setContext(2048);
+        if (!attempt && st.gpuFitBuffer && oomish(err) && context.context > 2048) {
+          context.context = 2048;
+          adjustments.push("wegen GPU-Speicherfehler auf 2048 reduziert");
           onProgress({ progress: 0, text: "GPU-Puffer reicht nicht · gleicher Helfer mit Context 2k" });
           continue;
         }
-        if (!attempt && /sliding_window_size|context_window_size/i.test(String(err)) && useBrain.getState().sliding) {
-          useBrain.getState().setSliding(false);
+        if (!attempt && /sliding_window_size|context_window_size/i.test(String(err)) && context.sliding && !oomish(err)) {
+          context.sliding = false;
+          adjustments.push("Sliding von Runtime abgelehnt, ohne Sliding geladen");
           continue;
         }
-        throw err;
+        throw new Error(`Helfer mit ${context.context} Context konnte nicht geladen werden (gewünscht: ${requestedContext}): ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }).catch((err) => {
@@ -488,7 +484,9 @@ export async function prefetchBrain(id: string, onProgress?: (p: { progress: num
     if (engine || loading) throw new Error("Zum Vorladen den aktiven Helfer zuerst entladen.");
     await waitForMainRelease();
     const ticket: LoadTicket = { id: loadSequence, wanted: id, ctrl: new AbortController(), promise: Promise.resolve() };
-    const loaded = await createEngine(id, (p) => onProgress?.(p), ticket);
+    const st = useBrain.getState();
+    const context = { context: Math.min(st.context || 8192, brainModelOf(id)?.ctx ?? 32768), sliding: st.sliding };
+    const loaded = await createEngine(id, (p) => onProgress?.(p), ticket, context);
     if (loaded.worker) loaded.worker.terminate();
     else await loaded.engine.unload?.();
     cacheChecks.delete(id);

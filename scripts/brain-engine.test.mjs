@@ -43,7 +43,7 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
   const apps = await server.ssrLoadModule("/src/lib/brain/apps.ts");
   const reset = async () => {
     await e.unloadBrain();
-    useBrain.setState({ on: true, status: "ready", loadedId: "fixture", modelId: "fixture", customId: "", useWorker: false, autoUpdate: false, autonomy: "quiet", gpuKeepAlive: false, jobs: { ...useBrain.getState().jobs, title: true, distill: true, followup: true, prompts: true, review: true, tabHint: true, ask: true }, context: 8192 });
+    useBrain.setState({ on: true, status: "ready", loadedId: "fixture", modelId: "fixture", customId: "", useWorker: false, autoUpdate: false, autonomy: "quiet", gpuKeepAlive: false, gpuFitBuffer: true, gpuWarmShaders: false, sliding: false, jobs: { ...useBrain.getState().jobs, title: true, distill: true, followup: true, prompts: true, review: true, tabHint: true, ask: true }, context: 8192 });
     useIde.setState({ workspaceEpoch: useIde.getState().workspaceEpoch + 1, files: { "same.ts": "old content of this project, sufficiently long for a hint" }, activePath: "same.ts", chat: [], agentBusy: false });
     useLearn.setState({ on: true, facts: [], prefs: { ...useLearn.getState().prefs, distill: true } });
     e.fixtureEngine({ chat: { completions: { create: async () => result("OK") } } });
@@ -112,7 +112,7 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
       assert.equal(progressListeners, 0);
     } finally { delete window.anvilNative; }
   });
-  await t.test("duplicate loads share one owner; unload prevents late resurrection and preserves model limits", async () => {
+  await t.test("duplicate loads share one owner; unload prevents late resurrection and preserves context choice", async () => {
     await reset(); await e.unloadBrain();
     const gate = deferred(); let loads = 0, config;
     factory = () => ({ reload: async (_id, opts) => { loads++; config = opts; await gate.promise; }, unload: async () => {}, chat: { completions: { create: async () => result("OK") } } });
@@ -123,8 +123,82 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
     await e.unloadBrain(); gate.resolve(); await a;
     assert.equal(useBrain.getState().status, "idle");
     assert.equal(useBrain.getState().loadedId, "");
-    assert.ok(config.context_window_size <= 4096);
+    assert.equal(config.context_window_size, 8192);
     assert.equal(config.max_history_size, undefined, "retain runtime model's RNN history override");
+  });
+  await t.test("Qwen3.5 2B loads the selected 32K over the 4K runtime default, including Sliding", async () => {
+    const id = "Qwen3.5-2B-q4f16_1-MLC";
+    const record = { ...runtime.prebuiltAppConfig.model_list[0], model_id: id };
+    runtime.prebuiltAppConfig.model_list.push(record);
+    try {
+      for (const sliding of [false, true]) {
+        await reset(); await e.unloadBrain();
+        useBrain.setState({ modelId: id, context: 32768, sliding });
+        let config, appConfig;
+        factory = (cfg) => {
+          appConfig = cfg.appConfig;
+          return { reload: async (_id, opts) => { config = opts; }, unload: async () => {}, chat: { completions: { create: async () => result("OK") } } };
+        };
+        await e.loadBrain(); await flush();
+        assert.equal(useBrain.getState().status, "ready");
+        assert.equal(config.context_window_size, sliding ? -1 : 32768);
+        assert.equal(config.sliding_window_size, sliding ? 32768 : -1);
+        assert.equal(config.max_history_size, undefined);
+        assert.equal(appConfig.model_list.find((m) => m.model_id === id).overrides.max_history_size, 1);
+        assert.match(useBrain.getState().loadedConfig, /^32768 Context/);
+      }
+    } finally { runtime.prebuiltAppConfig.model_list.pop(); }
+  });
+  await t.test("a known model limit is preserved and explained without changing the selected context", async () => {
+    await reset(); await e.unloadBrain();
+    const id = "TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC";
+    runtime.prebuiltAppConfig.model_list.push({ ...runtime.prebuiltAppConfig.model_list[0], model_id: id });
+    try {
+      useBrain.setState({ modelId: id, context: 32768 });
+      let config;
+      factory = () => ({ reload: async (_id, opts) => { config = opts; }, unload: async () => {}, chat: { completions: { create: async () => result("OK") } } });
+      await e.loadBrain(); await flush();
+      assert.equal(config.context_window_size, 2048);
+      assert.equal(useBrain.getState().context, 32768);
+      assert.match(useBrain.getState().loadedConfig, /Gewünscht: 32768; Modellgrenze/);
+    } finally { runtime.prebuiltAppConfig.model_list.pop(); }
+  });
+  await t.test("memory fallback is opt-in and never overwrites the selected context or model profile", async () => {
+    for (const gpuFitBuffer of [true, false]) {
+      await reset(); await e.unloadBrain();
+      useBrain.setState({ gpuFitBuffer, autoProfile: true });
+      useBrain.getState().setContext(32768);
+      const slots = structuredClone(useBrain.getState().helperSlots);
+      const contexts = [];
+      factory = () => ({ reload: async (_id, opts) => { contexts.push(opts.context_window_size); if (contexts.length === 1) throw new Error("GPU buffer size exceeds device limit"); }, unload: async () => {}, chat: { completions: { create: async () => result("OK") } } });
+      await e.loadBrain(); await flush();
+      assert.deepEqual(contexts, gpuFitBuffer ? [32768, 2048] : [32768]);
+      assert.equal(useBrain.getState().context, 32768);
+      assert.deepEqual(useBrain.getState().helperSlots, slots);
+      assert.equal(useBrain.getState().status, gpuFitBuffer ? "ready" : "error");
+      if (gpuFitBuffer) assert.match(useBrain.getState().loadedConfig, /^2048 Context.*Gewünscht: 32768; wegen GPU-Speicherfehler/);
+      else assert.match(useBrain.getState().error, /32768 Context.*GPU buffer/);
+    }
+  });
+  await t.test("unsupported Sliding falls back locally; context-limit errors do not trigger memory reduction", async () => {
+    for (const sliding of [true, false]) {
+      await reset(); await e.unloadBrain();
+      useBrain.setState({ context: 32768, sliding });
+      const configs = [];
+      factory = () => ({ reload: async (_id, opts) => { configs.push(opts); if (configs.length === 1) throw new Error(sliding ? "sliding_window_size unsupported" : "context_window_size exceeds model limit"); }, unload: async () => {}, chat: { completions: { create: async () => result("OK") } } });
+      await e.loadBrain(); await flush();
+      assert.equal(useBrain.getState().context, 32768);
+      assert.equal(useBrain.getState().sliding, sliding);
+      assert.equal(configs.length, sliding ? 2 : 1);
+      if (sliding) {
+        assert.equal(configs[1].context_window_size, 32768);
+        assert.equal(configs[1].sliding_window_size, -1);
+        assert.match(useBrain.getState().loadedConfig, /Sliding von Runtime abgelehnt/);
+      } else {
+        assert.equal(useBrain.getState().status, "error");
+        assert.match(useBrain.getState().error, /context_window_size exceeds model limit/);
+      }
+    }
   });
   await t.test("late facts, followups and tab hints cannot enter another project", async () => {
     for (const start of [() => tasks.brainDistill("Use TypeScript", "configured"), () => apps.brainFollowups("continue", "done"), () => apps.brainTabHint("same.ts", useIde.getState().files["same.ts"])]) {

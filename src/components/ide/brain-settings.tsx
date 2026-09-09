@@ -182,7 +182,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
       <Row label="GPU warm halten" hint="Nach 70 s Leerlauf ein kurzer Ping. Pausiert bei Agent-Arbeit, verborgenem Fenster und Autonomie Aus.">
         <Toggle on={gpuKeepAlive} onChange={useBrain.getState().setGpuKeepAlive} />
       </Row>
-      <Row label="Puffer anpassen" hint="Context vorsichtig an GPU-Puffergrenze anpassen; keine Messung des freien VRAM. Modellgrenzen bleiben erhalten.">
+      <Row label="Puffer anpassen" hint="Bei GPU-Speicherfehler einmal mit 2K Context erneut laden. Dein gewählter Wert bleibt gespeichert.">
         <Toggle on={gpuFitBuffer} onChange={useBrain.getState().setGpuFitBuffer} />
       </Row>
       <Row label="Shader vorwärmen" hint="Nach dem Laden Prefill+Decode einmal kompilieren, erster Job wird schneller">
@@ -323,7 +323,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
 
       <Slider
         label="Context"
-        hint="Kleiner = schneller"
+        hint="Gewünschter Kontext beim nächsten Laden"
         min={1024}
         max={32768}
         step={1024}
