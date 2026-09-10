@@ -39,6 +39,7 @@ let session = 0;
 let retiringMain: Promise<void> | null = null;
 let updatePromise: Promise<string> | null = null;
 let keepAliveTimer: ReturnType<typeof setTimeout> | undefined;
+let generationRecovery: { engine: Engine; timer: ReturnType<typeof setTimeout> } | null = null;
 
 
 async function webllm() {
@@ -390,6 +391,8 @@ async function disposeBrainEngine(): Promise<void> {
   // Detach it first so cancelled jobs cannot use a subsequently loaded engine.
   engine = null;
   worker = null;
+  if (generationRecovery) clearTimeout(generationRecovery.timer);
+  generationRecovery = null;
   gpuCache = null;
   warming = false;
   clearTimeout(keepAliveTimer);
@@ -648,15 +651,26 @@ export async function brainGenerate(opts: {
     const canceled = ctrl.signal.aborted || /Abort|Superseded|Unavailable/.test(name) || /pausiert|entladen|cleared/.test(String(error));
     useBrain.getState().logJob(job, timeout ? "timeout" : canceled ? "cancel" : "error", Date.now() - startTime, error instanceof Error ? error.message : String(error));
     if (started && !settled && engine === loadedEngine) {
-      // A normal interrupt may take a few GPU frames. Keep the queue quarantined
-      // during this grace period; detach only if the generation never settles.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([finished, new Promise<void>((resolve) => { timer = setTimeout(resolve, 1500); })]);
-      clearTimeout(timer);
-      if (!settled && engine === loadedEngine) {
-        useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: "Helfer reagiert nicht auf Abbruch. Unter Einstellungen erneut laden." });
-        await disposeBrainEngine();
-      }
+      // WebGPU work already submitted (especially prefill) cannot be interrupted
+      // immediately. Return the caller's fallback now; the queue rejects new work
+      // until this generation settles, so no second GPU job can overlap it.
+      const progressText = useBrain.getState().progressText;
+      const recovery = {
+        engine: loadedEngine,
+        timer: setTimeout(() => {
+          if (generationRecovery !== recovery || engine !== loadedEngine || settled) return;
+          useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: `${timeout ? "Zeitlimit" : "Abbruch"} bei Helfer-Aufgabe „${job}“: GPU nach 30 Sekunden noch belegt. Unter Einstellungen erneut laden.` });
+          void disposeBrainEngine();
+        }, 30_000),
+      };
+      generationRecovery = recovery;
+      useBrain.getState().setStatus({ progressText: "Helfer-Aufgabe beendet · GPU-Aufgabe läuft noch aus; Chat bleibt nutzbar" });
+      void finished.then(() => {
+        if (generationRecovery !== recovery) return;
+        clearTimeout(recovery.timer);
+        generationRecovery = null;
+        if (engine === loadedEngine) useBrain.getState().setStatus({ progressText });
+      });
     }
     if (engine === loadedEngine && /device lost|out of memory|oom/i.test(String(error))) {
       useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: String(error) });

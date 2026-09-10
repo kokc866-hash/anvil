@@ -1,6 +1,6 @@
 # Helfer
 
-Stand: Anvil 1.3.21. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
+Stand: Anvil 1.3.22. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
 
 ## Verlässliche Zuordnung
 
@@ -48,6 +48,8 @@ Der gewählte Context überschreibt die Standardbelegung der Runtime (zum Beispi
 Modellspezifische RNN-History-Vorgaben bleiben erhalten. Qwen3-Vorlagen nutzen für kurze Helferaufgaben den von WebLLM unterstützten Modus ohne zusätzliche Thinking-Ausgabe. Thinking-Blöcke werden nicht als Titel, Fakten oder Codevorschläge ausgegeben.
 
 ## Integration
+
+Wird eine Helfer-Antwort durch einen neuen Chat-Auftrag, Stop oder ein Zeitlimit ungültig, kann der Chat sofort weiterarbeiten. Bereits gestartete GPU-Berechnungen dürfen bis zu 30 Sekunden auslaufen; ihre veralteten Ergebnisse werden verworfen. Währenddessen startet keine zweite Helfer-Berechnung auf derselben GPU-Engine. Antwortet die GPU wieder, bleibt das Modell geladen. Erst wenn sie danach weiterhin belegt ist, wird der Helfer entladen; die Fehlermeldung nennt die betroffene Aufgabe und den Auslöser.
 
 Die Run-Auswahl darf ausschließlich ausführbare Projektdateien auswählen. Bei einer nicht ausführbaren aktiven Datei kann der eingeschaltete Run-Helfer eine dieser Startdateien empfehlen. Markdown, JSON, Referenzen und interne Projektdateien gelangen dadurch nicht in den Compiler.
 
