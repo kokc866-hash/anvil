@@ -2,6 +2,7 @@ import { fileBytes, sameBytes } from "../../scripts/file-content.mjs";
 import { isSourcePath, skipDirName, skipPath, keepDotName, keepBareFile } from "./ws-skip";
 import { bytesToDataUrl } from "./archive";
 import { isRefPath } from "./ref";
+import { useIde } from "@/store/ide";
 
 const MAX = 1_500_000;
 const MAX_FILES = 4000;
@@ -15,6 +16,7 @@ type DirHandle = FileSystemDirectoryHandle;
 
 const slots: Partial<Record<DiskSlot, DirHandle>> = {};
 const names: Record<DiskSlot, string> = { workspace: "", backup: "" };
+const slotVersions: Record<DiskSlot, number> = { workspace: 0, backup: 0 };
 
 export function diskSupported(): boolean {
   return typeof window !== "undefined" && "showDirectoryPicker" in window;
@@ -85,6 +87,7 @@ async function persistHandle(slot: DiskSlot, handle: DirHandle | null) {
 }
 
 export async function restoreLocations(): Promise<Record<DiskSlot, string>> {
+  const versions = { ...slotVersions };
   try {
     const db = await openDb();
     const read = (slot: DiskSlot) =>
@@ -96,6 +99,13 @@ export async function restoreLocations(): Promise<Record<DiskSlot, string>> {
       });
     for (const slot of ["workspace", "backup"] as DiskSlot[]) {
       const row = await read(slot);
+      // A new selection wins over a late IndexedDB restore. Desktop cwd is the
+      // active project on restart; a legacy browser handle must not also return.
+      if (versions[slot] !== slotVersions[slot]) continue;
+      if (slot === "workspace" && useIde.getState().workspaceCwd.trim()) {
+        await clearLocation("workspace");
+        continue;
+      }
       if (row?.handle) {
         slots[slot] = row.handle;
         names[slot] = row.name || row.handle.name;
@@ -111,14 +121,20 @@ export async function restoreLocations(): Promise<Record<DiskSlot, string>> {
 export async function pickLocation(slot: DiskSlot): Promise<string> {
   if (!diskSupported()) throw new Error("Ordnerwahl braucht Chrome oder Edge.");
   const handle = await picker();
+  if (slot === "workspace" && !(await import("./save").then((s) => s.prepareWorkspaceSwitch()))) throw new Error("Projektwechsel abgebrochen");
+  const initial = useIde.getState();
   if (!(await ensurePerm(handle, "readwrite"))) throw new Error("Keine Berechtigung für den Ordner.");
+  if (slot === "workspace" && (useIde.getState().workspaceEpoch !== initial.workspaceEpoch || useIde.getState().files !== initial.files)) throw new Error("Projekt inzwischen geändert; Ordner erneut wählen.");
+  slotVersions[slot]++;
   slots[slot] = handle;
   names[slot] = handle.name;
+  if (slot === "workspace") useIde.getState().setWorkspaceCwd("");
   await persistHandle(slot, handle);
   return handle.name;
 }
 
 export async function clearLocation(slot: DiskSlot): Promise<void> {
+  slotVersions[slot]++;
   delete slots[slot];
   names[slot] = "";
   await persistHandle(slot, null);
@@ -152,6 +168,7 @@ export async function pickFolder(): Promise<DiskPack> {
   const files = await readFolder(handle, "", dirs, acc);
   if (useIde.getState().workspaceEpoch !== epoch || useIde.getState().files !== initial.files) throw new Error("Projekt inzwischen geändert; Ordner erneut öffnen.");
   const { abortAgent } = await import("./abort"); abortAgent("Projekt gewechselt");
+  slotVersions.workspace++;
   slots.workspace = handle; names.workspace = handle.name;
   useIde.getState().setWorkspaceCwd("");
   void persistHandle("workspace", handle);

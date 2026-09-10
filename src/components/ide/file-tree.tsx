@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useIde } from "@/store/ide";
-import { baseName, buildTree, cleanPath, isPinnedPath, joinPath, parentDir, visibleTree } from "@/lib/fs";
+import { baseName, buildTree, cleanPath, isPinnedPath, joinPath, parentDir, unusedFilePath, visibleTree } from "@/lib/fs";
 import { Button } from "@/components/ui/button";
 import { CtxMenu, type CtxItem } from "@/components/ide/ctx-menu";
 import { cn } from "@/lib/cn";
@@ -94,6 +94,7 @@ export function FileTree() {
   const expandTimer = useRef<number>(0);
   const nameRef = useRef<HTMLInputElement>(null);
   const [fileExt, setFileExt] = useState("py");
+  const createVersion = useRef(0);
 
   useEffect(() => {
     const el = box.current;
@@ -106,6 +107,7 @@ export function FileTree() {
   }, []);
 
   function cancelCreate() {
+    createVersion.current++;
     setCreating(null);
     setNewName("");
     setInDir("");
@@ -182,6 +184,7 @@ export function FileTree() {
   }
 
   function beginCreate(kind: "file" | "dir", dir = targetDir()) {
+    const version = ++createVersion.current;
     if (dir && collapsed.includes(dir)) toggleCollapsed(dir);
     setInDir(dir);
     setCreating(kind);
@@ -189,10 +192,17 @@ export function FileTree() {
       const ext = (preferredExt() || ".py").replace(/^\./, "");
       setFileExt(ext);
       const hint = useIde.getState().chat.filter((m) => m.role === "user").at(-1)?.content ?? "";
-      setNewName(`neu.${ext}`);
+      const current = useIde.getState();
+      const initial = baseName(unusedFilePath(joinPath(dir, `neu.${ext}`), Object.keys(current.files), current.dirs));
+      setNewName(initial);
       void import("@/lib/brain").then((b) =>
         b.brainRename(hint || `datei ${ext}`, ext).then((n) => {
-          setNewName((cur) => (cur.startsWith("neu.") ? n : cur));
+          if (createVersion.current !== version || useIde.getState().workspaceEpoch !== current.workspaceEpoch) return;
+          const state = useIde.getState();
+          const proposed = baseName(cleanPath(n));
+          if (!proposed) return;
+          const suggestion = baseName(unusedFilePath(joinPath(dir, proposed), Object.keys(state.files), state.dirs));
+          setNewName((cur) => (cur === initial && suggestion ? suggestion : cur));
         }),
       );
     } else {
@@ -246,7 +256,7 @@ export function FileTree() {
   function submitNew() {
     const raw0 = cleanPath(inDir ? joinPath(inDir, newName) : newName);
     let raw = raw0;
-    if (creating === "file" && raw && !raw.includes(".")) raw += `.${fileExt}`;
+    if (creating === "file" && raw && !baseName(raw).includes(".")) raw += `.${fileExt}`;
     if (!raw) {
       cancelCreate();
       return;
@@ -255,10 +265,14 @@ export function FileTree() {
       createFolder(raw);
       setSelected(raw);
     } else {
-      writeFile(raw, useIde.getState().files[raw] ?? templateFor(raw));
-      openFile(raw);
-      setSelected(raw);
+      const state = useIde.getState();
+      const dest = unusedFilePath(raw, Object.keys(state.files), state.dirs);
+      writeFile(dest, templateFor(dest));
+      openFile(dest);
+      setSelected(dest);
+      if (dest !== raw) setNotice(`Name bereits belegt · neue Datei: ${dest}`);
     }
+    createVersion.current++;
     setNewName("");
     setCreating(null);
     setInDir("");

@@ -11,6 +11,7 @@ export function installCanvasBridge(
   const boot = (win as unknown as { __ANVIL_SESSION__?: CanvasBoot }).__ANVIL_SESSION__;
   const channel = "anvil-canvas-v2";
   const logs: string[] = [];
+  let outputSize: { width: number; height: number } | undefined;
   let failure = "",
     loaded = false,
     stopped = false,
@@ -183,6 +184,7 @@ export function installCanvasBridge(
       state,
       error: failure || current.error || undefined,
       logs: logs.slice(-24),
+      outputSize,
     };
   }
   const pageLoaded = new Promise<void>((resolve) => {
@@ -215,6 +217,38 @@ export function installCanvasBridge(
         win.requestAnimationFrame(() => win.requestAnimationFrame(() => resolve())),
       );
       loaded = true;
+      // Measure once before the host resizes. Re-measuring a responsive page
+      // after every resize would feed its viewport back into the window size.
+      const body = win.document.body;
+      const elements = Array.from(body.querySelectorAll<HTMLElement>("*"))
+        .filter(el => !el.children.length && !["SCRIPT", "STYLE", "LINK"].includes(el.tagName)).slice(0, 4096);
+      const boxes = elements.map(el => ({ el, rect: el.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.width > 0 && rect.height > 0);
+      if (boxes.length) {
+        let width = Math.max(...boxes.map(b => b.rect.right)) - Math.min(...boxes.map(b => b.rect.left));
+        let height = Math.max(...boxes.map(b => b.rect.bottom)) - Math.min(...boxes.map(b => b.rect.top));
+        const media = boxes.filter(b => ["CANVAS", "IMG", "VIDEO"].includes(b.el.tagName));
+        if (media.length === 1) {
+          const { el, rect } = media[0];
+          const canvas = el as HTMLCanvasElement & { _cssW?: number; _cssH?: number };
+          const image = el as HTMLImageElement;
+          // Anvil's logical dimensions are independent of devicePixelRatio.
+          // Other media keep their rendered CSS dimensions when explicitly sized.
+          const w = canvas._cssW || (!el.style.width && el.tagName === "CANVAS" ? canvas.width : 0) || rect.width;
+          const h = canvas._cssH || (!el.style.height && el.tagName === "CANVAS" ? canvas.height : 0) || rect.height;
+          width += w - rect.width;
+          height += h - rect.height;
+          if (el.tagName === "IMG" && !el.getAttribute("style") && rect.width < image.naturalWidth) {
+            width += image.naturalWidth - rect.width;
+            height += image.naturalHeight - rect.height;
+          }
+        }
+        const style = win.getComputedStyle(body);
+        const px = (s: string) => Math.max(0, parseFloat(s) || 0);
+        width += px(style.marginLeft) + px(style.marginRight) + px(style.paddingLeft) + px(style.paddingRight);
+        height += px(style.marginTop) + px(style.marginBottom) + px(style.paddingTop) + px(style.paddingBottom);
+        if (Number.isFinite(width) && Number.isFinite(height)) outputSize = { width: Math.ceil(width), height: Math.ceil(height) };
+      }
       send({ op: "state", ...status() });
     })
     .catch((error) => {

@@ -81,12 +81,13 @@ export async function applyWorkspace(ev: WorkspaceEvent) {
   if (ev.op === "write") {
     if (s.autoAcceptDiffs) s.writeFile(ev.path, ev.content, { quiet: true });
     else s.patchFiles({ [ev.path]: ev.content }, { quiet: true });
+    const current = useIde.getState();
+    if (s.files[ev.path] !== ev.content && current.files[ev.path] === ev.content) current.openFile(ev.path);
   } else if (ev.op === "delete") s.deleteFile(ev.path);
   else if (ev.op === "mkdir") s.createFolder(ev.path);
   else if (ev.op === "rename") s.movePath(ev.from, ev.to);
   else if (ev.op === "commit") s.commit(ev.message);
   else if (ev.op === "preview") {
-    s.openFile(ev.path);
     s.setRunPath(ev.path);
     s.setPreviewOpen(true);
     if (/\.html?$/i.test(ev.path) || s.runInWindow) {
@@ -126,7 +127,6 @@ export async function sendChat(
     addSessionTokens,
     finalizeAssistant,
     setAgentBusy,
-    patchFiles,
     writeFile,
     pushOutput,
     setRunning,
@@ -640,7 +640,10 @@ export async function sendChat(
         const st = useIde.getState();
         if (st.autoAcceptDiffs || isFixPrompt(work)) {
           for (const [p, c] of Object.entries(map)) st.writeFile(p, c, { quiet: true });
-        } else patchFiles(map);
+        } else st.patchFiles(map, { quiet: true });
+        const current = useIde.getState();
+        const lastWritten = Object.keys(map).reverse().find((p) => current.files[p] === map[p]);
+        if (lastWritten) current.openFile(lastWritten);
       }
       void brainReview(result.files.map((f) => ({ path: f.path, before: s.files[f.path] ?? "", after: f.content }))).then((t) => {
         if (t && my === agentGen()) addAgentStep({ name: "Helfer-Hinweis", detail: t, status: "ok" });

@@ -227,7 +227,7 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
   });
   await t.test("temperature, stop and JSON requirements use different response cache entries", async () => {
     await reset(); let calls = 0;
-    e.fixtureEngine({ chat: { completions: { create: async (p) => { calls++; return result(p.response_format ? '{"ok":true}' : `value${calls}`); } } } });
+    e.fixtureEngine({ chat: { completions: { create: async (p) => { calls++; return result(p.messages[0]?.role === "system" ? '{"ok":true}' : `value${calls}`); } } } });
     const opts = { messages: [{ role: "user", content: "same request" }], job: "ask", maxTokens: 32 };
     assert.equal(await e.brainGenerate({ ...opts, temperature: 0 }), "value1");
     assert.equal(await e.brainGenerate({ ...opts, temperature: 0 }), "value1");
@@ -235,6 +235,29 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
     await e.brainGenerate({ ...opts, temperature: 1, stop: ["x"] });
     await e.brainGenerate({ ...opts, temperature: 1, json: true });
     assert.equal(calls, 4);
+  });
+  await t.test("usage avoids grammar initialization; invalid JSON falls back without unloading or caching it", async () => {
+    await reset();
+    useBrain.setState({ jobs: { ...useBrain.getState().jobs, usage: true } });
+    useLearn.setState({ events: Array.from({ length: 8 }, (_, i) => ({ t: Date.now() - i, k: "open", d: "main.ts" })) });
+    let calls = 0;
+    e.fixtureEngine({ chat: { completions: { create: async (payload) => {
+      calls++;
+      assert.equal(payload.response_format, undefined, "do not enter the runtime's hanging grammar path");
+      assert.match(payload.messages[0].content, /valid JSON object/);
+      return result(calls === 1 ? "not JSON" : '{"facts":[{"kind":"user","text":"Prefers TypeScript for project code."}]}');
+    } } } });
+    await tasks.brainUsage();
+    assert.equal(useLearn.getState().facts.some((f) => f.text === "not JSON"), false);
+    assert.equal(useBrain.getState().status, "ready");
+    await tasks.brainUsage();
+    assert.equal(calls, 2, "invalid output must not be cached");
+    assert.ok(useLearn.getState().facts.some((f) => f.text === "Prefers TypeScript for project code."));
+    await tasks.brainUsage();
+    assert.equal(calls, 2, "validated output is reusable");
+    useBrain.setState({ jobs: { ...useBrain.getState().jobs, usage: false } });
+    await tasks.brainUsage();
+    assert.equal(calls, 2);
   });
   await t.test("empty or reasoning-only output is never successful; reasoning cannot become a title", async () => {
     await reset();

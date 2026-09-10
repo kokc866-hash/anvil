@@ -574,16 +574,25 @@ export async function brainGenerate(opts: {
   const valid = diagnostic ? () => useBrain.getState().on : captureBrainScope(job, opts.automatic);
   if (!valid()) throw brainCanceled();
   const maxTokens = opts.maxTokens ?? st.maxTokens;
+  // WebLLM 0.2.84 initializes its JSON grammar inside an async Promise executor
+  // without rejection forwarding. A grammar initialization failure can leave
+  // prefill pending forever, even after interruptGenerate(). Request JSON in
+  // the prompt instead and keep the validation below before caching/returning.
+  const jsonInstruction = "Return one valid JSON object only, without markdown or commentary.";
+  const messages = opts.json
+    ? opts.messages[0]?.role === "system"
+      ? [{ ...opts.messages[0], content: `${opts.messages[0].content}\n${jsonInstruction}` }, ...opts.messages.slice(1)]
+      : [{ role: "system", content: jsonInstruction }, ...opts.messages]
+    : opts.messages;
   const payload: Record<string, unknown> = {
-    messages: opts.messages, temperature: opts.temperature ?? st.temperature,
+    messages, temperature: opts.temperature ?? st.temperature,
     max_tokens: maxTokens, top_p: 0.9, repetition_penalty: st.repeatPenalty, stream: Boolean(opts.onDelta),
   };
   // Qwen3/3.5 templates support WebLLM's empty thinking header. Other model
   // families retain their own conversation template.
   if (/^Qwen3(?:[.-]|$)/i.test(st.loadedId)) payload.extra_body = { enable_thinking: false };
   if (opts.stop?.length) payload.stop = opts.stop;
-  if (opts.json) payload.response_format = { type: "json_object" };
-  const key = cacheKey([job, String(session), st.loadedId, JSON.stringify(payload)]);
+  const key = cacheKey([job, String(session), st.loadedId, String(Boolean(opts.json)), JSON.stringify(payload)]);
   if (!opts.onDelta && !diagnostic) {
     const hit = cacheGet(key);
     if (hit != null) return hit;
@@ -659,12 +668,12 @@ export async function brainGenerate(opts: {
         engine: loadedEngine,
         timer: setTimeout(() => {
           if (generationRecovery !== recovery || engine !== loadedEngine || settled) return;
-          useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: `${timeout ? "Zeitlimit" : "Abbruch"} bei Helfer-Aufgabe „${job}“: GPU nach 30 Sekunden noch belegt. Unter Einstellungen erneut laden.` });
+          useBrain.getState().setStatus({ status: "error", loadedId: "", loadedConfig: "", progress: 0, progressText: "", error: `${timeout ? "Zeitlimit" : "Abbruch"} bei Helfer-Aufgabe „${job}“: Laufzeit antwortet auch 30 Sekunden nach Abbruch nicht. Unter Einstellungen erneut laden.` });
           void disposeBrainEngine();
         }, 30_000),
       };
       generationRecovery = recovery;
-      useBrain.getState().setStatus({ progressText: "Helfer-Aufgabe beendet · GPU-Aufgabe läuft noch aus; Chat bleibt nutzbar" });
+      useBrain.getState().setStatus({ progressText: "Helfer-Aufgabe abgebrochen · Laufzeit läuft noch aus; Chat bleibt nutzbar" });
       void finished.then(() => {
         if (generationRecovery !== recovery) return;
         clearTimeout(recovery.timer);

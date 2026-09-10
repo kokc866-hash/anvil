@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, screen } from "electron";
 import { handleOnce } from "./ipc.mjs";
 import { anvilWebPrefs } from "./session.mjs";
 import { appOrigin } from "./app-origin.mjs";
@@ -61,6 +61,23 @@ export function bindChildWindows({ root, port, preload, icon }) {
   }
 
   handleOnce("child-open", (_e, path, opts) => createChild(String(path || "/run"), opts || {}));
+  handleOnce("child-fit-run", (event, size) => {
+    const child = kids.get("run");
+    if (!child || child.isDestroyed() || event.sender !== child.webContents
+      || event.senderFrame !== child.webContents.mainFrame || !allowed(event.senderFrame?.url || "")) return false;
+    if (!Number.isFinite(size?.width) || !Number.isFinite(size?.height) || size.width <= 0 || size.height <= 0) return false;
+    if (child.isMaximized() || child.isFullScreen()) return false;
+    const bounds = child.getBounds(), content = child.getContentBounds();
+    const area = screen.getDisplayMatching(bounds).workArea;
+    const width = Math.min(area.width, Math.max(480, Math.ceil(size.width + bounds.width - content.width)));
+    const height = Math.min(area.height, Math.max(360, Math.ceil(size.height + bounds.height - content.height)));
+    child.setBounds({
+      width, height,
+      x: Math.max(area.x, Math.min(bounds.x, area.x + area.width - width)),
+      y: Math.max(area.y, Math.min(bounds.y, area.y + area.height - height)),
+    });
+    return true;
+  });
   handleOnce("child-focus", (_e, path) => {
     const key = String(path || "").includes("console") ? "console" : "run";
     const w = kids.get(key);

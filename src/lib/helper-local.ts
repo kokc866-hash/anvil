@@ -19,6 +19,7 @@ type Native = {
   focusChild?: (path: string) => Promise<boolean>;
   closeChild?: (path: string) => Promise<boolean>;
   childAlive?: (path: string) => Promise<boolean>;
+  fitRunWindow?: (size: { width: number; height: number }) => Promise<boolean>;
   canvasCapture?: (rect: { x: number; y: number; width: number; height: number }) => Promise<string>;
   pathsGet?: () => Promise<{ data: string; helper: string; logs: string; packages?: string }>;
   pathsPick?: (kind: "data" | "helper" | "logs" | "packages") => Promise<{ data: string; helper: string; logs: string; packages?: string }>;

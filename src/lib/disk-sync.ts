@@ -21,13 +21,14 @@ function targetKey(target: DiskTarget): string {
   );
 }
 
-function noteFail(path: string) {
+function noteFail(path: string, error: unknown) {
   if (Date.now() - noticeAt < 4000) return;
   noticeAt = Date.now();
-  useIde.getState().setNotice(`Nicht vollständig gespeichert: ${path}`);
+  const reason = error instanceof Error ? error.message : String(error || "Schreibfehler");
+  useIde.getState().setNotice(`Nicht vollständig gespeichert: ${path}. ${reason}`);
 }
 
-const queue = new WriteQueue(() => noteFail("Arbeitsbereich"));
+const queue = new WriteQueue((error) => noteFail("Arbeitsbereich", error));
 
 const knownDisk = new Map<string, string | null>();
 export function noteDiskFile(path: string, content: string | null, target = captureDiskTarget()) { knownDisk.set(targetKey(target) + path, content); }
@@ -62,7 +63,7 @@ async function write(path: string, content: string, target: DiskTarget, baseCont
       useIde.setState({ dirty, editBases });
     }
   } catch (error) {
-    noteFail(path);
+    noteFail(path, error);
     if (error instanceof Error && /extern geändert/.test(error.message)) useIde.getState().setNotice(error.message);
     throw error;
   }
@@ -129,7 +130,7 @@ export function syncRemove(path: string, target = captureDiskTarget()): Promise<
     ]);
     const failed = results.find((r) => r.status === "rejected");
     if (failed?.status === "rejected") {
-      noteFail(path);
+      noteFail(path, failed.reason);
       throw failed.reason;
     }
     const prefix = targetKey(target) + path;
@@ -153,7 +154,7 @@ export function syncMkdir(path: string, target = captureDiskTarget()): Promise<v
     ]);
     const failed = results.find((r) => r.status === "rejected");
     if (failed?.status === "rejected") {
-      noteFail(path);
+      noteFail(path, failed.reason);
       throw failed.reason;
     }
   });

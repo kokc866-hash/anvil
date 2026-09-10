@@ -53,6 +53,19 @@ export function dupPath(path: string, taken: Set<string>): string {
   return next;
 }
 
+/** New-file names also reserve directories and case variants on Windows. */
+export function unusedFilePath(path: string, files: string[], dirs: string[] = []): string {
+  const occupied = new Set([...files, ...dirs].flatMap((p) => [p, ...ancestorDirs(p)]).map((p) => p.toLowerCase()));
+  if (!occupied.has(path.toLowerCase())) return path;
+  const dot = path.lastIndexOf(".");
+  const hasExt = dot > path.lastIndexOf("/") + 1;
+  const stem = hasExt ? path.slice(0, dot) : path;
+  const ext = hasExt ? path.slice(dot) : "";
+  let n = 2;
+  while (occupied.has(`${stem}-${n}${ext}`.toLowerCase())) n++;
+  return `${stem}-${n}${ext}`;
+}
+
 export function remapPath(path: string, from: string, to: string): string {
   if (path === from) return to;
   if (from && path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`;

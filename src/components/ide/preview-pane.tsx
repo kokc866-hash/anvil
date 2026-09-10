@@ -152,6 +152,7 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
 function GameFrame({ srcDoc, scope, popout }: { srcDoc: string; scope: string; popout: boolean }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const owner = useRef<ReturnType<typeof registerCanvasFrame> | null>(null);
+  const fitted = useRef(false);
   const [state, setState] = useState<CanvasReply | null>(null);
   const source = useRef(srcDoc);
   source.current = srcDoc;
@@ -162,6 +163,21 @@ function GameFrame({ srcDoc, scope, popout }: { srcDoc: string; scope: string; p
     const registered = registerCanvasFrame(frame, { scope, priority: popout ? 2 : 1, capture,
       onState(reply) {
         setState(reply);
+        if (popout && !fitted.current && reply.ok && reply.outputSize && ["ready", "running", "paused"].includes(reply.state)) {
+          fitted.current = true;
+          const rect = frame.getBoundingClientRect();
+          const size = {
+            width: reply.outputSize.width + Math.max(0, window.innerWidth - rect.width),
+            height: reply.outputSize.height + Math.max(0, window.innerHeight - rect.height),
+          };
+          const native = nativeHelper();
+          if (native?.fitRunWindow) void native.fitRunWindow(size).catch(() => undefined);
+          else {
+            const w = Math.min(window.screen.availWidth, Math.max(480, size.width + window.outerWidth - window.innerWidth));
+            const h = Math.min(window.screen.availHeight, Math.max(360, size.height + window.outerHeight - window.innerHeight));
+            window.resizeTo(Math.ceil(w), Math.ceil(h));
+          }
+        }
         if (reply.state === "failed") {
           const st = useIde.getState();
           if (st.output.some(o => o.stage?.kind === "html" && o.stage.id === reply.session && o.ok)) {

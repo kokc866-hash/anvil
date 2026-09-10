@@ -33,6 +33,9 @@ import { useLivePreview } from "@/lib/live-write";
 
 export function EditorPane() {
   const draft = useLivePreview((s) => s.draft);
+  const draftStreaming = useLivePreview((s) => s.streaming);
+  const [draftOpen, setDraftOpen] = useState(false);
+  useEffect(() => { setDraftOpen(Boolean(draft && draftStreaming)); }, [draft?.path, draftStreaming]);
   const t = useT();
   const kNew = useKbd("newFile");
   const kAgent = useKbd("agent");
@@ -324,7 +327,7 @@ export function EditorPane() {
   }
 
     const liveDraft = draft ? (
-        <details open className="max-h-[40%] shrink-0 overflow-auto border-b border-border bg-surface">
+        <details open={draftOpen} onToggle={(event) => setDraftOpen(event.currentTarget.open)} className="max-h-[40%] shrink-0 overflow-auto border-b border-border bg-surface">
           <summary className="sticky top-0 bg-surface px-3 py-1 text-xs text-muted">Live-Entwurf · {draft.path} · noch nicht übernommen</summary>
           <pre className="whitespace-pre-wrap p-3 font-mono text-xs">{draft.content}</pre>
         </details>

@@ -1,6 +1,6 @@
 # Helfer
 
-Stand: Anvil 1.3.22. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
+Stand: Anvil 1.3.23. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
 
 ## Verlässliche Zuordnung
 
@@ -49,7 +49,9 @@ Modellspezifische RNN-History-Vorgaben bleiben erhalten. Qwen3-Vorlagen nutzen f
 
 ## Integration
 
-Wird eine Helfer-Antwort durch einen neuen Chat-Auftrag, Stop oder ein Zeitlimit ungültig, kann der Chat sofort weiterarbeiten. Bereits gestartete GPU-Berechnungen dürfen bis zu 30 Sekunden auslaufen; ihre veralteten Ergebnisse werden verworfen. Währenddessen startet keine zweite Helfer-Berechnung auf derselben GPU-Engine. Antwortet die GPU wieder, bleibt das Modell geladen. Erst wenn sie danach weiterhin belegt ist, wird der Helfer entladen; die Fehlermeldung nennt die betroffene Aufgabe und den Auslöser.
+Wird eine Helfer-Antwort durch einen neuen Chat-Auftrag, Stop oder ein Zeitlimit ungültig, kann der Chat sofort weiterarbeiten. Die gestartete Modellanfrage darf bis zu 30 Sekunden auslaufen; ihre veralteten Ergebnisse werden verworfen. Währenddessen startet keine zweite Helfer-Berechnung auf derselben GPU-Engine. Antwortet die Laufzeit wieder, bleibt das Modell geladen. Bleibt die Anfrage nach der Abbruchfrist offen, wird der Helfer entladen; die Fehlermeldung nennt die betroffene Aufgabe und den Auslöser.
+
+JSON-Aufgaben wie die Nutzungsauswertung (`usage`) fordern JSON über den Prompt an und prüfen die Antwort vor der Übernahme. Sie verwenden nicht die Grammatikvorbereitung von WebLLM 0.2.84: Deren Fehlerbehandlung kann eine Anfrage dauerhaft offen lassen. Ungültige Antworten werden nicht gecacht; die vorhandenen Ersatzverfahren bleiben aktiv. Ein Zeitlimit allein beweist keinen GPU-Defekt.
 
 Die Run-Auswahl darf ausschließlich ausführbare Projektdateien auswählen. Bei einer nicht ausführbaren aktiven Datei kann der eingeschaltete Run-Helfer eine dieser Startdateien empfehlen. Markdown, JSON, Referenzen und interne Projektdateien gelangen dadurch nicht in den Compiler.
 

@@ -8,6 +8,7 @@ export type CanvasReply = {
   logs: string[];
   w?: number;
   h?: number;
+  outputSize?: { width: number; height: number };
   session: string;
   revision: string;
 };

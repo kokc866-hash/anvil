@@ -1,9 +1,9 @@
 import type { LlmChoice, ToolCall } from "./agent-core";
 import { asToolCall } from "./agent-core";
-import { agentBeat, localSseStall, streamIdleMs } from "./abort";
+import { agentBeat, agentGen, localSseStall, streamIdleMs } from "./abort";
 import { useIde } from "@/store/ide";
 import { isToolTemplateEcho } from "./agent-parse";
-import { applyLiveDraft, applyLiveText } from "./live-write";
+import { applyLiveDraft, applyLiveText, finishLiveWrite } from "./live-write";
 import { applyResponsesEvent, choiceFromAcc, emptyResponsesAcc } from "./responses-parse";
 
 const AFTER_FINISH_MS = 8_000;
@@ -39,6 +39,7 @@ export async function readSseChat(
   onDelta?: (text: string, kind?: "text" | "think") => void,
 ): Promise<LlmChoice> {
   if (!res.body) throw new Error("Keine Stream-Antwort.");
+  const generation = agentGen();
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -239,6 +240,7 @@ export async function readSseChat(
     }
   }
   } finally {
+    finishLiveWrite(generation);
     try {
       await reader.cancel();
     } catch {
@@ -272,6 +274,7 @@ export async function readSseResponses(
   onDelta?: (text: string, kind?: "text" | "think") => void,
 ): Promise<LlmChoice> {
   if (!res.body) throw new Error("Keine Stream-Antwort.");
+  const generation = agentGen();
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -345,6 +348,7 @@ export async function readSseResponses(
       if (sawDone || acc.done) break;
     }
   } finally {
+    finishLiveWrite(generation);
     try {
       await reader.cancel();
     } catch {
@@ -368,6 +372,7 @@ export async function readSseAnthropic(
   onDelta?: (text: string, kind?: "text" | "think") => void,
 ): Promise<LlmChoice> {
   if (!res.body) throw new Error("Keine Stream-Antwort.");
+  const generation = agentGen();
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -506,6 +511,7 @@ export async function readSseAnthropic(
       if (sawStop) break;
     }
   } finally {
+    finishLiveWrite(generation);
     try {
       await reader.cancel();
     } catch {

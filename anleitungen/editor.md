@@ -1,16 +1,22 @@
 # Editor: Bearbeiten, Speichern und Wiederherstellen
 
-Stand: Anvil 1.3.20. Bestehende Editor-, Agent-, Canvas- und Tool-Funktionen bleiben verfügbar.
+Stand: Anvil 1.3.23. Bestehende Editor-, Agent-, Canvas- und Tool-Funktionen bleiben verfügbar.
 
 ## Dateien und Vorschläge
 
-Der Live-Editor zeigt eintreffenden Modelltext als ausdrücklich gekennzeichnete Vorschau. Erst ein vollständig geprüfter Tool-Aufruf verändert Projektdateien. Beispiele in Antworten und unvollständige Argumente schreiben keine Dateien.
+„Neue Datei“ verwendet einen freien Namen, etwa `neu-2.py`, wenn der Name schon belegt ist. Auch gleichnamige Ordner und Unterschiede nur in Groß-/Kleinschreibung werden berücksichtigt. Ein verspäteter Helfer-Namensvorschlag verändert keinen später geöffneten Anlegedialog.
+
+Der Live-Editor zeigt eintreffenden Modelltext als ausdrücklich gekennzeichnete Vorschau. Erst ein vollständig geprüfter Tool-Aufruf verändert Projektdateien. Beispiele in Antworten und unvollständige Argumente schreiben keine Dateien. Beim Ende des Schreib-Streams klappt der Entwurf automatisch zu; der nächste Schreibvorgang öffnet ihn wieder. Manuelles Aufklappen bleibt möglich. Nach der Dateiübernahme kann ein verzögerter Entwurf nicht erneut erscheinen.
+
+Beim Schreiben folgt der Editor der bearbeiteten Datei: vorhandene Dateien öffnen sich bereits beim Beginn des Live-Entwurfs, neue Dateien nach der Übernahme. Ihr Entwurf ist vorher separat sichtbar. Lesen, MCP-Ausgaben und das Starten einer Vorschau wechseln die aktive Editor-Datei nicht.
 
 Änderungsvorschläge lassen sich weiterhin einzeln, gemeinsam oder abschnittsweise prüfen. Rücknahmen bewahren bestehende leere Dateien und vollständige Ausgangstexte. Nach einer zusätzlichen manuellen Änderung verweigert Anvil eine pauschale Rücknahme, die diese Änderung überschreiben würde. Ältere, bereits abgeschnittene Sicherungen können nicht nachträglich rekonstruiert werden; mehrdeutige Rücknahmen werden deshalb abgewiesen.
 
 Ordner behalten beim Verschieben ihren Namen und ihre Unterordner. Bestehende Ziele werden nicht überschrieben. Native Verschiebungen erhalten auch Binärdateien und vom Editor ausgeblendete Dateien; Browser-Verschiebungen kopieren vollständig vor dem Entfernen der Quelle.
 
 ## Speichern und Projektwechsel
+
+Es ist nur ein Arbeitsordner aktiv: ein Desktop-Pfad oder ein Browser-Ordner. Beim Wechsel wird das vorherige Speicherziel abgelöst. Beim Neustart wird zu einem gespeicherten Desktop-Pfad kein alter Browser-Arbeitsordner zusätzlich aktiviert. Ein separater Backup-Ordner bleibt erhalten. Fehlgeschlagene Schreibvorgänge nennen Datei und Ursache.
 
 - Speichern bearbeitet die aktive Datei; „Alle speichern“ bearbeitet die tatsächlich geänderten Dateien.
 - Deaktiviertes automatisches Speichern wird respektiert. Bestätigte Datei-Tools und ausdrücklich angenommene Vorschläge dürfen weiterhin schreiben.
@@ -25,6 +31,10 @@ Ordner behalten beim Verschieben ihren Namen und ihre Unterordner. Bestehende Zi
 IndexedDB hält vollständige Datei- und Rücknahmeinhalte; die kleinere lokale Wiederherstellungskopie nimmt nur vollständige Einträge auf. Undo ist pro Datei begrenzt und wird beim Wechsel zu einem anderen Projekt getrennt. Lokale Versionsstände ersetzen keine externe Datensicherung.
 
 Auf schmalen Fenstern sind Dateien, Editor, Agent, Spur und Ausgabe einzeln über eine Bereichsleiste erreichbar. Desktop-Breiten und gespeicherte Panel-Einstellungen bleiben erhalten.
+
+Das externe Run-Fenster passt sich nach dem Laden einmalig an die grafische Ausgabe an. Bei Anvil-Canvas zählt die logische Spielgröße statt der durch Bildschirm-Skalierung vergrößerten Pixelauflösung. Bedienleisten und Fensterrahmen kommen hinzu; die Größe bleibt innerhalb der Arbeitsfläche des aktuellen Monitors. Die Mindestgröße beträgt 480 × 360. Anschließend bleibt manuelles Vergrößern und Verkleinern erhalten. Ausgaben ohne messbare grafische Fläche verwenden weiterhin die normale Startgröße.
+
+Die Spur unter „Denken“ folgt neuen Schritten und Ergebnissen automatisch. Manuelles Hochscrollen pausiert das Nachführen; unten wird es wieder aktiv.
 
 ## Navigation, Formatierung und Sprachdienste
 

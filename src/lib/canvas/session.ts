@@ -274,6 +274,9 @@ export function registerCanvasFrame(
       image: typeof d.image === "string" && d.image.startsWith("data:image/") ? d.image : undefined,
       w: Number(d.w) || undefined,
       h: Number(d.h) || undefined,
+      outputSize: d.outputSize && Number.isFinite(d.outputSize.width) && Number.isFinite(d.outputSize.height)
+        && d.outputSize.width > 0 && d.outputSize.height > 0
+        ? { width: Math.min(16384, d.outputSize.width), height: Math.min(16384, d.outputSize.height) } : undefined,
     };
     if (d.op === "state") options.onState?.(reply);
     const p = pending.get(d.request);

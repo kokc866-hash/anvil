@@ -503,6 +503,8 @@ function clientTools(opts: {
       } catch (error) {
         if (!mcpSignal.aborted && agentGen() === mcpGeneration) st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: false, detail: String(error instanceof Error ? error.message : error).slice(0, 400) });
         throw error;
+      } finally {
+        if (st.mcpStream) (await import("./live-write")).finishLiveWrite(mcpGeneration);
       }
     },
     engine: async (action: "status" | "run", args?: Record<string, unknown>) => {

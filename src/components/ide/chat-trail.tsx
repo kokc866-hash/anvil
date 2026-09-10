@@ -193,6 +193,18 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
   const t = useT();
   const locale = useIde((s) => s.locale);
   const loopTries = useIde((s) => s.loopTries);
+  const scroller = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+
+  useEffect(() => {
+    follow.current = true;
+  }, [m.id]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    if (fill && follow.current && el) el.scrollTop = el.scrollHeight;
+  }, [m.id, m.steps, m.lastRun, m.lastTests, m.changes, m.harness, live, liveTools, fill]);
+
   const run = m.lastRun;
   const attempt = run?.attempt ?? 0;
   const max = run?.max ?? loopTries;
@@ -314,7 +326,17 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-bg">
-      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-2.5 py-2">{body}</div>
+      <div
+        ref={scroller}
+        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-2.5 py-2"
+        onScroll={(event) => {
+          if (event.target !== event.currentTarget) return;
+          const el = event.currentTarget;
+          follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        }}
+      >
+        {body}
+      </div>
     </div>
   );
 }

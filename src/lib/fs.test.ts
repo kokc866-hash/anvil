@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { unusedFilePath } from "./fs.ts";
+
+test("new-file names avoid case-insensitive file and directory collisions", () => {
+  assert.equal(unusedFilePath("neu.py", ["Neu.py", "neu-2.py"]), "neu-3.py");
+  assert.equal(unusedFilePath("src/test.py", ["src/test.py/inside.txt"], ["src/test-2.py"]), "src/test-3.py");
+  assert.equal(unusedFilePath("src.v2/new.py", ["other/new.py"]), "src.v2/new.py");
+  assert.equal(unusedFilePath(".env", [".env", ".env-2"]), ".env-3");
+});
 import { autoCollapsePaths, buildTree, dropRecord, isPinnedPath, remapList, remapPath, remapRecord } from "./fs.ts";
 
 test("pins .anvil and ref above project files, with their children", () => {

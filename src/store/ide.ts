@@ -6,6 +6,7 @@ export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, Sp
 import { create } from "zustand";
 import { partializeIde } from "./ide-persist";
 import { syncWrite, syncRemove, syncMkdir, syncMove, cancelSyncWrite, scheduleSyncWrite, captureDiskTarget, noteDiskContents, flushDiskSync } from "@/lib/disk-sync";
+import { clearLocation } from "@/lib/disk";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
@@ -1294,7 +1295,15 @@ export const useIde = create<IdeState>()(
         set({ chat: [...chat, { id: nid(), role: "assistant", content: reply, tools }] });
       },
       setDiskName: (diskName) => set({ diskName }),
-      setWorkspaceCwd: (workspaceCwd) => set({ workspaceCwd, workspaceEpoch: get().workspaceEpoch + (get().workspaceCwd === workspaceCwd ? 0 : 1) }),
+      setWorkspaceCwd: (value) => {
+        const workspaceCwd = value.trim();
+        // Clear the browser destination synchronously before publishing a native
+        // target, including Git/ZIP paths that do not use openOsWorkspace.
+        if (workspaceCwd) void clearLocation("workspace");
+        set({ workspaceCwd, workspaceEpoch: get().workspaceEpoch + (get().workspaceCwd === workspaceCwd ? 0 : 1),
+          ...(workspaceCwd ? { diskName: workspaceCwd.replace(/\\/g, "/").split("/").pop() || workspaceCwd } : {}),
+        });
+      },
       setSetupDone: (setupDone) => set({ setupDone }),
       setBackupName: (backupName) => set({ backupName }),
       setStorageMode: (storageMode) => set({ storageMode }),

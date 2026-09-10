@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
     return () => ipcRenderer.removeListener("helper-progress", wrap);
   },
   openChild: (path, opts) => ipcRenderer.invoke("child-open", path, opts),
+  fitRunWindow: (size) => ipcRenderer.invoke("child-fit-run", size),
   focusChild: (path) => ipcRenderer.invoke("child-focus", path),
   closeChild: (path) => ipcRenderer.invoke("child-close", path),
   childAlive: (path) => ipcRenderer.invoke("child-alive", path),
