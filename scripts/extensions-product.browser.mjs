@@ -8,7 +8,7 @@ import { _electron } from "playwright";
 const root = process.cwd(),
   output = path.resolve("artifacts/extensions-product");
 await mkdir(output, { recursive: true });
-const profile = await mkdtemp(path.resolve("data/extensions-qa-")),
+const profile = await mkdtemp(path.join(output, "profile-")),
   project = path.join(profile, "Produkt-Test");
 await mkdir(project);
 const socket = createServer();

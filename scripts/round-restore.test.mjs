@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { restoreRel } from "../companion/restore.mjs";
 
 test("round restoration is complete, conflict checked, durable, and isolated", async (t) => {
+  const globals = new Map(["window", "document", "localStorage", "fetch", "roundRestoreArchive"].map((key) => [key, globalThis[key]]));
   const values = new Map(), archive = new Map();
   globalThis.roundRestoreArchive = archive;
   globalThis.localStorage = { getItem: (k) => values.get(k) ?? null, setItem: (k, v) => values.set(k, v), removeItem: (k) => values.delete(k) };
@@ -18,14 +19,30 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
       export async function removeArchive(name) { globalThis.roundRestoreArchive.delete(name); }
     `;
   } }] });
+  let sync, persist;
+  t.after(async () => {
+    try {
+      await sync?.flushDiskSync().catch(() => {}); await persist?.flushPersistence().catch(() => {});
+      if (persist) await (await server.ssrLoadModule("/src/lib/persist-storage.ts")).flushPersistence();
+      if (persist) await server.ssrLoadModule("/src/lib/intern.ts");
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      await server.close();
+      for (const [key, value] of globals) {
+        if (value === undefined) delete globalThis[key];
+        else globalThis[key] = value;
+      }
+    }
+  });
   const { useIde } = await server.ssrLoadModule("/src/store/ide.ts");
   await useIde.persist.rehydrate();
   const { useIntern } = await server.ssrLoadModule("/src/lib/intern.ts");
   useIntern.getState().setPrefs({ on: false, autoHeal: false });
-  const sync = await server.ssrLoadModule("/src/lib/disk-sync.ts");
-  const persist = await server.ssrLoadModule("/src/lib/persist-storage.ts");
-  const priorFetch = globalThis.fetch;
-  const cwd = mkdtempSync(path.resolve("data/round-restore-"));
+  sync = await server.ssrLoadModule("/src/lib/disk-sync.ts");
+  persist = await server.ssrLoadModule("/src/lib/persist-storage.ts");
+  const output = path.resolve("artifacts/round-restore");
+  mkdirSync(output, { recursive: true });
+  const cwd = mkdtempSync(path.join(output, "project-"));
   let interrupt = false;
   globalThis.fetch = async (url, opts) => {
     if (String(url).endsWith("/v1/workspace")) return Response.json({ ok: true });
@@ -42,13 +59,6 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
     }
     throw new Error(`Unexpected request: ${url}`);
   };
-  t.after(async () => {
-    await sync.flushDiskSync().catch(() => {}); await persist.flushPersistence().catch(() => {});
-    await (await server.ssrLoadModule("/src/lib/persist-storage.ts")).flushPersistence();
-    await server.ssrLoadModule("/src/lib/intern.ts");
-    await new Promise((resolve) => setImmediate(resolve));
-    await server.close(); globalThis.fetch = priorFetch;
-  });
   useIde.setState({ files: {}, dirs: [], dirty: {}, editBases: {}, pendingDiffs: [], checkpoints: [], workspaceCwd: "", autoSaveDisk: false, agentBusy: false });
   const id = useIde.getState().pushCheckpoint("empty before first round");
   useIde.setState({ files: { "new.txt": "created" }, dirs: [] });
@@ -124,7 +134,9 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
 });
 
 test("disk restore preflights external conflicts and rolls back a partial failure", () => {
-  const cwd = mkdtempSync(path.resolve("data/round-restore-disk-"));
+  const output = path.resolve("artifacts/round-restore");
+  mkdirSync(output, { recursive: true });
+  const cwd = mkdtempSync(path.join(output, "disk-"));
   writeFileSync(path.join(cwd, "a.txt"), "a"); writeFileSync(path.join(cwd, "b.txt"), "external");
   const request = { files: [{ path: "a.txt", expected: "a", after: null }, { path: "b.txt", expected: "b", after: "before" }], mkdir: [], rmdir: [] };
   assert.throws(() => restoreRel(cwd, request), /extern geändert/);

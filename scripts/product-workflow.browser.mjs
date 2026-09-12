@@ -10,7 +10,7 @@ import { SEED_FILES } from "../src/lib/seed-files.ts";
 
 const root = process.cwd(), output = path.resolve("artifacts/product-workflow");
 await mkdir(output, { recursive: true });
-const profile = await mkdtemp(path.resolve("data/workflow-"));
+const profile = await mkdtemp(path.join(output, "profile-"));
 const project = path.join(profile, "Neustart-Test");
 await mkdir(project);
 const socket = createServer();

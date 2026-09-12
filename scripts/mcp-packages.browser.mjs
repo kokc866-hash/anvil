@@ -9,7 +9,7 @@ import { _electron } from "playwright";
 const root = process.cwd(),
   output = path.resolve("artifacts/mcp-packages");
 await mkdir(output, { recursive: true });
-const profile = await mkdtemp(path.resolve("data/mcp-package-qa-"));
+const profile = await mkdtemp(path.join(output, "profile-"));
 const socket = createServer();
 await new Promise((resolve) => socket.listen(0, "127.0.0.1", resolve));
 const port = socket.address().port;

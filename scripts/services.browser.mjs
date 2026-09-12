@@ -11,7 +11,7 @@ import { startServiceFixture } from "../fixtures/mcp-service-server.mjs";
 const root = process.cwd(),
   output = path.resolve("artifacts/services");
 await mkdir(output, { recursive: true });
-const profile = await mkdtemp(path.resolve("data/services-qa-"));
+const profile = await mkdtemp(path.join(output, "profile-"));
 const fixture = await startServiceFixture();
 const socket = createServer();
 await new Promise((resolve) => socket.listen(0, "127.0.0.1", resolve));

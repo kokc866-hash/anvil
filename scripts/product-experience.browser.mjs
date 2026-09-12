@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { _electron } from "playwright";
 const root = process.cwd(), output = path.resolve("artifacts/product-experience");
 await mkdir(output, { recursive: true });
-const profile = await mkdtemp(path.resolve("data/product-experience-"));
+const profile = await mkdtemp(path.join(output, "profile-"));
 const socket = createServer(); await new Promise(r => socket.listen(0, "127.0.0.1", r));
 const port = socket.address().port; await new Promise(r => socket.close(r));
 const env = { ...process.env, ANVIL_PORT: String(port), ANVIL_COMPANION_PORT: "7845", ANVIL_QA_USER_DATA: profile, ANVIL_HOME: path.join(profile, "packages") }; delete env.ELECTRON_RUN_AS_NODE;

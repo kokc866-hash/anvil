@@ -37,17 +37,33 @@ test("workspace plugin removal is durable, scoped, cancellable and conflict chec
       },
     ],
   });
+  let sync, persist;
+  t.after(async () => {
+    try {
+      await sync?.flushDiskSync().catch(() => {});
+      await persist?.flushPersistence();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      await server.close();
+      for (const [k, v] of globals) {
+        if (v === undefined) delete globalThis[k];
+        else globalThis[k] = v;
+      }
+    }
+  });
   const { useIde } = await server.ssrLoadModule("/src/store/ide.ts");
   await useIde.persist.rehydrate();
-  const sync = await server.ssrLoadModule("/src/lib/disk-sync.ts");
-  const persist = await server.ssrLoadModule("/src/lib/persist-storage.ts");
+  sync = await server.ssrLoadModule("/src/lib/disk-sync.ts");
+  persist = await server.ssrLoadModule("/src/lib/persist-storage.ts");
   const { removeWorkspacePlugin, requestRemoveWorkspacePlugin } = await server.ssrLoadModule(
     "/src/lib/plugins/remove.ts",
   );
   const host = await server.ssrLoadModule("/src/lib/plugins/host.ts");
   const { emitPlugin } = await server.ssrLoadModule("/src/lib/plugins/events.ts");
   const { subscribeConfirm } = await server.ssrLoadModule("/src/lib/confirm.ts");
-  const cwd = mkdtempSync(path.resolve("data/plugin-remove-"));
+  const output = path.resolve("artifacts/plugin-removal");
+  mkdirSync(output, { recursive: true });
+  const cwd = mkdtempSync(path.join(output, "project-"));
   mkdirSync(path.join(cwd, "plugins"));
   const file = "plugins/mein-plugin.js",
     id = `ws:${file}`;
@@ -75,16 +91,6 @@ test("workspace plugin removal is durable, scoped, cancellable and conflict chec
     }
     throw Error(`Unexpected request ${url}`);
   };
-  t.after(async () => {
-    await sync.flushDiskSync().catch(() => {});
-    await persist.flushPersistence();
-    await new Promise((r) => setImmediate(r));
-    await server.close();
-    for (const [k, v] of globals) {
-      if (v === undefined) delete globalThis[k];
-      else globalThis[k] = v;
-    }
-  });
   useIde.setState({
     workspaceCwd: cwd,
     files: { [file]: code, "plugins/keep.js": "// Keep this file" },
