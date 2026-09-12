@@ -37,7 +37,7 @@ export function LearnSection({ q }: { q: string }) {
         </Row>
       </Vis>
       <Vis q={q} label="Projekt Fakten pytest stack">
-        <Row label="Projekt" hint="Nur dieses Repo (pytest, Stack, Ordner).">
+        <Row label="Projekt" hint="Nur dieses Projekt (Tests, Stack, Ordner).">
           <Toggle on={p.project} onChange={(v) => setPref("project", v)} />
         </Row>
       </Vis>
@@ -110,7 +110,7 @@ export function LearnSection({ q }: { q: string }) {
             Nur Log
           </Button>
           <Button className="h-8" onClick={() => useLearn.getState().clear()}>
-            Alles löschen
+            Gelerntes vergessen
           </Button>
           <Button className="h-8" onClick={() => useLearn.getState().resetPrefs()}>
             Standard

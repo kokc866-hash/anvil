@@ -1,10 +1,10 @@
+import type { TokenUsage, RequestTokens } from "./token-usage";
 import { isExecutablePath } from "./run-target";
 import { automaticRunVerification } from "./agent-evidence";
 import { chatWithProvider } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
 import { toolCode, toolDetail } from "@/lib/llm-options";
 import { runFile } from "@/lib/run-client";
-import { estimateTokens } from "@/lib/tokens";
 import { emitPlugin } from "@/lib/plugins/events";
 import { anvilHandle } from "@/lib/anvil";
 import {
@@ -282,7 +282,11 @@ export async function sendChat(
         path,
         content: isRefImage(content) ? imageStub(path, content) : content,
       }));
-    const promptTok = estimateTokens(user) + estimateTokens(JSON.stringify(Object.keys(s.files)));
+    const onUsage = (usage: TokenUsage, request?: RequestTokens) => {
+      if (my !== agentGen()) return;
+      addSessionTokens(usage.prompt, usage.completion, usage.estimated);
+      useIde.setState({ lastRequestTokens: request ?? null });
+    };
 
     if (!asking && !isFixPrompt(work) && (s.agentMode === "ask" || forceAsk)) {
       const helperAsk =
@@ -299,11 +303,12 @@ export async function sendChat(
             if (my !== agentGen()) return;
             requestPhase(my, "answering");
             appendAssistant(chunk);
-          }, memory);
+          }, memory, onUsage);
         } catch {
           if (my !== agentGen()) return;
           requestPhase(my, "waiting");
           reply = await completeText({
+            onUsage,
             prompt: `You are Anvil in Ask mode. Do not change files. Explain briefly in the user's language.\n\n${memory ? `${memory}\n\n` : ""}${user}`,
             provider: s.llmProvider,
             baseUrl: s.llmBaseUrl,
@@ -316,6 +321,7 @@ export async function sendChat(
         useIde.getState().setAgentJob(newJob(work));
         if (my !== agentGen()) return;
         const asked = await chatWithProvider({
+          onUsage,
           provider: s.llmProvider,
           baseUrl: s.llmBaseUrl,
           model: s.llmModel,
@@ -326,7 +332,7 @@ export async function sendChat(
           context: s.llmContext,
           thinking: s.llmThinking,
           compact: s.llmCompact,
-          journal: s.sessionJournal,
+          journal: useIde.getState().sessionJournal,
           memory,
           prefer,
           locale: s.locale,
@@ -370,7 +376,6 @@ export async function sendChat(
       }
       if (my !== agentGen()) return;
       finalizeAssistant(reply, undefined, { replace: useRequestState.getState().phase === "error" });
-      addSessionTokens(promptTok, estimateTokens(reply));
       void brainDistill(work, reply);
       {
         const st = useIde.getState();
@@ -427,6 +432,7 @@ export async function sendChat(
     }
     if (my !== agentGen()) return;
     const result = await chatWithProvider({
+      onUsage,
       provider: s.llmProvider,
       baseUrl: s.llmBaseUrl,
       model: s.llmModel,
@@ -444,7 +450,7 @@ export async function sendChat(
       context: s.llmContext,
       thinking: s.llmThinking,
       compact: s.llmCompact,
-      journal: s.sessionJournal,
+      journal: useIde.getState().sessionJournal,
       memory,
       prefer,
       locale: s.locale,
@@ -605,10 +611,7 @@ export async function sendChat(
         await testAfterRound();
       }
     }
-    addSessionTokens(
-      result.usage?.prompt || promptTok,
-      result.usage?.completion || estimateTokens(result.reply),
-    );
+
     void brainDistill(work, result.reply);
     {
       const st = useIde.getState();

@@ -1,3 +1,4 @@
+import type { RequestTokens } from "@/lib/token-usage";
 import type { ToolCompatibility } from "@/lib/tool-compat";
 import type { IdeSettings } from "@/lib/settings-schema";
 import type { ToolLearning, ToolLearningState } from "@/lib/tool-learning";
@@ -246,8 +247,12 @@ export type IdeState = {
   llmProfiles: LlmProfile[];
   llmToolModes: Record<string, ToolCompatibility>;
   llmToolLearning: ToolLearningState;
-  sessionTokens: { prompt: number; completion: number };
+  sessionTokens: { prompt: number; completion: number; estimated?: boolean };
+  lastRequestTokens: RequestTokens | null;
   sessionJournal: SessionJournal;
+  memoryWorkspace: string;
+  workspaceMemoryId: string;
+  workspaceSessions: Record<string, { chat: ChatMsg[]; sessionJournal: SessionJournal; sessionTokens: IdeState["sessionTokens"] }>;
   sidebar: SidebarId;
   palette: PaletteMode;
   pendingDiffs: FileDiff[];
@@ -384,7 +389,7 @@ export type IdeState = {
   deleteLlmProfile: (id: string) => void;
   addAgentStep: (step: Omit<AgentStep, "id">) => void;
   appendThinking: (s: string) => void;
-  addSessionTokens: (prompt: number, completion: number) => void;
+  addSessionTokens: (prompt: number, completion: number, estimated?: boolean) => void;
   setSessionJournal: (j: SessionJournal) => void;
   setSidebar: (v: SidebarId) => void;
   setPalette: (v: PaletteMode) => void;

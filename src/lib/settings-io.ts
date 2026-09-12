@@ -21,7 +21,7 @@ export function exportSettingsPack(): Record<string, unknown> {
     ide: pickSettings(ide, IDE_SETTINGS_KEYS),
     brain: pickSettings(brain, BRAIN_SETTINGS_KEYS),
     models: pickSettings(useModelLib.getState(), MODEL_SETTINGS_KEYS),
-    learn: { on: learn.on, prefs: learn.prefs, facts: learn.facts, skills: learn.skills, negs: learn.negs, forgotten: learn.forgotten },
+    learn: { on: learn.on, prefs: learn.prefs, facts: learn.facts, skills: learn.skills, negs: learn.negs, forgotten: learn.forgotten, forgottenFacts: learn.forgottenFacts },
     intern: { prefs: useIntern.getState().prefs, appLog: appLogOn() },
   };
 }

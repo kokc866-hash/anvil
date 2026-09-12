@@ -1,3 +1,4 @@
+import { legacyProject } from "@/lib/learn-parse";
 import { useState } from "react";
 import { Brain, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,12 +23,20 @@ export function MemoryPane() {
   const clear = useLearn((s) => s.clear);
   const setSidebar = useIde((s) => s.setSidebar);
   const p = profile();
+  useIde(s => s.memoryWorkspace);
   const ws = workspaceId();
-  const [tab, setTab] = useState<"person" | "project" | "session" | "skills" | "neg" | "log">("person");
+  const assignLegacy = useLearn(s => s.assignLegacy);
+  const [tab, setTab] = useState<"person" | "project" | "session" | "skills" | "neg" | "log" | "legacy">("person");
   const [draft, setDraft] = useState("");
-  const person = facts.filter((f) => f.scope !== "project" && f.kind !== "project");
-  const proj = facts.filter((f) => (f.scope === "project" || f.kind === "project") && (!f.ws || f.ws === ws));
-  const shownSkills = skills.filter((s) => s.scope !== "project" || !s.ws || s.ws === ws);
+  const person = facts.filter((f) => f.scope !== "project" && f.kind !== "project" && !/^Nicht so \(/.test(f.text));
+  const proj = facts.filter((f) => (f.scope === "project" || f.kind === "project" || /^Nicht so \(/.test(f.text)) && f.ws === ws);
+  const shownSkills = skills.filter((s) => s.scope !== "project" || s.ws === ws);
+  const shownNegs = negs.filter(n => n.ws === ws);
+  const legacy = [
+    ...facts.filter(f => (f.scope === "project" || f.kind === "project" || /^Nicht so \(/.test(f.text)) && legacyProject(f.ws)).map(f => ({ id: f.id, text: f.text, ws: f.ws, forget: forgetFact })),
+    ...skills.filter(s => s.scope === "project" && legacyProject(s.ws)).map(s => ({ id: s.id, text: s.name, ws: s.ws, forget: forgetSkill })),
+    ...negs.filter(n => legacyProject(n.ws)).map(n => ({ id: n.id, text: `${n.path}: ${n.text}`, ws: n.ws, forget: forgetNeg })),
+  ];
   const journal = useIde((s) => s.sessionJournal);
   const setSessionJournal = useIde((s) => s.setSessionJournal);
 
@@ -61,6 +70,7 @@ export function MemoryPane() {
             ["skills", "Skills"],
             ["neg", "Nicht"],
             ["log", "Log"],
+            ["legacy", "Nicht zugeordnet"],
           ] as const
         ).map(([t, label]) => (
           <button
@@ -74,7 +84,15 @@ export function MemoryPane() {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2 text-xs">
-        {tab === "person" || tab === "project"
+        {tab === "legacy" ? <>
+          <p className="mb-2 text-muted">Alte Projekteinträge bleiben erhalten. Ordne sie nur zu, wenn sie zu diesem Projekt gehören.</p>
+          {legacy.map((item, i) => <div key={`${item.id}-${i}`} className="mb-2 rounded-md border border-border p-2">
+            <p>{item.text}</p><p className="text-subtle">Bisher: {item.ws || "unbekannt"}</p>
+            <button type="button" className="mt-1 text-accent" onClick={() => assignLegacy(item.id)}>Diesem Projekt zuordnen</button>
+            <button type="button" className="ml-2 text-subtle" onClick={() => item.forget(item.id)}>Vergessen</button>
+          </div>)}
+        </> : null}
+        {tab === "legacy" ? null : tab === "person" || tab === "project"
           ? (tab === "person" ? person : proj).map((f) => (
               <div key={f.id} className="mb-1.5 rounded-md border border-border px-2 py-1.5">
                 <div className="flex items-start gap-2">
@@ -128,7 +146,7 @@ export function MemoryPane() {
                 );
               })
             : tab === "neg"
-              ? negs.map((n) => (
+              ? shownNegs.map((n) => (
                   <div key={n.id} className="mb-1.5 flex gap-2 rounded-md border border-border px-2 py-1.5">
                     <p className="min-w-0 flex-1 font-mono text-muted">
                       {n.path}: {n.text}
@@ -147,9 +165,9 @@ export function MemoryPane() {
         {tab === "person" && person.length === 0 ? <p className="text-muted">Noch keine Personen-Fakten.</p> : null}
         {tab === "project" && proj.length === 0 ? <p className="text-muted">Noch keine Projekt-Fakten für {ws}.</p> : null}
         {tab === "skills" && shownSkills.length === 0 ? <p className="text-muted">Keine Skills für {ws}.</p> : null}
-        {tab === "neg" && negs.length === 0 ? <p className="text-muted">Keine abgelehnten Muster.</p> : null}
+        {tab === "neg" && shownNegs.length === 0 ? <p className="text-muted">Keine abgelehnten Muster.</p> : null}
       </div>
-      {tab !== "session" && tab !== "log" && tab !== "neg" ? (
+      {tab !== "session" && tab !== "log" && tab !== "neg" && tab !== "legacy" ? (
       <form
         className="flex gap-1 border-t border-border p-2"
         onSubmit={(e) => {
@@ -178,10 +196,9 @@ export function MemoryPane() {
         className="px-3 pb-2 text-[10px] text-subtle hover:text-fg"
         onClick={() => {
           clear();
-          setSessionJournal({ ...EMPTY_JOURNAL });
         }}
       >
-        Alles vergessen
+        Gelerntes vergessen
       </button>
     </div>
   );

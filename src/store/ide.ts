@@ -1,3 +1,6 @@
+import { idFromPins } from "@/lib/learn-parse";
+import { invalidateMemory, captureMemory } from "@/lib/memory-scope";
+import { tokenCount } from "@/lib/token-usage";
 import { toolTargetKey, toolCompatibility } from "@/lib/tool-compat";
 import { sanitizeToolLearning } from "@/lib/tool-learning";
 import { migrateLegacyCaps } from "@/lib/model-caps";
@@ -6,7 +9,7 @@ export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, Sp
 import { create } from "zustand";
 import { partializeIde } from "./ide-persist";
 import { syncWrite, syncRemove, syncMkdir, syncMove, cancelSyncWrite, scheduleSyncWrite, captureDiskTarget, noteDiskContents, flushDiskSync } from "@/lib/disk-sync";
-import { clearLocation } from "@/lib/disk";
+import { clearLocation, diskWorkspaceHandle } from "@/lib/disk";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
@@ -33,7 +36,7 @@ import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 import { abortReason, stopAgent } from "@/lib/abort";
 import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
-import { EMPTY_JOURNAL, normalizeJournal } from "@/lib/session";
+import { EMPTY_JOURNAL, normalizeJournal, parseSessionFile, sessionFileText, isJournalEmpty } from "@/lib/session";
 import { normalizeJob, type AgentJob } from "@/lib/agent-ask";
 import { AGENT_MIN, AGENT_MAX, SIDE_MIN, SIDE_MAX, TRAIL_MIN, TRAIL_MAX } from "@/lib/layout";
 import { connectionSettings, connectionValues as slotOf } from "@/lib/connection-settings";
@@ -43,6 +46,10 @@ import { pushUndo } from "@/lib/document";
 import { planMove } from "@/lib/move-plan";
 
 const THINK_CAP = 64_000;
+const initialMemoryId = nid();
+function memorySession(s: IdeState) {
+  return { chat: s.chat, sessionJournal: s.sessionJournal, sessionTokens: s.sessionTokens };
+}
 
 let liveThink = "";
 let liveText = "";
@@ -251,8 +258,11 @@ export const useIde = create<IdeState>()(
       llmProfiles: [],
       llmToolModes: {},
       llmToolLearning: {},
-      sessionTokens: { prompt: 0, completion: 0 },
+      lastRequestTokens: null, sessionTokens: { prompt: 0, completion: 0, estimated: false },
       sessionJournal: { ...EMPTY_JOURNAL },
+      workspaceMemoryId: initialMemoryId,
+      memoryWorkspace: `v2:local:${initialMemoryId}`,
+      workspaceSessions: {},
       sidebar: "files",
       palette: null,
       pendingDiffs: [],
@@ -891,7 +901,7 @@ export const useIde = create<IdeState>()(
         stopAgent("Neuer Chat");
         resetLiveChat();
         set({
-          chat: [], sessionTokens: { prompt: 0, completion: 0 }, agentJob: null,
+          chat: [], lastRequestTokens: null, sessionTokens: { prompt: 0, completion: 0, estimated: false }, agentJob: null,
           agentBusy: false, agentStartedAt: 0, agentInbox: null, agentQueue: [],
           agentDraft: "", pendingAsk: null,
           ...(wasBusy ? { running: false, testsRunning: false } : {}),
@@ -1160,6 +1170,19 @@ export const useIde = create<IdeState>()(
         const { openPaths, activePath, collapsed } = prev;
         let files = { ...next };
         const keepDirty = Boolean(opts?.keepDirty);
+        const portable = !prev.workspaceCwd && Boolean(diskWorkspaceHandle());
+        const storedId = next[".anvil/memory-id"]?.trim();
+        const workspaceMemoryId = keepDirty ? prev.workspaceMemoryId : portable
+          ? (/^[a-zA-Z0-9-]{8,80}$/.test(storedId || "") ? storedId! : nid())
+          : prev.workspaceMemoryId;
+        const memoryWorkspace = keepDirty ? prev.memoryWorkspace : idFromPins({ ...prev, workspaceMemoryId, ...(portable ? { githubRepo: "" } : {}) });
+        const switched = memoryWorkspace !== prev.memoryWorkspace;
+        const workspaceSessions = switched
+          ? { ...prev.workspaceSessions, [prev.memoryWorkspace]: memorySession(prev) }
+          : prev.workspaceSessions;
+        const saved = workspaceSessions[memoryWorkspace];
+        if (switched) { invalidateMemory(); resetLiveChat(); }
+
         const dirty: Record<string, boolean> = {};
         if (keepDirty) {
           for (const p of Object.keys(prev.dirty)) {
@@ -1178,6 +1201,14 @@ export const useIde = create<IdeState>()(
         const gone = (p: string) => !(p in files);
         set({
           files,
+          memoryWorkspace, workspaceMemoryId, workspaceSessions,
+          sessionJournal: isJournalEmpty(prev.sessionJournal) && next[".anvil/session.md"] ? parseSessionFile(next[".anvil/session.md"]) : prev.sessionJournal,
+          ...(switched ? {
+            chat: saved?.chat ?? [],
+            sessionJournal: saved?.sessionJournal ?? parseSessionFile(next[".anvil/session.md"] || ""),
+            sessionTokens: saved?.sessionTokens ?? { prompt: 0, completion: 0, estimated: false },
+            lastRequestTokens: null, agentJob: null, agentQueue: [], agentInbox: null,
+          } : {}),
           workspaceEpoch: keepDirty ? prev.workspaceEpoch : prev.workspaceEpoch + 1,
           ...(!keepDirty ? { lspProblems: [], compileProblems: [], companionProblems: [], runProblems: [], jumpStack: [], jumpIndex: -1 } : {}),
           editBases: keepDirty ? prev.editBases : {},
@@ -1192,7 +1223,14 @@ export const useIde = create<IdeState>()(
           attached: prev.attached.filter((p) => p in files),
           recentPaths: prev.recentPaths.filter((p) => p in files),
         });
-        void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(files)).catch(() => undefined);
+        if (portable && !keepDirty && storedId !== workspaceMemoryId) get().writeFile(".anvil/memory-id", workspaceMemoryId, { quiet: true });
+        const epoch = get().workspaceEpoch;
+        const memoryValid = captureMemory();
+        void import("@/lib/learn").then((m) => {
+          if (get().workspaceEpoch !== epoch || !memoryValid()) return;
+          if (switched) m.markSkills([]);
+          m.hydrateLearnFromFiles(files);
+        }).catch(() => undefined);
       },
       addChat: (msg) => {
         set({ chat: [...get().chat, { ...msg, id: nid() }] });
@@ -1250,18 +1288,20 @@ export const useIde = create<IdeState>()(
         chat[chat.length - 1] = { ...last, steps };
         set({ chat });
       },
-      addSessionTokens: (prompt, completion) => {
+      addSessionTokens: (prompt, completion, estimated = true) => {
         const cur = get().sessionTokens;
         set({
           sessionTokens: {
-            prompt: cur.prompt + Math.max(0, prompt),
-            completion: cur.completion + Math.max(0, completion),
+            prompt: (tokenCount(cur.prompt) ?? 0) + (tokenCount(prompt) ?? 0),
+            completion: (tokenCount(cur.completion) ?? 0) + (tokenCount(completion) ?? 0),
+            estimated: (cur.estimated ?? (cur.prompt + cur.completion > 0)) || estimated || tokenCount(prompt) === undefined || tokenCount(completion) === undefined,
           },
         });
       },
       setSessionJournal: (sessionJournal) => {
         set({ sessionJournal: normalizeJournal(sessionJournal) });
-        void import("@/lib/session").then((m) => m.persistSessionDisk()).catch(() => undefined);
+        // writeFile already uses the checked, captured disk queue. Do not write twice.
+        get().writeFile(".anvil/session.md", sessionFileText(get().sessionJournal, get().chat.length), { quiet: true });
       },
       finalizeAssistant: (reply, tools, options) => {
         flushLiveChat();
@@ -1416,8 +1456,16 @@ export const useIde = create<IdeState>()(
         }
         get().setContent(path, hit.snap[path]);
       },
-      resetWorkspace: () =>
+      resetWorkspace: () => {
+        const prev = get();
+        const workspaceMemoryId = nid();
+        invalidateMemory();
+        resetLiveChat();
+        void clearLocation("workspace");
         set({
+          workspaceMemoryId, memoryWorkspace: `v2:local:${workspaceMemoryId}`,
+          workspaceSessions: { ...prev.workspaceSessions, [prev.memoryWorkspace]: memorySession(prev) },
+          workspaceCwd: "", githubRepo: "", diskName: "",
           files: { ...SEED_FILES },
           workspaceEpoch: get().workspaceEpoch + 1,
           editBases: {},
@@ -1432,14 +1480,15 @@ export const useIde = create<IdeState>()(
           dirs: [],
           collapsed: [],
           sessionJournal: { ...EMPTY_JOURNAL },
-          sessionTokens: { prompt: 0, completion: 0 },
+          lastRequestTokens: null, sessionTokens: { prompt: 0, completion: 0, estimated: false },
           agentJob: null,
           pendingDiffs: [],
           undo: {},
           breakpoints: {},
           checkpoints: [],
           attached: [],
-        }),
+        });
+      },
       applySettings: (patch) => {
         const cur = get();
         const rebind = ["llmProvider", "llmAuthMode", "llmBaseUrl", "llmModel"].some((key) => Object.hasOwn(patch, key));
@@ -1537,6 +1586,13 @@ export const useIde = create<IdeState>()(
             ? (p.agentQueue as unknown[]).filter((t): t is string => typeof t === "string" && t.trim().length > 0).slice(0, 8)
             : [],
           sessionJournal: normalizeJournal(p.sessionJournal),
+          workspaceMemoryId: typeof p.workspaceMemoryId === "string" ? p.workspaceMemoryId : current.workspaceMemoryId,
+          memoryWorkspace: typeof p.memoryWorkspace === "string" ? p.memoryWorkspace : idFromPins({
+            workspaceCwd: String(p.workspaceCwd || ""), githubRepo: String(p.githubRepo || ""),
+            workspaceMemoryId: typeof p.workspaceMemoryId === "string" ? p.workspaceMemoryId : current.workspaceMemoryId,
+          }),
+          workspaceSessions: p.workspaceSessions && typeof p.workspaceSessions === "object" && !Array.isArray(p.workspaceSessions)
+            ? p.workspaceSessions as IdeState["workspaceSessions"] : {},
           workspaceCwd: typeof p.workspaceCwd === "string" ? p.workspaceCwd : "",
         };
       },

@@ -1,3 +1,4 @@
+import { chatUsage } from "./token-usage.ts";
 import type { LlmChoice, ToolCall } from "./agent-core.ts";
 
 function asToolCall(id: string, name: string, args: string): ToolCall {
@@ -43,7 +44,7 @@ export function parseResponses(json: ResponsesJson): LlmChoice {
     content: content || null,
     reasoning: reasoning || undefined,
     tool_calls: tool_calls.length ? tool_calls : undefined,
-    usage: json.usage ? { prompt: json.usage.input_tokens ?? 0, completion: json.usage.output_tokens ?? 0 } : undefined,
+    usage: chatUsage(json.usage),
   };
 }
 

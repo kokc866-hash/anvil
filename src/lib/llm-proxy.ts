@@ -1,3 +1,4 @@
+import { chatUsage, anthropicUsage, withRequestTokens } from "./token-usage";
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
@@ -148,7 +149,7 @@ function parseOpenAiChoice(json: {
       asToolCall("legacy", choice.function_call.name, choice.function_call.arguments || "{}"),
     ];
   }
-  if (json.usage) choice.usage = { prompt: json.usage.prompt_tokens ?? 0, completion: json.usage.completion_tokens ?? 0 };
+  choice.usage = chatUsage(json.usage);
   if (choice.tool_calls?.length) {
     const stamped = stampToolCalls([{ tool_calls: choice.tool_calls }])[0]?.tool_calls;
     if (Array.isArray(stamped)) choice.tool_calls = stamped as ToolCall[];
@@ -174,7 +175,8 @@ async function postOpenAi(
   }
   if (cap?.tools === "text" && tools) prepareTextTools(payload, tools);
   if (cap) applyCapToPayload(payload, cap, Boolean(tools));
-  prepChatPayload(payload, ctx);
+  let wireCtx = ctx;
+  prepChatPayload(payload, wireCtx);
   const hdr = withUa(headers);
   const send = () =>
     fetch(endpoint, {
@@ -187,16 +189,17 @@ async function postOpenAi(
   if (res.ok) {
     const raw = await res.text();
     if (looksHtml(raw)) httpFail(res.status, raw, kind);
-    return parseOpenAiChoice(JSON.parse(raw) as Parameters<typeof parseOpenAiChoice>[0]);
+    return withRequestTokens(parseOpenAiChoice(JSON.parse(raw) as Parameters<typeof parseOpenAiChoice>[0]), payload, wireCtx);
   }
   let body = await res.text();
   if (isContextError(body)) {
-    prepChatPayload(payload, Math.max(2048, Math.floor(ctx * 0.7)));
+    wireCtx = Math.max(2048, Math.floor(ctx * 0.7));
+    prepChatPayload(payload, wireCtx);
     if (payload.max_tokens != null) payload.max_tokens = Math.max(256, Math.floor(Number(payload.max_tokens) * 0.5));
     if (payload.max_completion_tokens != null)
       payload.max_completion_tokens = Math.max(256, Math.floor(Number(payload.max_completion_tokens) * 0.5));
     res = await send();
-    if (res.ok) return parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]);
+    if (res.ok) return withRequestTokens(parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]), payload, wireCtx);
     body = await res.text();
   }
   if (res.status === 400) {
@@ -211,7 +214,7 @@ async function postOpenAi(
         delete payload.tool_choice;
       }
       res = await send();
-      if (res.ok) return parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]);
+      if (res.ok) return withRequestTokens(parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]), payload, wireCtx);
       body = await res.text();
     }
   }
@@ -221,19 +224,19 @@ async function postOpenAi(
       tools = next;
       payload.tools = next;
       res = await send();
-      if (res.ok) return parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]);
+      if (res.ok) return withRequestTokens(parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]), payload, wireCtx);
       body = await res.text();
     }
   }
   if (res.status === 400) {
     stripPayload(payload, body);
     res = await send();
-    if (res.ok) return parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]);
+    if (res.ok) return withRequestTokens(parseOpenAiChoice((await res.json()) as Parameters<typeof parseOpenAiChoice>[0]), payload, wireCtx);
     body = await res.text();
   }
   if (allowResponses && res.status === 400 && tools && /reasoning_effort/i.test(body) && /function tools|tool/i.test(body)) {
     const alt = endpoint.replace(/\/chat\/completions.*$/, "/responses");
-    return postResponses(alt, headers, payload, true, kind, selectedTools);
+    return postResponses(alt, headers, payload, true, kind, selectedTools, wireCtx);
   }
   httpFail(res.status, body, kind);
 }
@@ -245,7 +248,10 @@ async function postResponses(
   useTools: boolean,
   kind = "",
   selectedTools = AGENT_TOOLS,
+  context = 32768,
 ): Promise<LlmChoice> {
+  if (useTools) payload.tools = selectedTools;
+  prepChatPayload(payload, context);
   const body: Record<string, unknown> = responsesBody(payload, kind);
   if (useTools) {
     body.tools = toResponsesTools(selectedTools);
@@ -281,7 +287,7 @@ async function postResponses(
   }
   if (!res.ok) httpFail(res.status, raw, kind);
   try {
-    return parseResponsesSse(raw);
+    return withRequestTokens(parseResponsesSse(raw), { ...payload, tools: body.tools }, context);
   } catch {
     throw new Error(raw.slice(0, 280) || "Leere Responses-Antwort.");
   }
@@ -311,13 +317,12 @@ async function openaiChat(
   }
   if (providerId === "google" && /^AIza/.test(apiKey.trim())) headers["x-goog-api-key"] = apiKey.trim();
   const payload: Record<string, unknown> = applyLlmOptions({ model, temperature: 0.3, messages }, rt, { tools: useTools });
-  prepChatPayload(payload, rt.context);
 
   const talk = (host: URL) => {
     const endpoint = `${host.toString().replace(/\/+$/, "")}/chat/completions`;
     if (usesResponsesApi(rt, useTools)) {
       const respUrl = endpoint.replace(/\/chat\/completions$/, "/responses");
-      return postResponses(respUrl, headers, payload, useTools, providerId, selectedTools).catch((err: unknown) => {
+      return postResponses(respUrl, headers, payload, useTools, providerId, selectedTools, rt.context).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (!/HTTP 404|not found/i.test(msg)) throw err;
         delete payload.reasoning_effort;
@@ -343,11 +348,10 @@ async function azureChat(
   const url = assertUrl(baseUrl, "azure");
   const endpoint = `${url.origin}/openai/deployments/${encodeURIComponent(model)}/chat/completions?api-version=2024-10-21`;
   const payload: Record<string, unknown> = applyLlmOptions({ temperature: 0.3, messages }, { ...rt, api: "azure" }, { tools: useTools });
-  prepChatPayload(payload, rt.context);
   const headers = { "Content-Type": "application/json", "api-key": apiKey };
   if (usesResponsesApi({ ...rt, api: "azure" }, useTools)) {
     const resp = `${url.origin}/openai/v1/responses`;
-    return postResponses(resp, headers, { ...payload, model }, useTools, "azure", selectedTools);
+    return postResponses(resp, headers, { ...payload, model }, useTools, "azure", selectedTools, rt.context);
   }
   return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, "azure", selectedTools);
 }
@@ -363,7 +367,7 @@ async function anthropicChat(
   selectedTools = AGENT_TOOLS,
 ): Promise<LlmChoice> {
   const url = assertUrl(baseUrl || "https://api.anthropic.com", "anthropic");
-  const fitted = { messages: [...messages] };
+  const fitted = applyLlmOptions({ messages: [...messages], ...(useTools ? { tools: selectedTools } : {}) }, { ...rt, api: "anthropic" });
   prepChatPayload(fitted, rt.context);
   const system = (fitted.messages as Record<string, unknown>[])
     .filter((m) => m.role === "system")
@@ -386,6 +390,8 @@ async function anthropicChat(
       description: t.function.description,
       input_schema: t.function.parameters ?? { type: "object", properties: {} },
     }));
+  body.max_tokens = fitted.max_tokens;
+  if (fitted.thinking) body.thinking = fitted.thinking;
   if (tools) body.tools = mapTools(tools);
   const headers = anthropicHeaders(apiKey);
   const hdr = withUa(headers);
@@ -430,15 +436,13 @@ async function anthropicChat(
   const tool_calls: ToolCall[] = blocks
     .filter((b) => b.type === "tool_use" && b.id && b.name)
     .map((b) => asToolCall(b.id as string, b.name as string, JSON.stringify(b.input ?? {})));
-  return {
+  return withRequestTokens({
     role: "assistant",
     content: text || null,
     reasoning: reasoning || undefined,
     tool_calls: tool_calls.length ? tool_calls : undefined,
-    usage: json.usage
-      ? { prompt: json.usage.input_tokens ?? 0, completion: json.usage.output_tokens ?? 0 }
-      : undefined,
-  };
+    usage: anthropicUsage(json.usage),
+  }, fitted, rt.context);
 }
 
 export function toAnthropicMessages(messages: Record<string, unknown>[]): Record<string, unknown>[] {

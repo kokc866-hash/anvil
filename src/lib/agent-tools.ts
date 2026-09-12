@@ -95,7 +95,8 @@ export const AGENT_TOOLS = [
   }, ["text"]),
   tool("memory_forget", "Delete a learned fact. id from Gelerntes [id], or the fact text.", { id: { type: "string" } }, ["id"]),
   tool("skill_list", "List skills the agent wrote (reusable workflows).", {}),
-  tool("skill_write", "Create or update a skill. Use after a reusable multi-step workflow succeeded.", {
+  tool("skill_write", "Create or update a skill. Use after a reusable multi-step workflow succeeded. Default scope: current project.", {
+    scope: { type: "string", enum: ["user", "project"] },
     name: { type: "string" },
     when: { type: "string", description: "When to use this skill" },
     body: { type: "string", description: "Concrete steps" },

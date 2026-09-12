@@ -1,3 +1,4 @@
+import { chatUsage, resolvedUsage, type ReportedUsage, type TokenUsage } from "../token-usage";
 import { useIde } from "@/store/ide";
 import { captureBrainScope, bindBrainScope, brainCanceled } from "./scope";
 import { removeModelCache } from "./model-cache";
@@ -565,6 +566,7 @@ export async function brainGenerate(opts: {
   messages: ChatMsg[]; maxTokens?: number; temperature?: number; stop?: string[];
   json?: boolean; pri?: BrainPri; job?: string; onDelta?: (s: string) => void;
   deadlineMs?: number; signal?: AbortSignal; automatic?: boolean;
+  onUsage?: (usage: TokenUsage) => void;
 }): Promise<string> {
   if (!brainReady() || !engine) throw new Error("Helfer nicht geladen");
   const loadedEngine = engine;
@@ -591,11 +593,15 @@ export async function brainGenerate(opts: {
   // Qwen3/3.5 templates support WebLLM's empty thinking header. Other model
   // families retain their own conversation template.
   if (/^Qwen3(?:[.-]|$)/i.test(st.loadedId)) payload.extra_body = { enable_thinking: false };
+  if (opts.onDelta && opts.onUsage) payload.stream_options = { include_usage: true };
   if (opts.stop?.length) payload.stop = opts.stop;
   const key = cacheKey([job, String(session), st.loadedId, String(Boolean(opts.json)), JSON.stringify(payload)]);
   if (!opts.onDelta && !diagnostic) {
     const hit = cacheGet(key);
-    if (hit != null) return hit;
+    if (hit != null) {
+      opts.onUsage?.({ prompt: 0, completion: 0, estimated: false });
+      return hit;
+    }
   }
   const ctrl = new AbortController();
   const cancel = () => ctrl.abort(opts.signal?.reason ?? brainCanceled());
@@ -624,6 +630,7 @@ export async function brainGenerate(opts: {
       check();
       const raw = await loadedEngine.chat.completions.create(payload);
       check();
+      let usage: ReportedUsage | undefined;
       let text = "";
       let emitted = "";
       const emit = () => {
@@ -634,15 +641,19 @@ export async function brainGenerate(opts: {
         }
       };
       if (opts.onDelta && raw && typeof raw === "object" && Symbol.asyncIterator in raw) {
-        for await (const chunk of raw as AsyncIterable<{ choices?: { delta?: { content?: string } }[] }>) {
+        for await (const chunk of raw as AsyncIterable<{ choices?: { delta?: { content?: string } }[]; usage?: unknown }>) {
           check();
+          const current = chatUsage(chunk.usage);
+          if (current) usage = { ...usage, ...Object.fromEntries(Object.entries(current).filter(([, v]) => v !== undefined)) };
           text += chunk.choices?.[0]?.delta?.content ?? "";
           emit();
         }
       } else {
+        usage = chatUsage((raw as { usage?: unknown })?.usage);
         text = (raw as { choices?: { message?: { content?: string } }[] })?.choices?.[0]?.message?.content ?? "";
       }
       check();
+      opts.onUsage?.(resolvedUsage({ content: text, usage }, messages));
       const out = helperText(String(text));
       if (!out) throw new Error("Helfer lieferte keine nutzbare Antwort");
       if (opts.json && extractJson(out) === null) throw new Error("Helfer lieferte kein gültiges JSON");

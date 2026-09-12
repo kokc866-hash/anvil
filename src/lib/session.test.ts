@@ -143,3 +143,35 @@ describe("persistChat", () => {
     assert.equal(out.at(-1)?.content, "u79");
   });
 });
+
+
+describe("memory regressions", () => {
+  it("retains the task on continuation and correction", () => {
+    const old = { ...EMPTY_JOURNAL, goal: "Ein spielbares Memory-Spiel bauen", files: ["index.html"], notes: "Tastatur unterstützen" };
+    for (const text of ["Mach weiter", "Ok, weiter!", "Bitte nicht automatisch veröffentlichen."]) {
+      const next = beginJournal(text, old);
+      assert.equal(next.goal, old.goal);
+      assert.deepEqual(next.files, old.files);
+    }
+  });
+  it("retains newest constraints once the journal is full", () => {
+    const old = { ...EMPTY_JOURNAL, goal: "Spiel bauen", corrections: Array.from({ length: 16 }, (_, i) => `Nicht Regel ${i}`) };
+    const next = mergeJournal(old, extractJournal([{ role: "user", content: "Nicht mehr automatisch veröffentlichen." }], old));
+    assert.equal(next.corrections[0], "Nicht mehr automatisch veröffentlichen.");
+    assert.equal(next.corrections.length, 16);
+  });
+  it("merges notes idempotently and preserves the round count on disk", () => {
+    const old = { ...EMPTY_JOURNAL, goal: "Spiel bauen", notes: "Tastatur unterstützen", turns: 3 };
+    const next = mergeJournal(old, extractJournal([{ role: "assistant", content: "Ich arbeite weiter." }], old));
+    assert.equal(next.notes, old.notes);
+    assert.equal(parseSessionFile(sessionFileText(old, 22)).turns, 3);
+  });
+});
+
+
+it("recent file paths remain available after the journal reaches capacity", () => {
+  const old = { ...EMPTY_JOURNAL, files: Array.from({ length: 48 }, (_, i) => `old${i}.ts`) };
+  const next = extractJournal([{ role: "user", content: "Bitte src/new.ts korrigieren" }], old);
+  assert.equal(next.files[0], "src/new.ts");
+  assert.equal(next.files.length, 48);
+});

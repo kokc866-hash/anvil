@@ -1,3 +1,4 @@
+import { resolvedUsage, type ReportedUsage, type TokenUsage, type RequestTokens } from "./token-usage";
 import { AgentEvidence, type Verification } from "./agent-evidence.ts";
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { parseTextTool, validateToolCall, isToolStall, toolCallKey, type ToolContract } from "./tool-compat";
@@ -67,7 +68,7 @@ export type AgentResult = {
   tools?: string[];
   deleted?: string[];
   applied?: boolean;
-  usage?: { prompt: number; completion: number };
+  usage?: TokenUsage;
   compacted?: boolean;
   error?: string;
   ask?: JobAsk;
@@ -147,7 +148,8 @@ export type LlmChoice = {
   role?: string;
   reasoning?: string;
   finish_reason?: string;
-  usage?: { prompt: number; completion: number };
+  usage?: ReportedUsage;
+  requestTokens?: RequestTokens;
 };
 
 export { extractFileBlocks, looksLikeNoTools, looksIncomplete, looksStoppedEarly };
@@ -605,6 +607,7 @@ export async function runAgentLoop(
     runFile?: (path: string, files: Record<string, string>) => Promise<unknown>;
     play?: (keys: string[], hold?: number) => Promise<unknown>;
     see?: () => Promise<unknown>;
+    onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
     onHarness?: (bar: string) => void;
     selectTools?: (names: string[]) => unknown;
     tryTextFallback?: () => boolean;
@@ -628,7 +631,12 @@ export async function runAgentLoop(
   let beforeTextFallback: Set<string> | undefined;
   let previousTransport: "native" | "text" | undefined;
   const deleted: string[] = [];
-  let usage = { prompt: 0, completion: 0 };
+  let usage: TokenUsage = { prompt: 0, completion: 0, estimated: false };
+  const recordUsage = (choice: LlmChoice) => {
+    const current = resolvedUsage(choice, messages, AGENT_TOOLS);
+    usage = { prompt: usage.prompt + current.prompt, completion: usage.completion + current.completion, estimated: usage.estimated || current.estimated };
+    opts?.onUsage?.(current, choice.requestTokens);
+  };
   let compacted = false;
   const fileMap = Object.fromEntries(files);
   const prefer = [...new Set((data.prefer ?? []).filter((p) => p in fileMap))];
@@ -766,16 +774,11 @@ export async function runAgentLoop(
     }
     throwIfAborted();
     if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
-    if (choice.usage) {
-      usage = {
-        prompt: usage.prompt + choice.usage.prompt,
-        completion: usage.completion + choice.usage.completion,
-      };
-    }
+    recordUsage(choice);
     if (choice.tool_calls?.length) {
       choice.tool_calls = stampToolCalls([{ tool_calls: choice.tool_calls }])[0]?.tool_calls as ToolCall[];
     }
-    const { toolContract, ...historyChoice } = choice;
+    const { toolContract, usage: _usage, requestTokens: _requestTokens, ...historyChoice } = choice;
     const learned = opts?.toolLearning?.resolve(choice);
     if (learned?.error) return packResult(learned.error, { ok: false, error: learned.error });
     if (toolContract?.transport === "text" && previousTransport === "native" && !beforeTextFallback) beforeTextFallback = new Set(completedChanges);
@@ -1157,12 +1160,7 @@ export async function runAgentLoop(
     }
     if (stopAfter) {
       const last = await complete(messages, true, opts?.onDelta);
-      if (last.usage) {
-        usage = {
-          prompt: usage.prompt + last.usage.prompt,
-          completion: usage.completion + last.usage.completion,
-        };
-      }
+      recordUsage(last);
       const extra = extractFileBlocks(last.content ?? "");
       for (const b of extra) {
         files.set(b.path, b.content);

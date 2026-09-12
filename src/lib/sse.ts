@@ -1,3 +1,4 @@
+import { chatUsage, anthropicUsage, type ReportedUsage } from "./token-usage";
 import type { LlmChoice, ToolCall } from "./agent-core";
 import { asToolCall } from "./agent-core";
 import { agentBeat, agentGen, localSseStall, streamIdleMs } from "./abort";
@@ -45,13 +46,13 @@ export async function readSseChat(
   let buf = "";
   let content = "";
   let reasoning = "";
-  let promptTok = 0;
-  let completionTok = 0;
+  let usage: ReportedUsage | undefined;
   let sawDone = false;
   let finish = "";
   let inThink = false;
   let gotThink = false;
   let sawStop = false;
+  let finishAt = 0;
   let thinkAt = 0;
   let gotEvent = false;
   const tools = new Map<number, { id: string; name: string; args: string }>();
@@ -109,7 +110,7 @@ export async function readSseChat(
 
   const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
     new Promise((resolve, reject) => {
-      const wait = sawDone ? AFTER_FINISH_MS : sawStop ? AFTER_STOP_MS : stallWait(gotEvent);
+      const wait = sawStop ? Math.max(1, AFTER_STOP_MS - (Date.now() - finishAt)) : stallWait(gotEvent);
       const t =
         wait > 0
           ? setTimeout(() => {
@@ -135,9 +136,9 @@ export async function readSseChat(
   try {
   while (true) {
     const { value, done } = await readChunk();
-    if (done) break;
+    if (done && !buf.trim()) break;
     if (value && value.byteLength) gotEvent = true;
-    buf += dec.decode(value, { stream: true });
+    buf += done ? dec.decode() + "\n" : dec.decode(value, { stream: true });
     const lines = buf.split("\n");
     buf = lines.pop() ?? "";
     for (const line of lines) {
@@ -174,8 +175,8 @@ export async function readSseChat(
           }[];
         };
         if (json.usage) {
-          promptTok = json.usage.prompt_tokens ?? promptTok;
-          completionTok = json.usage.completion_tokens ?? completionTok;
+          const next = chatUsage(json.usage);
+          if (next) usage = { ...usage, ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)) };
         }
         const ch = json.choices?.[0];
         if (ch?.finish_reason) {
@@ -183,11 +184,12 @@ export async function readSseChat(
           if (fr === "tool_calls" || fr === "function_call" || fr === "length") {
             finish = fr;
             sawStop = true;
-            if (fr !== "length") sawDone = true;
+            finishAt ||= Date.now();
+            // Usage may arrive in a separate chunk after finish_reason.
           } else if (fr === "stop" || fr === "end_turn") {
             finish = finish || fr;
             sawStop = true;
-            if (thinkOff() || content || tools.size) sawDone = true;
+            finishAt ||= Date.now();
           }
         }
         const delta = ch?.delta;
@@ -227,7 +229,7 @@ export async function readSseChat(
         /* ignore broken chunk */
       }
     }
-    if (sawDone) break;
+    if (sawDone || done) break;
     if (
       thinkOff() &&
       thinkAt &&
@@ -265,7 +267,7 @@ export async function readSseChat(
     reasoning: reasoning || undefined,
     tool_calls: tool_calls.length ? tool_calls : undefined,
     finish_reason: finish || (tool_calls.length ? "tool_calls" : sawDone ? "stop" : undefined),
-    usage: promptTok || completionTok ? { prompt: promptTok, completion: completionTok } : undefined,
+    usage,
   };
 }
 
@@ -310,9 +312,9 @@ export async function readSseResponses(
   try {
     while (true) {
       const { value, done } = await readChunk();
-      if (done) break;
+      if (done && !buf.trim()) break;
       if (value && value.byteLength) gotEvent = true;
-      buf += dec.decode(value, { stream: true });
+      buf += done ? dec.decode() + "\n" : dec.decode(value, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop() ?? "";
       for (const line of lines) {
@@ -345,7 +347,7 @@ export async function readSseResponses(
           if (err instanceof Error && acc.error) throw err;
         }
       }
-      if (sawDone || acc.done) break;
+      if (sawDone || acc.done || done) break;
     }
   } finally {
     finishLiveWrite(generation);
@@ -382,8 +384,8 @@ export async function readSseAnthropic(
   let blockId = "";
   let blockKind = "";
   let sawStop = false;
-  let promptTok = 0;
-  let completionTok = 0;
+  const usageFields: Record<string, unknown> = {};
+  let finished = false;
   let errMsg = "";
   let gotEvent = false;
 
@@ -415,9 +417,9 @@ export async function readSseAnthropic(
   try {
     while (true) {
       const { value, done } = await readChunk();
-      if (done) break;
+      if (done && !buf.trim()) break;
       if (value && value.byteLength) gotEvent = true;
-      buf += dec.decode(value, { stream: true });
+      buf += done ? dec.decode() + "\n" : dec.decode(value, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop() ?? "";
       for (const line of lines) {
@@ -429,7 +431,7 @@ export async function readSseAnthropic(
         if (!t.startsWith("data:")) continue;
         const data = t.slice(5).trim();
         if (!data || data === "[DONE]") {
-          if (data === "[DONE]") sawStop = true;
+          if (data === "[DONE]") { sawStop = true; finished = true; }
           continue;
         }
         let j: Record<string, unknown>;
@@ -495,20 +497,23 @@ export async function readSseAnthropic(
           }
           agentBeat();
         }
+        if (type === "message_start") {
+          const message = j.message as { usage?: Record<string, unknown> } | undefined;
+          if (message?.usage) Object.assign(usageFields, message.usage);
+        }
         if (type === "message_delta") {
           const usage = (j.usage && typeof j.usage === "object" ? j.usage : null) as
             | { input_tokens?: number; output_tokens?: number }
             | null;
           if (usage) {
-            promptTok = usage.input_tokens ?? promptTok;
-            completionTok = usage.output_tokens ?? completionTok;
+            Object.assign(usageFields, usage);
           }
           const delta = (j.delta && typeof j.delta === "object" ? j.delta : {}) as { stop_reason?: string };
           if (delta.stop_reason) sawStop = true;
         }
-        if (type === "message_stop") sawStop = true;
+        if (type === "message_stop") { sawStop = true; finished = true; }
       }
-      if (sawStop) break;
+      if (finished || errMsg || done) break;
     }
   } finally {
     finishLiveWrite(generation);
@@ -535,6 +540,6 @@ export async function readSseAnthropic(
     content: content || null,
     reasoning: reasoning || undefined,
     tool_calls: tool_calls.length ? tool_calls : undefined,
-    usage: promptTok || completionTok ? { prompt: promptTok, completion: completionTok } : undefined,
+    usage: anthropicUsage(usageFields),
   };
 }

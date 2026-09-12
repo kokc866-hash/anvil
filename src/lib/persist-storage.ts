@@ -194,6 +194,11 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           const source = state.files;
           const chat = Array.isArray(state.chat) ? (state.chat as ArchiveMessage[]) : undefined;
           delete state.files;
+          const savedAt = Date.now();
+          const archiveState = name === "anvil-ide" || name === "anvil-learn" ? { ...state } : undefined;
+          if (archiveState) { delete archiveState.chat; delete archiveState.pendingDiffs; delete archiveState.editBases; }
+          // Complete inactive sessions live in IndexedDB, not the small recovery copy.
+          delete state.workspaceSessions;
           const recovery = Array.isArray(state.pendingDiffs) ? {
             pendingDiffs: state.pendingDiffs,
             editBases: (state.editBases ?? {}) as Record<string, string | null>,
@@ -215,7 +220,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
               }),
             }));
           if (name === "anvil-ide") snapLlm(state);
-          const localOk = writeLs(name, JSON.stringify({ ...value, state }));
+          const localOk = writeLs(name, JSON.stringify({ ...value, state, savedAt }));
           let files: Record<string, string> | undefined;
           if (source) {
             const onDisk =
@@ -254,14 +259,14 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
               }
             }
           }
-          if (files || chat || recovery) {
-            const snapshot = { files, chat, recovery };
+          if (files || chat || recovery || archiveState) {
+            const snapshot = { files, chat, recovery, state: archiveState, savedAt };
             const previous = written.get(name) ?? {};
-            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat || snapshot.recovery !== previous.recovery)
+            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat || snapshot.recovery !== previous.recovery || snapshot.state !== previous.state)
               await saveArchive(name, snapshot, previous);
             written.set(name, snapshot);
           }
-          if (!localOk) throw new Error("Einstellungen konnten nicht gespeichert werden.");
+          if (!localOk && !archiveState) throw new Error("Einstellungen konnten nicht gespeichert werden.");
         } catch (error) {
           persistenceError(name, error);
           failures.push(error);
@@ -290,7 +295,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
       await tail.catch(() => undefined);
       const raw = lsGet(name);
       try {
-        let parsed: StorageValue<Slice> | null = null;
+        let parsed: (StorageValue<Slice> & { savedAt?: number }) | null = null;
         try {
           const value = raw ? JSON.parse(raw) : null;
           if (value?.state && typeof value.state === "object")
@@ -298,16 +303,16 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
         } catch {
           /* Recover the primary archive even if the compact copy is damaged. */
         }
-        if (!parsed && name !== "anvil-ide") {
+        if (!parsed && name !== "anvil-ide" && name !== "anvil-learn") {
           seen.add(name);
           return bag.get(name) ?? null;
         }
         const archive = await loadArchive(name).catch((error) => {
           if (name === "anvil-ide") persistenceError(name, error);
-          return { files: null, chat: null, recovery: null };
+          return { files: null, chat: null, recovery: null, state: undefined, savedAt: 0 };
         });
         const llm = name === "anvil-ide" ? readLlm() : null;
-        if (!parsed && archive.files === null && archive.chat === null && !llm) {
+        if (!parsed && archive.files === null && archive.chat === null && !archive.state && !llm) {
           seen.add(name);
           return bag.get(name) ?? null;
         }
@@ -322,8 +327,10 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           }
         }
         files ??= parsed.state?.files ?? {};
-        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined, recovery: archive.recovery ?? undefined });
-        parsed.state = { ...(llm ?? {}), ...(parsed.state ?? {}), files };
+        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined, recovery: archive.recovery ?? undefined, state: archive.state, savedAt: archive.savedAt });
+        const metadata = (parsed.savedAt ?? 0) > (archive.savedAt ?? 0)
+          ? { ...archive.state, ...parsed.state } : { ...parsed.state, ...archive.state };
+        parsed.state = { ...(llm ?? {}), ...metadata, ...(name === "anvil-ide" || archive.files !== null ? { files } : {}) };
         if (archive.recovery) Object.assign(parsed.state, archive.recovery);
         if (archive.chat !== null) parsed.state.chat = archive.chat;
         seen.add(name);

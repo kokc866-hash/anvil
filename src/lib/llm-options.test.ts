@@ -282,3 +282,19 @@ test("patchResponses400 drops nested reasoning.summary", () => {
   assert.equal(patchResponses400(body, "Unsupported parameter: summary"), true);
   assert.deepEqual(body.reasoning, { effort: "medium" });
 });
+
+
+test("explicit local output is not capped to a percentage of context", () => {
+  for (const thinking of ["off", "high"] as const) {
+    const payload = applyLlmOptions({ stream: true }, { provider: "ollama", model: "qwen3", context: 32768, thinking, maxOut: 16384 });
+    assert.equal((payload.options as { num_predict: number }).num_predict, 16384);
+    assert.equal(payload.stream_options, undefined);
+  }
+});
+
+test("request streamed usage on OpenAI without changing Anthropic or legacy local wire formats", () => {
+  for (const provider of ["openai", "anthropic", "custom"]) {
+    const payload = applyLlmOptions({ stream: true }, { provider, model: "model", context: 32768, thinking: "off" });
+    assert.deepEqual(payload.stream_options, provider === "openai" ? { include_usage: true } : undefined);
+  }
+});

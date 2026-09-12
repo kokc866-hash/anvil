@@ -1,3 +1,4 @@
+import { chatUsage, withRequestTokens, type ReportedUsage, type RequestTokens } from "./token-usage";
 import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
 import {
@@ -35,7 +36,8 @@ async function grokChat(
   if (Array.isArray(payload.messages)) {
     payload.messages = stampToolCalls(foldChatMessages(payload.messages as Record<string, unknown>[]));
   }
-  prepChatPayload(payload, 131072);
+  let wireCtx = 131072;
+  prepChatPayload(payload, wireCtx);
   const send = (p: Record<string, unknown>) =>
     fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
@@ -62,7 +64,8 @@ async function grokChat(
     raw = await res.text();
   }
   if (!res.ok && isContextError(raw)) {
-    prepChatPayload(payload, 65536);
+    wireCtx = 65536;
+    prepChatPayload(payload, wireCtx);
     if (payload.max_tokens != null) payload.max_tokens = Math.max(256, Math.floor(Number(payload.max_tokens) * 0.5));
     if (payload.max_completion_tokens != null)
       payload.max_completion_tokens = Math.max(256, Math.floor(Number(payload.max_completion_tokens) * 0.5));
@@ -70,15 +73,16 @@ async function grokChat(
     raw = await res.text();
   }
   if (!res.ok) throw new Error(`xAI-Fehler ${res.status}: ${raw.slice(0, 300)}`);
-  let json: { choices?: { message?: LlmChoice }[] };
+  let json: { choices?: { message?: LlmChoice }[]; usage?: unknown };
   try {
-    json = JSON.parse(raw) as { choices?: { message?: LlmChoice }[] };
+    json = JSON.parse(raw) as { choices?: { message?: LlmChoice }[]; usage?: unknown };
   } catch {
     throw new Error(raw.slice(0, 280) || "Leere xAI-Antwort.");
   }
   const choice = json.choices?.[0]?.message;
   if (!choice) throw new Error("Leere Antwort vom Modell.");
-  return choice;
+  choice.usage = chatUsage(json.usage);
+  return withRequestTokens(choice, payload, wireCtx);
 }
 
 export const grokRound = createServerFn({ method: "POST" })
@@ -155,7 +159,7 @@ export const chatWithAgent = createServerFn({ method: "POST" })
 export const completePrompt = createServerFn({ method: "POST" })
   .middleware([sameOriginMiddleware])
   .validator((input: { prompt: string }) => input)
-  .handler(async ({ data }): Promise<{ ok: boolean; text: string; error?: string }> => {
+  .handler(async ({ data }): Promise<{ ok: boolean; text: string; error?: string; usage?: ReportedUsage; requestTokens?: RequestTokens }> => {
     const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) return { ok: false, text: "", error: "AI is not available" };
     try {
@@ -165,7 +169,7 @@ export const completePrompt = createServerFn({ method: "POST" })
         max_tokens: 1200,
         messages: [{ role: "user", content: data.prompt.slice(0, 12000) }],
       });
-      return { ok: true, text: choice.content?.trim() || "" };
+      return { ok: true, text: choice.content?.trim() || "", usage: choice.usage, requestTokens: choice.requestTokens };
     } catch (err) {
       return {
         ok: false,

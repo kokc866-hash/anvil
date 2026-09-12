@@ -1,12 +1,12 @@
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import { estimateTokens, formatContext, formatTokens } from "@/lib/tokens";
+import { formatContext, formatTokens } from "@/lib/tokens";
 
 import { cn } from "@/lib/cn";
 
 import { useIde } from "@/store/ide";
 
-import { t, useT } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 
 function Chip({ children, title, tone }: { children: ReactNode; title?: string; tone?: "ok" | "warn" | "live" }) {
   return (
@@ -26,36 +26,31 @@ function Chip({ children, title, tone }: { children: ReactNode; title?: string; 
 
 export function ContextBar() {
   const t = useT();
-  const chat = useIde((s) => s.chat);
-  const fileN = useIde((s) => Object.keys(s.files).length);
+  const request = useIde((s) => s.lastRequestTokens);
+  const locale = useIde((s) => s.locale);
   const llmContext = useIde((s) => s.llmContext);
   const sessionTokens = useIde((s) => s.sessionTokens);
   const llmThinking = useIde((s) => s.llmThinking);
   const llmCompact = useIde((s) => s.llmCompact);
-  const agentBusy = useIde((s) => s.agentBusy);
   const runLoop = useIde((s) => s.runLoop);
   const graphLoop = useIde((s) => s.graphLoop);
   const llmRetries = useIde((s) => s.llmRetries);
   const agentQueue = useIde((s) => s.agentQueue.length);
-  const ctxUsed = useMemo(() => {
-    let n = 0;
-    for (const m of chat) n += estimateTokens(m.content) + estimateTokens(m.thinking ?? "");
-    n += fileN * 4;
-    return n;
-  }, [chat, fileN]);
-  const pct = Math.min(100, Math.round((ctxUsed / Math.max(1, llmContext)) * 100));
+  const ctxUsed = request?.prompt ?? 0;
+  const contextLimit = request?.limit ?? llmContext;
+  const pct = Math.min(100, Math.round((ctxUsed / Math.max(1, contextLimit)) * 100));
   const session = sessionTokens.prompt + sessionTokens.completion;
   const think = llmThinking === "auto" ? "auto" : llmThinking === "medium" ? "mid" : llmThinking;
   const items: { id: string; title?: string; tone?: "ok" | "warn" | "live"; node: ReactNode }[] = [
     {
       id: "ctx",
-      title: t("context"),
+      title: locale === "de" ? "Eingabe der letzten Modellanfrage einschließlich System und Werkzeugen. ≈ = geschätzt; keine aktuelle Tokenizer-Messung." : "Input of the last model request including system and tools. ≈ = estimated; not a live tokenizer measurement.",
       tone: pct > 85 ? "warn" : undefined,
       node: (
         <>
           <span>{t("context")}</span>
           <span>
-            {formatTokens(ctxUsed)}/{formatContext(llmContext)}
+            {request ? `${request.estimated ? "≈" : ""}${formatTokens(ctxUsed)}` : "—"}/{formatContext(contextLimit)}
           </span>
           <span className="inline-block h-1 w-10 overflow-hidden rounded-full bg-border">
             <span
@@ -63,7 +58,7 @@ export function ContextBar() {
               style={{ width: `${pct}%` }}
             />
           </span>
-          <span>{pct}%</span>
+          <span>{request ? `${request.estimated ? "≈" : ""}${pct}%` : ""}</span>
         </>
       ),
     },
@@ -71,11 +66,13 @@ export function ContextBar() {
   if (session > 0) {
     items.push({
       id: "session",
-      title: t("session"),
+      title: locale === "de"
+        ? `Chat-Anfragen dieser Sitzung: Eingabe ${formatTokens(sessionTokens.prompt)}, Ausgabe ${formatTokens(sessionTokens.completion)}. Wiederholte Eingaben werden pro Anfrage gezählt. ≈ enthält Schätzungen; abgebrochene Antworten ohne Nutzungsdaten können fehlen. Automatische Helferjobs sind nicht enthalten.`
+        : `Chat requests this session: input ${formatTokens(sessionTokens.prompt)}, output ${formatTokens(sessionTokens.completion)}. Repeated input counts per request. ≈ includes estimates; interrupted responses without usage may be missing. Automatic helper jobs are excluded.`,
       node: (
         <>
-          {t("session")} {formatTokens(session)}
-          {sessionTokens.completion ? ` · ${formatTokens(sessionTokens.completion)}` : ""}
+          {t("session")} {sessionTokens.estimated !== false ? "≈" : ""}{formatTokens(session)}
+          {sessionTokens.completion ? ` · ↓${formatTokens(sessionTokens.completion)}` : ""}
         </>
       ),
     });

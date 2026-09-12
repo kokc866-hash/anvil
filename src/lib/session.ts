@@ -93,6 +93,9 @@ function uniqCap(xs: string[], cap: number): string[] {
 
 function taskLooksNew(next: string, prev: string): boolean {
   if (!prev || next === prev) return false;
+  if (/^(?:(?:ok(?:ay)?|ja|bitte)[,!. ]*)?(?:mach(?:e)? weiter|weiter(?:machen)?|fortsetzen|continue|go on|reparieren(?: und nichts kaputt machen)?|korrigieren|push(?: und release)?|release)[.! ]*$/i.test(next.trim())) return false;
+  if (CORRECT_RE.test(next)) return false;
+  if (!/^(?:neue[rns]? (?:aufgabe|auftrag|thema)|anderes (?:problem|thema)|jetzt (?:ein|eine|bauen|schreibe|erstelle)|build |create |schreibe |erstelle |bau(?:e)? )/i.test(next)) return false;
   if (next.startsWith(prev.slice(0, 24))) return false;
   const words = (s: string) => new Set(s.toLowerCase().split(/\s+/).filter((w) => w.length > 3));
   const a = words(next);
@@ -114,10 +117,11 @@ export function parseSessionFile(text: string): SessionJournal {
     .replace(/^Nicht:.*$/m, "")
     .replace(/^Offen:.*$/m, "")
     .replace(/^Nachrichten:.*$/m, "")
+    .replace(/^Runden:.*$/m, "")
     .replace(/^Stand:.*$/m, "")
     .replace(/^\(leer\)\s*$/m, "")
     .trim();
-  const turns = Number(t.match(/Nachrichten:\s*(\d+)/)?.[1] || 0);
+  const turns = Number(t.match(/^Runden:\s*(\d+)/m)?.[1] || 0);
   return normalizeJournal({
     goal: grab("Ziel"),
     files: split(grab("Dateien"), /,\s*/),
@@ -172,7 +176,7 @@ export function extractJournal(
   prev?: SessionJournal | null,
 ): SessionJournal {
   const base = normalizeJournal(prev);
-  const files = new Set<string>(base.files);
+  const files = new Set<string>();
   const decisions: string[] = [...base.decisions];
   const corrections: string[] = [...base.corrections];
   const open: string[] = [...base.open];
@@ -214,18 +218,14 @@ export function extractJournal(
     }
   }
 
-  const notes = [base.notes, ...noteBits]
-    .filter(Boolean)
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .slice(-3000);
+  const notes = mergeNotes(base.notes, ...noteBits);
 
   return {
     goal,
-    files: uniqCap([...files], 48),
-    decisions: uniqCap(decisions, 16),
-    corrections: uniqCap(corrections, 16),
-    open: uniqCap(open, 10),
+    files: uniqCap([...files].reverse().concat(base.files), 48),
+    decisions: uniqCap([...decisions.slice(base.decisions.length).reverse(), ...base.decisions], 16),
+    corrections: uniqCap([...corrections.slice(base.corrections.length).reverse(), ...base.corrections], 16),
+    open: uniqCap([...open.slice(base.open.length).reverse(), ...base.open], 10),
     notes,
     at: Date.now(),
     turns: Math.max(base.turns, users, base.turns + (users ? 1 : 0)),
@@ -236,8 +236,12 @@ export function beginJournal(work: string, prev?: SessionJournal | null): Sessio
   const one = String(work || "").replace(/\s+/g, " ").trim().slice(0, 240);
   const cur = normalizeJournal(prev);
   if (/^Antwort auf:/i.test(one)) return cur;
-  if (cur.goal && !/^Antwort auf:/i.test(cur.goal) && !taskLooksNew(one, cur.goal)) return cur;
+  if (cur.goal && !/^Antwort auf:/i.test(cur.goal) && !taskLooksNew(one, cur.goal)) return { ...extractJournal([{ role: "user", content: work }], cur), turns: cur.turns };
   return extractJournal([{ role: "user", content: work }]);
+}
+
+function mergeNotes(...notes: string[]) {
+  return [...new Set(notes.flatMap(n => n.split("\n")).map(n => n.trim()).filter(Boolean))].join("\n").slice(-3000);
 }
 
 export function mergeJournal(a: SessionJournal | null | undefined, b: SessionJournal | Partial<SessionJournal> | null | undefined): SessionJournal {
@@ -247,11 +251,11 @@ export function mergeJournal(a: SessionJournal | null | undefined, b: SessionJou
   if (isJournalEmpty(left)) return right;
   return {
     goal: right.goal || left.goal,
-    files: uniqCap([...left.files, ...right.files], 48),
-    decisions: uniqCap([...left.decisions, ...right.decisions], 16),
-    corrections: uniqCap([...left.corrections, ...right.corrections], 16),
+    files: uniqCap([...right.files, ...left.files], 48),
+    decisions: uniqCap([...right.decisions, ...left.decisions], 16),
+    corrections: uniqCap([...right.corrections, ...left.corrections], 16),
     open: uniqCap([...right.open, ...left.open], 10),
-    notes: `${left.notes}\n${right.notes}`.replace(/\n{3,}/g, "\n\n").trim().slice(-3000),
+    notes: mergeNotes(left.notes, right.notes),
     at: Math.max(left.at, right.at) || Date.now(),
     turns: Math.max(left.turns, right.turns),
   };
@@ -282,26 +286,7 @@ export function journalPrompt(j: SessionJournal | null | undefined): string {
 
 export function sessionFileText(j: SessionJournal, chatLen = 0): string {
   const body = formatJournal(j) || "(leer)";
-  return `# Anvil Sitzung\n\n${body}\n\nNachrichten: ${chatLen}\nStand: ${j.at ? new Date(j.at).toISOString() : ""}\n`;
-}
-
-export async function persistSessionDisk(): Promise<void> {
-  const { useIde } = await import("@/store/ide");
-  const st = useIde.getState();
-  const text = sessionFileText(st.sessionJournal ?? EMPTY_JOURNAL, st.chat.length);
-  try {
-    st.writeFile(".anvil/session.md", text, { quiet: true });
-  } catch {
-    /* workspace not ready */
-  }
-  const cwd = st.workspaceCwd?.trim();
-  if (!cwd) return;
-  try {
-    const { companionWriteFile } = await import("@/lib/companion");
-    await companionWriteFile(".anvil/session.md", text, cwd);
-  } catch {
-    /* companion down */
-  }
+  return `# Anvil Sitzung\n\n${body}\n\nNachrichten: ${chatLen}\nRunden: ${j.turns}\nStand: ${j.at ? new Date(j.at).toISOString() : ""}\n`;
 }
 
 export type ChatTurn = {
@@ -412,6 +397,6 @@ export async function pruneSession(): Promise<void> {
     mcpLog,
     lspLog,
   });
-  void persistSessionDisk();
+  st.writeFile(".anvil/session.md", sessionFileText(st.sessionJournal, st.chat.length), { quiet: true });
 }
 

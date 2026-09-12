@@ -22,11 +22,28 @@ test("immer pytest is a project fact", () => {
   assert.ok(facts.some((f) => f.kind === "project" && /pytest/i.test(f.text)));
 });
 
-test("workspace id prefers repo then cwd then disk", () => {
-  assert.equal(idFromPins({ workspaceCwd: "C:/Users/a/proj/anvil" }), "a/proj/anvil");
-  assert.equal(idFromPins({ githubRepo: "kokc866-hash/anvil", workspaceCwd: "x" }), "kokc866-hash/anvil");
-  assert.equal(idFromPins({ diskName: "Anvil" }), "Anvil");
-  assert.equal(idFromPins({}), "local");
+test("workspace identity uses complete paths and stable portable IDs", () => {
+  assert.equal(idFromPins({ workspaceCwd: "C:/Users/a/proj/anvil" }), "v2:path:c:/users/a/proj/anvil");
+  assert.notEqual(idFromPins({ workspaceCwd: "C:/one/shared/apps/game" }), idFromPins({ workspaceCwd: "D:/two/shared/apps/game" }));
+  assert.equal(idFromPins({ githubRepo: "kokc866-hash/anvil", workspaceCwd: "x" }), "v2:path:x");
+  assert.equal(idFromPins({ githubRepo: "https://github.com/Owner/Repo.git" }), "v2:repo:owner/repo");
+  assert.notEqual(idFromPins({ diskName: "Same", workspaceMemoryId: "one" }), idFromPins({ diskName: "Same", workspaceMemoryId: "two" }));
+});
+
+test("questions and negations cannot invert preferences", () => {
+  const facts = factsFromUtterance("Warum gibt es keine Animation? Bitte kein pytest, sondern unittest.");
+  assert.equal(facts.some(f => /Animation|Python-Tests mit pytest/.test(f.text)), false);
+  assert.ok(facts.some(f => f.text === "Nicht verwenden: pytest"));
+  assert.equal(factsFromUtterance("Statt TypeScript lieber Python.").some(f => /Bevorzugt TypeScript/.test(f.text)), false);
+  assert.equal(factsFromUtterance("Bitte nicht kurz antworten.").some(f => /Antworten kurz/.test(f.text)), false);
+});
+
+test("skill files default to project and bound prompt content", () => {
+  const skill = parseSkillMd("A".repeat(9000), ".anvil/skills/build-unique.md");
+  assert.ok(skill);
+  assert.equal(skill.scope, "project");
+  assert.equal(skill.id, "build-unique");
+  assert.equal(skill.body.length, 8000);
 });
 
 test("parses skill markdown", () => {

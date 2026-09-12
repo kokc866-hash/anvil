@@ -26,12 +26,13 @@ test("compact never clips the last tool result", () => {
 
 test("fitMessages shrinks few huge messages to budget", () => {
   const msgs = [
-    { role: "system", content: "A".repeat(20_000) },
+    { role: "system", content: "A".repeat(1000) },
     { role: "user", content: "B".repeat(20_000) },
     { role: "assistant", content: "C".repeat(20_000) },
   ];
   const out = fitMessages(msgs, 2000);
-  assert.ok(estimatePrompt(out) <= 2000 * 1.3);
+  assert.ok(estimatePrompt(out) <= 2000);
+  assert.equal(out[0].content, msgs[0].content);
 });
 
 test("prepChatPayload: prompt + max_tokens fits n_ctx", () => {
@@ -141,4 +142,47 @@ test("estimatePrompt stubs data urls so they do not dominate the budget", () => 
   ];
   const n = estimatePrompt(msgs);
   assert.ok(n < 2000, String(n));
+});
+
+
+test("4k payload stays inside the same conservative budget after trimming", () => {
+  const payload: Record<string, unknown> = { messages: [{ role: "system", content: "Short system." }, { role: "user", content: "x".repeat(24000) }], max_tokens: 1024 };
+  prepChatPayload(payload, 4096);
+  assert.ok(estimatePrompt(payload.messages, payload.tools) + Number(payload.max_tokens) + 192 <= 4096);
+});
+
+test("impossible tools or system budget fails explicitly without dropping contracts", () => {
+  const tools = [{ type: "function", function: { name: "big", description: "x".repeat(20000) } }];
+  const payload = { messages: [{ role: "user", content: "hi" }], tools, max_tokens: 1024 };
+  assert.throws(() => prepChatPayload(payload, 4096), /Context window/);
+  assert.deepEqual(payload.tools, tools);
+  const system = { role: "system", content: "rules ".repeat(4000) };
+  assert.throws(() => fitMessages([system, { role: "user", content: "hi" }], 2000), /Context window/);
+  assert.equal(system.content, "rules ".repeat(4000));
+});
+
+test("explicit output length is honored when it fits, including small limits", () => {
+  for (const limit of [16, 128, 16384]) {
+    const payload = { messages: [{ role: "user", content: "Hallo" }], max_tokens: limit };
+    prepChatPayload(payload, 32768);
+    assert.equal(payload.max_tokens, limit);
+  }
+});
+
+test("images reserve tokens without counting base64 as text", () => {
+  const small = [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64," + "A".repeat(100) } }] }];
+  const big = [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64," + "A".repeat(1000000) } }] }];
+  assert.equal(estimatePrompt(small), estimatePrompt(big));
+  assert.ok(estimatePrompt(small) >= 1536);
+  assert.ok(estimatePrompt([...small, ...small]) >= 3072);
+});
+
+
+test("manual thinking retains valid room for both thinking and visible output", () => {
+  const payload = { messages: [{ role: "system", content: "sys" }, { role: "user", content: "x".repeat(20000) }], max_tokens: 8192, thinking: { type: "enabled", budget_tokens: 4096 } };
+  prepChatPayload(payload, 4096);
+  assert.ok(payload.max_tokens >= 2048);
+  assert.ok(payload.thinking.budget_tokens >= 1024);
+  assert.ok(payload.thinking.budget_tokens <= payload.max_tokens - 1024);
+  assert.ok(estimatePrompt(payload.messages) + payload.max_tokens + 192 <= 4096);
 });

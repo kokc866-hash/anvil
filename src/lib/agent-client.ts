@@ -1,3 +1,4 @@
+import { chatUsage, resolvedUsage, withRequestTokens, type TokenUsage, type RequestTokens } from "./token-usage";
 import { modelSeesImages } from "./ref";
 import { ToolSession, toolTargetKey, toolCompatibility } from "./tool-compat";
 import { ToolLearningSession } from "./tool-learning";
@@ -136,6 +137,7 @@ export async function chatWithProvider(opts: {
   onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
   onTool?: (info: { name: string; args: Record<string, unknown>; result: unknown }) => void;
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
+  onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
   onHarness?: (bar: string) => void;
   runLoop?: boolean;
   graphLoop?: boolean;
@@ -201,13 +203,14 @@ export async function chatWithProvider(opts: {
             signal: withAgentTimeout(stop),
           });
           if (res.ok) {
-            if (payload.stream) return readSseChat(res, onDelta);
-            const json = (await res.json()) as { choices: { message: LlmChoice }[] };
+            if (payload.stream) return withRequestTokens(await readSseChat(res, onDelta), payload, opts.context ?? 131072);
+            const json = (await res.json()) as { choices: { message: LlmChoice }[]; usage?: unknown };
             const choice = json.choices[0]?.message;
+            if (choice) choice.usage = chatUsage(json.usage);
             if (!choice) throw new Error("Leere Antwort vom Modell");
             if (choice.reasoning) onDelta?.(choice.reasoning, "think");
             if (choice.content) onDelta?.(choice.content, "text");
-            return choice;
+            return withRequestTokens(choice, payload, opts.context ?? 131072);
           }
         } catch (err) {
           if (err instanceof AgentAbortError) throw err;
@@ -239,7 +242,7 @@ export async function chatWithProvider(opts: {
         observeOnly: opts.observeOnly,
       },
       complete,
-      { ...clientTools(opts), onHarness: opts.onHarness },
+      { ...clientTools(opts), onHarness: opts.onHarness, onUsage: opts.onUsage },
     );
   }
   if (spec.id === "brain") {
@@ -267,7 +270,12 @@ export async function chatWithProvider(opts: {
     contract: () => toolSession.contract, compatibility: toolSession.mode, locale: opts.locale,
   }) : undefined;
   const transport = cliKind
-    ? (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => completeViaCli(cliKind, model, messages, useTools ? toolsForCall(opts.observeOnly) : [], hardStopMs(useIde.getState().llmHardStopMin), onDelta)
+    ? async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => {
+        const offered = useTools ? toolsForCall(opts.observeOnly) : [];
+        const choice = await completeViaCli(cliKind, model, messages, offered, hardStopMs(useIde.getState().llmHardStopMin), onDelta);
+        choice.usage = resolvedUsage(choice, messages, offered);
+        return choice;
+      }
     : isBrowserTarget(spec, opts.baseUrl)
     ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession)
     : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession);
@@ -307,7 +315,7 @@ export async function chatWithProvider(opts: {
         observeOnly: opts.observeOnly,
       },
       complete,
-      { ...clientTools(opts), onHarness: opts.onHarness,
+      { ...clientTools(opts), onHarness: opts.onHarness, onUsage: opts.onUsage,
         toolLearning,
         selectTools: toolSession ? (names) => toolSession.select(names) : undefined,
         tryTextFallback: toolSession ? () => toolSession.tryTextFallback() : undefined,
@@ -810,7 +818,7 @@ function makeLocalComplete(
           if (!choice.content && !choice.reasoning && !choice.tool_calls?.length) {
             throw new StreamStallError("Leere Antwort");
           }
-          return choice;
+          return withRequestTokens(choice, payload, wireCtx);
         }
         const json = (await res.json()) as {
           choices: { message: LlmChoice }[];
@@ -818,13 +826,11 @@ function makeLocalComplete(
         };
         const choice = json.choices[0]?.message;
         if (!choice) throw new Error("Leere Antwort vom Modell.");
-        if (json.usage) {
-          choice.usage = { prompt: json.usage.prompt_tokens ?? 0, completion: json.usage.completion_tokens ?? 0 };
-        }
+        choice.usage = chatUsage(json.usage);
         const think = (choice as LlmChoice & { reasoning_content?: string }).reasoning_content;
         if (think && onDelta) onDelta(think, "think");
         if (choice.content && onDelta) onDelta(choice.content, "text");
-        return choice;
+        return withRequestTokens(choice, payload, wireCtx);
       } catch (err) {
         last = err;
         if (err instanceof AgentAbortError) throw err;
@@ -879,7 +885,7 @@ function makeProxyComplete(
       try {
         if (nativeHttp && spec.api === "anthropic") {
           const st = useIde.getState();
-          const fitted = { messages: [...wireMessages] };
+          const fitted = applyLlmOptions({ messages: [...wireMessages], ...(wantTools ? { tools: offered } : {}) }, { ...rt, api: "anthropic" });
           prepChatPayload(fitted, context);
           const packed = fitted.messages as Record<string, unknown>[];
           const system = packed.filter((m) => m.role === "system").map((m) => String(m.content ?? "")).join("\n\n");
@@ -893,6 +899,8 @@ function makeProxyComplete(
             },
             { ...rt, api: "anthropic" },
           );
+          body.max_tokens = fitted.max_tokens;
+          if (fitted.thinking) body.thinking = fitted.thinking;
           body.stream = true;
           if (wantTools) {
             body.tools = offered.map((t) => ({
@@ -929,7 +937,7 @@ function makeProxyComplete(
               last = new Error(`HTTP ${res.status}: ${errText.slice(0, 180)}`);
             }
           }
-          if (res.ok) return await readSseAnthropic(res, onDelta);
+          if (res.ok) return withRequestTokens(await readSseAnthropic(res, onDelta), fitted, context);
           if (!last) last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
         } else if (nativeHttp && spec.id === "azure") {
           const raw = (baseUrl || spec.baseUrl).trim();
@@ -941,6 +949,7 @@ function makeProxyComplete(
               { ...rt, api: "azure" },
               { tools: wantTools },
             );
+            if (wantTools) chatPayload.tools = offered;
             prepChatPayload(chatPayload, context);
             const body = responsesBody(chatPayload, "azure");
             body.stream = true;
@@ -954,7 +963,7 @@ function makeProxyComplete(
               body: JSON.stringify(body),
               signal: withAgentTimeout(stop),
             });
-            if (res.ok) return await readSseResponses(res, onDelta);
+            if (res.ok) return withRequestTokens(await readSseResponses(res, onDelta), chatPayload, context);
             throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
           }
           const payload: Record<string, unknown> = applyLlmOptions(
@@ -976,7 +985,7 @@ function makeProxyComplete(
               signal: withAgentTimeout(stop),
             },
           );
-          if (res.ok) return await readSseChat(res, onDelta);
+          if (res.ok) return withRequestTokens(await readSseChat(res, onDelta), payload, context);
           last = new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
         }
         if (pipeOk && needResponses) {
@@ -986,6 +995,7 @@ function makeProxyComplete(
             { provider: spec.id, model, api: spec.api, context, thinking: think, temperature: st.llmTemperature, maxOut: st.llmMaxOut },
             { tools: wantTools },
           );
+          if (wantTools) chatPayload.tools = offered;
           prepChatPayload(chatPayload, context);
           const body = responsesBody(chatPayload, spec.id);
           body.stream = true;
@@ -1028,12 +1038,12 @@ function makeProxyComplete(
           }
           if (res.ok) {
             const ct = res.headers.get("content-type") || "";
-            if (/event-stream|text\/plain/i.test(ct) || body.stream) return await readSseResponses(res, onDelta);
+            if (/event-stream|text\/plain/i.test(ct) || body.stream) return withRequestTokens(await readSseResponses(res, onDelta), chatPayload, context);
             const raw = await res.text();
             const choice = parseResponsesSse(raw);
             if (choice.reasoning) onDelta?.(choice.reasoning, "think");
             if (choice.content) onDelta?.(choice.content, "text");
-            return choice;
+            return withRequestTokens(choice, chatPayload, context);
           }
         }
         if (pipeChat) {
@@ -1062,13 +1072,14 @@ function makeProxyComplete(
             signal: withAgentTimeout(stop),
           });
           if (res.ok) {
-            if (payload.stream) return await readSseChat(res, onDelta);
-            const json = (await res.json()) as { choices: { message: LlmChoice }[] };
+            if (payload.stream) return withRequestTokens(await readSseChat(res, onDelta), payload, context);
+            const json = (await res.json()) as { choices: { message: LlmChoice }[]; usage?: unknown };
             const choice = json.choices[0]?.message;
+            if (choice) choice.usage = chatUsage(json.usage);
             if (!choice) throw new Error("Leere Antwort vom Modell.");
             if (choice.reasoning) onDelta?.(choice.reasoning, "think");
             if (choice.content) onDelta?.(choice.content, "text");
-            return choice;
+            return withRequestTokens(choice, payload, context);
           }
           const body = await res.text();
           const learned = learnFromError(spec.id, model, res.status, body, base);
@@ -1150,6 +1161,7 @@ export async function completeLocal(opts: {
   model: string;
   apiKey: string;
   images?: string[];
+  onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
 }): Promise<string> {
   const spec = providerOf(opts.provider);
   const model = opts.model.trim() || spec.model;
@@ -1157,6 +1169,7 @@ export async function completeLocal(opts: {
     const { loadBrain, brainGenerate, brainReady, brainSystem } = await import("./brain");
     if (!brainReady()) await loadBrain();
     return brainGenerate({
+      onUsage: opts.onUsage,
       messages: [
         { role: "system", content: brainSystem("Short answer.") },
         { role: "user", content: opts.prompt },
@@ -1167,6 +1180,7 @@ export async function completeLocal(opts: {
   if (cli) {
     if (opts.images?.length) throw new Error("Bilder werden über die Abo-CLI noch nicht übertragen.");
     const choice = await completeViaCli(cli, model, [{ role: "user", content: opts.prompt }], [], hardStopMs(useIde.getState().llmHardStopMin));
+    opts.onUsage?.(resolvedUsage(choice, [{ role: "user", content: opts.prompt }]));
     return choice.content?.trim() || "";
   }
   if (isBrowserTarget(spec, opts.baseUrl)) {
@@ -1190,6 +1204,7 @@ export async function completeLocal(opts: {
       },
       { provider: spec.id, model, api: spec.api, context: ctx, thinking: "off", temperature: 0.2, maxOut: 1200 },
     );
+    prepChatPayload(payload, ctx);
     const chatUrl = localChatUrl(spec.id, base);
     const res = await lanFetch(chatUrl, {
       method: "POST",
@@ -1204,11 +1219,15 @@ export async function completeLocal(opts: {
     if (spec.id === "ollama") {
       const choice = await readSseChat(wrapOllamaResponse(chatUrl, res));
       if (!choice.content?.trim()) throw new Error("Leere Antwort.");
+      withRequestTokens(choice, payload, ctx);
+      opts.onUsage?.(resolvedUsage(choice, payload.messages), choice.requestTokens);
       return choice.content.trim();
     }
-    const json = (await res.json()) as { choices: { message: { content?: string } }[] };
+    const json = (await res.json()) as { choices: { message: LlmChoice }[]; usage?: unknown };
     const text = json.choices[0]?.message?.content?.trim();
     if (!text) throw new Error("Leere Antwort.");
+    const choice = withRequestTokens({ ...json.choices[0].message, usage: chatUsage(json.usage) }, payload, ctx);
+    opts.onUsage?.(resolvedUsage(choice, payload.messages), choice.requestTokens);
     return text;
   }
   const r = await proxyLlm({
@@ -1224,5 +1243,6 @@ export async function completeLocal(opts: {
   if (!r.ok) throw new Error(r.error || "Keine Antwort");
   const text = r.choice?.content?.trim();
   if (!text) throw new Error("Leere Antwort.");
+  opts.onUsage?.(resolvedUsage(r.choice!, [{ role: "user", content: opts.prompt }]), r.choice?.requestTokens);
   return text;
 }

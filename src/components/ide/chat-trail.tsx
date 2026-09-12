@@ -117,7 +117,7 @@ export function ThinkBlock({
         {live ? <AgentPulse className="shrink-0" tip={false} /> : null}
         {live && thinkMs ? <span className="font-mono text-[10px] text-subtle">{formatElapsed(thinkMs)}</span> : null}
         {text.trim() ? (
-          <span className="shrink-0 font-mono text-[10px] text-subtle">{formatTokens(estimateTokens(text))}</span>
+          <span className="shrink-0 font-mono text-[10px] text-subtle">≈{formatTokens(estimateTokens(text))}</span>
         ) : null}
       </div>
       {fill ? (

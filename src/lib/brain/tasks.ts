@@ -1,3 +1,5 @@
+import { captureMemory } from "../memory-scope";
+import type { TokenUsage } from "../token-usage";
 import { useLearn } from "@/lib/learn";
 import { useIde } from "@/store/ide";
 import { expandIntent, heuristicPalette, heuristicUsageFacts } from "./heuristics";
@@ -167,13 +169,14 @@ function validFact(text: string) {
 
 export async function brainDistill(user: string, reply: string): Promise<void> {
   const valid = captureBrainScope("distill");
-  const learning = () => valid() && useLearn.getState().on && useLearn.getState().prefs.distill;
+  const memoryValid = captureMemory();
+  const learning = () => valid() && memoryValid() && useLearn.getState().on && useLearn.getState().prefs.distill;
   if (!learning()) return;
   if (!brainReady()) return;
   try {
     const raw = await brainGenerate({
       messages: [
-        { role: "system", content: brainSystem("JSON facts only. Max 2. Durable, concrete.") },
+        { role: "system", content: brainSystem("JSON facts only. Max 2. Durable, concrete. Only explicit user preferences or constraints. Questions and missing features are not prohibitions. Preserve negation. Never treat assistant claims as user preferences.") },
         {
           role: "user",
           content: `{"facts":[{"kind":"user"|"project"|"lesson","text":"..."}]}\nLeer: {"facts":[]}\nUser: ${user.slice(0, 500)}\nAssist: ${reply.slice(0, 400)}`,
@@ -201,7 +204,8 @@ export async function brainDistill(user: string, reply: string): Promise<void> {
 
 export async function brainUsage(): Promise<void> {
   const valid = captureBrainScope("usage");
-  const learning = () => valid() && useLearn.getState().on && useLearn.getState().prefs.distill;
+  const memoryValid = captureMemory();
+  const learning = () => valid() && memoryValid() && useLearn.getState().on && useLearn.getState().prefs.distill;
   if (!learning()) return;
   if (brainReady()) {
     const ev = useLearn.getState().events.slice(0, 24);
@@ -317,13 +321,14 @@ export async function brainCompact(blob: string): Promise<string> {
   }
 }
 
-export async function brainAsk(question: string, onDelta?: (s: string) => void, context = ""): Promise<string> {
+export async function brainAsk(question: string, onDelta?: (s: string) => void, context = "", onUsage?: (usage: TokenUsage) => void): Promise<string> {
   const prompt = helperQuestion(question, context);
   if (!brainReady() || !useBrain.getState().jobs.ask) throw new Error("Ask lokal aus");
   if (useBrain.getState().jobs.help) {
     const h = helpFor(question);
     if (h && question.length < 100) {
       onDelta?.(h);
+      onUsage?.({ prompt: 0, completion: 0, estimated: false });
       return h;
     }
   }
@@ -338,6 +343,7 @@ export async function brainAsk(question: string, onDelta?: (s: string) => void, 
     stop: ["\n\n\n"],
     job: "ask",
     onDelta,
+    onUsage,
   });
   return raw.split("\n").slice(0, 8).join("\n");
 }

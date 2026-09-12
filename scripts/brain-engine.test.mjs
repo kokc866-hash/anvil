@@ -60,6 +60,50 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
     delete globalThis.helperTestRuntime; delete globalThis.window; delete globalThis.document; delete globalThis.localStorage;
   });
 
+  await t.test("usage callbacks retain model counts and cached replies consume zero tokens", async () => {
+    await reset(); let calls = 0; const counts = [];
+    e.fixtureEngine({ chat: { completions: { create: async () => { calls++; return { ...result("OK"), usage: { prompt_tokens: 1234, completion_tokens: 56 } }; } } } });
+    const opts = { messages: [{ role: "user", content: "usage cache fixture" }], job: "ask", onUsage: (u) => counts.push(u) };
+    await e.brainGenerate(opts);
+    await e.brainGenerate(opts);
+    assert.equal(calls, 1);
+    assert.deepEqual(counts, [{ prompt: 1234, completion: 56, estimated: false }, { prompt: 0, completion: 0, estimated: false }]);
+  });
+  await t.test("streamed helper usage includes the trailing usage event", async () => {
+    await reset(); const counts = []; const chunks = [];
+    e.fixtureEngine({ chat: { completions: { create: async (payload) => {
+      assert.deepEqual(payload.stream_options, { include_usage: true });
+      return (async function* () {
+        yield { choices: [{ delta: { content: "OK" } }] };
+        yield { choices: [], usage: { prompt_tokens: 1234, completion_tokens: 56 } };
+      })();
+    } } } });
+    assert.equal(await e.brainGenerate({ messages: [{ role: "user", content: "usage stream fixture" }], job: "ask", onDelta: (c) => chunks.push(c), onUsage: (u) => counts.push(u) }), "OK");
+    assert.equal(chunks.join(""), "OK");
+    assert.deepEqual(counts, [{ prompt: 1234, completion: 56, estimated: false }]);
+  });
+  await t.test("forgetting cancels already running memory distillation", async () => {
+    await reset();
+    const pending = deferred();
+    e.fixtureEngine({ chat: { completions: { create: async () => pending.promise } } });
+    const task = tasks.brainDistill("Bitte ausführlich erklären", "Ich erkläre ausführlich.");
+    await flush();
+    useLearn.getState().clear();
+    pending.resolve(result('{"facts":[{"kind":"user","text":"Bevorzugt ausführliche Erklärungen."}]}'));
+    await task;
+    assert.deepEqual(useLearn.getState().facts, []);
+  });
+  await t.test("off then on cannot revive a previous learning job", async () => {
+    await reset();
+    const pending = deferred();
+    e.fixtureEngine({ chat: { completions: { create: async () => pending.promise } } });
+    const task = tasks.brainDistill("Bitte auf Deutsch", "Ich antworte auf Deutsch.");
+    await flush();
+    useLearn.getState().setOn(false); useLearn.getState().setOn(true);
+    pending.resolve(result('{"facts":[{"kind":"user","text":"Bevorzugt deutsche Antworten."}]}'));
+    await task;
+    assert.deepEqual(useLearn.getState().facts, []);
+  });
   await t.test("an update check never replaces idle/ready/loading status", async () => {
     await reset();
     for (const status of ["idle", "ready", "downloading"]) {

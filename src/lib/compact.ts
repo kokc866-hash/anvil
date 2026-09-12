@@ -25,8 +25,8 @@ function stubImages(v: unknown): unknown {
   if (typeof v === "string") return v.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g, "[image]");
   if (Array.isArray(v)) {
     return v.map((p) => {
-      if (p && typeof p === "object" && (p as { type?: string }).type === "image_url") {
-        return { type: "image_url", image_url: { url: "[image]" } };
+      if (p && typeof p === "object" && ["image_url", "image", "input_image"].includes(String((p as { type?: string }).type))) {
+        return { type: (p as { type: string }).type, image: "[image]" };
       }
       if (p && typeof p === "object" && "text" in (p as object)) {
         return { ...(p as object), text: stubImages((p as { text: unknown }).text) };
@@ -132,10 +132,21 @@ export function compactMessages(
   return { messages: next, compacted: true };
 }
 
-/** llama.cpp / OpenAI: Prompt oft ~20 % größer als chars/4. */
+// Image tokenization is model-dependent. Reserve a conservative allowance per image,
+// independent of base64 size; this is still an estimate, never a tokenizer result.
+export const IMAGE_TOKEN_RESERVE = 1536;
+function imageCount(v: unknown): number {
+  if (Array.isArray(v)) return v.reduce((n, x) => n + imageCount(x), 0);
+  if (!v || typeof v !== "object") return 0;
+  const o = v as Record<string, unknown>;
+  if (o.type === "image_url" || o.type === "image" || o.type === "input_image") return 1;
+  return Object.values(o).reduce<number>((n, x) => n + imageCount(x), 0);
+}
+
+/** Shared conservative estimate; actual provider tokenization can differ. */
 export function estimatePrompt(messages: unknown, tools?: unknown): number {
   const n = estimateTokens(JSON.stringify(slimMessages(messages) ?? [])) + (tools ? estimateTokens(JSON.stringify(tools)) : 0);
-  return Math.ceil(n * 1.2);
+  return Math.ceil(n * 1.2) + imageCount(messages) * IMAGE_TOKEN_RESERVE;
 }
 
 function dropOldestTurn(msgs: Record<string, unknown>[]): Record<string, unknown>[] | null {
@@ -156,9 +167,9 @@ function dropOldestTurn(msgs: Record<string, unknown>[]): Record<string, unknown
 }
 
 export function fitMessages(messages: Record<string, unknown>[], budget: number): Record<string, unknown>[] {
-  const cap = Math.max(1024, budget);
+  const cap = Math.max(0, Math.floor(budget));
   let next = messages.map((m) => ({ ...m }));
-  const used = () => estimateTokens(JSON.stringify(slimMessages(next)));
+  const used = () => estimatePrompt(next);
   if (used() <= cap) return next;
 
   const packed = compactMessages(next, cap, "aggressive");
@@ -182,8 +193,7 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
   }
   if (used() <= cap) return next;
 
-  next = next.map((m) => (isSys(m) ? trimContent(m, 8000) : m));
-  if (used() <= cap) return next;
+  // System instructions and tool-call arguments must remain intact.
 
   let extra = used() - cap;
   for (let i = 0; i < next.length && extra > 0; i++) {
@@ -204,6 +214,16 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
       next[last] = trimContent(next[last], Math.max(200, t.length - extra * 4));
     }
   }
+  // Account for trim markers, multipart text and indivisible image/tool overhead.
+  for (let i = 0; i < next.length && used() > cap; i++) {
+    if (isSys(next[i])) continue;
+    let chars = JSON.stringify(next[i].content ?? "").length;
+    while (used() > cap && chars > 80) {
+      chars = Math.max(80, Math.floor(chars / 2));
+      next[i] = trimContent(next[i], chars);
+    }
+  }
+  if (used() > cap) throw new Error("Context window zu klein für System, Bilder und Werkzeugaufrufe. Kontext vergrößern oder weniger Werkzeuge/Bilder verwenden.");
   return next;
 }
 
@@ -232,27 +252,32 @@ export function prepChatPayload(payload: Record<string, unknown>, ctx: number): 
     (payload.options && typeof (payload.options as { num_predict?: number }).num_predict === "number"
       ? (payload.options as { num_predict: number }).num_predict
       : Math.floor(ctxN * 0.18));
-  const toolsTok = payload.tools ? estimateTokens(JSON.stringify(payload.tools)) : 0;
-  const overhead = 192 + Math.min(toolsTok, Math.floor(ctxN * 0.28));
-  let replyWant = Math.min(Math.max(256, want), Math.floor(ctxN * 0.22));
-  let prompt = estimatePrompt(payload.messages);
-  if (prompt + replyWant + overhead > ctxN) {
-    replyWant = Math.max(256, ctxN - prompt - overhead);
+  const overhead = 192;
+  const toolsTok = payload.tools ? Math.ceil(estimateTokens(JSON.stringify(payload.tools)) * 1.2) : 0;
+  const thinking = payload.thinking as Record<string, unknown> | undefined;
+  const replyMin = thinking?.type === "enabled" ? 2048 : Math.min(256, Math.max(16, Math.floor(want)));
+  let reply = Math.max(replyMin, Math.floor(want));
+  let prompt = estimatePrompt(payload.messages, payload.tools);
+  if (prompt + reply + overhead > ctxN) reply = Math.max(replyMin, ctxN - prompt - overhead);
+  if (prompt + reply + overhead > ctxN && Array.isArray(payload.messages)) {
+    payload.messages = fitMessages(payload.messages as Record<string, unknown>[], ctxN - replyMin - overhead - toolsTok);
+    prompt = estimatePrompt(payload.messages, payload.tools);
+    reply = Math.min(reply, ctxN - prompt - overhead);
   }
-  if (prompt + replyWant + overhead > ctxN && Array.isArray(payload.messages)) {
-    const sysKeep = (payload.messages as Record<string, unknown>[]).filter((m) => m.role === "system");
-    const sysTok = Math.max(800, estimateTokens(JSON.stringify(sysKeep)));
-    const msgBudget = Math.max(sysTok + 400, ctxN - Math.max(256, replyWant) - overhead);
-    payload.messages = fitMessages(payload.messages as Record<string, unknown>[], msgBudget);
-    prompt = estimatePrompt(payload.messages);
+  if (reply < replyMin || prompt + reply + overhead > ctxN) {
+    throw new Error("Context window zu klein für Prompt, Werkzeuge und Antwort. Kontext vergrößern.");
   }
-  const reply = Math.max(256, Math.min(replyWant, Math.max(256, ctxN - prompt - overhead)));
   if (payload.max_tokens != null) payload.max_tokens = reply;
   if (payload.max_completion_tokens != null) payload.max_completion_tokens = reply;
   const opt = payload.options as Record<string, unknown> | undefined;
   if (opt && typeof opt === "object") {
     if (typeof opt.num_predict === "number") opt.num_predict = reply;
     opt.num_ctx = ctxN;
+    if (typeof opt.n_ctx === "number") opt.n_ctx = ctxN;
+  }
+  if (typeof payload.n_ctx === "number") payload.n_ctx = ctxN;
+  if (thinking?.type === "enabled" && typeof thinking.budget_tokens === "number") {
+    if (reply < 2048) throw new Error("Context window zu klein für Denken und Antwort. Kontext vergrößern oder Denken ausschalten.");
+    thinking.budget_tokens = Math.min(thinking.budget_tokens, reply - 1024);
   }
 }
-

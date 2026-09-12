@@ -94,7 +94,7 @@ export function applyLlmOptions(
   }
 
   if (local) {
-    const predict = Math.min(Math.floor(ctx * 0.22), Math.max(maxOut, think ? maxOut + Math.min(budget, Math.floor(ctx * 0.08)) : maxOut));
+    const predict = rt.maxOut && rt.maxOut > 0 ? maxOut : Math.max(maxOut, think ? maxOut + Math.min(budget, Math.floor(ctx * 0.08)) : maxOut);
     payload.keep_alive = "30m";
     payload.n_ctx = ctx;
     payload.temperature = temp;
@@ -135,6 +135,11 @@ export function applyLlmOptions(
       };
     }
     delete payload.stream_options;
+  }
+
+  // Only opt in on known OpenAI-compatible services; legacy local servers may reject it.
+  if (payload.stream && !anthropic && ["openai", "azure", "xai", "grok", "openrouter", "groq", "deepseek"].includes(rt.provider)) {
+    payload.stream_options = { ...((payload.stream_options as object) || {}), include_usage: true };
   }
 
   if (!think) {
