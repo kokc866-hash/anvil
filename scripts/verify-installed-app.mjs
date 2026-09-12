@@ -45,6 +45,17 @@ async function launch() {
   page.on('pageerror', e => result.errors.push(e.message));
   await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated(), null, { timeout: 60000 });
   await page.evaluate(companion => window.__anvilIde.setState({ autoUpdate: false, setupDone: true, companionKeep: true, companionUrl: `http://127.0.0.1:${companion}` }), companion);
+  // QA uses a private port, not the desktop's auto-start endpoint on :7845.
+  // Start and pair the real packaged helper explicitly for this isolated profile.
+  assert.equal(await page.evaluate(async () => {
+    const native = window.anvilNative;
+    const started = await native.companionEnsure();
+    if (!started.ok || !started.token) return false;
+    try {
+      const saved = await native.secretsSave({ companionToken: started.token });
+      return saved.ok && saved.secrets.companionToken === started.token;
+    } finally { await native.companionRelease(true); }
+  }), true, 'Isolated packaged Companion starts and pairs without external Node');
   assert.ok((await page.locator('body').innerText()).length > 50, 'Visible app content');
   const profile = await app.evaluate(({ app }) => app.getPath('userData'));
   assert.equal(path.resolve(profile), path.join(target, 'data'), 'Installed data stays beside the app');
@@ -94,6 +105,10 @@ try {
   result.ok = true;
 } catch (error) {
   result.ok = false; result.failure = String(error.stack || error);
+  if (page && !page.isClosed()) result.editor = await page.evaluate(() => {
+    const state = window.__anvilIde?.getState();
+    return { notice: state?.notice, dirty: Object.keys(state?.dirty || {}) };
+  }).catch(() => null);
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(fixture, 'failure.png') }).catch(() => {});
   throw error;
 } finally {
