@@ -79,7 +79,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
     <SettingsSection q={q} className="py-3">
       <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Lokaler Helfer</h3>
       <p className="mb-3 text-xs text-muted">
-        Optional, lokal, schnell. Kurzbefehle, Titel, Commit-Zeile, Folge-Chips. Nach einer Runde schreibt der Helfer kurze Notizen an den Agenten (Spur: „Helfer · …“). Code, Plan und Chat immer das Hauptmodell. Hintergrundaufgaben blockieren das Senden nicht. Bei Zeitlimits wird die Aufgabe abgebrochen; ein reagierendes Modell bleibt geladen.
+        Optionales lokales KI-Modell für Titel, Kurzvorschläge und Notizen. Für Chat, Code und Planung nutzt Anvil weiterhin das unter Agent gewählte Modell. Du kannst Anvil ohne diesen Helfer verwenden.
       </p>
       <Row label="Helfer an" hint="Mini-Modell nur, wenn die Heuristik unsicher ist">
         <Toggle on={on} onChange={setOn} />

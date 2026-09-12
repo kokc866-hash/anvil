@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, Plus, RotateCcw, Workflow, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { useHelpTour } from "@/lib/help-guide";
 import {
   addEdgeNode,
   applySettings,
@@ -121,6 +122,7 @@ export function HarnessBoard() {
 
   useEffect(() => {
     function onWin(e: KeyboardEvent) {
+      if (useHelpTour.getState().step !== null || (e.key === "Escape" && document.querySelector("[data-help-card]"))) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();

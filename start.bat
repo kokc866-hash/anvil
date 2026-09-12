@@ -37,12 +37,9 @@ if not exist "node_modules\electron\dist\electron.exe" (
   exit /b 1
 )
 
-if exist "scripts\brand-electron.mjs" (
-  node "scripts\brand-electron.mjs" 2>nul
-)
-
-set EXE=%~dp0node_modules\electron\dist\Anvil.exe
-if not exist "%EXE%" set EXE=%~dp0node_modules\electron\dist\electron.exe
+rem Renaming electron.exe makes app.isPackaged true, even in a source checkout.
+rem Keep the original runtime so Anvil starts the development UI.
+set "EXE=%~dp0node_modules\electron\dist\electron.exe"
 
 tasklist /FI "IMAGENAME eq Anvil.exe" 2>nul | find /I "Anvil.exe" >nul
 if not errorlevel 1 (

@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import os from "node:os";
 import { nodeCommand } from "./node-cmd.mjs";
+import { THINKING_MODES, claudeAdaptive, effectiveThinking } from "./thinking-support.mjs";
 
 export const CLI_KINDS = ["codex", "claude", "copilot"];
 const PACKAGES = {
@@ -228,10 +229,12 @@ export const CHOICE_SCHEMA = {
   },
 };
 
-export function completionArgs(kind, model, dir) {
+export function completionArgs(kind, model, dir, thinking = "auto") {
   if (!CLI_KINDS.includes(kind)) throw new Error("Unbekannte CLI.");
   if (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+\-]{0,199}$/.test(model))
     throw new Error("Ungültige CLI-Modell-ID.");
+  if (!THINKING_MODES.includes(thinking)) throw new Error("Ungültige Thinking-Stufe.");
+  const mode = effectiveThinking("", model, thinking, kind);
   if (kind === "codex")
     return [
       "exec",
@@ -243,6 +246,7 @@ export function completionArgs(kind, model, dir) {
       "--color",
       "never",
       "--json",
+      ...(mode !== "auto" ? ["-c", `model_reasoning_effort=${JSON.stringify(mode)}`] : []),
       "-c",
       'forced_login_method="chatgpt"',
       "-c",
@@ -276,7 +280,8 @@ export function completionArgs(kind, model, dir) {
       "--setting-sources",
       "",
       "--settings",
-      '{"disableAllHooks":true}',
+      JSON.stringify({ disableAllHooks: true, ...(mode !== "auto" ? { alwaysThinkingEnabled: mode !== "off" } : {}) }),
+      ...(mode !== "auto" && mode !== "off" && claudeAdaptive(model) ? ["--effort", mode] : []),
       "--model",
       model,
     ];
@@ -290,9 +295,24 @@ export function completionArgs(kind, model, dir) {
     "--available-tools=",
     "--deny-tool=*",
     "--no-ask-user",
+    ...(mode !== "auto" ? [`--effort=${mode}`] : []),
     "--model",
     model,
   ];
+}
+
+export function completionEnvironment(kind, model, thinking = "auto", base = process.env) {
+  const env = cliEnvironment(base);
+  const mode = effectiveThinking("", model, thinking, kind);
+  if (kind === "claude" && mode !== "auto") {
+    // Explicit per-request selection wins over inherited thinking settings.
+    for (const key of Object.keys(env)) {
+      if (/^(CLAUDE_CODE_EFFORT_LEVEL|CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING|MAX_THINKING_TOKENS)$/i.test(key)) delete env[key];
+    }
+    if (mode === "off") env.MAX_THINKING_TOKENS = "0";
+    else if (!claudeAdaptive(model)) env.MAX_THINKING_TOKENS = String({ low: 2048, medium: 8192, high: 32768 }[mode]);
+  }
+  return env;
 }
 
 export function parseCliOutput(kind, stdout) {
@@ -328,18 +348,21 @@ export function parseCliOutput(kind, stdout) {
 }
 
 export async function completeCli(
-  { kind, model, prompt },
+  { kind, model, prompt, thinking = "auto" },
   { signal, onActivity, timeoutMs = 0 } = {},
 ) {
   if (typeof prompt !== "string" || !prompt.trim() || Buffer.byteLength(prompt) > 8 * 1024 * 1024)
     throw new Error("CLI-Anfrage leer oder zu groß (max. 8 MiB).");
+  // Validate all options before probing or spawning any CLI.
+  completionArgs(kind, model, ".", thinking);
   const status = await probeCli(kind, signal);
   if (status.authenticated === false)
     throw new Error(`${kind}: Abo-Anmeldung fehlt. Einstellungen → Abo → Anmelden.`);
   const dir = await mkdtemp(join(os.tmpdir(), "anvil-cli-"));
   try {
     await writeFile(join(dir, "schema.json"), JSON.stringify(CHOICE_SCHEMA), { mode: 0o600 });
-    const r = await runProcess(findCli(kind), completionArgs(kind, model, dir), {
+    const r = await runProcess(findCli(kind), completionArgs(kind, model, dir, thinking), {
+      env: completionEnvironment(kind, model, thinking),
       cwd: dir,
       input: prompt,
       signal,

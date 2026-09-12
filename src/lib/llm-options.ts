@@ -1,4 +1,6 @@
-export type ThinkingMode = "off" | "auto" | "low" | "medium" | "high";
+import { THINKING_MODES, claudeAdaptive, effectiveThinking, isLocalThinking, thinkingModes } from "../../electron/thinking-support.mjs";
+export type { ThinkingMode } from "../../electron/thinking-support.mjs";
+import type { ThinkingMode } from "../../electron/thinking-support.mjs";
 
 export type LlmRuntime = {
   provider: string;
@@ -15,19 +17,19 @@ const THINK_RE =
 
 export function normalizeThinking(v: string): ThinkingMode {
   if (v === "on" || v === "mid") return "medium";
-  if (v === "off" || v === "auto" || v === "low" || v === "medium" || v === "high") return v;
-  return "auto";
+  return THINKING_MODES.find(mode => mode === v) ?? "auto";
 }
 
 export function wantsThinking(rt: LlmRuntime): boolean {
-  if (rt.thinking === "off") return false;
-  if (rt.thinking === "low" || rt.thinking === "medium" || rt.thinking === "high") return true;
-  return THINK_RE.test(rt.model) || rt.provider === "grok" || rt.provider === "anthropic";
+  const mode = effectiveThinking(rt.api === "anthropic" ? "anthropic" : rt.provider, rt.model, rt.thinking);
+  if (mode === "off") return false;
+  if (mode !== "auto") return true;
+  return THINK_RE.test(rt.model) || rt.provider === "grok" || rt.provider === "anthropic" || thinkingModes(rt.provider, rt.model).length > 1 && !isLocalThinking(rt.provider);
 }
 
 export function thinkingEffort(rt: LlmRuntime): "low" | "medium" | "high" {
-  if (rt.thinking === "low") return "low";
-  if (rt.thinking === "high") return "high";
+  if (rt.thinking === "low" || rt.thinking === "minimal") return "low";
+  if (["high", "xhigh", "max"].includes(rt.thinking)) return "high";
   return "medium";
 }
 
@@ -63,18 +65,8 @@ export function applyLlmOptions(
   opts?: { tools?: boolean },
 ): Record<string, unknown> {
   const ctx = Math.max(2048, rt.context || 32768);
-  const local =
-    rt.provider === "ollama" ||
-    rt.provider === "lmstudio" ||
-    rt.provider === "llamacpp" ||
-    rt.provider === "localai" ||
-    rt.provider === "jan" ||
-    rt.provider === "vllm" ||
-    rt.provider === "koboldcpp" ||
-    rt.provider === "textgen" ||
-    rt.provider === "openwebui" ||
-    rt.provider === "gpt4all" ||
-    rt.provider === "custom";
+  const local = isLocalThinking(rt.provider);
+  if (local) rt = { ...rt, thinking: effectiveThinking(rt.provider, rt.model, rt.thinking) };
   const temp = clampTemp(rt.temperature);
   const maxOut = clampMaxOut(rt.maxOut, ctx, local);
   const think = wantsThinking(rt);
@@ -142,18 +134,28 @@ export function applyLlmOptions(
     payload.stream_options = { ...((payload.stream_options as object) || {}), include_usage: true };
   }
 
-  if (!think) {
-    delete payload.reasoning_effort;
+  if (local) {
+    if (!think) delete payload.reasoning_effort;
+    else if (completion || /grok/i.test(rt.model)) payload.reasoning_effort = effort;
     return payload;
   }
-
-  if (anthropic) {
+  const provider = anthropic ? "anthropic" : rt.provider;
+  const mode = effectiveThinking(provider, rt.model, rt.thinking);
+  // Auto leaves effort to the model. Never send a made-up level to a provider.
+  delete payload.reasoning_effort;
+  if (anthropic && thinkingModes(provider, rt.model).length > 1) {
+    if (mode === "off") {
+      payload.thinking = { type: "disabled" };
+      if (/fable|mythos|(?:opus|sonnet)[-.]5|opus[-.]4[-.][78]/i.test(rt.model)) delete payload.temperature;
+      return payload;
+    }
     const maxTok = Math.max(maxOut, budget + 2048);
     payload.max_tokens = maxTok;
     payload.temperature = 1;
     delete payload.max_completion_tokens;
-    if (rt.thinking === "auto") {
+    if (claudeAdaptive(rt.model)) {
       payload.thinking = { type: "adaptive", display: "summarized" };
+      if (mode !== "auto") payload.output_config = { ...((payload.output_config as object) || {}), effort: mode };
     } else {
       payload.thinking = {
         type: "enabled",
@@ -161,10 +163,12 @@ export function applyLlmOptions(
         display: "summarized",
       };
     }
-  } else if (completion || rt.provider === "grok" || rt.provider === "xai" || /grok/i.test(rt.model)) {
-    payload.reasoning_effort = effort;
-  } else if (local) {
-    /* think + num_predict already set */
+  } else if (mode !== "auto") {
+    if (provider === "openrouter") payload.reasoning = { effort: mode === "off" ? "none" : mode };
+    else if (provider === "deepseek") {
+      payload.thinking = { type: mode === "off" ? "disabled" : "enabled" };
+      if (mode !== "off") payload.reasoning_effort = mode;
+    } else payload.reasoning_effort = mode === "off" ? "none" : mode;
   }
   return payload;
 }

@@ -12,6 +12,7 @@ import { uniqueDest } from "@/lib/dnd";
 import { type CtxItem } from "./ctx-menu";
 
 import { parseBlocks } from "@/lib/chat-content";
+import { requestCheckpointRestore } from "@/lib/restore-request";
 export type ChatMenu =
   | { kind: "msg"; x: number; y: number; id: string }
   | { kind: "pane"; x: number; y: number }
@@ -264,10 +265,7 @@ export function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) =
   if (m.checkpointId) {
     items.push({
       label: t("restoreRound"),
-      onClick: () => {
-        const ok = st.restoreCheckpoint(m.checkpointId!);
-        st.setNotice(ok ? t("restored") : t("noSnapshot"));
-      },
+      onClick: () => { void requestCheckpointRestore(m.checkpointId!); },
     });
   }
   items.push({ label: t("chatDel"), danger: true, onClick: () => st.removeChat(m.id) });

@@ -5,16 +5,16 @@ import path from "node:path";
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 test("memory stays scoped, durable and controllable", async t => {
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
+  const warn = console.warn;
+  t.after(async () => { try { await flush(); } finally { await server.close(); console.warn = warn; } });
   const { useIde } = await server.ssrLoadModule("/src/store/ide.ts");
   const m = await server.ssrLoadModule("/src/lib/learn.ts");
   const { EMPTY_JOURNAL, sessionFileText } = await server.ssrLoadModule("/src/lib/session.ts");
   const { useLearn } = m;
   const writes = [], deletes = [];
-  const warn = console.warn;
   console.warn = (...args) => { if (!String(args[0]).startsWith("[zustand persist middleware]")) warn(...args); };
   useIde.setState({ writeFile: (p, text) => writes.push({ p, text }), deleteFile: p => deletes.push(p) });
-  t.after(async () => { await flush(); await server.close(); console.warn = warn; });
   const reset = () => {
     useLearn.setState({ on: true, prefs: { ...m.LEARN_DEFAULTS }, facts: [], skills: [], negs: [], forgotten: [], forgottenFacts: [], activeSkills: [], events: [], eventCount: 0 });
     useIde.setState({ workspaceCwd: "C:/A", githubRepo: "", memoryWorkspace: "v2:path:c:/a", workspaceMemoryId: "fixture-local", workspaceSessions: {}, chat: [], sessionJournal: { ...EMPTY_JOURNAL }, sessionTokens: { prompt: 0, completion: 0 }, files: {}, dirty: {}, pendingDiffs: [] });

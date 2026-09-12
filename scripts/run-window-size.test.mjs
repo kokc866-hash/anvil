@@ -44,10 +44,15 @@ test("native fitting includes window chrome, stays on its monitor and rejects ot
   let child;
   const Original = BrowserWindow;
   const Factory = class extends Original { constructor(...args) { super(...args); child = this; } };
-  const source = readFileSync("electron/child.mjs", "utf8").replace(/^import .*;\n/gm, "").replace("export function bindChildWindows", "function bindChildWindows");
-  const bind = new Function("BrowserWindow", "screen", "handleOnce", "anvilWebPrefs", "appOrigin", `${source}; return bindChildWindows;`)(Factory,
+  const moduleSource = readFileSync("electron/child.mjs", "utf8");
+  const functionStart = moduleSource.indexOf("export function bindChildWindows(");
+  assert.ok(functionStart >= 0, "The fixture must execute the real child-window binder");
+  // Evaluate the binder, not the module's import header. This is independent of
+  // LF/CRLF checkouts and additional or multiline imports before the function.
+  const source = moduleSource.slice(functionStart).replace("export function bindChildWindows", "function bindChildWindows");
+  const bind = new Function("BrowserWindow", "screen", "handleOnce", "anvilWebPrefs", "appOrigin", "kids", `${source}; return bindChildWindows;`)(Factory,
     { getDisplayMatching: () => ({ workArea: { x: 1920, y: 0, width: 1920, height: 1040 } }) },
-    (name, fn) => handlers.set(name, fn), () => ({}), () => url => url.startsWith("http://127.0.0.1:8080/"));
+    (name, fn) => handlers.set(name, fn), () => ({}), () => url => url.startsWith("http://127.0.0.1:8080/"), new Map());
   const manager = bind({ port: 8080 }); manager.createChild("/run");
   const fit = handlers.get("child-fit-run");
   const event = { sender: child.webContents, senderFrame: child.webContents.mainFrame };

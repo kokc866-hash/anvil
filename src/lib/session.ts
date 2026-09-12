@@ -372,7 +372,7 @@ export function digestOldMessages(old: Record<string, unknown>[], maxChars: numb
   return [structured, prev, lines.join("\n")].filter(Boolean).join("\n").slice(0, maxChars);
 }
 
-export async function pruneSession(): Promise<void> {
+export async function pruneSession(options: { persistJournal?: boolean } = {}): Promise<void> {
   const { useIde } = await import("@/store/ide");
   const st = useIde.getState();
   if (st.agentBusy) return;
@@ -397,6 +397,7 @@ export async function pruneSession(): Promise<void> {
     mcpLog,
     lspLog,
   });
-  st.writeFile(".anvil/session.md", sessionFileText(st.sessionJournal, st.chat.length), { quiet: true });
+  if (options.persistJournal !== false)
+    st.writeFile(".anvil/session.md", sessionFileText(st.sessionJournal, st.chat.length), { quiet: true });
 }
 

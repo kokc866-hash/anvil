@@ -6,12 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 
 import { listModels } from "@/lib/agent-client";
-import { wantsThinking, type ThinkingMode } from "@/lib/llm-options";
+import type { ThinkingMode } from "@/lib/llm-options";
+import { effectiveThinking, isLocalThinking, thinkingModes } from "../../../../electron/thinking-support.mjs";
 import type { CompactMode } from "@/lib/compact";
 import { CONTEXT_MAX, CONTEXT_MIN, CONTEXT_SIZES, formatContext, matchingContextChip } from "@/lib/tokens";
 import { useLearn } from "@/lib/learn";
 
-import { ANVIL_ROLES } from "@/lib/anvil";
 
 import { newMcpId, type McpServer } from "@/lib/mcp";
 import { ModelPick } from "../model-pick";
@@ -37,6 +37,8 @@ import { capLabel, getCap, resetCap } from "@/lib/model-caps";
 
 import { cliKindFor, probeCli, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
 import { ProviderPick } from "../provider-pick";
+import { ConnectionSummary } from "../connection-summary";
+import { connectionProbeSummary } from "@/lib/connection-capabilities";
 
 import { SettingsSection, Head, Vis, Row, Seg, Field, Toggle } from "./fields";
 
@@ -91,6 +93,9 @@ export function AgentSection({ q }: { q: string }) {
   const spec = providerOf(llmProvider);
   const aboKind = cliKindFor(llmProvider, llmAuthMode);
   const aboOn = Boolean(aboKind);
+  const thinkModes = thinkingModes(llmProvider, llmModel, aboKind);
+  const activeThinking = effectiveThinking(llmProvider, llmModel, llmThinking, aboKind);
+  const thinkingLabels: Record<ThinkingMode, string> = { off: "Aus", auto: "Auto", minimal: "Minimal", low: "Low", medium: "Mid", high: "High", xhigh: "XHigh", max: "Max" };
   const probeController = useRef<AbortController | null>(null);
   const loginController = useRef<AbortController | null>(null);
   const [subBusy, setSubBusy] = useState(false);
@@ -117,7 +122,7 @@ export function AgentSection({ q }: { q: string }) {
       if (kind) {
         const status = await probeCli(kind, controller.signal);
         if (current()) {
-          setProbe(cliStatusText(status));
+          setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
           setModels([]);
         }
         return;
@@ -132,13 +137,7 @@ export function AgentSection({ q }: { q: string }) {
       setModels(ids);
       // Catalogs can be incomplete. Never replace a model or deployment chosen by the user.
       if (!useIde.getState().llmModel && ids[0] && snapshot.llmProvider !== "azure") setLlmModel(ids[0]);
-      setProbe(
-        snapshot.llmProvider === "azure"
-          ? "Azure-Zugang geprüft; Deployment wird beim Senden geprüft"
-          : ids.length
-            ? `Modellliste geladen · ${ids.length} Modelle`
-            : "Server erreichbar · Modellliste leer",
-      );
+      setProbe(connectionProbeSummary("catalog", { count: ids.length }, useIde.getState().locale));
     } catch (err) {
       if (!current()) return;
       setModels([]);
@@ -191,7 +190,7 @@ export function AgentSection({ q }: { q: string }) {
           : await probeCli(kind, controller.signal);
       if (current()) {
         setSubMsg(cliStatusText(status));
-        setProbe(cliStatusText(status));
+        setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
       }
     } catch (err) {
       if (current()) setSubMsg(err instanceof Error ? err.message : "CLI-Anmeldung fehlgeschlagen.");
@@ -204,7 +203,7 @@ export function AgentSection({ q }: { q: string }) {
     <SettingsSection q={q}>
       <Head>Agent</Head>
       <p className="mb-2 text-xs text-muted">
-        {ANVIL_ROLES.model} Die App handelt selbst (Run, Git, Dateien). {ANVIL_ROLES.helper}
+        {useIde.getState().locale === "en" ? "Choose the AI connection for your chat here. Ask explains and investigates; Agent can edit files and run tools. The separate local helper is optional." : "Hier wählst du die KI-Verbindung für deinen Chat. Fragen erklärt und untersucht; Agent kann Dateien bearbeiten und Werkzeuge ausführen. Der zusätzliche lokale Helfer ist optional."}
       </p>
       <Vis q={q} label="Anbieter Provider Verbindung Connection Modell Model API URL Key Lokal Local Cloud Abo CLI Custom Profil Profile">
         <ProviderPick
@@ -269,6 +268,7 @@ export function AgentSection({ q }: { q: string }) {
             placeholder={spec.needsKey ? "sk-…" : "meist leer"}
           />
         ) : null}
+        <ConnectionSummary />
         {aboOn ? <p className="py-1 text-xs text-muted">{t("subNoKey")}</p> : <SecretStorageStatus />}
         {spec.id !== "grok" ? (
           <div className="flex items-center gap-2 py-1">
@@ -415,30 +415,28 @@ export function AgentSection({ q }: { q: string }) {
           </div>
         </Row>
       </Vis>
+      <Vis q={q} label="Thinking Reasoning Denken minimal low mid high xhigh max">
+        <Row
+          label="Thinking"
+          hint={
+            activeThinking !== llmThinking
+              ? `Gespeichert: ${thinkingLabels[llmThinking]}. Für dieses Modell nicht verfügbar; wirksam ist Auto.`
+              : thinkModes.length === 1
+                ? "Für dieses Modell ist keine einstellbare Denkstufe bekannt. Es gilt die Modellvorgabe."
+                : isLocalThinking(llmProvider) && !aboOn
+                  ? "Auto erkennt Thinking am Modell; Low/Mid/High legen die Denkstufe fest."
+                  : "Auto verwendet die CLI- bzw. Modellvorgabe. Höhere Stufen können länger dauern und mehr Tokens verbrauchen."
+          }
+        >
+          <Seg<ThinkingMode>
+            value={activeThinking}
+            onChange={setLlmThinking}
+            options={thinkModes.map(id => ({ id, label: thinkingLabels[id] }))}
+          />
+        </Row>
+      </Vis>
       {!aboOn ? (
         <>
-          <Vis q={q} label="Thinking Reasoning Denken low mid high">
-            <Row
-              label="Thinking"
-              hint={
-                wantsThinking({ provider: llmProvider, model: llmModel, context: llmContext, thinking: llmThinking })
-                  ? "An · Effort an die API (reasoning_effort / budget)"
-                  : "Aus, außer Low/Mid/High erzwungen"
-              }
-            >
-              <Seg<ThinkingMode>
-                value={llmThinking}
-                onChange={setLlmThinking}
-                options={[
-                  { id: "off", label: "Aus" },
-                  { id: "auto", label: "Auto" },
-                  { id: "low", label: "Low" },
-                  { id: "medium", label: "Mid" },
-                  { id: "high", label: "High" },
-                ]}
-              />
-            </Row>
-          </Vis>
           <Vis q={q} label="Temperatur max tokens Antwort Länge">
             <Slider
               label="Temperatur"
@@ -463,7 +461,7 @@ export function AgentSection({ q }: { q: string }) {
           </Vis>
         </>
       ) : (
-        <p className="py-2 text-xs text-muted">Thinking, Temperatur und Antwortlimit werden von der CLI gesteuert.</p>
+        <p className="py-2 text-xs text-muted">Temperatur und Antwortlimit werden von der CLI gesteuert.</p>
       )}
       {!aboOn && llmProvider !== "grok" && llmProvider !== "brain" ? (
         <Vis q={q} label="Modell Format Tools Werkzeuge Kompatibilität kompakt Text 400 Lernen gelernt Zuordnung learning">
@@ -509,13 +507,13 @@ export function AgentSection({ q }: { q: string }) {
           />
         </Row>
       </Vis>
-      <Vis q={q} label="Ask Agent Modus">
-        <Row label="Standard-Modus" hint="Ask erklärt, Agent schreibt Dateien">
+        <Vis q={q} label="Ask Fragen Agent Modus">
+          <Row label="Standard-Modus" hint={t("defaultModeHint")}>
           <Seg
             value={agentMode}
             onChange={setAgentMode}
             options={[
-              { id: "ask", label: "Ask" },
+              { id: "ask", label: t("ask") },
               { id: "agent", label: "Agent" },
             ]}
           />

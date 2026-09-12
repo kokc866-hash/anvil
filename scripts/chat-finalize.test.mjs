@@ -1,0 +1,48 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import path from "node:path";
+import { createServer } from "vite";
+
+test("stopping hides interrupted tool transport and completion respects unfinished work", async (t) => {
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
+  t.after(() => server.close());
+  const { useIde } = await server.ssrLoadModule("/src/store/ide.ts");
+  const seed = (content, plan = []) => useIde.setState({ chat: [{ id: "stop-fixture", role: "assistant", content, plan, harness: "Arbeit · Tools 2/20" }] });
+  const plan = [{ text: "Dateien schreiben", status: "ok" }, { text: "Run", status: "ok" }, { text: "Funktionsprüfung per Snapshot", status: "todo" }];
+  seed("Dateien erstellt.", plan);
+  useIde.getState().finalizeAssistant("Dateien erstellt.");
+  const message = useIde.getState().chat.at(-1);
+  assert.match(message.harness, /^Beendet · 1 Schritt offen/);
+  assert.deepEqual(message.plan, plan, "An unfinished snapshot check must not become a passed test");
+  seed('{"action":"set_plan",');
+  useIde.getState().finalizeAssistant("Gestoppt");
+  assert.equal(useIde.getState().chat.at(-1).content, "Gestoppt");
+  seed("Die erste Datei wurde gespeichert.\n{\"action\":\"set_plan\",");
+  useIde.getState().finalizeAssistant("Gestoppt");
+  assert.equal(useIde.getState().chat.at(-1).content, "Die erste Datei wurde gespeichert.\n\nGestoppt");
+  seed('Beispiel:\n```json\n{"action":"set_plan","steps":[]}\n```');
+  useIde.getState().finalizeAssistant("Gestoppt");
+  assert.match(useIde.getState().chat.at(-1).content, /"steps":\[\]/);
+  assert.match(useIde.getState().chat.at(-1).content, /Gestoppt/);
+  seed('{"title":"Meine Daten",');
+  useIde.getState().finalizeAssistant("Gestoppt");
+  assert.match(useIde.getState().chat.at(-1).content, /Meine Daten/);
+  seed("Eine normale Antwort über set_plan.");
+  useIde.getState().finalizeAssistant("Eine normale Antwort über set_plan.");
+  assert.equal(useIde.getState().chat.at(-1).content, "Eine normale Antwort über set_plan.");
+  seed("Der Timer wird");
+  useIde.getState().finalizeAssistant("Der Timer wird gestoppt, wenn du Pause drückst.", undefined, { replace: true });
+  assert.equal(useIde.getState().chat.at(-1).content, "Der Timer wird gestoppt, wenn du Pause drückst.");
+  assert.match(useIde.getState().chat.at(-1).harness, /^Fertig/);
+
+  seed("Alles erledigt.", plan.map(s => ({ ...s, status: "ok" })));
+  useIde.getState().finalizeAssistant("Alles erledigt.");
+  assert.match(useIde.getState().chat.at(-1).harness, /^Fertig/);
+  seed('{"action":"set_plan",', plan);
+  useIde.getState().failRunningSteps();
+  assert.equal(useIde.getState().chat.at(-1).content, "Gestoppt");
+  assert.match(useIde.getState().chat.at(-1).harness, /^Stop/);
+  const { finishedHarness } = await server.ssrLoadModule("/src/lib/chat-finalize.ts");
+  assert.match(finishedHarness("Fertig · Tools 2/20", plan, false, "en"), /^Ended · 1 step remaining/);
+  assert.match(finishedHarness("Beendet · 1 Schritt offen · Tools 2/20", plan.map(s => ({ ...s, status: "ok" }))), /^Fertig · Tools 2\/20$/);
+});

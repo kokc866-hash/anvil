@@ -26,5 +26,7 @@ export function pickAssets(assets = []) {
     zipName: zip ? String(zip.name || "Anvil.zip") : "",
     setupUrl: setup ? String(setup.browser_download_url || "") : "",
     setupName: setup ? String(setup.name || "Anvil.Setup.exe") : "",
+    zipDigest: zip ? String(zip.digest || "") : "",
+    setupDigest: setup ? String(setup.digest || "") : "",
   };
 }

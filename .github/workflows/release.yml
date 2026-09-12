@@ -10,6 +10,15 @@ on:
       - anleitungen/releases/**
       - .github/workflows/release.yml
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish release downloads after all package checks pass'
+        type: boolean
+        default: false
+      signed:
+        description: 'Require publisher metadata and verified Windows signatures'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +34,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       publish: ${{ steps.release.outputs.publish }}
+      signed: ${{ steps.release.outputs.signed }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/github-script@v8
@@ -41,6 +51,7 @@ jobs:
             if (!fs.existsSync(`anleitungen/releases/${tag}.md`)) throw new Error('Release notes missing');
             core.setOutput('version', version);
             core.setOutput('tag', tag);
+            core.setOutput('signed', context.eventName === 'workflow_dispatch' && context.payload.inputs?.signed === 'true' ? 'true' : 'false');
             try {
               const { data } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
               if (!data.draft) {
@@ -51,11 +62,11 @@ jobs:
             } catch (error) {
               if (error.status !== 404) throw error;
             }
-            core.setOutput('publish', 'true');
+            core.setOutput('publish', context.ref === `refs/tags/${tag}` || (context.eventName === 'workflow_dispatch' && context.payload.inputs?.publish === 'true') ? 'true' : 'false');
 
   verify:
     needs: metadata
-    if: needs.metadata.outputs.publish == 'true'
+    if: needs.metadata.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -64,6 +75,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Signed release identity and support gate
+        if: needs.metadata.outputs.signed == 'true'
+        run: node scripts/verify-release-readiness.mjs
       - run: npm test
       - run: npm run typecheck
       - run: npx playwright install --with-deps chromium
@@ -88,7 +102,6 @@ jobs:
 
   windows:
     needs: [metadata, verify]
-    if: needs.metadata.outputs.publish == 'true'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -100,6 +113,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:connections
+      - run: npm run test:engines
       - name: Electron storage, restart, CLI access and Canvas capture
         run: node scripts/verify-electron-ipc.mjs
         timeout-minutes: 3
@@ -112,13 +126,36 @@ jobs:
       - run: npm run build
         env:
           ANVIL_ELECTRON_BUILD: "1"
+      - name: Desktop onboarding, interactive help and tour
+        run: node scripts/product-experience.browser.mjs
+        timeout-minutes: 5
       - run: node scripts/pack-ui.mjs
-      - run: npx electron-builder --win nsis zip --publish never
+      - name: Unsigned Windows packages
+        if: needs.metadata.outputs.signed != 'true'
+        run: npx electron-builder --win nsis zip --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Signed release package
+        if: needs.metadata.outputs.signed == 'true'
+        run: npx electron-builder --win nsis zip --publish never --config.forceCodeSigning=true
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+      - name: Verify publisher and timestamp on app and setup
+        if: needs.metadata.outputs.signed == 'true'
+        run: ./scripts/verify-signatures.ps1
+        shell: pwsh
       - run: ./scripts/verify-installer.ps1
         shell: pwsh
+      - name: Portable ZIP launch and restart without external Node
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist-win -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'Portable ZIP missing' }
+          node scripts/verify-portable.mjs $zip.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Portable ZIP acceptance failed' }
       - uses: softprops/action-gh-release@v3
+        if: needs.metadata.outputs.publish == 'true'
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
           target_commitish: ${{ github.sha }}
@@ -131,3 +168,10 @@ jobs:
             dist-win/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        if: needs.metadata.outputs.publish != 'true'
+        with:
+          name: Anvil-local-unsigned-test
+          path: |
+            dist-win/*.exe
+            dist-win/*.zip

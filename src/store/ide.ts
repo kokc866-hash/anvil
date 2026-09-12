@@ -1,4 +1,5 @@
 import { idFromPins } from "@/lib/learn-parse";
+import { persistedChatQueue } from "@/lib/chat-queue";
 import { invalidateMemory, captureMemory } from "@/lib/memory-scope";
 import { tokenCount } from "@/lib/token-usage";
 import { toolTargetKey, toolCompatibility } from "@/lib/tool-compat";
@@ -8,11 +9,13 @@ import type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, Sp
 export type { LlmSlot, LlmProfile, ChatRole, PanelId, ThemeName, MotionLevel, SplitMode, SidebarId, PaletteMode, AgentMode, OutputDock, StorageMode, DebugFrame, McpCallLog, McpView, DebugState, FileDiff, PlanStep, Checkpoint, ChatVoice, ChatMsg, AgentStep, GitCommit, RunResult, Panels, IdeState } from "./ide-types";
 import { create } from "zustand";
 import { partializeIde } from "./ide-persist";
-import { syncWrite, syncRemove, syncMkdir, syncMove, cancelSyncWrite, scheduleSyncWrite, captureDiskTarget, noteDiskContents, flushDiskSync } from "@/lib/disk-sync";
+import { syncWrite, syncRemove, syncMkdir, syncMove, cancelSyncWrite, scheduleSyncWrite, captureDiskTarget, noteDiskContents, flushDiskSync, prepareRestoreDisk, syncRestore } from "@/lib/disk-sync";
+import { checkpointRestorePlan } from "@/lib/restore-plan";
 import { clearLocation, diskWorkspaceHandle } from "@/lib/disk";
 import { persist } from "zustand/middleware";
 import { idePersistStorage } from "@/lib/persist-storage";
 import { SEED_FILES } from "@/lib/seed-files";
+import { stoppedAssistantContent, finishedHarness } from "@/lib/chat-finalize";
 import { langFromPath } from "@/lib/languages";
 import { modelForProvider, providerOf, connectionMode, connectionSlot, type LlmProvider } from "@/lib/providers";
 import { ancestorDirs, autoCollapsePaths, cleanPath, dropRecord, dupPath, isInside, joinPath, parentDir, remapList, remapPath, remapRecord } from "@/lib/fs";
@@ -44,6 +47,7 @@ import { IDE_SETTINGS_KEYS, pickSettings } from "@/lib/settings-schema";
 
 import { pushUndo } from "@/lib/document";
 import { planMove } from "@/lib/move-plan";
+import { omitSecrets } from "@/lib/ref";
 
 const THINK_CAP = 64_000;
 const initialMemoryId = nid();
@@ -209,6 +213,7 @@ export const useIde = create<IdeState>()(
       theme: "dark",
       locale: "de",
       motion: "full",
+      helpPreferences: { tips: false, pointer: true, delay: 900 },
       fontSize: 13,
       tabSize: 2,
       lineNumbers: true,
@@ -350,6 +355,7 @@ export const useIde = create<IdeState>()(
       setTheme: (theme) => set({ theme }),
       setLocale: (locale) => set({ locale }),
       setMotion: (motion) => set({ motion }),
+      setHelpPreferences: (helpPreferences) => set({ helpPreferences }),
       setFontSize: (n) => set({ fontSize: Math.min(22, Math.max(10, Math.round(n))) }),
       setTabSize: (tabSize) => set({ tabSize }),
       setLineNumbers: (lineNumbers) => set({ lineNumbers }),
@@ -581,13 +587,14 @@ export const useIde = create<IdeState>()(
       pushCheckpoint: (label) => {
         const id = nid();
         const st = get();
-        const files = st.files;
+        const files = omitSecrets(st.files);
         const row: Checkpoint = {
           id,
           at: Date.now(),
           label: label.slice(0, 80) || "Runde",
           files,
           dirs: [...get().dirs],
+          workspace: st.workspaceCwd || st.memoryWorkspace,
         };
         set({ checkpoints: [...get().checkpoints, row].slice(-40) });
         return id;
@@ -598,7 +605,7 @@ export const useIde = create<IdeState>()(
         const merged = { ...files };
         for (const [path, after] of Object.entries(next)) {
           if (files[path] === after) continue;
-          if (get().pathOperation && isInside(path, get().pathOperation!.to)) { get().setNotice("Verschieben zuerst abschließen lassen."); continue; }
+          if (get().pathOperation && (!get().pathOperation!.from || isInside(path, get().pathOperation!.to))) { get().setNotice("Verschieben zuerst abschließen lassen."); continue; }
           const prior = get().pendingDiffs.find((d) => d.path === path);
           diffs.push(prior ? { ...prior, after } : { path, before: files[path] ?? "", after, source: "propose", existedBefore: path in files, dirtyBefore: Boolean(get().dirty[path]), backupVersion: 2 });
           cancelSyncWrite(path);
@@ -619,26 +626,45 @@ export const useIde = create<IdeState>()(
         });
         return diffs.length;
       },
-      restoreCheckpoint: (id) => {
+      restoreCheckpoint: async (id) => {
         const c = get().checkpoints.find((x) => x.id === id);
-        if (!c || !Object.keys(c.files).length) return false;
-        const keepOpen = get().openPaths.filter((p) => p in c.files);
-        const cur = get().activePath;
-        const active = cur && cur in c.files ? cur : keepOpen[0] ?? null;
-        const curFiles = get().files;
-        const dirty: Record<string, boolean> = { ...get().dirty };
-        for (const p of Object.keys(c.files)) dirty[p] = true;
-        set({
-          files: { ...curFiles, ...c.files },
-          editBases: { ...get().editBases, ...Object.fromEntries(Object.keys(c.files).filter((p) => !(p in get().editBases)).map((p) => [p, curFiles[p] ?? null])) },
-          dirs: [...new Set([...get().dirs, ...c.dirs])],
-          dirty,
-          pendingDiffs: [],
-          openPaths: keepOpen.length ? keepOpen : active ? [active] : [],
-          activePath: active,
-        });
-        noteLearn("checkpoint", id);
-        return true;
+        if (!c) { get().setNotice("Kein gesicherter Rundenstand vorhanden."); return false; }
+        if (c.workspace && c.workspace !== (get().workspaceCwd || get().memoryWorkspace)) { get().setNotice("Diese Rücknahme gehört zu einem anderen Projekt."); return false; }
+        if (get().agentBusy || get().pathOperation) { get().setNotice("Laufende Arbeit zuerst abschließen lassen."); return false; }
+        const initial = get(), target = captureDiskTarget();
+        const plan = checkpointRestorePlan(c, initial.files, initial.dirs);
+        if (plan.conflicts.length) { get().setNotice(`Rücknahme nicht ausgeführt: ${plan.conflicts.join("; ")}`); return false; }
+        set({ pathOperation: { from: "", to: "" } });
+        try {
+          await flushDiskSync();
+          const intent = c.restoreIntent ?? prepareRestoreDisk(plan, target);
+          // Persist the exact compare-and-restore intent BEFORE touching disk; it survives a crash.
+          set({ checkpoints: get().checkpoints.map((x) => x.id === id ? { ...x, restoreIntent: intent } : x) });
+          const { flushPersistence } = await import("@/lib/persist-storage");
+          await flushPersistence();
+          const removedDirs = await syncRestore(intent, target);
+          if (get().workspaceEpoch !== initial.workspaceEpoch) throw new Error("Projekt gewechselt. Rücknahme beim nächsten Öffnen abgleichen.");
+          const cur = get(), files = { ...cur.files }, dirty = { ...cur.dirty }, editBases = { ...cur.editBases };
+          for (const f of intent.files) {
+            if (f.after === null) delete files[f.path]; else files[f.path] = f.after;
+            delete dirty[f.path]; delete editBases[f.path];
+          }
+          const paths = new Set(intent.files.map((f) => f.path));
+          const openPaths = cur.openPaths.filter((p) => p in files);
+          set({ files, dirty, editBases, openPaths,
+            activePath: cur.activePath && cur.activePath in files ? cur.activePath : openPaths[0] ?? null,
+            dirs: [...new Set([...cur.dirs.filter((p) => !removedDirs.includes(p)), ...intent.mkdir])],
+            pendingDiffs: cur.pendingDiffs.filter((d) => !paths.has(d.path)),
+            checkpoints: cur.checkpoints.map((x) => x.id === id ? { ...x, restoreIntent: undefined } : x),
+          });
+          await flushPersistence();
+          get().setNotice("Änderungen dieser Runde zurückgenommen und gespeichert. Spätere eigene Dateien bleiben erhalten.");
+          noteLearn("checkpoint", id);
+          return true;
+        } catch (error) {
+          get().setNotice(`${error instanceof Error ? error.message : "Rücknahme fehlgeschlagen."} Gesicherter Rücknahmeplan bleibt für einen erneuten Versuch erhalten.`);
+          return false;
+        } finally { set({ pathOperation: null }); }
       },
       setChatChanges: (changes) => {
         const chat = [...get().chat];
@@ -684,23 +710,26 @@ export const useIde = create<IdeState>()(
           ? { ...last.lastRun, running: false, ok: false, stderr: last.lastRun.stderr || why }
           : last.lastRun;
         const lastTests = last.lastTests ? { ...last.lastTests, running: false } : last.lastTests;
-        const done = Boolean(last.content.trim());
         chat[chat.length - 1] = {
           ...last,
+          content: stoppedAssistantContent(last.content, why),
           steps,
           plan,
           lastRun,
           lastTests,
-          harness: done ? last.harness : last.harness ? last.harness.replace(/^[A-Za-zäöüÄÖÜß]+/, "Stop") : "Stop",
+          harness: finishedHarness(last.harness, plan, true, get().locale),
         };
-        set({ chat, agentBusy: false, running: false, testsRunning: false, agentStartedAt: 0 });
+        const checkpointId = last.checkpointId;
+        const checkpoints = get().checkpoints.map((c) => c.id === checkpointId && c.sealedBy !== last.id ? { ...c, endFiles: omitSecrets(get().files), endDirs: [...get().dirs], sealedBy: last.id } : c);
+        set({ chat, checkpoints, agentBusy: false, running: false, testsRunning: false, agentStartedAt: 0 });
       },
       openRoundDiff: (path, checkpointId) => {
         get().openFile(path);
         const ck = checkpointId ? get().checkpoints.find((c) => c.id === checkpointId) : get().checkpoints.at(-1);
         if (!ck) return;
+        if (!ck.endFiles) { get().setNotice("Für diese alte Runde fehlt ein verlässlicher Endstand. Die Vorschau in der Spur bleibt verfügbar."); return; }
         const before = ck.files[path] ?? "";
-        const after = get().files[path] ?? "";
+        const after = ck.endFiles[path] ?? "";
         if (before === after) return;
         set({
           pendingDiffs: [...get().pendingDiffs.filter((d) => d.path !== path), { path, before, after, source: "round", existedBefore: path in ck.files, backupVersion: 2 }],
@@ -791,29 +820,30 @@ export const useIde = create<IdeState>()(
         chat[n] = { ...last, plan };
         set({ chat });
       },
-      pushAgent: (text, steal) => {
+      pushAgent: (text, steal, mode) => {
         const t = text.trim();
         if (!t) return;
-        const fix = /^(behebe diese probleme|intern-fehler beheben)/i.test(t);
+        const fix = mode === undefined && /^(behebe diese probleme|intern-fehler beheben)/i.test(t);
+        const request = { text: t, mode: mode ?? (fix ? "agent" as const : get().agentMode) };
         if (steal && get().agentBusy) {
           set({
-            agentQueue: [...get().agentQueue, t],
+            agentQueue: [...get().agentQueue, request],
             panels: { ...get().panels, agent: true },
             ...(fix ? { agentMode: "agent" as const } : {}),
           });
           get().setNotice("Auftrag in die Warteschlange");
           return;
         }
-        if (get().agentBusy || get().agentInbox) {
+        if (get().agentBusy || get().agentInbox || get().agentJob?.status === "ask") {
           set({
-            agentQueue: [...get().agentQueue, t],
+            agentQueue: [...get().agentQueue, request],
             panels: { ...get().panels, agent: true },
             ...(fix ? { agentMode: "agent" as const } : {}),
           });
           return;
         }
         set({
-          agentInbox: t,
+          agentInbox: request,
           panels: { ...get().panels, agent: true },
           ...(fix ? { agentMode: "agent" as const } : {}),
         });
@@ -947,8 +977,9 @@ export const useIde = create<IdeState>()(
         if (diff.source === "round") {
           // Keep the full review and current buffer until disk rollback succeeds.
           try {
-            if (created) await syncRemove(path, target);
-            else await syncWrite(path, diff.before, target);
+            await flushDiskSync();
+            const plan = prepareRestoreDisk({ files: [{ path, before: diff.after, after: created ? null : diff.before }], mkdir: [], rmdir: [], conflicts: [] }, target);
+            await syncRestore(plan, target);
           } catch (error) {
             if (get().workspaceEpoch === initial.workspaceEpoch) get().setNotice(error instanceof Error ? error.message : "Rücknahme nicht gespeichert. Änderung bleibt erhalten.");
             return;
@@ -1042,7 +1073,7 @@ export const useIde = create<IdeState>()(
         }
       },
       setContent: (path, content) => {
-        if (get().pathOperation && isInside(path, get().pathOperation!.to)) return;
+        if (get().pathOperation && (!get().pathOperation!.from || isInside(path, get().pathOperation!.to))) return;
         const { files, dirty, undo, editBases } = get();
         if (files[path] === content) return;
         const base = path in editBases ? editBases[path] : files[path] ?? null;
@@ -1058,7 +1089,7 @@ export const useIde = create<IdeState>()(
       writeFile: (path, content, opts) => {
         const name = cleanPath(path);
         const op = get().pathOperation;
-        if (op && isInside(name, op.to)) { get().setNotice("Ziel wird gerade verschoben. Änderung danach erneut anwenden."); return; }
+        if (op && (!op.from || isInside(name, op.to))) { get().setNotice("Ziel wird gerade verschoben. Änderung danach erneut anwenden."); return; }
         if (!name) return;
         const { files, openPaths, dirty, panels, dirs, activePath, undo } = get();
         const quiet = Boolean(opts?.quiet);
@@ -1090,7 +1121,7 @@ export const useIde = create<IdeState>()(
       },
       deleteFile: (path) => {
         const op = get().pathOperation;
-        if (op && (isInside(path, op.from) || isInside(path, op.to))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
+        if (op && (!op.from || isInside(path, op.from) || isInside(path, op.to))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
         const { files, openPaths, activePath, dirty } = get();
         const nextFiles = { ...files };
         delete nextFiles[path];
@@ -1111,7 +1142,7 @@ export const useIde = create<IdeState>()(
         pushDisk("remove", path);
       },
       createFolder: (path) => {
-        if (get().pathOperation && isInside(path, get().pathOperation!.to)) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
+        if (get().pathOperation && (!get().pathOperation!.from || isInside(path, get().pathOperation!.to))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
         const name = cleanPath(path);
         if (!name) return;
         const { files, dirs } = get();
@@ -1121,7 +1152,7 @@ export const useIde = create<IdeState>()(
       },
       deleteDir: (path) => {
         const op = get().pathOperation;
-        if (op && (isInside(op.from, path) || isInside(path, op.from) || isInside(op.to, path))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
+        if (op && (!op.from || isInside(op.from, path) || isInside(path, op.from) || isInside(op.to, path))) { get().setNotice("Verschieben zuerst abschließen lassen."); return; }
         const dir = cleanPath(path);
         if (!dir) return;
         const { files, openPaths, activePath, dirty, dirs } = get();
@@ -1308,12 +1339,12 @@ export const useIde = create<IdeState>()(
         const chat = [...get().chat];
         const last = chat[chat.length - 1];
         if (last?.role === "assistant") {
-          const stopped = /gestoppt|abgebrochen/i.test(reply);
+          const stopped = /^(?:gestoppt|abgebrochen)\b/i.test(reply.trim());
           const echo = isToolTemplateEcho(last.content) || isToolTemplateEcho(reply);
           const now = Date.now();
           chat[chat.length - 1] = {
             ...last,
-            content: options?.replace || echo ? reply : last.content.trim() ? last.content : reply,
+            content: stopped ? stoppedAssistantContent(last.content, reply) : options?.replace || echo ? reply : last.content.trim() ? last.content : reply,
             tools: tools ?? last.tools,
             ms: now - (last.at || now),
             steps: last.steps?.map((s) => (s.status === "run" ? { ...s, status: stopped ? "err" : "ok", ms: now - (s.at || now) } : s)),
@@ -1325,9 +1356,7 @@ export const useIde = create<IdeState>()(
               }
               return s;
             }),
-            harness: last.harness
-              ? last.harness.replace(/^(Stop|Arbeit|Plan|Run|Vorschau|Patch|Engine)/, stopped ? "Stop" : "Fertig")
-              : last.harness,
+            harness: finishedHarness(last.harness, last.plan, stopped, get().locale),
           };
           set({ chat });
           return;
@@ -1365,8 +1394,14 @@ export const useIde = create<IdeState>()(
       resetInputMap: () => set({ inputMap: normalizeInputMap(DEFAULT_INPUT_MAP) }),
       setKeyBind: (id, chord) => set({ keyMap: { ...get().keyMap, [id]: chord } }),
       resetKeyMap: () => set({ keyMap: { ...KEY_DEFAULTS } }),
-      setAgentBusy: (agentBusy) =>
-        set(agentBusy ? { agentBusy, agentStartedAt: get().agentStartedAt || Date.now() } : { agentBusy, agentStartedAt: 0 }),
+      setAgentBusy: (agentBusy) => {
+        if (!agentBusy && get().agentBusy) {
+          const message = get().chat.at(-1);
+          const id = message?.checkpointId;
+          if (id) set({ checkpoints: get().checkpoints.map((c) => c.id === id && c.sealedBy !== message.id ? { ...c, endFiles: omitSecrets(get().files), endDirs: [...get().dirs], sealedBy: message.id } : c) });
+        }
+        set(agentBusy ? { agentBusy, agentStartedAt: get().agentStartedAt || Date.now() } : { agentBusy, agentStartedAt: 0 });
+      },
       setAgentJob: (agentJob) => set({ agentJob }),
       setTestsRunning: (testsRunning) => set({ testsRunning }),
       mergeTestResults: (hits) => {
@@ -1554,6 +1589,10 @@ export const useIde = create<IdeState>()(
           planWho: normalizePlanWho(p.planWho),
           engineLoop: p.engineLoop === true,
           locale: p.locale === "en" || p.locale === "de" ? p.locale : current.locale,
+          helpPreferences: (() => {
+            const v = p.helpPreferences as Partial<IdeState["helpPreferences"]> | undefined;
+            return { tips: v?.tips === true, pointer: v?.pointer !== false, delay: v?.delay === 400 || v?.delay === 1800 ? v.delay : 900 };
+          })(),
           keyMap: normalizeKeyMap(p.keyMap),
           inputMap: normalizeInputMap(p.inputMap ?? current.inputMap),
           panels: {
@@ -1582,9 +1621,7 @@ export const useIde = create<IdeState>()(
           testsRunning: false,
           agentInbox: null,
           agentJob: normalizeJob(p.agentJob, { revive: true }),
-          agentQueue: Array.isArray(p.agentQueue)
-            ? (p.agentQueue as unknown[]).filter((t): t is string => typeof t === "string" && t.trim().length > 0).slice(0, 8)
-            : [],
+          agentQueue: persistedChatQueue(p.agentQueue),
           sessionJournal: normalizeJournal(p.sessionJournal),
           workspaceMemoryId: typeof p.workspaceMemoryId === "string" ? p.workspaceMemoryId : current.workspaceMemoryId,
           memoryWorkspace: typeof p.memoryWorkspace === "string" ? p.memoryWorkspace : idFromPins({

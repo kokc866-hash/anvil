@@ -411,19 +411,6 @@ async function anthropicChat(
       res = await send(hdr);
       if (!res.ok) err = await res.text();
     }
-    if (!res.ok && res.status === 400 && body.thinking) {
-      const think = body.thinking as { type?: string; budget_tokens?: number };
-      if (think.budget_tokens != null) {
-        body.thinking = { type: "adaptive" };
-        res = await send(hdr);
-        if (!res.ok) err = await res.text();
-      }
-    }
-    if (!res.ok && res.status === 400 && body.thinking) {
-      delete body.thinking;
-      res = await send(hdr);
-      if (!res.ok) err = await res.text();
-    }
     if (!res.ok) httpFail(res.status, err, "anthropic");
   }
   const json = (await res.json()) as {

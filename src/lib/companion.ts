@@ -63,6 +63,19 @@ export type LspPack = {
 export const DEFAULT_COMPANION = "http://127.0.0.1:7845";
 export const DEFAULT_ENGINE_MCP = "http://127.0.0.1:7845/mcp";
 
+export type EnginePaths = { godot: string; unity: string; unreal: string };
+export async function companionEnginePaths(base = DEFAULT_COMPANION, configured?: EnginePaths): Promise<{configured: EnginePaths; bins: Record<string, string | null>}> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/v1/engines`, {
+    method: configured ? "POST" : "GET", headers: headers(),
+    ...(configured ? {body: JSON.stringify(configured)} : {}),
+    signal: AbortSignal.timeout(8000),
+  });
+  const result = await r.json();
+  if (!r.ok || result.ok === false || !result.configured || !result.bins)
+    throw new Error(result.error || "Engine-Pfade konnten nicht geladen werden. Companion aktualisieren und erneut prüfen.");
+  return result;
+}
+
 function token(): string {
   return loadSecrets().companionToken.trim();
 }
@@ -122,7 +135,7 @@ export async function companionPing(base = DEFAULT_COMPANION): Promise<Companion
 }
 
 export async function companionRun(
-  body: { cwd?: string; cmd: string; timeoutMs?: number },
+  body: { cwd?: string; cmd: string; action?: "play" | "check" | "editor" | "test"; timeoutMs?: number },
   base = DEFAULT_COMPANION,
 ): Promise<CompanionJob> {
   const r = await fetch(`${base.replace(/\/$/, "")}/v1/run`, {
@@ -462,6 +475,15 @@ export async function companionWriteChecked(path: string, content: string, cwd: 
   });
   const result = await r.json() as { ok?: boolean; error?: string };
   if (!r.ok || !result.ok) throw new Error(result.error || `Nicht gespeichert: ${path}`);
+}
+
+export async function companionRestore(plan: import("./restore-plan").RestoreDiskPlan, cwd: string, base = DEFAULT_COMPANION): Promise<string[]> {
+  const response = await fetch(`${base.replace(/\/$/, "")}/v1/restore`, {
+    method: "POST", headers: headers(), body: JSON.stringify({ ...plan, cwd }), signal: AbortSignal.timeout(60000),
+  });
+  const result = await response.json() as { ok?: boolean; error?: string; removedDirs?: string[] };
+  if (!response.ok || !result.ok) throw new Error(result.error || "Rücknahme konnte nicht gespeichert werden.");
+  return result.removedDirs ?? [];
 }
 
 export async function companionMoveFile(from: string, to: string, cwd: string, base = DEFAULT_COMPANION): Promise<void> {

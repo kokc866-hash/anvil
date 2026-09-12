@@ -272,7 +272,7 @@ export async function chatWithProvider(opts: {
   const transport = cliKind
     ? async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => {
         const offered = useTools ? toolsForCall(opts.observeOnly) : [];
-        const choice = await completeViaCli(cliKind, model, messages, offered, hardStopMs(useIde.getState().llmHardStopMin), onDelta);
+        const choice = await completeViaCli(cliKind, model, messages, offered, hardStopMs(useIde.getState().llmHardStopMin), onDelta, opts.thinking ?? "auto");
         choice.usage = resolvedUsage(choice, messages, offered);
         return choice;
       }
@@ -517,22 +517,43 @@ function clientTools(opts: {
     },
     engine: async (action: "status" | "run", args?: Record<string, unknown>) => {
       const { companionPing, companionRun } = await import("./companion");
-      const { detectEngines, primaryEngine } = await import("./engines");
+      const { detectEngines } = await import("./engines");
+      const { engineReady, planEngineRun } = await import("./engine-request");
       const { useIde } = await import("@/store/ide");
       const st = useIde.getState();
       const url = st.companionUrl || "http://127.0.0.1:7845";
       const hits = detectEngines(st.files, st.dirs);
-      const hit = primaryEngine(st.files, st.dirs);
+      const hit = hits[0];
+      const current = () => {
+        mcpCurrent();
+        const live = useIde.getState();
+        if (live.workspaceEpoch !== st.workspaceEpoch || live.workspaceCwd !== st.workspaceCwd || live.companionUrl !== st.companionUrl)
+          throw new Error("Projekt oder Companion inzwischen gewechselt. Engine-Auftrag erneut starten.");
+      };
+      current();
+      const { withCompanion } = await import("./companion-life");
       if (args?.detect || action === "status") {
-        const ping = await companionPing(url);
-        st.setEngineLink(hit ? { label: hit.label, ok: ping.ok } : null);
-        if (args?.detect) return { engines: hits, companion: ping };
-        return ping;
+        const ping = await withCompanion(() => companionPing(url), url, st.workspaceCwd);
+        current();
+        st.setEngineLink(hit ? { label: hit.label, ok: engineReady(hit, ping) } : null);
+        const engines = hits.map((engine) => ({ ...engine, installed: engineReady(engine, ping) }));
+        if (args?.detect) return { engines, companion: ping };
+        return { ...ping, engines };
       }
-      const cmd = String(args?.cmd || hit?.cmds[String(args?.action || "check")] || hit?.cmds.play || hit?.cmds.check || "");
-      if (!cmd) return { ok: false, error: "Keine Engine oder kein Befehl. Godot-/Unity-Ordner öffnen." };
-      const job = await companionRun({ cmd, cwd: st.workspaceCwd || undefined, timeoutMs: Number(args?.timeoutMs) || 90000 }, url);
-      return { ...job, engine: hit?.label };
+      if (!st.workspaceCwd.trim()) return { ok: false, error: "Für die Engine zuerst einen lokalen Projektordner öffnen. Ein Projekt nur in Anvils Sitzung reicht nicht." };
+      const plan = planEngineRun(hits, args);
+      const { saveNow } = await import("./save");
+      if (!await saveNow({ all: true, format: false })) return { ok: false, error: "Projekt konnte nicht vollständig gespeichert werden. Änderungen zuerst abgleichen." };
+      current();
+      const job = await withCompanion(() => {
+        current();
+        return companionRun({ cmd: plan.cmd, action: plan.action, cwd: st.workspaceCwd, timeoutMs: Number(args?.timeoutMs) || 90000 }, url);
+      }, url, st.workspaceCwd);
+      current();
+      st.pushOutput({ ...job, label: `${plan.hit?.label || "Engine"} · ${plan.action}` });
+      st.revealOutput();
+      return { ...job, engineId: plan.hit?.id, engine: plan.hit?.label, projectRoot: plan.hit?.root,
+        ...(job.running ? { status: "Engine läuft. Das bestätigt den Start, keinen erfolgreichen Build oder Test." } : {}) };
     },
     runFile: async (path: string, files: Record<string, string>) => {
       const { runLoopFile } = await import("./run-loop");
@@ -922,15 +943,7 @@ function makeProxyComplete(
             const learned = learnFromError(spec.id, model, res.status, errText, base);
             if (learned && attempt < tries) { last = new Error(learned.note); continue; }
             const think = body.thinking as Record<string, unknown> | undefined;
-            if (think?.type === "adaptive" && /adaptive|thinking/i.test(errText)) {
-              const maxTok = Number(body.max_tokens) || 8192;
-              body.thinking = {
-                type: "enabled",
-                budget_tokens: Math.min(8192, Math.max(1024, maxTok - 1024)),
-                display: "summarized",
-              };
-              res = await sendAnt();
-            } else if (think && "display" in think && /display/i.test(errText)) {
+            if (think && "display" in think && /display/i.test(errText)) {
               delete think.display;
               res = await sendAnt();
             } else {

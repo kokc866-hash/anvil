@@ -7,6 +7,13 @@ import { McpHost, mcpConfig } from "./mcp-host.mjs";
 import { McpOAuth } from "./mcp-oauth.mjs";
 
 const owners = new Map();
+// Credentials are app-wide. Sharing the OAuth generation guard prevents a
+// second window or a stale provider from undoing a logout in another window.
+const oauth = new McpOAuth({
+  read: readCredential,
+  write: writeCredential,
+  open: (url) => shell.openExternal(url),
+});
 let records;
 let writes = Promise.resolve();
 const vaultPath = () => join(app.getPath("userData"), "mcp-oauth.enc");
@@ -82,11 +89,6 @@ export function bindMcpIpc(isTrusted) {
     const emit = (value) => {
       if (!owner.isDestroyed()) owner.send("mcp-event", value);
     };
-    const oauth = new McpOAuth({
-      read: readCredential,
-      write: writeCredential,
-      open: (url) => shell.openExternal(url),
-    });
     state = {
       host: new McpHost({ version: app.getVersion(), emit, oauth }),
       jobs: new Map(),
@@ -100,7 +102,9 @@ export function bindMcpIpc(isTrusted) {
       owner.off("destroyed", stop);
       owner.off("did-start-navigation", navigate);
     };
-    const navigate = (_e, _url, _inPlace, mainFrame) => { if (mainFrame) stop(); };
+    const navigate = (_e, _url, _inPlace, mainFrame) => {
+      if (mainFrame) stop();
+    };
     owner.once("destroyed", stop);
     owner.on("did-start-navigation", navigate);
     return state;
@@ -121,13 +125,39 @@ export function bindMcpIpc(isTrusted) {
       const config = mcpConfig(request.server);
       state.jobs.set(id, { controller, server: config.id });
       let value;
-      if (request.method === "oauth/login" || request.method === "oauth/logout") {
+      if (
+        ["oauth/login", "oauth/logout", "oauth/status", "oauth/reopen"].includes(request.method)
+      ) {
         if (config.transport !== "http") throw new Error("OAuth benötigt HTTP.");
-        await state.host.close(config.id);
-        value =
-          request.method === "oauth/login"
-            ? await state.oauth.login(config, controller.signal)
-            : await state.oauth.logout(config);
+        if (request.method === "oauth/status") value = await oauth.status(config);
+        else if (request.method === "oauth/reopen") value = await oauth.reopen(config);
+        else {
+          // Cancel all old work before credentials can be refreshed or saved.
+          // The current logout/login job must remain alive to report its result.
+          for (const owner of owners.values())
+            for (const [jobId, job] of owner.jobs)
+              if (job.server === config.id && !(owner === state && jobId === id))
+                job.controller.abort();
+          const closing = Promise.allSettled(
+            [...owners.values()].map((owner) => owner.host.close(config.id)),
+          );
+          if (request.method === "oauth/logout") {
+            value = await oauth.logout(config);
+            await closing;
+          } else {
+            await closing;
+            controller.signal.throwIfAborted();
+            value = await oauth.login(config, controller.signal, (message) => {
+              if (!controller.signal.aborted && !e.sender.isDestroyed())
+                e.sender.send("mcp-event", {
+                  id,
+                  server: config.id,
+                  kind: "oauth-progress",
+                  params: { message },
+                });
+            });
+          }
+        }
       } else
         value = await state.host.request(config, request.method, request.params, {
           signal: controller.signal,

@@ -13,6 +13,8 @@ import { useT } from "@/lib/i18n";
 import { resetSettingsCategory } from "@/lib/settings-io";
 import type { SettingsCategory } from "@/lib/settings-groups";
 import { SettingsSection, Vis } from "./settings/fields";
+import { OrientationSection } from "./settings/orientation";
+import { HelpSettings } from "./settings/help";
 
 const AgentSection = lazy(() => import("./settings/agent").then((m) => ({ default: m.AgentSection })));
 const EditorSection = lazy(() => import("./settings/editor").then((m) => ({ default: m.EditorSection })));
@@ -24,10 +26,12 @@ const InputSection = lazy(() => import("./settings/input").then((m) => ({ defaul
 const KeysSection = lazy(() => import("./settings/input").then((m) => ({ default: m.KeysSection })));
 const LearnSection = lazy(() => import("./settings/memory").then((m) => ({ default: m.LearnSection })));
 const InternSection = lazy(() => import("./settings/diagnostics").then((m) => ({ default: m.InternSection })));
+const SupportSection = lazy(() => import("./settings/support").then((m) => ({ default: m.SupportSection })));
 
-type Cat = SettingsCategory;
+type Cat = SettingsCategory | "help" | "overview";
 
 const CATS: { id: Cat; key: string }[] = [
+  { id: "overview", key: "orientation" },
   { id: "agent", key: "catAgent" },
   { id: "companion", key: "catCompanion" },
   { id: "brain", key: "catHelper" },
@@ -41,6 +45,7 @@ const CATS: { id: Cat; key: string }[] = [
   { id: "input", key: "catInput" },
   { id: "keys", key: "catKeys" },
   { id: "data", key: "catData" },
+  { id: "help", key: "help" },
 ];
 
 export function SettingsPane() {
@@ -52,6 +57,14 @@ export function SettingsPane() {
   const query = q.trim().toLowerCase();
   const show = (id: Cat) => Boolean(query) || id === cat;
   const de = useIde((s) => s.locale) !== "en";
+  const purpose: Partial<Record<Cat, string>> = {
+    agent: de ? "KI für deinen Chat" : "AI for your chat",
+    companion: de ? "Programme ausführen" : "Run programs",
+    brain: de ? "Zusätzliche lokale KI" : "Additional local AI",
+    models: de ? "Lokale Modelle laden" : "Get local models",
+    learn: de ? "Wissen und Regeln" : "Knowledge and rules",
+    intern: de ? "Fehlersuche" : "Diagnostics",
+  };
   useEffect(() => { if (results.current) results.current.scrollTop = 0; }, [cat, query]);
 
   return (
@@ -75,20 +88,22 @@ export function SettingsPane() {
             <button
               key={c.id}
               type="button"
+              aria-label={c.id === "overview" ? (de ? "Orientierung" : "Getting started") : c.id === "help" ? (de ? "Hilfe" : "Help") : t(c.key)}
               aria-current={cat === c.id && !query ? "page" : undefined}
               onClick={() => {
                 setCat(c.id);
                 setQ("");
               }}
               className={cn(
-                "h-8 rounded-md px-2 text-left text-sm",
+                "shrink-0 rounded-md px-2 py-2 text-left text-sm",
                 cat === c.id && !query ? "bg-hover text-fg" : "text-muted hover:text-fg",
               )}
             >
-              {t(c.key)}
+              <span className="block">{c.id === "overview" ? (de ? "Orientierung" : "Getting started") : c.id === "help" ? (de ? "Hilfe" : "Help") : t(c.key)}</span>
+              {purpose[c.id] ? <span className="mt-0.5 block text-[10px] leading-tight text-subtle">{purpose[c.id]}</span> : null}
             </button>
           ))}
-          {!query ? <div className="mt-auto border-t border-border pt-3">
+          {!query && cat !== "help" && cat !== "overview" ? <div className="mt-auto border-t border-border pt-3">
             <Button variant="quiet" className="h-auto w-full whitespace-normal px-2 py-2 text-left text-xs" onClick={() => {
               resetSettingsCategory(cat);
               useIde.getState().setNotice(de ? "Bereich auf Standard gesetzt. Profile und Projektinhalte bleiben erhalten." : "Category reset. Profiles and project contents are kept.");
@@ -100,13 +115,15 @@ export function SettingsPane() {
         </nav>
         <div ref={results} className="settings-results min-h-0 min-w-0 flex-1 overflow-auto px-4 pb-8">
           <Suspense fallback={<p className="py-4 text-sm text-muted">{t("settings")} …</p>}>
+            {!query && cat === "overview" ? <OrientationSection navigate={(next) => { setCat(next); setQ(""); }} /> : null}
+            {query ? <SettingsSection q={query}><Vis q={query} label="Erklärhilfen Tooltips Tutorial Tour Hand Orientierung Explanations Delay Verzögerung"><HelpSettings /></Vis></SettingsSection> : null}
             {query ? <p className="settings-empty py-4 text-sm text-muted" role="status">{de ? "Keine passenden Einstellungen gefunden." : "No matching settings found."}</p> : null}
             {show("agent") ? <AgentSection q={query} /> : null}
             {show("companion") ? (
               <SettingsSection q={query} className="pb-6">
-                <Vis q={query} label="Companion Compiler Pakete Packages Sprachserver Language Server Go Rust Java Python C++ Token koppeln Pairing Verbindung Connection">
+                <Vis q={query} label="Companion Ausführen Run Unity Unreal Godot Engine Compiler Pakete Packages Sprachserver Language Server Go Rust Java Python C++ Token koppeln Pairing Verbindung Connection">
                 <h3 className="pt-4 pb-1 text-xs font-medium tracking-wide text-muted uppercase">{t("catCompanion")}</h3>
-                <CompanionSetup probeOnMount={!query} />
+                <CompanionSetup probeOnMount={!query} revealConnection={Boolean(query)} />
                 </Vis>
               </SettingsSection>
             ) : null}
@@ -121,6 +138,7 @@ export function SettingsPane() {
             {show("input") ? <InputSection q={query} /> : null}
             {show("keys") ? <KeysSection q={query} /> : null}
             {show("data") ? <DataSection q={query} /> : null}
+            {show("help") ? <SupportSection q={query} /> : null}
           </Suspense>
         </div>
       </div>

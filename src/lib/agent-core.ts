@@ -22,6 +22,7 @@ import { runFailHint, scrubRunError } from "./run-error";
 import { applyGitClone, keepAgentTool, pinHistory, type ToolPick } from "./agent-select";
 import { journalPrompt, type SessionJournal } from "./session";
 import { parseAsk, type JobAsk } from "./agent-ask";
+import { ANVIL_RUN_FRAME } from "./agent-image.ts";
 
 export type AgentFile = { path: string; content: string };
 
@@ -1150,6 +1151,7 @@ export async function runAgentLoop(
       if (frame) {
         messages.push({
           role: "user",
+          [ANVIL_RUN_FRAME]: true,
           content: [
             { type: "text", text: say("Graph-Frame nach Run/Play. Kurz sagen, was du siehst. Bug → patchen und run_file/play.", "Graph frame after run/play. Say briefly what you see. Bug → patch and run_file/play again.") },
             { type: "image_url", image_url: { url: frame } },

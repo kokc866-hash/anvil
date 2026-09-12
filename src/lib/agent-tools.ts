@@ -142,8 +142,10 @@ export const AGENT_TOOLS = [
   }, ["id"]),
   tool("engine_detect", "Detect Godot/Unity/Unreal/Bevy/… in the workspace. Games run in those engines, not inside Anvil.", {}),
   tool("engine_status", "Ping the local engine companion (HTTP). Returns binaries if running.", {}),
-  tool("engine_run", "Run play/check/editor on the detected engine via companion. action: play|check|editor|test or cmd.", {
+  tool("engine_run", "Run an explicitly supported engine action in a saved project via companion. Use engine_detect first. Multiple projects require engine + projectRoot. A running editor is not a passed test. action: play|check|editor|test or cmd.", {
     action: { type: "string" },
+    engine: { type: "string", description: "Engine id from engine_detect, e.g. unity, unreal, godot." },
+    projectRoot: { type: "string", description: "Exact relative root from engine_detect; empty string for workspace root." },
     cmd: { type: "string" },
     timeoutMs: { type: "number" },
   }),

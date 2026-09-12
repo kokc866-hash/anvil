@@ -4,7 +4,7 @@ import path from "node:path";
 import { createServer } from "vite";
 
 test("agent completion follows tool outcomes and fresh diagnostic results", async (t) => {
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
   try {
     const { runAgentLoop } = await server.ssrLoadModule("/src/lib/agent-core.ts");
     const { beginAgent } = await server.ssrLoadModule("/src/lib/abort.ts");

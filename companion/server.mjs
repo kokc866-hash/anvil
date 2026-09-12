@@ -6,8 +6,7 @@
  * Token: ~/.anvil-companion-token  oder  ANVIL_COMPANION_TOKEN
  */
 import http from "node:http";
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +24,9 @@ import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, assertLlmTarget } fr
 import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
 import { gitDispatch, gitBin, listTree, writeRel, removeRel, readRelFiles, moveRel, mkdirRel, resolveCwd } from "./git.mjs";
 import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
+import { restoreRel } from "./restore.mjs";
+import { findBinary, engineBinaries, detectDiskEngines, selectEngineCommand, runEngineCommand } from "./engine-runtime.mjs";
+import { readEngineConfig, saveEngineConfig, engineEnvironment } from "./engine-config.mjs";
 import {
   allowCorsOrigin,
   blockedCwd,
@@ -34,9 +36,7 @@ import {
   MAX_BODY,
   mcpProtocol,
   pairTarget,
-  runAllowed,
   tokenOk,
-  whichExts,
 } from "./guard.mjs";
 
 process.on("uncaughtException", (err) => {
@@ -74,30 +74,15 @@ function loadToken() {
 
 const TOKEN = loadToken();
 
-function which(bin) {
-  const env = process.env.PATH || "";
-  const ext = whichExts();
-  const lookup = (name) => {
-    for (const dir of env.split(path.delimiter)) {
-      for (const e of ext) {
-        const p = path.join(dir, name + e);
-        if (existsSync(p)) return p;
-      }
-    }
-    return null;
-  };
-  const hit = lookup(bin);
-  if (hit) return hit;
-  if (process.platform === "win32" && (bin === "python" || bin === "python3")) return lookup("py");
-  return null;
-}
+const which = findBinary;
 
 function bins() {
   const extra = lintBins();
+  const engines = engineBinaries(engineEnvironment());
   const raw = {
-    godot: which("godot") || which("godot4"),
-    unity: which("unity") || which("Unity"),
-    UnrealEditor: which("UnrealEditor"),
+    godot: engines.godot.file,
+    unity: engines.unity.file,
+    UnrealEditor: engines.UnrealEditor.file,
     cargo: which("cargo"),
     love: which("love"),
     python: extra.python,
@@ -114,7 +99,7 @@ function bins() {
     dotnet: which("dotnet"),
   };
   for (const k of Object.keys(raw)) {
-    if (!raw[k]) raw[k] = resolveBin(k);
+    if (!raw[k] && !engines[k]) raw[k] = resolveBin(k);
   }
   return raw;
 }
@@ -127,59 +112,12 @@ function safeCwd(cwd) {
   throw new Error("cwd außerhalb des Workspace");
 }
 
-function parseCmd(cmd) {
-  const raw = String(cmd || "").trim();
-  if (!raw) throw new Error("cmd fehlt");
-  if (/[;&|`$()<>\n]/.test(raw)) throw new Error("Shell-Metazeichen verboten");
-  const parts = raw.split(/\s+/);
-  const base = path.basename(parts[0]);
-  if (!runAllowed(base) && !runAllowed(parts[0])) throw new Error(`Binärdatei nicht erlaubt: ${base}`);
-  const file = which(base) || which(parts[0]) || resolveBin(base);
-  if (!file) throw new Error(`${base} nicht im PATH`);
-  return { file, args: parts.slice(1) };
-}
-
-function runCmd(cwd, cmd, timeoutMs) {
-  return new Promise((resolve) => {
-    let parsed;
-    try {
-      parsed = parseCmd(cmd);
-      cwd = safeCwd(cwd);
-    } catch (err) {
-      resolve({
-        ok: false,
-        code: 1,
-        stdout: "",
-        stderr: err instanceof Error ? err.message : String(err),
-        duration: 0,
-        cmd: String(cmd || ""),
-      });
-      return;
-    }
-    const start = Date.now();
-    const child = spawn(parsed.file, parsed.args, { cwd, shell: false, env: toolEnv() });
-    let stdout = "";
-    let stderr = "";
-    const cap = (s, add) => (s + add).slice(-24000);
-    child.stdout?.on("data", (d) => {
-      stdout = cap(stdout, d.toString());
-    });
-    child.stderr?.on("data", (d) => {
-      stderr = cap(stderr, d.toString());
-    });
-    const t = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1500);
-    }, timeoutMs || MAX_MS);
-    child.on("close", (code) => {
-      clearTimeout(t);
-      resolve({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start, cmd });
-    });
-    child.on("error", (err) => {
-      clearTimeout(t);
-      resolve({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start, cmd });
-    });
-  });
+async function runCmd(cwd, cmd, timeoutMs, action = "") {
+  try {
+    return await runEngineCommand(safeCwd(cwd), cmd, timeoutMs || MAX_MS, { action, env: engineEnvironment(toolEnv()), resolveBin });
+  } catch (error) {
+    return { ok: false, code: 1, stdout: "", stderr: error.message, duration: 0, cmd };
+  }
 }
 
 function safeRel(p) {
@@ -221,63 +159,22 @@ async function formatLang(body) {
 }
 
 
-function walkNames(root, max = 80) {
-  const out = [];
-  const walk = (dir, depth) => {
-    if (out.length >= max || depth > 3) return;
-    let ents = [];
-    try {
-      ents = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of ents) {
-      if (e.name.startsWith(".") || e.name === "node_modules") continue;
-      const rel = path.relative(root, path.join(dir, e.name)).replaceAll("\\", "/");
-      if (e.isDirectory()) walk(path.join(dir, e.name), depth + 1);
-      else out.push(rel);
-    }
-  };
-  walk(root, 0);
-  return out;
-}
-
 function detectOnDisk(root) {
-  const cwd = safeCwd(root || ROOT);
-  const names = walkNames(cwd);
-  const engines = [];
-  if (names.some((p) => p.endsWith("project.godot"))) {
-    engines.push({ id: "godot", cmds: { play: "godot --path .", check: "godot --headless --path . --quit-after 1", editor: "godot --editor --path ." } });
-  }
-  if (names.some((p) => p.includes("ProjectSettings")) && names.some((p) => p.includes("Assets"))) {
-    engines.push({ id: "unity", cmds: { editor: "unity -projectPath .", test: "unity -projectPath . -batchmode -runTests -logFile -" } });
-  }
-  const up = names.find((p) => p.endsWith(".uproject"));
-  if (up) engines.push({ id: "unreal", cmds: { editor: `UnrealEditor ${up}` } });
-  const cargo = names.find((p) => p.endsWith("Cargo.toml"));
-  if (cargo) {
-    try {
-      if (/bevy/i.test(readFileSync(path.join(cwd, cargo), "utf8"))) {
-        engines.push({ id: "bevy", cmds: { play: "cargo run", check: "cargo check" } });
-      }
-    } catch {
-      /* */
-    }
-  }
-  if (names.includes("main.lua")) engines.push({ id: "love", cmds: { play: "love ." } });
-  return { root: cwd, engines };
+  return detectDiskEngines(safeCwd(root || workspace));
 }
 
 const TOOLS = [
   { name: "engine_detect", description: "Welche Engine liegt im Ordner?", inputSchema: { type: "object", properties: { cwd: { type: "string" } } } },
-  { name: "engine_status", description: "Welche Engine-Binaries sind im PATH?", inputSchema: { type: "object", properties: {} } },
+  { name: "engine_status", description: "Welche Engine-Editoren wurden gefunden oder über ANVIL_GODOT_BIN/ANVIL_UNITY_BIN/ANVIL_UNREAL_BIN konfiguriert?", inputSchema: { type: "object", properties: {} } },
   {
     name: "engine_run",
     description: "Play/Check/Editor über die erkannte Engine. cmd nur Allowlist (godot/unity/cargo/…).",
     inputSchema: {
       type: "object",
       properties: {
-        action: { type: "string" },
+        action: { type: "string", enum: ["check", "test", "play", "editor"] },
+        engine: { type: "string" },
+        projectRoot: { type: "string" },
         cmd: { type: "string" },
         cwd: { type: "string" },
         timeoutMs: { type: "number" },
@@ -300,14 +197,13 @@ const TOOLS = [
 async function callTool(name, args = {}) {
   const cwd = String(args.cwd || workspace);
   if (name === "engine_detect") return detectOnDisk(cwd);
-  if (name === "engine_status") return { ok: true, bins: bins(), cwd };
+  if (name === "engine_status") return { ok: true, bins: bins(), engineBinaries: engineBinaries(engineEnvironment()), cwd };
   if (name === "engine_run") {
-    const found = detectOnDisk(cwd);
-    const hit = found.engines[0];
-    const action = String(args.action || "check");
-    const cmd = String(args.cmd || hit?.cmds[action] || hit?.cmds.play || hit?.cmds.check || "").trim();
-    if (!cmd) return { ok: false, error: "Keine Engine oder kein Befehl." };
-    return runCmd(cwd, cmd, Number(args.timeoutMs) || MAX_MS);
+    try {
+      const action = String(args.action || "check");
+      const cmd = selectEngineCommand(detectOnDisk(cwd), args);
+      return runCmd(cwd, cmd, Number(args.timeoutMs) || MAX_MS, action);
+    } catch (error) { return { ok: false, error: error.message }; }
   }
   if (name === "lint") return runLint({ files: args.files || [], timeoutMs: args.timeoutMs });
   return { ok: false, error: `unbekanntes Tool ${name}` };
@@ -452,12 +348,14 @@ const server = http.createServer(async (req, res) => {
       json(req, res, 401, { ok: false, error: "Token fehlt. ~/.anvil-companion-token nach Einstellungen kopieren.", needToken: true });
       return;
     }
+    try {
     refreshPath();
     json(req, res, 200, {
       ok: true,
       version: JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version,
       modes: ["http", "mcp", "compile", "lsp", "install", "toolchain", "git", "debug"],
       bins: bins(),
+      engineBinaries: engineBinaries(engineEnvironment()),
       lsp: listLsp(),
       installer: installerKind(),
       toolchains: listToolchains(),
@@ -469,10 +367,19 @@ const server = http.createServer(async (req, res) => {
       git: Boolean(gitBin()),
       workspace,
     });
+    } catch (error) { json(req, res, 500, { ok: false, error: error.message }); }
     return;
   }
   if (!checkToken(req)) {
     json(req, res, 401, { ok: false, error: "Token fehlt (Header x-anvil-token)." });
+    return;
+  }
+  if (["GET", "POST"].includes(req.method) && url.pathname === "/v1/engines") {
+    try {
+      const configured = req.method === "POST" ? saveEngineConfig(await readBody(req)) : readEngineConfig();
+      const status = engineBinaries(engineEnvironment(process.env, configured));
+      json(req, res, 200, { ok: true, configured, engineBinaries: status, bins: Object.fromEntries(Object.entries(status).map(([key, value]) => [key, value.file])) });
+    } catch (error) { json(req, res, 400, { ok: false, error: error.message }); }
     return;
   }
   if (req.method === "GET" && url.pathname === "/v1/run-active") {
@@ -527,7 +434,7 @@ const server = http.createServer(async (req, res) => {
         json(req, res, 400, { ok: false, error: "cmd fehlt" });
         return;
       }
-      json(req, res, 200, await runCmd(String(body.cwd || workspace), cmd, Number(body.timeoutMs) || MAX_MS));
+      json(req, res, 200, await runCmd(String(body.cwd || workspace), cmd, Number(body.timeoutMs) || MAX_MS, String(body.action || "")));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e) });
     }
@@ -558,6 +465,14 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/restore") {
+    if (!checkToken(req)) { json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true }); return; }
+    try {
+      const body = await readBody(req);
+      json(req, res, 200, restoreRel(safeCwd(body.cwd || workspace), body));
+    } catch (e) { json(req, res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) }); }
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/file") {

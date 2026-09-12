@@ -38,12 +38,22 @@ test("questions and negations cannot invert preferences", () => {
   assert.equal(factsFromUtterance("Bitte nicht kurz antworten.").some(f => /Antworten kurz/.test(f.text)), false);
 });
 
-test("skill files default to project and bound prompt content", () => {
+test("skill files default to project and preserve full instructions", () => {
   const skill = parseSkillMd("A".repeat(9000), ".anvil/skills/build-unique.md");
   assert.ok(skill);
   assert.equal(skill.scope, "project");
   assert.equal(skill.id, "build-unique");
-  assert.equal(skill.body.length, 8000);
+  assert.equal(skill.body.length, 9000);
+});
+
+test("standard folder skills use description and distinct stable folder identities", () => {
+  const source = '---\nname: "web-check"\ndescription: >-\n  Check a page\n  after changes.\nlicense: MIT\n---\nRead references/check.md before testing.';
+  const one = parseSkillMd(source, ".anvil/skills/one/SKILL.md");
+  const two = parseSkillMd(source, ".anvil/skills/two/SKILL.md");
+  assert.equal(one?.when, "Check a page after changes.");
+  assert.equal(one?.name, "web-check");
+  assert.notEqual(one?.id, two?.id);
+  assert.equal(one?.id, parseSkillMd(source, ".anvil/skills/one/SKILL.md")?.id);
 });
 
 test("parses skill markdown", () => {

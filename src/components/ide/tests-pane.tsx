@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { CtxMenu } from "./ctx-menu";
+import { InteractionChecks } from "./interaction-checks";
 
 export function TestsPane() {
   const t = useT();
@@ -83,6 +84,7 @@ export function TestsPane() {
         </p>
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
+        <InteractionChecks />
         {groups.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted">{t("testHint")}</p>
         ) : (

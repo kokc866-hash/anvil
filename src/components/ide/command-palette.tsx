@@ -174,8 +174,7 @@ export function CommandPalette() {
           const cks = useIde.getState().checkpoints;
           const last = cks[cks.length - 1];
           if (!last) return;
-          const ok = useIde.getState().restoreCheckpoint(last.id);
-          useIde.getState().setNotice(ok ? t("undoRoundOk") : t("noSnapshot"));
+          void import("@/lib/restore-request").then((m) => m.requestCheckpointRestore(last.id));
         } },
       ];
       const pluginCmds = listCommands().map((c) => ({

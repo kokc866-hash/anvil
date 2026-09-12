@@ -56,7 +56,7 @@ export function ActivityBar() {
 
   return (
     <nav className="flex w-11 shrink-0 flex-col items-center border-r border-border bg-surface py-1">
-      <IconBtn label={t("files")} kbd={kFiles} on={sidebar === "files"} onClick={() => side("files")}>
+      <IconBtn help="files" label={t("files")} kbd={kFiles} on={sidebar === "files"} onClick={() => side("files")}>
         <FolderTree className="size-4" />
       </IconBtn>
       <IconBtn label={t("refs")} kbd={kRefs} on={sidebar === "ref"} onClick={() => side("ref")}>
@@ -77,20 +77,21 @@ export function ActivityBar() {
       <IconBtn label={t("board")} kbd={kBoard} on={harnessBoardOpen} onClick={() => setHarnessBoardOpen(!harnessBoardOpen)}>
         <Workflow className="size-4" />
       </IconBtn>
-      <IconBtn label={t("extensions")} on={sidebar === "ext"} onClick={() => side("ext")}>
+      <IconBtn help="extensions" label={t("extensions")} on={sidebar === "ext"} onClick={() => side("ext")}>
         <Puzzle className="size-4" />
       </IconBtn>
       <IconBtn label={t("mcp")} on={sidebar === "mcp" || mcpOn} onClick={() => side("mcp")} badge={mcpN || undefined}>
         <Unplug className="size-4" />
       </IconBtn>
-      <IconBtn label={t("agent")} kbd={kAgent} on={panels.agent} onClick={() => togglePanel("agent")} pulse={agentBusy}>
+      <IconBtn help="agent" label={t("agent")} kbd={kAgent} on={panels.agent} onClick={() => togglePanel("agent")} pulse={agentBusy}>
         <MessageSquare className="size-4" />
       </IconBtn>
-      <IconBtn label={t("trail")} kbd={kTrail} on={panels.trail} onClick={() => togglePanel("trail")}>
+      <IconBtn help="trail" label={t("trail")} kbd={kTrail} on={panels.trail} onClick={() => togglePanel("trail")}>
         <Footprints className="size-4" />
       </IconBtn>
       <IconBtn
         label={t("output")}
+        help="output"
         kbd={kOut}
         on={panels.output}
         onClick={() => {
@@ -110,7 +111,7 @@ export function ActivityBar() {
           {ANVIL_VERSION}
         </button>
       </Tip>
-      <IconBtn label={t("settings")} kbd={kSet} on={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>
+      <IconBtn help="settings" label={t("settings")} kbd={kSet} on={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>
         <Settings className="size-4" />
       </IconBtn>
     </nav>
@@ -118,6 +119,7 @@ export function ActivityBar() {
 }
 
 function IconBtn({
+  help,
   label,
   kbd,
   on,
@@ -127,6 +129,7 @@ function IconBtn({
   pulse,
   children,
 }: {
+  help?: string;
   label: string;
   kbd?: string;
   on: boolean;
@@ -136,9 +139,11 @@ function IconBtn({
   pulse?: boolean;
   children: ReactNode;
 }) {
+  const tips = useIde(s => s.helpPreferences.tips);
   return (
-    <Tip label={label} kbd={kbd} side="right">
+    <Tip label={label} kbd={kbd} side="right" disabled={Boolean(help && tips)}>
       <button
+        data-help={help}
         type="button"
         aria-label={label}
         aria-pressed={on}

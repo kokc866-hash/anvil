@@ -1,6 +1,7 @@
 import type { TokenUsage, RequestTokens } from "./token-usage";
 import { isExecutablePath } from "./run-target";
 import { automaticRunVerification } from "./agent-evidence";
+import { connectionCapabilities, imageAttachmentError, historyForConnection } from "./connection-capabilities";
 import { chatWithProvider } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
 import { toolCode, toolDetail } from "@/lib/llm-options";
@@ -85,7 +86,7 @@ export async function applyWorkspace(ev: WorkspaceEvent) {
     if (s.files[ev.path] !== ev.content && current.files[ev.path] === ev.content) current.openFile(ev.path);
   } else if (ev.op === "delete") s.deleteFile(ev.path);
   else if (ev.op === "mkdir") s.createFolder(ev.path);
-  else if (ev.op === "rename") s.movePath(ev.from, ev.to);
+  else if (ev.op === "rename") await s.relocatePath(ev.from, ev.to);
   else if (ev.op === "commit") s.commit(ev.message);
   else if (ev.op === "preview") {
     s.setRunPath(ev.path);
@@ -116,8 +117,15 @@ type SendInput = {
 };
 export async function sendChat(
   { preset, draft, images, title, setTitle, setDraft, setImages, setMention }: SendInput,
-  opts?: { queued?: boolean; choiceId?: string },
+  opts?: { queued?: boolean; choiceId?: string; mode?: "ask" | "agent" },
 ) {
+  const initial = useIde.getState();
+  const connectionError = imageAttachmentError({ provider: initial.llmProvider, authMode: initial.llmAuthMode, baseUrl: initial.llmBaseUrl, model: initial.llmModel }, images.length, initial.locale);
+  if (connectionError) { initial.setNotice(connectionError); return; }
+  if (images.length && initial.agentBusy && initial.agentJob?.status !== "ask") {
+    initial.setNotice(initial.locale === "en" ? "Wait for this round to finish before sending images. Your draft is kept." : "Warte vor dem Senden von Bildern auf das Ende dieser Runde. Dein Entwurf bleibt erhalten.");
+    return;
+  }
   const {
     addChat,
     startAssistant,
@@ -135,6 +143,7 @@ export async function sendChat(
   } = useIde.getState();
   const pending = useIde.getState().pendingAsk;
   const jobNow = useIde.getState().agentJob;
+  const selectedMode = opts?.mode ?? initial.agentMode;
   const asking = jobNow?.status === "ask" && Boolean(jobNow.ask);
   const typed = (preset ?? draft).trim();
   let text = typed;
@@ -143,12 +152,13 @@ export async function sendChat(
     text = isAskAnswer(typed) ? typed : formatAskAnswer(jobNow.ask, opts?.choiceId, typed);
   } else {
     if (pending && !text) text = "Erkläre die Auswahl.";
+    if (!text && images.length) text = initial.locale === "en" ? "Describe the attached image." : "Beschreibe das angehängte Bild.";
     if (!text) return;
   }
   let holdUi = false;
   let parked = false;
   if (!asking && useIde.getState().agentBusy) {
-    useIde.getState().pushAgent(text);
+    useIde.getState().pushAgent(text, false, selectedMode);
     setDraft("");
     setImages([]);
     return;
@@ -160,6 +170,8 @@ export async function sendChat(
     useIde.getState().setPendingAsk(null);
   }
   const forceAsk = Boolean(pending) && (!typed || useIde.getState().agentMode === "ask");
+  // The selected mode is a user decision, not a guess based on request wording.
+  const observeRequest = asking ? (jobNow?.mode ?? selectedMode) === "ask" : selectedMode === "ask" || forceAsk;
   if (scrub.n) useIde.getState().setNotice(t("secretsN", { n: scrub.n }));
   else {
     const warningEpoch = useIde.getState().workspaceEpoch;
@@ -195,7 +207,7 @@ export async function sendChat(
   emitPlugin("agent", work);
   reflectUtterance(work, "ask");
   try {
-    const routed = await anvilHandle(work);
+    const routed = observeRequest ? { hand: "model" as const } : await anvilHandle(work);
     if (my !== agentGen()) return;
     if (routed.hand === "app" && routed.reply) {
       finalizeAssistant(routed.reply);
@@ -228,7 +240,8 @@ export async function sendChat(
     hydrateLearnFromFiles(s.files);
     const memory = [learnPrompt(work), internPrompt()].filter(Boolean).join("\n\n");
     const helperNotes = lanePrompt();
-    const vision = modelSeesImages(s.llmProvider, s.llmModel);
+    const connection = { provider: s.llmProvider, authMode: s.llmAuthMode, baseUrl: s.llmBaseUrl, model: s.llmModel };
+    const vision = connectionCapabilities(connection).images !== "unsupported" && modelSeesImages(s.llmProvider, s.llmModel);
     const refs = packRefContext(
       s.files,
       work,
@@ -272,10 +285,9 @@ export async function sendChat(
         ? `${prefix}\n\nAuftrag:\n${work}`
         : work;
     const history = packChatHistory(
-      s.chat.map((m) => ({ role: m.role, content: m.content, images: m.images })),
+      historyForConnection(s.chat.map((m) => ({ role: m.role, content: m.content, images: m.images })), connection),
       { content: user, images: vision ? [...pics, ...refs.images].slice(0, 4) : pics.slice(0, 4) },
     );
-    if (isFixPrompt(work) && s.agentMode !== "agent") useIde.getState().setAgentMode("agent");
     const fileList = Object.entries(s.files)
       .filter(([path]) => !isSecretPath(path))
       .map(([path, content]) => ({
@@ -288,8 +300,9 @@ export async function sendChat(
       useIde.setState({ lastRequestTokens: request ?? null });
     };
 
-    if (!asking && !isFixPrompt(work) && (s.agentMode === "ask" || forceAsk)) {
+    if (observeRequest) {
       const helperAsk =
+        !asking &&
         s.agentMode === "ask" &&
         !forceAsk &&
         brainReady() &&
@@ -318,7 +331,9 @@ export async function sendChat(
           });
         }
       } else {
-        useIde.getState().setAgentJob(newJob(work));
+        useIde.getState().setAgentJob(asking && jobNow
+          ? { ...jobNow, mode: "ask", status: "run", ask: null, rounds: jobNow.rounds + 1 }
+          : newJob(work, "ask"));
         if (my !== agentGen()) return;
         const asked = await chatWithProvider({
           onUsage,
@@ -379,11 +394,10 @@ export async function sendChat(
       void brainDistill(work, reply);
       {
         const st = useIde.getState();
-        st.setSessionJournal(
-          mergeJournal(st.sessionJournal, extractJournal(st.chat, st.sessionJournal)),
-        );
+        // Ask keeps its journal in the profile without modifying the project.
+        useIde.setState({ sessionJournal: mergeJournal(st.sessionJournal, extractJournal(st.chat, st.sessionJournal)) });
       }
-      void pruneSession();
+      void pruneSession({ persistJournal: false });
       return;
     }
 
@@ -603,7 +617,7 @@ export async function sendChat(
       void import("@/lib/problems").then((m) => m.refreshProblems());
     }
     const snap = useIde.getState().checkpoints.find((c) => c.id === ck);
-    if (snap && Object.keys(snap.files).length) {
+    if (snap) {
       const changes = snapshotDiff(snap.files, useIde.getState().files);
       useIde.getState().setChatChanges(changes);
       const st = useIde.getState();
@@ -712,10 +726,14 @@ export async function sendChat(
       void brainStopNote(last?.steps ?? []).then((note) => {
         if (my !== agentGen()) return;
         const cur = useIde.getState().chat.at(-1);
-        if (!cur || cur.role !== "assistant") return;
+        if (!cur || cur.role !== "assistant" || cur.id !== last?.id) return;
         const body = (cur.content || "").trim();
-        if (note && !body.includes(note.slice(0, 24)))
-          finalizeAssistant(body ? `${body}\n${note}` : note);
+        if (note && !body.includes(note.slice(0, 24))) {
+          // The request is already stopped and finalized. Append the helper's
+          // note without finalizing a second time or resurrecting stale output.
+          useIde.setState((state) => ({ chat: state.chat.map((message) => message.id === cur.id
+            ? { ...message, content: body ? `${body}\n${note}` : note } : message) }));
+        }
       });
     }
   } finally {

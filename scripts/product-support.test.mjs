@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createServer } from "vite";
+import path from "node:path";
+
+test("support summary never exports private context, and workflows preserve user intent", async (t) => {
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
+  t.after(() => server.close());
+  const { supportSummary, supportDraft } = await server.ssrLoadModule("/src/lib/product-support.ts");
+  const report = supportSummary({ llmProvider: "ollama", llmAuthMode: "key", locale: "de", workspaceCwd: "I:/private-company-project", files: { "secret.txt": "PASSWORD-PRIVATE", "main.html": "private source" }, dirty: { "secret.txt": true }, agentBusy: false, running: true, llmApiKey: "SECRET-KEY", llmBaseUrl: "https://user:password@private-host", chat: [{ content: "PRIVATE-CONVERSATION" }], output: ["PRIVATE-LOG"] });
+  for (const secret of ["secret.txt", "PASSWORD", "private", "SECRET", "CONVERSATION", "LOG"]) assert.ok(!report.includes(secret), secret);
+  const summary = JSON.parse(report);
+  assert.equal(summary.files, 2);
+  assert.equal(summary.unsavedFiles, 1);
+  assert.equal(summary.programRunning, true);
+  assert.match(supportDraft(report, "Save", "Failed", "1. Save"), /Erwartet: Save/);
+  const { publicHttpsUrl } = await server.ssrLoadModule("/src/lib/product-info.ts");
+  for (const url of ["javascript:alert(1)", "http://example.com", "https://user:secret@example.com", ""]) assert.equal(publicHttpsUrl(url), null);
+  assert.equal(publicHttpsUrl("https://example.com/support"), "https://example.com/support");
+  const { PRODUCT_WORKFLOWS, workflowDraft } = await server.ssrLoadModule("/src/lib/product-workflows.ts");
+  assert.equal(PRODUCT_WORKFLOWS.length, 4);
+  assert.equal(workflowDraft("understand", "Mein Projekt").mode, "ask");
+  assert.equal(workflowDraft("review", "Meine Änderungen").mode, "ask");
+  assert.equal(workflowDraft("debug", "Button defekt").mode, "agent");
+  assert.equal(workflowDraft("change", "Nur Titel ändern").mode, "agent");
+  assert.match(workflowDraft("change", "Nur Titel ändern").text, /Mein Auftrag: Nur Titel ändern$/);
+  assert.match(workflowDraft("debug", "Click fails", "en").text, /My task: Click fails$/);
+  const switched = workflowDraft("review", workflowDraft("change", "Only rename title").text);
+  assert.match(switched.text, /Mein Auftrag: Only rename title$/);
+  assert.equal(switched.text.split("Arbeitsablauf:").length, 2, "Switching workflow does not nest conflicting instructions");
+  const { SEED } = await server.ssrLoadModule("/src/lib/skill-seeds.ts");
+  for (const workflow of PRODUCT_WORKFLOWS) assert.equal(SEED.filter(seed => seed.id === workflow.skill).length, 1);
+});

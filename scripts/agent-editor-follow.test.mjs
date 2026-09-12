@@ -8,21 +8,25 @@ test("editor follows agent writes without persisting streaming drafts or followi
   globalThis.localStorage = { getItem: (k) => values.get(k) ?? null, setItem: (k, v) => values.set(k, v), removeItem: (k) => values.delete(k) };
   globalThis.window = Object.assign(new EventTarget(), { localStorage, setTimeout, clearTimeout });
   globalThis.document = Object.assign(new EventTarget(), { documentElement: { lang: "de" } });
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
+  let live;
+  t.after(async () => {
+    try {
+      live?.resetLiveWrite();
+      t.mock.timers.reset();
+      const { flushPersistence } = await server.ssrLoadModule("/src/lib/persist-storage.ts");
+      await flushPersistence().catch(() => {});
+    } finally {
+      await server.close();
+      delete globalThis.window; delete globalThis.document; delete globalThis.localStorage;
+    }
+  });
   const { useIde } = await server.ssrLoadModule("/src/store/ide.ts");
   const { useIntern } = await server.ssrLoadModule("/src/lib/intern.ts");
   useIntern.getState().setPrefs({ on: false, autoHeal: false });
   const { beginAgent, abortAgent } = await server.ssrLoadModule("/src/lib/abort.ts");
-  const live = await server.ssrLoadModule("/src/lib/live-write.ts");
+  live = await server.ssrLoadModule("/src/lib/live-write.ts");
   const { applyWorkspace } = await server.ssrLoadModule("/src/lib/chat-session.ts");
-  t.after(async () => {
-    live.resetLiveWrite();
-    t.mock.timers.reset();
-    const { flushPersistence } = await server.ssrLoadModule("/src/lib/persist-storage.ts");
-    await flushPersistence().catch(() => {});
-    await server.close();
-    delete globalThis.window; delete globalThis.document; delete globalThis.localStorage;
-  });
   useIde.setState({ files: { "a.ts": "old a", "b.ts": "old b" }, activePath: "a.ts", openPaths: ["a.ts"], liveEditor: true, agentBusy: true, autoSaveDisk: false, autoPreview: false, workspaceCwd: "", pendingDiffs: [] });
   beginAgent(); live.resetLiveWrite();
   t.mock.timers.enable({ apis: ["setTimeout"] });

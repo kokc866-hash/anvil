@@ -52,7 +52,10 @@ export type PluginApi = {
   mkdir: (path: string) => void;
   agent: (prompt: string) => void;
   complete: (prompt: string) => Promise<string>;
-  config: { get: (key: string, fallback?: unknown) => unknown; set: (key: string, value: unknown) => void };
+  config: {
+    get: (key: string, fallback?: unknown) => unknown;
+    set: (key: string, value: unknown) => void;
+  };
   problems: (items: { path: string; line: number; text: string }[]) => void;
 };
 
@@ -65,6 +68,7 @@ let version = 0;
 const listeners = new Set<() => void>();
 const unhooks: Array<() => void> = [];
 let reloading = false;
+let apiGeneration = 0;
 
 function bump() {
   version += 1;
@@ -81,38 +85,57 @@ function noticeErr(label: string, err: unknown) {
   useIde.getState().setNotice(`${label}: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-async function pluginFetch(url: string): Promise<{ ok: boolean; text: string }> {
+async function pluginFetch(
+  url: string,
+  live: () => boolean,
+): Promise<{ ok: boolean; text: string }> {
   try {
     const r = await fetchWeb({ data: { url } });
     if (r && typeof r === "object" && "ok" in r) return r;
   } catch {
     /* Electron has no TanStack server fn — fall through */
   }
+  if (!live()) return { ok: false, text: "Plugin nicht mehr aktiv" };
   return readWebPage(url);
 }
 
 function makeApi(plugin: string, trust = true): PluginApi {
+  const generation = apiGeneration,
+    epoch = useIde.getState().workspaceEpoch;
+  // A plugin may retain this API in an asynchronous callback. Reload/removal,
+  // disabling and project switches revoke that handle, including its results.
+  // This is API lifecycle control, not a sandbox for arbitrary JavaScript.
+  const live = () =>
+    generation === apiGeneration &&
+    epoch === useIde.getState().workspaceEpoch &&
+    !useIde.getState().pluginDisabled.includes(plugin);
   return {
     command: (cmd) => {
+      if (!live()) return;
       const id = cmd.id.includes(".") || cmd.id.includes(":") ? cmd.id : `${plugin}.${cmd.id}`;
-      const run = () => {
+      const run = async () => {
+        if (!live()) return;
         try {
-          return cmd.run();
+          await cmd.run();
         } catch (err) {
-          noticeErr(plugin, err);
+          if (live()) noticeErr(plugin, err);
         }
       };
       commands = [...commands.filter((c) => c.id !== id), { ...cmd, id, plugin, run }];
       bump();
     },
-    notify: (msg) => useIde.getState().setNotice(msg),
-    files: () => (trust ? omitSecrets(useIde.getState().files) : {}),
+    notify: (msg) => {
+      if (live()) useIde.getState().setNotice(msg);
+    },
+    files: () => (live() && trust ? omitSecrets(useIde.getState().files) : {}),
     read: (path) => {
+      if (!live()) return undefined;
       if (!trust && !path.startsWith("plugins/")) return undefined;
       if (isSecretPath(path)) return undefined;
       return useIde.getState().files[path];
     },
     write: (path, content) => {
+      if (!live()) return;
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht schreiben");
         return;
@@ -123,25 +146,46 @@ function makeApi(plugin: string, trust = true): PluginApi {
       }
       useIde.getState().writeFile(path, content);
     },
-    open: (path) => useIde.getState().openFile(path),
-    active: () => useIde.getState().activePath,
-    format: formatCode,
-    output: (text, ok = true) =>
+    open: (path) => {
+      if (live()) useIde.getState().openFile(path);
+    },
+    active: () => (live() ? useIde.getState().activePath : null),
+    format: async (path, code) => {
+      if (!live()) return "";
+      const result = await formatCode(path, code);
+      return live() ? result : "";
+    },
+    output: (text, ok = true) => {
+      if (!live()) return;
       useIde.getState().pushOutput({
         ok,
         stdout: ok ? text : "",
         stderr: ok ? "" : text,
         duration: 0,
         label: plugin,
-      }),
-    on: (event, fn) => {
-      unhooks.push(onPlugin(event, fn));
+      });
     },
-    status: (text) => useIde.getState().setPluginStatus(text),
-    prompt: (msg, fallback) => (typeof window !== "undefined" ? window.prompt(msg, fallback ?? "") : fallback ?? null),
-    highlight: (code, lang) => tokenize(code, lang || "plaintext"),
-    cursor: () => useIde.getState().cursor,
+    on: (event, fn) => {
+      if (!live()) return;
+      unhooks.push(
+        onPlugin(event, (payload) => {
+          if (live()) fn(payload);
+        }),
+      );
+    },
+    status: (text) => {
+      if (live()) useIde.getState().setPluginStatus(text);
+    },
+    prompt: (msg, fallback) =>
+      live()
+        ? typeof window !== "undefined"
+          ? window.prompt(msg, fallback ?? "")
+          : (fallback ?? null)
+        : null,
+    highlight: (code, lang) => (live() ? tokenize(code, lang || "plaintext") : []),
+    cursor: () => (live() ? useIde.getState().cursor : { line: 1, col: 1 }),
     range: () => {
+      if (!live()) return { from: 1, to: 1 };
       const s = useIde.getState().selection ?? {
         startLine: useIde.getState().cursor.line,
         endLine: useIde.getState().cursor.line,
@@ -151,6 +195,7 @@ function makeApi(plugin: string, trust = true): PluginApi {
       return { from: Math.min(s.startLine, s.endLine), to: Math.max(s.startLine, s.endLine) };
     },
     insert: (text) => {
+      if (!live()) return;
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht schreiben");
         return;
@@ -167,14 +212,14 @@ function makeApi(plugin: string, trust = true): PluginApi {
       st.writeFile(path, lines.join("\n"));
     },
     replace: (path, old, next, all) => {
-      if (!trust) return false;
+      if (!live() || !trust) return false;
       const cur = useIde.getState().files[path];
       if (cur == null || !old || !cur.includes(old)) return false;
       useIde.getState().writeFile(path, all ? cur.split(old).join(next) : cur.replace(old, next));
       return true;
     },
     grep: (query, glob) => {
-      if (!trust) return [];
+      if (!live() || !trust) return [];
       let re: RegExp | null = null;
       try {
         re = new RegExp(query, "i");
@@ -189,12 +234,14 @@ function makeApi(plugin: string, trust = true): PluginApi {
         if (g && !matchGlob(path, g) && !matchGlob(path.split("/").pop() ?? "", g)) continue;
         content.split("\n").forEach((line, i) => {
           const ok = re ? re.test(line) : line.toLowerCase().includes(q);
-          if (ok && hits.length < 80) hits.push({ path, line: i + 1, text: line.trim().slice(0, 200) });
+          if (ok && hits.length < 80)
+            hits.push({ path, line: i + 1, text: line.trim().slice(0, 200) });
         });
       }
       return hits;
     },
     run: (path) => {
+      if (!live()) return;
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht starten");
         return;
@@ -203,14 +250,17 @@ function makeApi(plugin: string, trust = true): PluginApi {
       window.dispatchEvent(new Event("anvil-run"));
     },
     debug: () => {
-      if (!trust) return;
+      if (!live() || !trust) return;
       window.dispatchEvent(new Event("anvil-debug"));
     },
     fetch: async (url) => {
+      if (!live()) return { ok: false, text: "Plugin nicht mehr aktiv" };
       if (!trust) return { ok: false, text: "Plugin ohne @trust darf nicht laden" };
-      return pluginFetch(url);
+      const result = await pluginFetch(url, live);
+      return live() ? result : { ok: false, text: "Plugin nicht mehr aktiv" };
     },
     remove: (path) => {
+      if (!live()) return;
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf nicht löschen");
         return;
@@ -219,10 +269,11 @@ function makeApi(plugin: string, trust = true): PluginApi {
       useIde.getState().deleteFile(path);
     },
     mkdir: (path) => {
-      if (!trust) return;
+      if (!live() || !trust) return;
       useIde.getState().createFolder(path);
     },
     agent: (prompt) => {
+      if (!live()) return;
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf den Agenten nicht starten");
         return;
@@ -230,30 +281,35 @@ function makeApi(plugin: string, trust = true): PluginApi {
       useIde.getState().pushAgent(prompt);
     },
     complete: async (prompt) => {
+      if (!live()) return "";
       if (!trust) {
         useIde.getState().setNotice("Plugin ohne @trust darf das Modell nicht nutzen");
         return "";
       }
       const s = useIde.getState();
-      return completeText({
+      const result = await completeText({
         prompt,
         provider: s.llmProvider,
         baseUrl: s.llmBaseUrl,
         model: s.llmModel,
         apiKey: s.llmApiKey,
       });
+      return live() ? result : "";
     },
     config: {
       get: (key, fallback) => {
+        if (!live()) return fallback;
         const v = useIde.getState().pluginConfig[`${plugin}.${key}`];
         return v === undefined ? fallback : v;
       },
       set: (key, value) => {
+        if (!live()) return;
         const st = useIde.getState();
         st.setPluginConfig({ ...st.pluginConfig, [`${plugin}.${key}`]: value });
       },
     },
     problems: (items) => {
+      if (!live()) return;
       const st = useIde.getState();
       const rest = st.pluginProblems.filter((x) => x.source !== plugin);
       st.setPluginProblems([...rest, ...items.map((x) => ({ ...x, source: plugin }))]);
@@ -281,8 +337,18 @@ function ingestWorkspace(files: Record<string, string>) {
       id,
       name: path.slice("plugins/".length).replace(/\.js$/, ""),
       description:
-        (code.split("\n").slice(0, 8).join("\n").match(/@desc\s+(.+)/)?.[1]?.trim() ||
-          code.split("\n").slice(0, 8).join("\n").match(/^\/\/\s*(.+)/)?.[1]?.trim() ||
+        (code
+          .split("\n")
+          .slice(0, 8)
+          .join("\n")
+          .match(/@desc\s+(.+)/)?.[1]
+          ?.trim() ||
+          code
+            .split("\n")
+            .slice(0, 8)
+            .join("\n")
+            .match(/^\/\/\s*(.+)/)?.[1]
+            ?.trim() ||
           "Workspace-Plugin") + (trust ? "" : " (lesen)"),
       builtin: false,
       category: "workspace",
@@ -294,7 +360,10 @@ function ingestWorkspace(files: Record<string, string>) {
     }
     if (disabled.includes(id)) continue;
     try {
-      const fn = new Function("anvil", `${code}\n;if (typeof activate === "function") activate(anvil);`);
+      const fn = new Function(
+        "anvil",
+        `${code}\n;if (typeof activate === "function") activate(anvil);`,
+      );
       fn(makeApi(id, trust));
     } catch (err) {
       noticeErr(`Plugin ${path}`, err);
@@ -311,6 +380,7 @@ function ingestWorkspace(files: Record<string, string>) {
 export function reloadPlugins(files?: Record<string, string>) {
   if (reloading) return;
   reloading = true;
+  apiGeneration++;
   try {
     for (const u of unhooks) u();
     unhooks.length = 0;

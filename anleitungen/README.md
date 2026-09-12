@@ -6,6 +6,13 @@ Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/relea
 
 | Datei | |
 |---|---|
+| [produktreife.md](produktreife.md) | Prioritäten und Abnahme bis zur Windows-Beta |
+| [produktabschluss.md](produktabschluss.md) | Umgesetzte Produktarbeit 1–6, Bedienwege und bekannte Grenzen |
+| [erweiterungen.md](erweiterungen.md) | Plugins entfernen, Skill-Pakete, Projektprüfung, Bedienprüfungen, MCP und ACP-Vorschau |
+| [dienste.md](dienste.md) | Bei Notion und anderen Diensten anmelden und deren Werkzeuge über Anvils Brücke nutzen |
+| [engines.md](engines.md) | Unity, Unreal und Godot einrichten, Engine-Erweiterungen und echte Testnachweise |
+| [orientierung.md](orientierung.md) | Einstieg, Fragen und Agent sowie die Aufgaben der einzelnen Bereiche |
+| [installation-abnahme.md](installation-abnahme.md) | Sichere Updates, echte Paketprüfung und spätere Signierung |
 | [01-kurz.md](01-kurz.md) | Start, Modell, erste Aufgabe |
 | [02-handbuch.md](02-handbuch.md) | Fenster, Einstellungen, Vorschau |
 | [03-workflow.md](03-workflow.md) | Abläufe Schritt für Schritt |

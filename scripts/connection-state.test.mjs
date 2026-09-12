@@ -21,7 +21,7 @@ test("provider switching and profiles keep endpoints, auth modes and explicit mo
     configFile: false,
     root: process.cwd(),
     resolve: { alias: { "@": path.resolve("src") } },
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, watch: null },
     appType: "custom",
   });
   t.after(async () => {
@@ -57,6 +57,7 @@ test("provider switching and profiles keep endpoints, auth modes and explicit mo
   const apiProfile = useIde.getState().llmProfiles[0];
   actions.setLlmProvider("anthropic", "abo");
   actions.setLlmModel("claude-opus-5");
+  actions.setLlmThinking("max");
   actions.saveLlmProfile("CLI");
   const cliProfile = useIde.getState().llmProfiles[1];
   actions.applyLlmProfile(apiProfile.id);
@@ -64,6 +65,7 @@ test("provider switching and profiles keep endpoints, auth modes and explicit mo
   assert.equal(useIde.getState().llmModel, "claude-sonnet-4-5");
   actions.applyLlmProfile(cliProfile.id);
   assert.equal(useIde.getState().llmAuthMode, "abo");
+  assert.equal(useIde.getState().llmThinking, "max");
   actions.setLlmProvider("anthropic", "key");
   assert.equal(useIde.getState().llmModel, "claude-sonnet-4-5");
   assert.equal(useIde.getState().llmApiKey, "api-test");

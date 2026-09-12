@@ -20,6 +20,14 @@ async function launch() {
     env: { ...process.env, ANVIL_PORT: String(server.address().port), ANVIL_QA_USER_DATA: userData, ANVIL_HOME: folder },
     timeout: 45_000,
   });
+  const profilePaths = await electron.evaluate(({ app }) => ({
+    userData: app.getPath("userData"), sessionData: app.getPath("sessionData"),
+    crashDumps: app.getPath("crashDumps"), logs: app.getPath("logs"),
+  }));
+  assert.deepEqual(profilePaths, {
+    userData, sessionData: userData,
+    crashDumps: path.join(userData, "Crashpad"), logs: path.join(userData, "logs"),
+  }, "every desktop profile path must follow the selected data directory before startup");
   let page;
   for (let attempt = 0; attempt < 360; attempt++) {
     page = electron.windows().find((window) => window.url() === origin);

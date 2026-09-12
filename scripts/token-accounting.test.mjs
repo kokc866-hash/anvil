@@ -6,7 +6,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 test("token accounting across streams, tool rounds and session display", async (t) => {
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
   t.after(() => server.close());
   const { readSseChat, readSseAnthropic } = await server.ssrLoadModule("/src/lib/sse.ts");
   const { resolvedUsage, withRequestTokens } = await server.ssrLoadModule("/src/lib/token-usage.ts");

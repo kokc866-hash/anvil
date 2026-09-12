@@ -17,6 +17,7 @@ export type AgentJob = {
   rounds: number;
   ask: JobAsk | null;
   at: number;
+  mode?: "ask" | "agent";
 };
 
 const LETTERS = "ABCDE";
@@ -105,7 +106,7 @@ export function askCorrection(ask: JobAsk, choiceId?: string, text?: string): st
   return `Nachfrage „${ask.prompt.slice(0, 72)}“ → ${pick || "ohne Wahl"}`.slice(0, 160);
 }
 
-export function newJob(goal: string): AgentJob {
+export function newJob(goal: string, mode: "ask" | "agent" = "agent"): AgentJob {
   return {
     id: `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     status: "run",
@@ -113,6 +114,7 @@ export function newJob(goal: string): AgentJob {
     rounds: 0,
     ask: null,
     at: Date.now(),
+    mode,
   };
 }
 
@@ -143,5 +145,7 @@ export function normalizeJob(raw: unknown, opts?: { revive?: boolean }): AgentJo
   const id = str(o.id).slice(0, 40) || `job-${Date.now().toString(36)}`;
   const rounds = typeof o.rounds === "number" && Number.isFinite(o.rounds) ? Math.max(0, Math.round(o.rounds)) : 0;
   const at = typeof o.at === "number" && Number.isFinite(o.at) ? o.at : Date.now();
-  return { id, status: opts?.revive && status === "ask" ? "ask" : status, goal, rounds, ask, at };
+  return { id, status: opts?.revive && status === "ask" ? "ask" : status, goal, rounds, ask, at,
+    ...(o.mode === "ask" || o.mode === "agent" ? { mode: o.mode } : {}),
+  };
 }

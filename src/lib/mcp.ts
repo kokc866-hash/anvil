@@ -16,7 +16,14 @@ import { loadSecrets, saveSecrets } from "./secrets";
 import { mcpArguments } from "./mcp-schema";
 import { forgetMcpOutputs, modelMcpResult, readMcpOutput } from "./mcp-results";
 import { withCompanion } from "./companion-life";
+import { assertMcpPackageRequest, mcpPackage, mcpPackageTools } from "./mcp-packages";
 import { useIde } from "@/store/ide";
+import {
+  assertServiceRequest,
+  isMcpService,
+  serviceConnectionKey,
+  validateService,
+} from "./mcp-service-policy";
 export type { McpTool, McpResource } from "./mcp-parse";
 export {
   parseMcpBody,
@@ -45,8 +52,17 @@ export type McpServer = {
   cwd?: string;
   auth?: "bearer" | "oauth";
   oauthClientId?: string;
+  service?: string;
+  allowedTools?: string[];
+  allowResources?: boolean;
 };
-type NativeEvent = { id?: string; server: string; kind: string; params?: Record<string, unknown> };
+type NativeEvent = {
+  id?: string;
+  server: string;
+  kind: string;
+  connectionToken?: string;
+  params?: Record<string, unknown>;
+};
 type Native = {
   mcpRequest: (r: unknown) => Promise<{ ok: boolean; value?: unknown; error?: string }>;
   mcpCancel: (id: string) => Promise<unknown>;
@@ -79,6 +95,30 @@ type Entry = {
 };
 type Session = { sid: string; proto: string; caps: string[]; ready: Promise<void> };
 const entries = new Map<string, Entry>();
+const serviceOffers = new Map<
+  string,
+  { key: string; tools: McpTool[]; resources: McpResource[]; ready: boolean }
+>();
+const nativeClosings = new Map<string, Promise<unknown>>();
+function queueNativeClose(id: string) {
+  const pending = (nativeClosings.get(id) || Promise.resolve())
+    .catch(() => {})
+    .then(() => native()?.mcpClose(id));
+  nativeClosings.set(id, pending);
+  void pending
+    .finally(() => {
+      if (nativeClosings.get(id) === pending) nativeClosings.delete(id);
+    })
+    .catch(() => {});
+  return pending;
+}
+export function mcpServiceCatalog(s: McpServer) {
+  const offer = serviceOffers.get(s.id);
+  const live = useIde.getState().mcpServers.find((x) => x.id === s.id);
+  if (!live?.enabled || !offer || offer.key !== serviceConnectionKey(live))
+    return { tools: [] as McpTool[], resources: [] as McpResource[], ready: false };
+  return { tools: offer.tools, resources: offer.resources, ready: offer.ready };
+}
 const sessions = new Map<string, Session>();
 const configured = new Map<string, string>();
 const listeners = new Set<() => void>();
@@ -115,14 +155,16 @@ function credentials(s: McpServer): Record<string, string> {
   const headers: Record<string, string> = {};
   if (companionTarget(s) && secrets.companionToken.trim())
     headers["x-anvil-token"] = secrets.companionToken.trim();
-  const token = secrets.keys[`mcp:${s.id}`]?.trim() || secrets.keys[`mcp:${s.name}`]?.trim();
+  const token =
+    secrets.keys[`mcp:${s.id}`]?.trim() ||
+    (!mcpPackage(s) && secrets.keys[`mcp:${s.name}`]?.trim());
   const bound = secrets.keys[`mcp-target:${s.id}`];
   if (s.auth !== "oauth" && token && (!bound || bound === s.url.trim()))
     headers.authorization = `Bearer ${token}`;
   return headers;
 }
 function fingerprint(s: McpServer) {
-  return `${serversFingerprint([s])}|${JSON.stringify([s.context, s.timeoutMs, credentials(s), loadSecrets().keys[`mcp-env:${s.id}`]])}`;
+  return `${serversFingerprint([s])}|${JSON.stringify([s.context, s.timeoutMs, s.service, s.allowedTools, s.allowResources, credentials(s), loadSecrets().keys[`mcp-env:${s.id}`]])}`;
 }
 function entryFor(s: McpServer): Entry {
   const fp = fingerprint(s);
@@ -148,7 +190,14 @@ function entryFor(s: McpServer): Entry {
 function sync() {
   const servers = useIde.getState().mcpServers || [];
   const next = new Map(servers.filter(mcpConfigured).map((s) => [s.id, fingerprint(s)]));
-  for (const [id, fp] of configured) if (next.get(id) !== fp) mcpForget(id);
+  for (const [id, fp] of configured)
+    if (next.get(id) !== fp) {
+      const live = servers.find((s) => s.id === id);
+      const retainOffers = Boolean(
+        live?.enabled && serviceOffers.get(id)?.key === serviceConnectionKey(live),
+      );
+      mcpForget(id, true, retainOffers);
+    }
   configured.clear();
   for (const [id, fp] of next) configured.set(id, fp);
 }
@@ -162,7 +211,12 @@ if (typeof window !== "undefined") {
   native()?.onMcpEvent?.((event) => {
     if (event.kind !== "catalog" && event.kind !== "closed") return;
     const entry = entries.get(event.server);
+    if (nativeClosings.has(event.server)) return;
+    if (event.connectionToken !== undefined && event.connectionToken !== String(entry?.generation))
+      return;
     if (entry) {
+      const offer = serviceOffers.get(event.server);
+      if (offer) offer.ready = false;
       entry.at = 0;
       if (event.kind === "closed") {
         sessions.delete(event.server);
@@ -184,9 +238,13 @@ export function mcpSnapshot(servers: McpServer[]) {
   for (const s of live) {
     const e = entries.get(s.id);
     if (!e || e.fp !== fingerprint(s) || e.error || !e.at) continue;
+    const live = isMcpService(s) ? useIde.getState().mcpServers.find((x) => x.id === s.id) : s;
+    if (!live?.enabled) continue;
     ready.add(s.id);
-    tools.push(...e.tools);
-    resources.push(...e.resources);
+    tools.push(
+      ...e.tools.filter((t) => !isMcpService(live) || live.allowedTools?.includes(t.name)),
+    );
+    resources.push(...e.resources.filter(() => !isMcpService(live) || live.allowResources));
   }
   return { ready, tools, resources };
 }
@@ -195,7 +253,8 @@ export const mcpResourcesCached = () => mcpSnapshot(useIde.getState().mcpServers
 export const mcpCaps = (id: string) => entries.get(id)?.caps || [];
 export const mcpListError = (id: string) => entries.get(id)?.error;
 export const mcpCatalogNow = () => mcpCatalogText(mcpToolsCached());
-export function mcpForget(id: string, closeNative = true) {
+export function mcpForget(id: string, closeNative = true, retainOffers = false) {
+  if (!retainOffers) serviceOffers.delete(id);
   entries
     .get(id)
     ?.controller.abort(new Error("MCP-Konfiguration geändert oder Verbindung beendet."));
@@ -208,17 +267,14 @@ export function mcpForget(id: string, closeNative = true) {
     delete mcpView[id];
     useIde.setState({ mcpView });
   }
-  if (closeNative)
-    void native()
-      ?.mcpClose?.(id)
-      .catch(() => {});
+  if (closeNative) void queueNativeClose(id).catch(() => {});
   changed();
 }
 export async function mcpClose(s: McpServer) {
   const session = sessions.get(s.id);
   mcpForget(s.id, false);
   if (hasMcpNative()) {
-    await native()!.mcpClose(s.id);
+    await queueNativeClose(s.id);
     return;
   }
   if (session?.sid && s.transport !== "stdio") {
@@ -269,6 +325,7 @@ async function nativeRpc(
 ) {
   const api = native()!,
     id = crypto.randomUUID();
+  await nativeClosings.get(s.id);
   signal.throwIfAborted();
   let env;
   const envText = loadSecrets().keys[`mcp-env:${s.id}`];
@@ -292,7 +349,12 @@ async function nativeRpc(
   try {
     const pending = api.mcpRequest({
       id,
-      server: { ...s, headers: credentials(s), env },
+      server: {
+        ...s,
+        headers: credentials(s),
+        env,
+        ...(entries.has(s.id) ? { connectionToken: String(entries.get(s.id)!.generation) } : {}),
+      },
       method,
       params,
     });
@@ -313,9 +375,16 @@ async function rpc(
   signal?: AbortSignal,
   onChunk?: (text: string) => void,
 ): Promise<unknown> {
+  assertServiceRequest(
+    s,
+    useIde.getState().mcpServers.find((x) => x.id === s.id),
+    method,
+    params,
+  );
+  assertMcpPackageRequest(s, method, params);
   if (s.transport !== "stdio" && s.auth !== "oauth") {
     const keys = loadSecrets().keys;
-    const token = keys[`mcp:${s.id}`]?.trim() || keys[`mcp:${s.name}`]?.trim();
+    const token = keys[`mcp:${s.id}`]?.trim() || (!mcpPackage(s) && keys[`mcp:${s.name}`]?.trim());
     if (token && keys[`mcp-target:${s.id}`] && keys[`mcp-target:${s.id}`] !== s.url.trim())
       throw new Error(
         "MCP-URL geändert. Bearer für diese Adresse im MCP-Bereich erneut eintragen.",
@@ -478,6 +547,8 @@ export async function mcpProbe(
   return withServer(s, async () => {
     const entry = entryFor(s);
     if (!entry.pending) {
+      const offer = serviceOffers.get(s.id);
+      if (offer) offer.ready = false;
       entry.error = undefined;
       entry.pendingSignal = signal;
       entry.pending = (async () => {
@@ -486,11 +557,12 @@ export async function mcpProbe(
         const tools = entry.caps.includes("tools")
           ? await listPaged(s, "tools/list", "tools", signal)
           : [];
-        const resources = entry.caps.includes("resources")
-          ? await listPaged(s, "resources/list", "resources", signal)
-          : [];
+        const resources =
+          !mcpPackage(s) && entry.caps.includes("resources")
+            ? await listPaged(s, "resources/list", "resources", signal)
+            : [];
         let templates: Record<string, unknown>[] = [];
-        if (entry.caps.includes("resources")) {
+        if (!mcpPackage(s) && entry.caps.includes("resources")) {
           try {
             templates = await listPaged(s, "resources/templates/list", "resourceTemplates", signal);
           } catch (error) {
@@ -500,7 +572,7 @@ export async function mcpProbe(
         }
         signal?.throwIfAborted();
         if (entries.get(s.id) !== entry) return;
-        entry.tools = tools
+        entry.tools = mcpPackageTools(s, tools)
           .filter((t) => typeof t.name === "string")
           .map((tool) => ({
             ...tool,
@@ -516,6 +588,13 @@ export async function mcpProbe(
           uri: String(r.uri || r.uriTemplate),
           name: String(r.name || r.uri || r.uriTemplate),
         })) as McpResource[];
+        if (isMcpService(s))
+          serviceOffers.set(s.id, {
+            key: serviceConnectionKey(s),
+            tools: entry.tools,
+            resources: entry.resources,
+            ready: true,
+          });
         entry.at = Date.now();
       })()
         .catch((error) => {
@@ -680,10 +759,29 @@ export function mcpReadOutput(servers: McpServer[], args: Record<string, unknown
     Number(args.limit),
   );
 }
-export async function mcpLogin(s: McpServer, signal?: AbortSignal) {
+export async function mcpLogin(
+  s: McpServer,
+  signal?: AbortSignal,
+  onProgress?: (message: string) => void,
+) {
   if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
+  validateService(s);
   await mcpClose(s);
-  return nativeRpc(s, "oauth/login", {}, signal || AbortSignal.timeout(180000));
+  return nativeRpc(s, "oauth/login", {}, signal || AbortSignal.timeout(660000), onProgress);
+}
+export async function mcpReopenLogin(s: McpServer, signal?: AbortSignal) {
+  if (!hasMcpNative()) throw new Error("Dienst-Anmeldung benötigt die Anvil-Desktop-App.");
+  return nativeRpc(s, "oauth/reopen", {}, signal || AbortSignal.timeout(8000));
+}
+export async function mcpAuthStatus(
+  s: McpServer,
+  signal?: AbortSignal,
+): Promise<{ authenticated: boolean }> {
+  if (!hasMcpNative()) throw new Error("Dienst-Anmeldung benötigt die Anvil-Desktop-App.");
+  const value = await nativeRpc(s, "oauth/status", {}, signal || AbortSignal.timeout(8000));
+  return {
+    authenticated: Boolean((value as { authenticated?: boolean } | undefined)?.authenticated),
+  };
 }
 export async function mcpLogout(s: McpServer) {
   if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");

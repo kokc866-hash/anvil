@@ -13,6 +13,8 @@ import { bindHwIpc } from "./hw.mjs";
 import { bindAccountIpc } from "./account-auth.mjs";
 import { bindMcpIpc, stopMcpConnections } from "./mcp-ipc.mjs";
 import { bindCliIpc, stopCliJobs } from "./cli-ipc.mjs";
+import { bindAcpIpc, stopAcpJobs } from "./acp-ipc.mjs";
+import { registerInteractionChecks } from "./interaction-checks.mjs";
 import { bindRecoveryIpc } from "./recovery.mjs";
 import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
@@ -24,8 +26,18 @@ import { serverLaunch } from "./ui-boot.mjs";
 import { ANVIL_PARTITION, allowAnvilPerm, anvilWebPrefs } from "./session.mjs";
 import { sweepAnvilTemp } from "../companion/tmp.mjs";
 import { appOrigin } from "./app-origin.mjs";
+import { configureDataHome } from "./data-home.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+try {
+  process.env.ANVIL_USER_DATA = configureDataHome(app, {
+    root: ROOT, execPath: process.execPath, isPackaged: app.isPackaged,
+    defaultApp: process.defaultApp, env: process.env,
+  });
+} catch (error) {
+  dialog.showErrorBox("Anvil-Datenordner", `Datenordner im Anvil-Verzeichnis nicht verfügbar.\n${error instanceof Error ? error.message : String(error)}`);
+  app.exit(1);
+}
 const PORT = Number(process.env.ANVIL_PORT || 8080);
 const APP_URL = `http://127.0.0.1:${PORT}/`;
 const isAppUrl = appOrigin(PORT);
@@ -485,8 +497,12 @@ if (!gotLock) {
     bindHwIpc();
     bindAccountIpc();
     bindCliIpc(isAppUrl);
+  bindAcpIpc(isAppUrl, app.getPath("userData"));
+  registerInteractionChecks({ ipcMain, BrowserWindow, session, assertTrustedSender(event) {
+    if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isAppUrl(event.senderFrame.url)) throw new Error("Bedienprüfungen nur im Anvil-Hauptfenster verfügbar.");
+  } });
   bindMcpIpc(isAppUrl);
-    bindUpdateIpc();
+    bindUpdateIpc(isAppUrl);
     bindRecoveryIpc(isAppUrl);
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());
@@ -515,9 +531,7 @@ if (!gotLock) {
   }).catch((err) => {
     hideSplash();
     const msg = err instanceof Error ? err.message : String(err);
-    const hint = app.isPackaged
-      ? "Log: anvil-desktop.log (unter AppData\\Roaming\\Anvil\\logs)."
-      : "stop.bat, dann start.bat. Log: anvil-desktop.log";
+    const hint = `${app.isPackaged ? "" : "stop.bat, dann start.bat. "}Log: ${logFile()}`;
     dialog.showErrorBox("Anvil", msg + "\n\n" + hint);
     stopCompanion();
     stopServer();
@@ -547,6 +561,7 @@ app.on("before-quit", (event) => {
     return;
   }
   stopCliJobs();
+  stopAcpJobs();
   stopCompanion();
   stopServer();
   stopLocals();

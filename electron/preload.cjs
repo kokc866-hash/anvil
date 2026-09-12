@@ -29,6 +29,10 @@ ipcRenderer.on("secrets-changed", (_event, state) => {
 
 contextBridge.exposeInMainWorld("anvilCompanionToken", companionToken);
 contextBridge.exposeInMainWorld("anvilNative", {
+  acpProbe: (request) => ipcRenderer.invoke("acp-probe", request),
+  acpCancel: () => ipcRenderer.invoke("acp-cancel"),
+  interactionCheckRun: (payload) => ipcRenderer.invoke("interaction-check-run", payload),
+  interactionCheckCancel: (id) => ipcRenderer.invoke("interaction-check-cancel", id),
   saveRecovery: (snapshot) => ipcRenderer.invoke("workspace-recovery", snapshot),
   onBeforeClose: (fn) => {
     const receive = async (_event, ticket) => {

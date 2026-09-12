@@ -26,19 +26,35 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
     hasModelInCache: async () => false,
   };
   globalThis.helperTestRuntime = runtime;
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom", plugins: [{
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", plugins: [{
     name: "helper-runtime-fixture", enforce: "pre",
     transform(code, id) {
       if (id.endsWith("/src/lib/brain/engine.ts")) return code.replace('return import("@mlc-ai/web-llm");', 'return (globalThis as any).helperTestRuntime;') + '\nexport function fixtureEngine(e: Engine, w: Worker | null = null) { engine = e; worker = w; bindLifetime(); }';
       if (id.endsWith("/src/lib/helper-local.ts")) return code.replaceAll('await import("@mlc-ai/web-llm")', '(globalThis as any).helperTestRuntime');
     },
   }] });
+  let e;
+  t.after(async () => {
+    try {
+      t.mock.timers.reset();
+      await e?.unloadBrain();
+      const { flushPersistence } = await server.ssrLoadModule("/src/lib/persist-storage.ts");
+      await flushPersistence().catch(() => undefined);
+      await flush();
+    } finally {
+      await server.close();
+      for (const timer of timers) clearTimeout(timer);
+      Object.defineProperty(navigator, "gpu", { value: oldGpu, configurable: true });
+      globalThis.fetch = oldFetch;
+      delete globalThis.helperTestRuntime; delete globalThis.window; delete globalThis.document; delete globalThis.localStorage;
+    }
+  });
   const { useIde } = await server.ssrLoadModule("/src/store/ide.ts");
   const { useBrain } = await server.ssrLoadModule("/src/lib/brain/store.ts");
   const { useLearn } = await server.ssrLoadModule("/src/lib/learn.ts");
   const { useIntern } = await server.ssrLoadModule("/src/lib/intern.ts");
   useIntern.getState().setPrefs({ on: false, autoHeal: false });
-  const e = await server.ssrLoadModule("/src/lib/brain/engine.ts");
+  e = await server.ssrLoadModule("/src/lib/brain/engine.ts");
   const tasks = await server.ssrLoadModule("/src/lib/brain/tasks.ts");
   const apps = await server.ssrLoadModule("/src/lib/brain/apps.ts");
   const reset = async () => {
@@ -48,17 +64,6 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
     useLearn.setState({ on: true, facts: [], prefs: { ...useLearn.getState().prefs, distill: true } });
     e.fixtureEngine({ chat: { completions: { create: async () => result("OK") } } });
   };
-  t.after(async () => {
-    t.mock.timers.reset();
-    await e.unloadBrain();
-    const { flushPersistence } = await server.ssrLoadModule("/src/lib/persist-storage.ts");
-    await flushPersistence().catch(() => undefined);
-    await flush(); await server.close();
-    for (const timer of timers) clearTimeout(timer);
-    Object.defineProperty(navigator, "gpu", { value: oldGpu, configurable: true });
-    globalThis.fetch = oldFetch;
-    delete globalThis.helperTestRuntime; delete globalThis.window; delete globalThis.document; delete globalThis.localStorage;
-  });
 
   await t.test("usage callbacks retain model counts and cached replies consume zero tokens", async () => {
     await reset(); let calls = 0; const counts = [];

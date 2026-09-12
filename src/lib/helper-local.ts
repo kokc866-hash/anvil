@@ -46,7 +46,7 @@ type Native = {
     error?: string;
   }>;
   updateZip?: () => Promise<{ ok: boolean; canceled?: boolean; dir?: string; latest?: string; error?: string }>;
-  updateSetup?: () => Promise<{ ok: boolean; path?: string; latest?: string; error?: string }>;
+  updateSetup?: () => Promise<{ ok: boolean; path?: string; latest?: string; error?: string; message?: string }>;
   updateOpen?: (url: string) => Promise<boolean>;
 };
 

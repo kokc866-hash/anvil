@@ -1,4 +1,5 @@
 import type { LlmChoice } from "./agent-core";
+import { ANVIL_RUN_FRAME } from "./agent-image.ts";
 
 export type CliKind = "codex" | "claude" | "copilot";
 export const CLI_PROVIDERS: { kind: CliKind; provider: string; cmd: string; label: string }[] = [
@@ -13,9 +14,20 @@ export function cliKindFor(provider: string, mode: "abo" | "key"): CliKind | nul
 }
 
 export function cliPrompt(messages: Record<string, unknown>[], tools: unknown[]): string {
-  messages = messages.map((m) => m.mcpResult && Array.isArray(m.content)
-    ? { ...m, content: m.content.filter((part) => part?.type !== "image_url" && part?.type !== "image").concat([{ type: "text", text: "MCP-Bilder liegen in Anvil vor. Über diese CLI nur Text/structuredContent auswerten; keine Bildsicht behaupten." }]) }
-    : m);
+  messages = messages.map((m) => {
+    // Run/Play creates these frames itself. Keep them in Anvil and in the
+    // original conversation for image-capable transports, but do not let an
+    // internal preview abort a text-only CLI round or ask it to claim vision.
+    if (Object.getOwnPropertyDescriptor(m, ANVIL_RUN_FRAME)?.value === true) return {
+      ...m,
+      content: "Das Ergebnisbild nach Run/Play liegt in Anvil vor und wird über diese CLI nicht übertragen. Nur die Text-/Werkzeugergebnisse auswerten; keine Bildsicht behaupten. Den Auftrag anhand der verfügbaren Ergebnisse fortsetzen und fehlende visuelle Prüfung klar benennen.",
+    };
+    if (m.mcpResult && Array.isArray(m.content)) return {
+      ...m,
+      content: m.content.filter((part) => part?.type !== "image_url" && part?.type !== "image").concat([{ type: "text", text: "MCP-Bilder liegen in Anvil vor. Über diese CLI nur Text/structuredContent auswerten; keine Bildsicht behaupten." }]),
+    };
+    return m;
+  });
   if (
     messages.some(
       (m) =>

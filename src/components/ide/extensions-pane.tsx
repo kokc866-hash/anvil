@@ -15,12 +15,18 @@ import { downloadVsix, FEATURED, searchMarket, type MarketItem } from "@/lib/mar
 import { cn } from "@/lib/cn";
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
+import { requestRemoveWorkspacePlugin } from "@/lib/plugins/remove";
+import { AcpPreview } from "./acp-preview";
+import { TaskPackages } from "./task-packages";
+import { ServicesPane } from "./services-pane";
 
-const TAB_IDS = ["all", "core", "edit", "web", "tools", "workspace", "market", "api"] as const;
+const TAB_IDS = ["all", "services", "tasks", "core", "edit", "web", "tools", "workspace", "market", "api"] as const;
 
 export function ExtensionsPane() {
   const t = useT();
   const disabled = useIde((s) => s.pluginDisabled);
+  const busy = useIde((s) => s.agentBusy || Boolean(s.pathOperation));
+  const en = useIde((s) => s.locale === "en");
   const files = useIde((s) => s.files);
   const togglePlugin = useIde((s) => s.togglePlugin);
   const writeFile = useIde((s) => s.writeFile);
@@ -92,6 +98,8 @@ export function ExtensionsPane() {
 
   const tabs: { id: (typeof TAB_IDS)[number]; label: string }[] = [
     { id: "all", label: t("extAll") },
+    { id: "services", label: en ? "Services" : "Dienste" },
+    { id: "tasks", label: en ? "Task packages" : "Aufgabenpakete" },
     { id: "core", label: t("extCore") },
     { id: "edit", label: t("extEdit") },
     { id: "web", label: t("extWeb") },
@@ -135,8 +143,13 @@ export function ExtensionsPane() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
-        {tab === "api" ? (
-          <pre className="whitespace-pre-wrap px-1 font-mono text-[11px] leading-5 text-muted">{PLUGIN_API_DOC}</pre>
+        {tab !== "services" && tab !== "api" && tab !== "market" ? <p className="mb-3 px-1 text-xs leading-relaxed text-muted">
+          {tab === "tasks"
+            ? (en ? "Task packages give the agent instructions for specific work. External accounts connect under Services." : "Aufgabenpakete geben dem Agenten Anleitungen für bestimmte Arbeiten. Externe Konten verbindest du unter Dienste.")
+            : (en ? "Plugins extend Anvil's features. To connect accounts such as Notion or Linear, choose Services above." : "Plugins erweitern Anvils Funktionen. Für Konten wie Notion oder Linear wähle oben Dienste.")}
+        </p> : null}
+        {tab === "services" ? <ServicesPane /> : tab === "tasks" ? <TaskPackages /> : tab === "api" ? (
+          <><AcpPreview /><pre className="whitespace-pre-wrap px-1 font-mono text-[11px] leading-5 text-muted">{PLUGIN_API_DOC}</pre></>
         ) : tab === "market" ? (
           <div>
             <p className="mb-2 px-1 text-[11px] text-muted">{t("extMarketHint")}</p>
@@ -200,11 +213,18 @@ export function ExtensionsPane() {
                     {p.path}
                   </button>
                 ) : null}
+                {!p.builtin && p.path ? <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`${en ? "Remove" : "Entfernen"}: ${p.name}`}
+                  className="mt-2 block text-xs text-muted hover:text-fg disabled:opacity-50"
+                  onClick={() => void requestRemoveWorkspacePlugin(p.path!)}
+                >{en ? "Remove plugin" : "Plugin entfernen"}</button> : null}
               </div>
             );
           })
         )}
-        {tab !== "api" && tab !== "market" ? (
+        {tab !== "api" && tab !== "market" && tab !== "tasks" && tab !== "services" ? (
           <>
             <p className="px-1 pt-2 pb-1 text-xs font-medium tracking-wide text-subtle uppercase">{t("extCmds")}</p>
             {commands.length === 0 ? (
@@ -224,7 +244,7 @@ export function ExtensionsPane() {
           </>
         ) : null}
       </div>
-      <div className="border-t border-border p-2">
+      {tab !== "services" ? <div className="border-t border-border p-2">
         <p className="mb-2 px-0.5 text-[11px] text-muted">{t("extVsixHint")}</p>
         <Button
           className="mb-1.5 h-8 w-full text-xs"
@@ -283,7 +303,7 @@ export function ExtensionsPane() {
         >
           {t("extNewPlugin")}
         </Button>
-      </div>
+      </div> : null}
     </div>
   );
 }

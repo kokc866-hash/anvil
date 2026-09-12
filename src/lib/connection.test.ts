@@ -74,3 +74,15 @@ test("CLI tool requests return to Anvil; unadvertised tools and malformed output
   assert.throws(() => parseCliChoice('{"content":"","tool_calls":[]}', []), /Leere/);
   assert.match(cliPrompt([{ role: "tool", content: "file result" }], []), /file result/);
 });
+
+test("CLI keeps user image validation and MCP text results", () => {
+  const image = { type: "image_url", image_url: { url: "data:image/png;base64,dGVzdA==" } };
+  assert.throws(() => cliPrompt([{ role: "user", content: [{ type: "text", text: "Describe my image" }, image] }], []), /Bilder werden/);
+  const original = [{ role: "user", mcpResult: true, content: [{ type: "text", text: "Structured result: 42" }, image] }];
+  const copy = JSON.stringify(original);
+  const prompt = cliPrompt(original, []);
+  assert.match(prompt, /Structured result: 42/);
+  assert.match(prompt, /keine Bildsicht behaupten/);
+  assert.doesNotMatch(prompt, /data:image/);
+  assert.equal(JSON.stringify(original), copy);
+});

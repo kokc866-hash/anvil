@@ -15,6 +15,7 @@ export type UpdateInfo = {
   canceled?: boolean;
   dir?: string;
   path?: string;
+  message?: string;
 };
 
 function missing(): UpdateInfo {

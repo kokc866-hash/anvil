@@ -1,6 +1,5 @@
 import { app, dialog } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { handleOnce } from "./ipc.mjs";
 
@@ -16,7 +15,7 @@ function defaults() {
     data: user,
     helper: join(user, "helper-models"),
     logs: user,
-    packages: join(homedir(), ".anvil"),
+    packages: join(user, "packages"),
   };
 }
 

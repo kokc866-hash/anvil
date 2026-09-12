@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyLlmOptions, applyResponsesStore, clampMaxOut, needsCompletionTokens, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
+import { applyLlmOptions, applyResponsesStore, clampMaxOut, needsCompletionTokens, normalizeThinking, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
+import { effectiveThinking, thinkingModes } from "../../electron/thinking-support.mjs";
+
+test("Fable explicit effort uses adaptive thinking, never a legacy budget", () => {
+  const p = applyLlmOptions({}, { provider: "anthropic", model: "claude-fable-5", context: 200000, thinking: "high" });
+  assert.deepEqual(p.thinking, { type: "adaptive", display: "summarized" });
+  assert.deepEqual(p.output_config, { effort: "high" });
+});
 
 test("gpt-5 o3 o4 grok-4 use max_completion_tokens", () => {
   assert.equal(needsCompletionTokens("gpt-5.6-luna"), true);
@@ -64,13 +71,58 @@ test("gpt-5 with tools keeps app thinking, not none", () => {
   assert.notEqual(p.reasoning_effort, "none");
 });
 
-test("gpt-5 thinking off omits reasoning_effort", () => {
+test("gpt-5.6 thinking off explicitly disables reasoning", () => {
   const p = applyLlmOptions(
     { model: "gpt-5.6-sol" },
     { provider: "openai", model: "gpt-5.6-sol", api: "openai", context: 32768, thinking: "off" },
     { tools: true },
   );
-  assert.equal("reasoning_effort" in p, false);
+  assert.equal(p.reasoning_effort, "none");
+});
+
+test("model-specific Thinking levels, mandatory reasoning and saved levels", () => {
+  assert.deepEqual(thinkingModes("anthropic", "claude-fable-5"), ["auto", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal(thinkingModes("anthropic", "claude-sonnet-4-6").includes("xhigh"), false);
+  assert.equal(thinkingModes("openai", "gpt-5.5").includes("max"), false);
+  assert.equal(thinkingModes("openai", "gpt-6-astra").includes("off"), false);
+  assert.deepEqual(thinkingModes("ollama", "qwen3"), ["off", "auto", "low", "medium", "high"]);
+  assert.deepEqual(thinkingModes("openai", "gpt-4o"), ["auto"]);
+  assert.equal(effectiveThinking("openai", "gpt-5.5", "max"), "auto");
+  for (const mode of ["minimal", "xhigh", "max"] as const) assert.equal(normalizeThinking(mode), mode);
+  assert.equal(normalizeThinking("injected"), "auto");
+});
+
+test("cloud reasoning reaches provider-native payloads and Responses", () => {
+  const make = (provider: string, model: string, thinking: "off" | "auto" | "low" | "high" | "xhigh" | "max") =>
+    applyLlmOptions({}, { provider, model, context: 32768, thinking, temperature: 0.7, maxOut: 4096 });
+  const openai = make("openai", "gpt-5.6-terra", "max");
+  assert.equal(openai.reasoning_effort, "max");
+  assert.equal((responsesBody(openai, "openai").reasoning as { effort: string }).effort, "max");
+  assert.equal(make("openai", "gpt-5.6-terra", "auto").reasoning_effort, undefined);
+  assert.deepEqual(make("anthropic", "claude-opus-5", "max").output_config, { effort: "max" });
+  assert.deepEqual(make("anthropic", "claude-sonnet-5", "off").thinking, { type: "disabled" });
+  assert.deepEqual(make("anthropic", "claude-fable-5", "off").thinking, { type: "adaptive", display: "summarized" });
+  assert.equal(make("google", "gemini-2.5-flash", "off").reasoning_effort, "none");
+  assert.equal(make("google", "gemini-2.5-pro", "off").reasoning_effort, undefined);
+  const gemini = make("google", "gemini-3.8-flash", "low");
+  assert.equal(gemini.reasoning_effort, "low");
+  assert.equal(gemini.temperature, 0.7);
+  assert.equal(gemini.max_tokens, 4096);
+  const router = make("openrouter", "anthropic/claude-fable-5", "max");
+  assert.deepEqual(router.reasoning, { effort: "max" });
+  assert.equal(router.reasoning_effort, undefined);
+  assert.equal(make("xai", "grok-4.5", "low").reasoning_effort, "low");
+  assert.equal(make("xai", "grok-4.5", "xhigh").reasoning_effort, undefined);
+  const deepseek = make("deepseek", "deepseek-v4-pro", "max");
+  assert.deepEqual(deepseek.thinking, { type: "enabled" });
+  assert.equal(deepseek.reasoning_effort, "max");
+});
+
+test("legacy Claude auto uses a valid budget and GPT-6 keeps its required Responses tool transport", () => {
+  const old = applyLlmOptions({}, { provider: "anthropic", model: "claude-sonnet-4-5", thinking: "auto", context: 32768 });
+  assert.equal((old.thinking as { type: string }).type, "enabled");
+  assert.equal(old.output_config, undefined);
+  assert.equal(usesResponsesApi({ provider: "openai", model: "gpt-6-astra", thinking: "off", context: 32768 }, true), true);
 });
 
 test("responses api when gpt-5 tools and thinking on", () => {

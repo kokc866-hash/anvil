@@ -28,7 +28,7 @@ export function automaticRunVerification(previous: Verification | undefined, ok:
 export class AgentEvidence {
   revision = 0;
   private writes = new Map<string, string>();
-  private runs = new Map<string, { revision: number; ok: boolean; detail: string }>();
+  private runs = new Map<string, { revision: number; ok: boolean; pending?: boolean; detail: string }>();
   changed() { this.revision++; }
   record(name: string, args: Record<string, unknown>, result: Record<string, unknown>) {
     if (/^(write_file|edit_file|append_file|delete_file|rename_file|mkdir)$/.test(name)) {
@@ -38,8 +38,12 @@ export class AgentEvidence {
     }
     if (!/^(run_file|engine_run|shell)$/.test(name)) return;
     if (name === "shell" && !executesProject(String(args.command ?? ""))) return;
-    const target = String(args.path ?? args.command ?? args.project ?? name);
-    this.runs.set(`${name}:${target}`, { revision: this.revision, ok: result.ok === true && !result.error && !result.isError, detail: `${target}: ${String(result.error || result.stderr || (result.ok === true ? "Run erfolgreich" : "Run nicht erfolgreich bestätigt")).slice(0, 1000)}` });
+    if (name === "engine_run" && /(?:^|\s)(?:--version|--help|-h)(?:\s|$)/i.test(String(args.cmd ?? ""))) return;
+    const target = name === "engine_run"
+      ? `${String(result.engineId || args.engine || result.engine || "engine").toLowerCase()}:${result.projectRoot ?? args.projectRoot ?? ""}:${args.cmd || args.action || "check"}`
+      : String(args.path ?? args.command ?? args.project ?? name);
+    const pending = name === "engine_run" && result.ok === true && !result.error && !result.isError && (result.running === true || args.action === "editor");
+    this.runs.set(`${name}:${target}`, { revision: this.revision, pending, ok: result.ok === true && !result.error && !result.isError, detail: `${target}: ${pending ? "Engine gestartet; keine abgeschlossene Prüfung." : String(result.error || result.stderr || (result.ok === true ? "Run erfolgreich" : "Run nicht erfolgreich bestätigt")).slice(0, 1000)}` });
   }
   status(): Verification {
     if (this.writes.size) return { state: "failed", detail: [...this.writes.values()].join("\n") };
@@ -47,7 +51,9 @@ export class AgentEvidence {
     const failed = runs.filter((r) => !r.ok);
     if (failed.length) return { state: "failed", detail: failed.map((r) => r.detail).join("\n") };
     if (!runs.length) return { state: "none", detail: "Kein bestätigter Run." };
-    if (runs.some((r) => r.revision !== this.revision)) return { state: "stale", detail: "Dateien nach dem letzten Run geändert. Aktueller Stand noch nicht durch Run bestätigt." };
+    const completed = runs.filter((r) => !r.pending);
+    if (!completed.length) return { state: "none", detail: runs.map((r) => r.detail).join("\n") };
+    if (completed.some((r) => r.revision !== this.revision)) return { state: "stale", detail: "Dateien nach dem letzten Run geändert. Aktueller Stand noch nicht durch Run bestätigt." };
     return { state: "passed", detail: "Run für den aktuellen Dateistand erfolgreich." };
   }
 }

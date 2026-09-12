@@ -5,6 +5,7 @@ import { AgentTodo } from "./chat-trail";
 import { LongRequestHint } from "./request-status";
 export { ThinkBlock, Trail, AgentTodo, HelperLaneBits, LiveTools } from "./chat-trail";
 import { sendChat } from "@/lib/chat-session";
+import { queuedChatRequest } from "@/lib/chat-queue";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImagePlus, Plus, Send, Square, X } from "lucide-react";
 
@@ -14,7 +15,7 @@ import { providerOf } from "@/lib/agent-client";
 import { prepareAnvilIntent } from "@/lib/anvil";
 import { isRefPath, REF_DIR } from "@/lib/ref";
 
-import { stopAgent } from "@/lib/abort";
+import { agentGen, stopAgent } from "@/lib/abort";
 
 import { brainMentionRank, brainModelOf, brainStopNote, useBrain } from "@/lib/brain";
 import { heuristicMention } from "@/lib/brain/extra-heur";
@@ -25,6 +26,9 @@ import { cn } from "@/lib/cn";
 import { useIde, type AgentMode } from "@/store/ide";
 import { SurfaceSwitch } from "./surface-switch";
 import { HelperPrompts } from "./helper-prompts";
+import { ProductWorkflows } from "./product-workflows";
+import { ConnectionSummary } from "./connection-summary";
+import { connectionCapabilities, imageAttachmentError } from "@/lib/connection-capabilities";
 import { t, useT } from "@/lib/i18n";
 import { getDrag, importDropped } from "@/lib/dnd";
 import { CtxMenu } from "./ctx-menu";
@@ -40,7 +44,6 @@ export function ChatPane() {
   const agentBusy = useIde((s) => s.agentBusy);
   const trailInline = useIde((s) => s.trailInChat || !s.panels.trail);
   const trailOpen = useIde((s) => s.panels.trail);
-  const finalizeAssistant = useIde((s) => s.finalizeAssistant);
   const setAgentBusy = useIde((s) => s.setAgentBusy);
   const togglePanel = useIde((s) => s.togglePanel);
   const clearChat = useIde((s) => s.clearChat);
@@ -48,6 +51,11 @@ export function ChatPane() {
   const [title, setTitle] = useState("");
   const llmProvider = useIde((s) => s.llmProvider);
   const llmModel = useIde((s) => s.llmModel);
+  const llmAuthMode = useIde(s => s.llmAuthMode);
+  const llmBaseUrl = useIde(s => s.llmBaseUrl);
+  const locale = useIde(s => s.locale);
+  const connection = { provider: llmProvider, authMode: llmAuthMode, baseUrl: llmBaseUrl, model: llmModel };
+  const capabilities = connectionCapabilities(connection);
   const helperId = useBrain((s) => s.customId.trim() || s.modelId);
   const helperLabel = brainModelOf(helperId)?.label ?? helperId;
   const agentMode = useIde((s) => s.agentMode);
@@ -154,32 +162,46 @@ export function ChatPane() {
     // Read the current busy flag: another effect may already have started work
     // since this render. Inbox and queue must share one consumer.
     const st = useIde.getState();
-    if (st.agentBusy) return;
-    const text = st.agentInbox || st.agentQueue[0];
-    if (!text) return;
+    if (st.agentBusy || st.agentJob?.status === "ask") return;
+    const entry = st.agentInbox || st.agentQueue[0];
+    if (!entry) return;
+    const request = queuedChatRequest(entry);
     const queued = !st.agentInbox;
     useIde.setState(st.agentInbox ? { agentInbox: null } : { agentQueue: st.agentQueue.slice(1) });
-    void send(text, { queued });
+    if (request) void send(request.text, { queued, mode: request.mode });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentBusy, agentInbox, agentQueue.length]);
+  }, [agentBusy, agentInbox, agentQueue.length, agentJob?.status]);
 
   function stop() {
     stopAgent("Gestoppt");
     setAgentBusy(false);
     useIde.getState().failRunningSteps();
+    const stopped = agentGen();
     const last = useIde.getState().chat.at(-1);
     if (last?.role === "assistant") {
       void brainStopNote(last.steps ?? []).then((note) => {
         const cur = useIde.getState().chat.at(-1);
-        if (cur?.id !== last.id) return;
-        const body = (cur.content || "").trim();
-        finalizeAssistant(body ? `${body}\n${note}` : `Gestoppt.\n${note}`);
+        if (stopped !== agentGen() || cur?.id !== last.id || !note) return;
+        const body = cur.content.trim();
+        if (body.includes(note.slice(0, 24))) return;
+        useIde.setState((state) => ({ chat: state.chat.map((message) => message.id === cur.id
+          ? { ...message, content: body ? `${body}\n${note}` : note } : message) }));
       });
     }
     reflectUtterance(draft, "abort");
   }
 
-  async function send(preset?: string, opts?: { queued?: boolean; choiceId?: string }) {
+  function addImages(urls: string[]) {
+    const st = useIde.getState();
+    const error = imageAttachmentError({ provider: st.llmProvider, authMode: st.llmAuthMode, baseUrl: st.llmBaseUrl, model: st.llmModel }, urls.length, st.locale);
+    if (error) { st.setNotice(error); return; }
+    setImages(prev => [...prev, ...urls].slice(0, 4));
+  }
+
+  async function send(preset?: string, opts?: { queued?: boolean; choiceId?: string; mode?: AgentMode }) {
+    const st = useIde.getState();
+    const error = imageAttachmentError({ provider: st.llmProvider, authMode: st.llmAuthMode, baseUrl: st.llmBaseUrl, model: st.llmModel }, images.length, st.locale);
+    if (error) { st.setNotice(error); return; }
     return sendChat({ preset, draft, images, title, setTitle, setDraft, setImages, setMention }, opts);
   }
 
@@ -221,7 +243,7 @@ export function ChatPane() {
               const r = new FileReader();
               r.onload = () => {
                 const url = String(r.result || "");
-                if (url) setImages((prev) => [...prev, url].slice(0, 4));
+                if (url) addImages([url]);
               };
               r.readAsDataURL(f);
             }
@@ -252,7 +274,7 @@ export function ChatPane() {
           setMenu({ kind: "pane", x: e.clientX, y: e.clientY });
         }}
       >
-        <div className="flex rounded-[10px] bg-bg p-0.5">
+        <div data-help="modes" className="flex rounded-[10px] bg-bg p-0.5">
           {(["agent", "ask"] as AgentMode[]).map((m) => (
             <button
               key={m}
@@ -262,6 +284,8 @@ export function ChatPane() {
                 agentMode === m ? "bg-hover text-fg" : "text-muted hover:text-fg",
               )}
               onClick={() => setAgentMode(m)}
+              aria-pressed={agentMode === m}
+              title={m === "agent" ? t("agentModeHint") : t("askModeHint")}
             >
               {m === "agent" ? t("agent") : t("ask")}
             </button>
@@ -297,6 +321,11 @@ export function ChatPane() {
           <X className="size-3.5" />
         </Button>
       </div>
+      <p className="shrink-0 border-b border-border px-3 py-1.5 text-[11px] leading-relaxed text-muted" data-testid="chat-mode-hint">
+        {(agentBusy || agentJob?.status === "ask") && agentJob?.mode
+          ? <>{agentJob.mode === "agent" ? t("agentModeHint") : t("askModeHint")} {locale === "en" ? "This task keeps its mode. The selector applies to your next task." : "Diese Aufgabe behält ihren Modus. Die Auswahl gilt für deinen nächsten Auftrag."}</>
+          : agentMode === "agent" ? t("agentModeHint") : t("askModeHint")}
+      </p>
 
       <div
         ref={scroller}
@@ -365,9 +394,12 @@ export function ChatPane() {
                   </button>
                 </div>
                 <ul className="mt-1 space-y-0.5">
-                  {agentQueue.map((q, i) => (
-                    <li key={`${i}-${q.slice(0, 24)}`} className="flex items-center gap-2 text-[11px]">
-                      <span className="min-w-0 flex-1 truncate text-fg">{q}</span>
+                  {agentQueue.map((q, i) => {
+                    const request = queuedChatRequest(q);
+                    if (!request) return null;
+                    return <li key={`${i}-${request.text.slice(0, 24)}`} className="flex items-center gap-2 text-[11px]">
+                      <span className="shrink-0 text-muted">{request.mode === "ask" ? t("ask") : t("agent")}</span>
+                      <span className="min-w-0 flex-1 truncate text-fg">{request.text}</span>
                       <button
                         type="button"
                         className="shrink-0 text-subtle hover:text-fg"
@@ -376,8 +408,8 @@ export function ChatPane() {
                       >
                         ×
                       </button>
-                    </li>
-                  ))}
+                    </li>;
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -414,7 +446,7 @@ export function ChatPane() {
           y={menu.y}
           onClose={() => setMenu(null)}
           items={chatMenu(menu, {
-            addImages: (urls) => setImages((prev) => [...prev, ...urls].slice(0, 4)),
+            addImages,
           })}
         />
       ) : null}
@@ -433,10 +465,14 @@ export function ChatPane() {
             </button>
           </div>
         ) : null}
+        <ProductWorkflows />
+        {capabilities.response === "final" && agentBusy ? <p role="status" className="px-3 py-1 text-[11px] text-muted">{locale === "en" ? "CLI working. The answer appears when each model call finishes; stop remains available." : "CLI arbeitet. Die Antwort erscheint nach Abschluss des jeweiligen Modellaufrufs; Abbrechen bleibt möglich."}</p> : null}
+        <details className="px-3 py-1 text-[11px] text-muted"><summary className="cursor-pointer">{locale === "en" ? "Connection and supported inputs" : "Verbindung und unterstützte Eingaben"}</summary><ConnectionSummary /></details>
+        {images.length && capabilities.images === "unsupported" ? <p role="alert" className="px-3 py-1 text-xs text-danger">{imageAttachmentError(connection, images.length, locale)} <button type="button" className="underline" onClick={() => setSettingsOpen(true)}>{locale === "en" ? "Choose connection" : "Verbindung wählen"}</button></p> : null}
         {images.length ? (
           <div className="mb-1.5 flex flex-wrap gap-1">
             {images.map((src, i) => (
-              <button key={i} type="button" className="relative" onClick={() => setImages(images.filter((_, n) => n !== i))}>
+              <button key={i} type="button" className="relative" aria-label={locale === "en" ? `Remove image ${i + 1}` : `Bild ${i + 1} entfernen`} onClick={() => setImages(images.filter((_, n) => n !== i))}>
                 <img src={src} alt="" className="h-12 w-12 rounded-md object-cover" />
               </button>
             ))}
@@ -494,11 +530,12 @@ export function ChatPane() {
               </ul>
             ) : null}
             <div className="flex items-end gap-2">
-              <Tip label={t("attachImage")} side="top">
+              <Tip label={capabilities.images === "unsupported" ? imageAttachmentError(connection, 1, locale) : t("attachImage")} side="top">
                 <label className="flex h-11 w-9 cursor-pointer items-center justify-center rounded-md text-muted hover:text-fg">
                   <ImagePlus className="size-4" />
                   <input
                     id="anvil-chat-img"
+                    onClick={(e) => { if (capabilities.images === "unsupported") { e.preventDefault(); useIde.getState().setNotice(imageAttachmentError(connection, 1, locale)); } }}
                     type="file"
                     accept="image/*"
                     className="hidden"
@@ -509,7 +546,7 @@ export function ChatPane() {
                       const r = new FileReader();
                       r.onload = () => {
                         const url = String(r.result || "");
-                        if (url) setImages((prev) => [...prev, url].slice(0, 4));
+                        if (url) addImages([url]);
                       };
                       r.readAsDataURL(f);
                     }}
@@ -551,7 +588,7 @@ export function ChatPane() {
                     const r = new FileReader();
                     r.onload = () => {
                       const url = String(r.result || "");
-                      if (url) setImages((prev) => [...prev, url].slice(0, 4));
+                      if (url) addImages([url]);
                     };
                     r.readAsDataURL(f);
                   }

@@ -1,4 +1,5 @@
 import type { RequestTokens } from "@/lib/token-usage";
+import type { QueuedChatEntry } from "@/lib/chat-queue";
 import type { ToolCompatibility } from "@/lib/tool-compat";
 import type { IdeSettings } from "@/lib/settings-schema";
 import type { ToolLearning, ToolLearningState } from "@/lib/tool-learning";
@@ -104,6 +105,12 @@ export type Checkpoint = {
   label: string;
   files: Record<string, string>;
   dirs: string[];
+  workspace?: string;
+  /** Captured at round completion; old snapshots remain reviewable but are not destructive restore targets. */
+  endFiles?: Record<string, string>;
+  endDirs?: string[];
+  sealedBy?: string;
+  restoreIntent?: import("@/lib/restore-plan").RestoreDiskPlan;
 };
 
 export type ChatVoice = "agent" | "helper";
@@ -198,6 +205,7 @@ export type IdeState = {
   theme: ThemeName;
   locale: "de" | "en";
   motion: MotionLevel;
+  helpPreferences: { tips: boolean; pointer: boolean; delay: 400 | 900 | 1800 };
   fontSize: number;
   tabSize: 2 | 4 | 8;
   lineNumbers: boolean;
@@ -300,8 +308,8 @@ export type IdeState = {
   lspLog: { at: number; ok: boolean; text: string }[];
   engineLink: { label: string; ok: boolean } | null;
   checkpoints: Checkpoint[];
-  agentInbox: string | null;
-  agentQueue: string[];
+  agentInbox: QueuedChatEntry | null;
+  agentQueue: QueuedChatEntry[];
   pendingAsk: { path: string; text: string } | null;
   recentPaths: string[];
   flashPath: string | null;
@@ -335,6 +343,7 @@ export type IdeState = {
   setTheme: (theme: ThemeName) => void;
   setLocale: (locale: "de" | "en") => void;
   setMotion: (v: MotionLevel) => void;
+  setHelpPreferences: (v: IdeState["helpPreferences"]) => void;
   setFontSize: (n: number) => void;
   setTabSize: (n: 2 | 4 | 8) => void;
   setLineNumbers: (v: boolean) => void;
@@ -445,7 +454,7 @@ export type IdeState = {
   openRoundDiff: (path: string, checkpointId?: string) => void;
   pushCheckpoint: (label: string) => string;
   patchFiles: (next: Record<string, string>, opts?: { quiet?: boolean }) => number;
-  restoreCheckpoint: (id: string) => boolean;
+  restoreCheckpoint: (id: string) => Promise<boolean>;
   setChatChanges: (changes: FileChange[]) => void;
   setPendingAsk: (v: { path: string; text: string } | null) => void;
   revealPath: (path: string) => void;
@@ -457,7 +466,7 @@ export type IdeState = {
   reopenTab: () => void;
   setChatPlan: (steps: PlanStep[], id?: string) => void;
   updatePlanStep: (i: number, status: PlanStep["status"], id?: string) => void;
-  pushAgent: (text: string, steal?: boolean) => void;
+  pushAgent: (text: string, steal?: boolean, mode?: AgentMode) => void;
   clearAgentInbox: () => void;
   toggleBreakpoint: (path: string, line: number, on?: boolean) => void;
   setDebug: (p: Partial<DebugState>) => void;

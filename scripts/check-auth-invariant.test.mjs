@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
@@ -101,11 +101,19 @@ test("the build side resolves a checkout's configured app-env and explicit overr
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the CLI reports rather than silently passing when run via a symlink", async () => {
+test("the CLI reports rather than silently passing when run via a symlink", async (t) => {
   // A check whose exit code is the whole signal must never no-op to 0 because
   // process.argv[1] came in through a symlinked path.
-  const link = join(mkdtempSync(join(tmpdir(), "auth-invariant-link-")), "scripts");
-  symlinkSync(join(projectRoot(), "scripts"), link);
+  const root = mkdtempSync(join(tmpdir(), "auth-invariant-link-"));
+  t.after(() => {
+    assert.equal(dirname(resolve(root)), resolve(tmpdir()));
+    // rm removes the directory link itself; it does not traverse into scripts.
+    rmSync(root, { recursive: true, force: true });
+  });
+  const link = join(root, "scripts");
+  // Directory junctions exercise the same realpath/argv distinction on Windows
+  // without requiring developer mode or the symbolic-link privilege.
+  symlinkSync(join(projectRoot(), "scripts"), link, process.platform === "win32" ? "junction" : "dir");
   const error = await promisify(execFile)(process.execPath, [
     join(link, "check-auth-invariant.mjs"),
     "--dev-url",

@@ -1,4 +1,5 @@
 import type { IdeState } from "./ide";
+import { persistedChatQueue } from "@/lib/chat-queue";
 
 function memo<T extends unknown[], R>(fn: (...args: T) => R): (...args: T) => R {
   let previous: T | undefined;
@@ -26,7 +27,7 @@ const undo = memo((items: IdeState["undo"], open: string[], dirty: IdeState["dir
 const diffs = memo((items: IdeState["pendingDiffs"]) =>
   items,
 );
-const queue = memo((items: string[]) => items.slice(0, 8).map((t) => t.slice(0, 2000)));
+const queue = memo((items: IdeState["agentQueue"]) => persistedChatQueue(items));
 
 export function partializeIde(s: IdeState) {
   return {
@@ -35,11 +36,13 @@ export function partializeIde(s: IdeState) {
     openPaths: s.openPaths,
     activePath: s.activePath,
     chat: s.chat,
+    checkpoints: s.checkpoints,
     commits: commits(s.commits),
     panels: s.panels,
     theme: s.theme,
     locale: s.locale,
     motion: s.motion,
+    helpPreferences: s.helpPreferences,
     fontSize: s.fontSize,
     tabSize: s.tabSize,
     lineNumbers: s.lineNumbers,

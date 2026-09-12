@@ -1,4 +1,5 @@
 import { SKILL_CREATOR_BODY } from "./skill-debug.ts";
+import { PRODUCT_WORKFLOWS } from "./product-workflows.ts";
 
 type Seed = {
   id: string;
@@ -31,6 +32,8 @@ function seed(id: string, name: string, when: string, body: string, score = 0.7)
 }
 
 export const SEED: Seed[] = [
+  ...PRODUCT_WORKFLOWS.map(flow => seed(flow.skill, flow.skill, `${flow.title} ${flow.titleEn}`,
+    `1. Nutze read_file für die relevanten Projektdateien.\n2. ${flow.steps}\n3. Beziehe das Ergebnis auf den konkreten Auftrag und benenne fehlende Nachweise.`, 0.8)),
   seed(
     "skill-creator",
     "skill-creator",
@@ -42,7 +45,7 @@ export const SEED: Seed[] = [
     "engine",
     "engine-projekt",
     "Godot Unity Unreal Bevy Engine Companion MCP",
-    "1. engine_detect im Workspace.\n2. Scripts mit edit_file/read_file ändern.\n3. engine_run play oder mcp_call. Keine eigene Engine in Anvil — HTML-Vorschau nur Demo.",
+    "1. engine_detect und engine_status: Projektwurzel, Engine-Version und verfügbare Programme prüfen. Bei mehreren Projekten engine und projectRoot explizit wählen.\n2. Scripts gezielt ändern; Unity .meta-Dateien und Referenzen, Unreal Blueprints/.uasset und Godot Ressourcen nicht blind überschreiben. Binäre Assets über passende Editor-Werkzeuge bearbeiten.\n3. Nur angebotene engine_run-Aktionen nutzen. Lokaler Projektordner und erfolgreiche Speicherung sind Voraussetzung. Godot check importiert Ressourcen, es ist kein Gameplaytest. Für Unity Tests den passenden Testmodus wählen; für Unreal Prüfungen über eingerichtete Editor-/Build-Werkzeuge ausführen.\n4. MCP-Katalog und Werkzeugbeschreibung des verbundenen Engine-Plugins prüfen; keine Editorsteuerung allein aus einer Anmeldung ableiten.\n5. Ausgabe und Testergebnis lesen. Laufender Editor, erfolgreicher Import und bestandener Test sind unterschiedliche Nachweise. Keine eigene Engine in Anvil — HTML-Vorschau nur Demo.",
     0.72,
   ),
   seed(

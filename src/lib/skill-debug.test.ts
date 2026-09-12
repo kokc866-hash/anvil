@@ -18,6 +18,11 @@ test("empty prose skill fails debug", () => {
   assert.ok(r.issues.length >= 2);
 });
 
+test("standard prose skills and long referenced instructions do not require Anvil tool names", () => {
+  assert.equal(debugSkill({ name: "web-check", when: "Check a web page", body: "Read references/check.md and verify the requested change." }).ok, true);
+  assert.equal(debugSkill({ name: "full-guide", when: "Read full instructions", body: "Keep this instruction. ".repeat(700) }).ok, true);
+});
+
 test("all seed skills pass debug and have unique ids", () => {
   assert.ok(SEED.length >= 20, `expected many seeds, got ${SEED.length}`);
   const ids = new Set<string>();

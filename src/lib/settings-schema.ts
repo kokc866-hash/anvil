@@ -11,7 +11,7 @@ const count = (min: number, max: number) => z.number().int().min(min).max(max);
 const number = (min: number, max: number) => z.number().min(min).max(max);
 const recordKey = text.refine((v) => !["__proto__", "constructor", "prototype"].includes(v), "Ungültiger Schlüssel");
 const provider = z.custom<ProviderId>((v) => typeof v === "string" && PROVIDERS.some((p) => p.id === v));
-const thinking = z.enum(["off", "auto", "low", "medium", "high"]);
+const thinking = z.enum(["off", "auto", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const compact = z.enum(["off", "auto", "aggressive"]);
 const toolMode = z.enum(["standard", "compact", "text"]);
 const context = count(CONTEXT_MIN, CONTEXT_MAX);
@@ -40,6 +40,7 @@ export const ideSettingsSchema = z.object({
   theme: z.enum(["dark", "light"]),
   locale: z.enum(["de", "en"]),
   motion: z.enum(["off", "reduced", "full"]),
+  helpPreferences: z.object({ tips: z.boolean(), pointer: z.boolean(), delay: z.union([z.literal(400), z.literal(900), z.literal(1800)]) }),
   fontSize: count(10, 22),
   tabSize: z.union([z.literal(2), z.literal(4), z.literal(8)]),
   lineNumbers: bool, wordWrap: bool, editorMinimap: bool, editorSticky: bool,

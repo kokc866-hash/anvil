@@ -14,6 +14,7 @@ import {
   idFromPins,
   factsFromUtterance,
   parseSkillMd,
+  serializeSkillMd,
   projectish,
   slugSkillId,
   memoryWords,
@@ -40,6 +41,7 @@ export type LearnSkill = {
   when: string;
   body: string;
   file?: string;
+  frontmatter?: string;
   kind: SkillKind;
   uses: number;
   at: number;
@@ -224,7 +226,7 @@ export const useLearn = create<LearnState>()(
         });
       },
       writeSkill: (s) => {
-        const name = s.name.trim().slice(0, 40) || "skill";
+        const name = s.name.trim() || "skill";
         const scope = s.scope ?? "project";
         const ws = scope === "project" ? workspaceId() : undefined;
         const cur = get().skills.find(x => x.name === name && x.scope === scope && x.ws === ws);
@@ -233,8 +235,9 @@ export const useLearn = create<LearnState>()(
         const skill: LearnSkill = {
           id: cur?.id ?? id,
           name,
-          when: s.when.trim().slice(0, 160) || name,
-          body: s.body.trim().slice(0, 8000),
+          when: s.when.trim() || name,
+          body: s.body.trim(),
+          frontmatter: cur?.frontmatter,
           kind: s.kind === "plugin" ? "plugin" : "guide",
           file: cur?.file,
           uses: cur?.uses ?? 0,
@@ -471,8 +474,8 @@ export function adaptIde() {
 }
 
 function persistSkillFile(skill: LearnSkill) {
-  const path = skill.file && /^\.anvil\/skills\/[a-z0-9_-]+\.md$/i.test(skill.file) ? skill.file : `.anvil/skills/${skill.id}.md`;
-  const src = `---\nname: ${skill.name}\nwhen: ${skill.when.replace(/\n/g, " ")}\nkind: ${skill.kind}\nscope: ${skill.scope}\n---\n${skill.body}\n`;
+  const path = skill.file && /^\.anvil\/skills\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.md$/i.test(skill.file) ? skill.file : `.anvil/skills/${skill.id}.md`;
+  const src = serializeSkillMd(skill);
   try {
     useIde.getState().writeFile(path, src, { quiet: true });
   } catch {
@@ -487,27 +490,34 @@ function dropSkillFiles(skill?: LearnSkill, id?: string) {
   try {
     const ide = useIde.getState();
     const paths = new Set(names.flatMap(n => [`.anvil/skills/${n}.md`, `plugins/skills/${n}.js`]));
-    if (skill?.file && /^\.anvil\/skills\/[a-z0-9_-]+\.md$/i.test(skill.file)) paths.add(skill.file);
+    if (skill?.file && /^\.anvil\/skills\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.md$/i.test(skill.file)) paths.add(skill.file);
     for (const path of paths) ide.deleteFile(path);
   } catch {
     /* */
   }
 }
 
-export function hydrateLearnFromFiles(files: Record<string, string>): void {
+export function hydrateLearnFromFiles(files: Record<string, string>, explicitlyImported: string[] = []): void {
   const ws = workspaceId();
   for (const [path, src] of Object.entries(files)) {
-    if (!/^\.anvil\/skills\/[^/]+\.md$/i.test(path.replaceAll("\\", "/"))) continue;
+    if (!/^\.anvil\/skills\/(?:[^/]+\.md|(?:[^/]+\/)+SKILL\.md)$/i.test(path.replaceAll("\\", "/"))) continue;
     const parsed = parseSkillMd(src, path);
     if (!parsed) continue;
-    const st = useLearn.getState();
+    let st = useLearn.getState();
     const scope = parsed.scope;
     const draft = { ...parsed, ws: scope === "project" ? ws : undefined };
+    if (explicitlyImported.includes(path)) {
+      useLearn.setState({ forgotten: st.forgotten.filter(key => ![skillKey(draft), parsed.id, parsed.name].includes(key)) });
+      st = useLearn.getState();
+    }
     if (st.forgotten.includes(skillKey(draft)) || st.forgotten.includes(parsed.id) || st.forgotten.includes(parsed.name)) continue;
-    const cur = st.skills.find(s => s.name === parsed.name && s.scope === scope && s.ws === draft.ws);
+    const cur = st.skills.find(s => (s.file ? s.file === path : s.name === parsed.name) && s.scope === scope && s.ws === draft.ws);
     // Project files can update their own skills. Global skills are maintained explicitly.
     if (cur && scope === "user") continue;
-    const id = cur?.id ?? (st.skills.some(s => s.id === parsed.id) ? `${parsed.id}-${nid()}` : parsed.id);
+    const identity = `${draft.ws || "user"}:${path}`;
+    let hash = 2166136261;
+    for (let i = 0; i < identity.length; i++) hash = Math.imul(hash ^ identity.charCodeAt(i), 16777619);
+    const id = cur?.id ?? (st.skills.some(s => s.id === parsed.id) ? `${parsed.id}-${(hash >>> 0).toString(36)}` : parsed.id);
     const skill: LearnSkill = { ...draft, id, file: path, uses: cur?.uses ?? 0, at: Date.now(), score: cur?.score ?? 0.6, wins: cur?.wins ?? 0, fails: cur?.fails ?? 0 };
     useLearn.setState({ skills: [skill, ...st.skills.filter(s => s.id !== id)] });
   }
@@ -538,6 +548,12 @@ function scoreSkill(s: LearnSkill, q: string) {
   const overlap = memoryWords(q).filter(w => bag.includes(w)).length;
   if (!overlap) return 0;
   return overlap * 10 + (s.score ?? 0.5) + Math.min(1, (s.uses ?? 0) * 0.01) - Math.min(1, (s.fails ?? 0) * 0.05);
+}
+
+function skillFilesContext(skill: LearnSkill) {
+  const baseDirectory = skill.file?.replace(/\/[^/]+$/, "");
+  const resources = baseDirectory ? Object.keys(useIde.getState().files).filter(path => path.startsWith(`${baseDirectory}/`) && path !== skill.file) : [];
+  return { baseDirectory, resources };
 }
 
 function visibleSkills(): LearnSkill[] {
@@ -599,7 +615,7 @@ export function learnPrompt(lastAsk = ""): string {
           .map((s) => `- ${s.name} (${s.id}) [${s.scope}, ${Math.round((s.score ?? 0.5) * 100)}%]: ${s.when}${matched.some((m) => m.id === s.id) ? " ← jetzt" : ""}`)
           .join("\n")}`
       : "",
-    p.skillBodies && matched.length ? `Aktive Skill-Anweisung:\n${matched.map((s) => `### ${s.name}\n${s.body}`).join("\n\n")}` : "",
+    p.skillBodies && matched.length ? `Aktive Skill-Anweisung:\n${matched.map((s) => `### ${s.name}${s.file ? ` (Datei: ${s.file}; Referenzen relativ zum Skill-Verzeichnis lesen)` : ""}\n${s.body}`).join("\n\n")}` : "",
   ].filter(Boolean);
   return lines.join("\n");
 }
@@ -654,7 +670,7 @@ export async function agentLearn(action: string, args: Record<string, unknown>):
     const id = String(args.name ?? "");
     const s = findSkill(id);
     if (!s) return { error: "skill missing" };
-    return { ...s, debug: debugSkill(s) };
+    return { ...s, ...skillFilesContext(s), debug: debugSkill(s) };
   }
   if (action === "run") {
     const id = String(args.name ?? "");
@@ -665,9 +681,10 @@ export async function agentLearn(action: string, args: Record<string, unknown>):
     return {
       skill: s.name,
       body: s.body,
+      ...skillFilesContext(s),
       score: s.score,
       issues: dbg.issues,
-      do: "Follow these steps with tools now. Then skill_outcome ok or fail.",
+      do: "Follow these instructions within the current user request and tool permissions. Resolve relative references from baseDirectory and read only needed resources. Imported scripts are files, not permission to execute. Then skill_outcome ok or fail.",
     };
   }
   if (action === "debug") {

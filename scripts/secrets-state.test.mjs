@@ -20,7 +20,7 @@ test("secret writes deduplicate, preserve failed migrations and report a redacte
   } });
   globalThis.document = new EventTarget();
   globalThis.fixtureSecretNotes = [];
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom",
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom",
     plugins: [{ name: "secret-diagnostic-sink", enforce: "pre", transform(_code, id) {
       if (id.endsWith("/src/lib/intern.ts")) return 'export function note(kind, message) { globalThis.fixtureSecretNotes.push({kind, message}); }';
     } }],

@@ -1,11 +1,25 @@
-; Runs in .onInit before the file copy. Built-in ExecWait — no extra NSIS plugins.
-!macro customInit
-  ExecWait "taskkill /IM Anvil.exe /F /T"
-  ExecWait '"$SYSDIR\cmd.exe" /c for /d %D in ("$TEMP\anvil-run-*") do @rd /s /q "%D"'
-  ExecWait '"$SYSDIR\cmd.exe" /c for /d %D in ("$TEMP\anvil-fmt-*") do @rd /s /q "%D"'
-  ExecWait '"$SYSDIR\cmd.exe" /c for /d %D in ("$TEMP\anvil-lint-*") do @rd /s /q "%D"'
-  ExecWait '"$SYSDIR\cmd.exe" /c for /d %D in ("$TEMP\anvil-dbg-*") do @rd /s /q "%D"'
-  ExecWait '"$SYSDIR\cmd.exe" /c for /d %D in ("$TEMP\anvil-tc-*") do @rd /s /q "%D"'
+; Override electron-builder's default close-then-force-kill path for BOTH
+; installation and removal. Only the app can safely resolve unsaved work.
+; nsProcess is bundled by electron-builder; 603 means no matching process.
+!macro customCheckAppRunning
+  ${Do}
+    nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
+    Pop $R0
+    ${If} $R0 == 603
+      ${ExitDo}
+    ${EndIf}
+    ${If} $R0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "Anvil konnte nicht sicher auf laufende Prozesse geprueft werden. Setup wurde ohne Aenderungen abgebrochen." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    IfSilent 0 +3
+      SetErrorLevel 2
+      Quit
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Anvil ist noch geoeffnet. Bitte dort die Arbeit speichern und Anvil schliessen. Danach auf Wiederholen klicken. Abbrechen laesst Anvil unveraendert." IDRETRY +3
+      SetErrorLevel 2
+      Quit
+  ${Loop}
 !macroend
 
 ; Build outputs belong to the user. Remove only packaged application files,
@@ -18,8 +32,11 @@
   Delete "$INSTDIR\chrome_100_percent.pak"
   Delete "$INSTDIR\chrome_200_percent.pak"
   Delete "$INSTDIR\d3dcompiler_47.dll"
+  Delete "$INSTDIR\dxcompiler.dll"
+  Delete "$INSTDIR\dxil.dll"
   Delete "$INSTDIR\ffmpeg.dll"
   Delete "$INSTDIR\icudtl.dat"
+  Delete "$INSTDIR\resources.pak"
   Delete "$INSTDIR\libEGL.dll"
   Delete "$INSTDIR\libGLESv2.dll"
   Delete "$INSTDIR\LICENSE.electron.txt"

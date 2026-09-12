@@ -19,6 +19,8 @@ import { t, useT } from "@/lib/i18n";
 
 import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { AgentPulse } from "./agent-pulse";
+import { finishedHarness } from "@/lib/chat-finalize";
+import { checkpointRestorePlan } from "@/lib/restore-plan";
 
 export function ThinkBlock({
   text,
@@ -216,6 +218,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
   const hasRound = Boolean(m.changes?.length);
   const hasRun = Boolean(run?.path || run?.running || run?.stdout || run?.stderr);
   const labelOf = (name: string) => stepLabel(name, locale);
+  const harness = live ? m.harness : finishedHarness(m.harness, m.plan, /^Stop(?:ped)?\b/.test(m.harness || ""), locale);
   if (!steps.length && !hasRun && !frames.length && !m.lastTests && !hasRound && !m.harness && !live) {
     if (fill) return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-bg px-2.5 py-2" />;
     return <HelperLaneBits />;
@@ -233,7 +236,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
               run?.running || work || live ? "text-fg" : run && !run.ok ? "text-danger" : run?.ok ? "text-ok" : "text-muted",
             )}
           >
-            {m.harness ? `${m.harness} · ` : ""}
+            {harness ? `${harness} · ` : ""}
             {run?.running
               ? `${t("trailRun")} ${Math.min(attempt, max)}/${max}${run.path ? ` · ${run.path}` : ""}`
               : hasRun
@@ -345,18 +348,22 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
   const t = useT();
   const [open, setOpen] = useState<string | null>(null);
   const [ask, setAsk] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const ck = useIde((s) => s.checkpoints.find((c) => c.id === m.checkpointId) ?? null);
   const now = useIde((s) => s.files);
+  const dirs = useIde((s) => s.dirs);
+  const en = useIde((s) => s.locale === "en");
+  const restorePlan = ck ? checkpointRestorePlan(ck, now, dirs) : null;
   const changes = m.changes ?? [];
   const plus = changes.reduce((n, c) => n + (c.add || 0), 0);
   const minus = changes.reduce((n, c) => n + (c.del || 0), 0);
-  const hasSnap = Boolean(ck && Object.keys(ck.files).length);
+  const hasSnap = Boolean(ck);
 
-  function restore() {
+  async function restore() {
     if (!m.checkpointId) return;
-    const ok = useIde.getState().restoreCheckpoint(m.checkpointId);
-    useIde.getState().setNotice(ok ? t("restored") : t("noSnapshot"));
-    setAsk(false);
+    setRestoring(true);
+    try { if (await useIde.getState().restoreCheckpoint(m.checkpointId)) setAsk(false); }
+    finally { setRestoring(false); }
   }
 
   return (
@@ -374,9 +381,9 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
         {!live && hasSnap ? (
           ask ? (
             <span className="flex flex-wrap items-center gap-2">
-              <span className="text-fg">{t("restoreAsk")}</span>
-              <button type="button" className="text-danger hover:underline" onClick={restore}>
-                {t("restoreRound")}
+              <span className="text-fg">{en ? "Apply and save the listed reversal?" : "Aufgeführte Rücknahme anwenden und speichern?"}</span>
+              <button type="button" disabled={restoring || Boolean(restorePlan?.conflicts.length)} className="text-danger hover:underline disabled:opacity-50" onClick={restore}>
+                {restoring ? (en ? "Restoring…" : "Wird zurückgenommen…") : t("restoreRound")}
               </button>
               <button type="button" className="hover:underline" onClick={() => setAsk(false)}>
                 {t("roundKeep")}
@@ -389,10 +396,18 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
           )
         ) : null}
       </div>
+      {ask && restorePlan ? <div className="my-2 max-h-52 overflow-auto rounded border border-border p-2 text-[11px]" aria-label={en ? "Restore preview" : "Vorschau der Rücknahme"}>
+        <p className="mb-1 text-muted">{en ? "Only this round’s changes. Later edits are protected. New files listed below will be deleted." : "Nur Änderungen dieser Runde. Spätere Bearbeitungen sind geschützt. Unten aufgeführte neue Dateien werden gelöscht."}</p>
+        {restorePlan.files.map((f) => <p key={f.path}><span className={f.after === null ? "text-danger" : "text-fg"}>{f.after === null ? (en ? "Delete" : "Löschen") : f.before === null ? (en ? "Recreate" : "Wiederherstellen") : (en ? "Restore content" : "Inhalt zurücksetzen")}</span>: <code>{f.path}</code></p>)}
+        {restorePlan.mkdir.map((p) => <p key={`+${p}`}>{en ? "Recreate folder" : "Ordner wiederherstellen"}: <code>{p}/</code></p>)}
+        {restorePlan.rmdir.map((p) => <p key={`-${p}`}>{en ? "Remove folder if empty" : "Ordner entfernen, falls leer"}: <code>{p}/</code></p>)}
+        {restorePlan.conflicts.map((p) => <p key={p} className="text-danger">{p}</p>)}
+        {!restorePlan.files.length && !restorePlan.mkdir.length && !restorePlan.rmdir.length && !restorePlan.conflicts.length ? <p>{en ? "Already restored; no files will change." : "Bereits zurückgenommen; keine Dateien werden geändert."}</p> : null}
+      </div> : null}
       {changes.slice(0, 32).map((c) => {
         const shown = open === c.path;
         const before = ck?.files[c.path] ?? "";
-        const after = c.kind === "del" ? "" : (now[c.path] ?? "");
+        const after = c.kind === "del" ? "" : (ck?.endFiles?.[c.path] ?? now[c.path] ?? "");
         return (
           <div key={c.path} className="mt-0.5">
             <button

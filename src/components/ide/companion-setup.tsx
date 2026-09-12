@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { EnginePathsSetup } from "./engine-paths";
 import { Button } from "@/components/ui/button";
 import { CopyMini } from "@/components/ui/copy-btn";
 import {
@@ -39,7 +40,7 @@ type Ping = {
   packages?: { home: string; toolchains: string; lsp: string };
 };
 
-export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boolean; probeOnMount?: boolean }) {
+export function CompanionSetup({ compact, probeOnMount = true, revealConnection = false }: { compact?: boolean; probeOnMount?: boolean; revealConnection?: boolean }) {
   const t = useT();
   const url = useIde((s) => s.companionUrl);
   const setUrl = useIde((s) => s.setCompanionUrl);
@@ -56,6 +57,7 @@ export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boo
   const [showTok, setShowTok] = useState(false);
   const [ping, setPing] = useState<Ping | null>(null);
   const [busy, setBusy] = useState(false);
+  const [connectionOpen, setConnectionOpen] = useState(false);
   const [pullId, setPullId] = useState("");
   const [checkId, setCheckId] = useState("");
   const [checkNote, setCheckNote] = useState<Record<string, string>>({});
@@ -72,6 +74,7 @@ export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boo
   const clearLspLog = useIde((s) => s.clearLspLog);
   const electron = Boolean(nativeHelper()?.companionEnsure);
   const port = portOf(url);
+  useEffect(() => { if (revealConnection || ping?.ok === false) setConnectionOpen(true); }, [revealConnection, ping?.ok]);
 
   useEffect(() => {
     if (!probeOnMount) return;
@@ -106,13 +109,16 @@ export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boo
   async function check(notice = true) {
     setBusy(true);
     try {
-      await holdCompanion();
+      await holdCompanion(useIde.getState().workspaceCwd, url || DEFAULT_COMPANION);
       const p = await companionPing(url || DEFAULT_COMPANION);
       setPing(p);
       if (p.packages?.home) setPkgPath(p.packages.home);
       else if (p.toolHome) setPkgPath(p.toolHome.replace(/[/\\]toolchains[/\\]?$/, ""));
-      const hit = useIde.getState().engineLink;
-      setEngineLink(hit ? { ...hit, ok: p.ok } : p.ok ? { label: "Companion", ok: true } : null);
+      const { primaryEngine } = await import("@/lib/engines");
+      const { engineReady } = await import("@/lib/engine-request");
+      const current = useIde.getState();
+      const hit = primaryEngine(current.files, current.dirs);
+      setEngineLink(hit ? { label: hit.label, ok: engineReady(hit, p) } : null);
       if (notice && !compact) setNotice(p.ok ? t("compOk") : p.error || t("compOff"));
       if (p.ok && !useIde.getState().mcpServers.some((s) => s.url.includes("7845"))) {
         setMcp([...useIde.getState().mcpServers, { id: newMcpId(), name: "Companion", url: DEFAULT_ENGINE_MCP, enabled: true }]);
@@ -240,6 +246,11 @@ export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boo
         <p className="py-2 text-xs text-muted">{t("compStartNative")}</p>
       )}
 
+      <div className="py-2">
+        <Button className="h-8" disabled={busy} onClick={() => void check(true)}>{t("compCheck")}</Button>
+      </div>
+      <details open={connectionOpen} onToggle={e => setConnectionOpen(e.currentTarget.open)} className="my-2 rounded-md border border-border p-3">
+        <summary className="cursor-pointer text-xs text-muted">{t("compConnectionDetails")}</summary>
       <Field label={t("compUrl")} hint={t("compUrlH")}>
         <input
           value={url}
@@ -274,9 +285,6 @@ export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boo
         </div>
       </Field>
       <div className="flex flex-wrap gap-1.5 py-2">
-        <Button className="h-8" disabled={busy} onClick={() => void check(true)}>
-          {t("compCheck")}
-        </Button>
         <Button
           className="h-8"
           variant="quiet"
@@ -297,7 +305,9 @@ export function CompanionSetup({ compact, probeOnMount = true }: { compact?: boo
           {t("pair")}
         </Button>
       </div>
+      </details>
 
+      <EnginePathsSetup key={url} base={url || DEFAULT_COMPANION} />
       <p className="mt-3 text-sm text-fg">{t("pkgHome")}</p>
       <p className="mt-0.5 text-xs text-muted">{t("pkgHomeH")}</p>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">

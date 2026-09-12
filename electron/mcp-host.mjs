@@ -3,12 +3,17 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 
 export function mcpConfig(input) {
-  if (!input || typeof input.id !== "string" || !/^[\w-]{1,120}$/.test(input.id))
+  if (!input || typeof input.id !== "string" || !/^[\w:-]{1,120}$/.test(input.id))
     throw new Error("Ungültige MCP-Server-Id.");
   const config = {
     ...input,
     timeoutMs: Math.min(600_000, Math.max(8000, Number(input.timeoutMs) || 120_000)),
   };
+  if (
+    config.connectionToken != null &&
+    (typeof config.connectionToken !== "string" || !/^[\w-]{1,80}$/.test(config.connectionToken))
+  )
+    throw new Error("Ungültige MCP-Verbindungsgeneration.");
   if (config.transport === "stdio") {
     if (
       typeof config.command !== "string" ||
@@ -69,6 +74,14 @@ export class McpHost {
     const session = this.sessions.get(id);
     if (!session) return;
     this.sessions.delete(id);
+    // Snapshot only for best-effort remote session deletion before revoking the
+    // provider's connection signal; no refresh or new credential write occurs.
+    let closingTokens;
+    try {
+      closingTokens = session.provider?.tokens();
+    } catch {
+      /* already logged out */
+    }
     session.controller.abort();
     // Session deletion needs its own short-lived signal: the connection signal
     // has already been canceled. Keep authentication, including LAN/OAuth.
@@ -80,7 +93,7 @@ export class McpHost {
           "mcp-session-id": sid,
           "mcp-protocol-version": session.client.getNegotiatedProtocolVersion(),
         };
-        const tokens = await session.provider?.tokens();
+        const tokens = await closingTokens;
         if (tokens?.access_token) headers.authorization = `Bearer ${tokens.access_token}`;
         const response = await mcpFetch(session.config.url, {
           method: "DELETE",
@@ -130,7 +143,10 @@ export class McpHost {
     }
     if (!session) {
       const controller = new AbortController();
-      const changed = () => this.emit({ server: config.id, kind: "catalog" });
+      const changed = () => {
+        if (this.sessions.get(config.id)?.controller !== controller) return;
+        this.emit({ server: config.id, kind: "catalog", connectionToken: config.connectionToken });
+      };
       const client = new Client(
         { name: "anvil", version: this.version },
         {
@@ -161,7 +177,7 @@ export class McpHost {
         if (this.sessions.get(config.id) !== owned) return;
         this.sessions.delete(config.id);
         controller.abort();
-        this.emit({ server: config.id, kind: "closed" });
+        this.emit({ server: config.id, kind: "closed", connectionToken: config.connectionToken });
       };
       client.fallbackNotificationHandler = async (note) => {
         if (owned.outputs.size === 1) for (const emit of owned.outputs) emit?.(note.params || {});
@@ -173,7 +189,10 @@ export class McpHost {
         };
         signal?.addEventListener("abort", abort, { once: true });
         try {
-          const provider = config.auth === "oauth" ? await this.oauth?.provider(config) : undefined;
+          const provider =
+            config.auth === "oauth"
+              ? await this.oauth?.provider(config, undefined, controller.signal)
+              : undefined;
           owned.provider = provider;
           controller.signal.throwIfAborted();
           signal?.throwIfAborted();

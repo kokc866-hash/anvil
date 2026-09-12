@@ -26,6 +26,14 @@ import { Button } from "@/components/ui/button";
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { isMcpService } from "@/lib/mcp-service-policy";
+import { disconnectService } from "@/lib/mcp-services";
+import {
+  GITHUB_READ_PACKAGE,
+  createGithubReadPackage,
+  mcpPackage,
+  assertMcpPackageProbeResult,
+} from "@/lib/mcp-packages";
 
 const field =
   "mt-1 h-7 w-full rounded-md border border-border bg-bg px-2 font-mono text-[11px] text-fg";
@@ -73,10 +81,49 @@ function ServerFields({
     saveSecrets({ keys: next });
     setKeys(next);
     void mcpClose(s);
+    if (mcpPackage(s)) patch({});
   }
   useEffect(() => {
     setArgs(JSON.stringify(s.args || []));
   }, [s.args]);
+  if (isMcpService(s)) return <p className="mt-2 break-words text-[11px] text-muted">Anmeldung und Werkzeugauswahl unter Erweiterungen → Dienste verwalten. {s.allowedTools?.length || 0} Werkzeuge freigegeben. {s.url}</p>;
+  if (mcpPackage(s))
+    return (
+      <fieldset disabled={busy} className="mt-2 text-[11px] text-muted">
+        <p>
+          Vorlage v1 · Anbieter: GitHub. Der gehostete Server wird von GitHub aktualisiert; seine
+          Version ist nicht festgesetzt.
+        </p>
+        <p className="mt-1">
+          Freigegeben: Dateien, Zweige und Commitlisten lesen. Neue Werkzeuge und Ressourcen bleiben
+          gesperrt. Anfragen gehen an GitHub; gelesene Inhalte können als Kontext an das gewählte
+          Modell gelangen.
+        </p>
+        <p className="mt-1">
+          Voraussetzung: Internet und ein GitHub-Token mit Lesezugriff auf die gewünschten
+          Repository-Inhalte. Kein zusätzliches Programm. Organisationsrichtlinien können den
+          Zugriff begrenzen.
+        </p>
+        <input
+          type="password"
+          aria-label="GitHub-Lesepaket Token"
+          autoComplete="off"
+          className={field}
+          value={keys[`mcp:${s.id}`] || ""}
+          placeholder="GitHub-Token für dieses Lesepaket"
+          onChange={(e) => key(`mcp:${s.id}`, e.target.value)}
+        />
+        <a
+          href={GITHUB_READ_PACKAGE.source}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-block underline"
+        >
+          Anbieter und Einrichtung
+        </a>
+        <p className="mt-1 break-all text-[10px]">{GITHUB_READ_PACKAGE.url}</p>
+      </fieldset>
+    );
   return (
     <fieldset disabled={busy}>
       <select
@@ -253,6 +300,11 @@ export function McpPane() {
     [argsText, setArgsText] = useState("{}");
   const [resourceUri, setResourceUri] = useState("");
   const [query, setQuery] = useState("");
+  const [packageProbe, setPackageProbe] = useState<{
+    id: string;
+    config: string;
+    at: number;
+  } | null>(null);
   const current = servers.find((s) => s.id === active && s.enabled) || servers.find(mcpConfigured);
   const picked = decodeMcpPick(pick);
   const pickedTool = tools.find(
@@ -334,6 +386,18 @@ export function McpPane() {
   useEffect(() => {
     setResourceUri("");
   }, [current?.id]);
+  useEffect(() => {
+    setPackageProbe(null);
+  }, [servers]);
+  useEffect(() => {
+    const invalidate = () => setPackageProbe(null);
+    window.addEventListener("anvil-secrets-changed", invalidate);
+    window.addEventListener("anvil-secret-status", invalidate);
+    return () => {
+      window.removeEventListener("anvil-secrets-changed", invalidate);
+      window.removeEventListener("anvil-secret-status", invalidate);
+    };
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
@@ -399,6 +463,32 @@ export function McpPane() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
+        <details className="border-b border-border px-3 py-2 text-[11px] text-muted">
+          <summary className="cursor-pointer text-xs text-fg">Aufgabenpakete</summary>
+          <p className="mt-2 font-medium text-fg">{GITHUB_READ_PACKAGE.name}</p>
+          <p className="mt-1">
+            Eine externe Projektquelle untersuchen: Dateien, Zweige und Commitlisten lesen. Vorlage
+            v1, GitHub-Token erforderlich. Hinzufügen speichert die Verbindung deaktiviert. Kein
+            Download und kein automatischer Aufruf.
+          </p>
+          <Button
+            variant="quiet"
+            className="mt-2 h-7 px-2 text-[11px]"
+            disabled={Boolean(busy) || servers.some((s) => s.id === GITHUB_READ_PACKAGE.id)}
+            onClick={() => {
+              const currentServers = useIde.getState().mcpServers;
+              if (currentServers.some((s) => s.id === GITHUB_READ_PACKAGE.id)) return;
+              const server = createGithubReadPackage();
+              server.name = uniqueMcpName(currentServers, server.name, server.id);
+              setServers([...currentServers, server]);
+              notice("Lesepaket hinzugefügt. Token eintragen, aktivieren und Leseprobe starten.");
+            }}
+          >
+            {servers.some((s) => s.id === GITHUB_READ_PACKAGE.id)
+              ? "Lesepaket hinzugefügt"
+              : "Lesepaket hinzufügen"}
+          </Button>
+        </details>
         {servers.map((s) => (
           <div
             key={s.id}
@@ -409,6 +499,7 @@ export function McpPane() {
                 type="checkbox"
                 aria-label={`${s.name} aktiviert`}
                 checked={s.enabled}
+                disabled={Boolean(busy)}
                 onChange={(e) =>
                   setServers(
                     servers.map((x) => (x.id === s.id ? { ...x, enabled: e.target.checked } : x)),
@@ -456,7 +547,23 @@ export function McpPane() {
               <button
                 type="button"
                 className="text-[10px] text-danger"
-                onClick={() => setServers(servers.filter((x) => x.id !== s.id))}
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  if (isMcpService(s)) {
+                    perform("Dienst entfernen", () => disconnectService(s.id, true));
+                    return;
+                  }
+                  void mcpClose(s);
+                  if (mcpPackage(s))
+                    saveSecrets({
+                      keys: {
+                        [`mcp:${s.id}`]: "",
+                        [`mcp-target:${s.id}`]: "",
+                        [`mcp-env:${s.id}`]: "",
+                      },
+                    });
+                  setServers(useIde.getState().mcpServers.filter((x) => x.id !== s.id));
+                }}
               >
                 {t("remove")}
               </button>
@@ -476,6 +583,54 @@ export function McpPane() {
               }
               perform={perform}
             />
+            {mcpPackage(s) ? (
+              <div className="mt-2 text-[11px] text-muted">
+                <p>
+                  Die Leseprobe ruft nur die öffentliche README von github/github-mcp-server ab. Sie
+                  bestätigt keinen Zugriff auf private Projekte.
+                </p>
+                <Button
+                  variant="quiet"
+                  className="mt-1 h-7 px-2 text-[11px]"
+                  disabled={Boolean(busy) || !s.enabled}
+                  onClick={() =>
+                    perform("Leseprobe", async (signal) => {
+                      setPackageProbe(null);
+                      if (!loadSecrets().keys[`mcp:${s.id}`]?.trim())
+                        throw new Error(
+                          "Zuerst einen GitHub-Token für dieses Lesepaket eintragen.",
+                        );
+                      await mcpProbe(s, servers, signal);
+                      const raw = await mcpCall(
+                        servers,
+                        s.id,
+                        "get_file_contents",
+                        { ...GITHUB_READ_PACKAGE.probe },
+                        undefined,
+                        { signal },
+                      );
+                      signal.throwIfAborted();
+                      show(s.id, raw);
+                      assertMcpPackageProbeResult(raw);
+                      setPackageProbe({ id: s.id, config: JSON.stringify(s), at: Date.now() });
+                      notice("Leseprobe erfolgreich: Der Dateiabruf hat Inhalt geliefert.");
+                    })
+                  }
+                >
+                  Öffentliche README lesen
+                </Button>
+                {packageProbe?.id === s.id &&
+                packageProbe.config === JSON.stringify(s) &&
+                ready.has(s.id) ? (
+                  <p role="status" className="mt-1 text-fg">
+                    Leseprobe erfolgreich · {new Date(packageProbe.at).toLocaleTimeString()} ·
+                    öffentliche README
+                  </p>
+                ) : (
+                  <p className="mt-1">Lesezugriff noch nicht mit dieser Konfiguration bestätigt.</p>
+                )}
+              </div>
+            ) : null}
             {mcpListError(s.id) ? (
               <p className="mt-1 break-words text-[10px] text-danger">{mcpListError(s.id)}</p>
             ) : null}
@@ -619,15 +774,13 @@ export function McpPane() {
                   signal.throwIfAborted();
                   show(sid, out);
                   const rec = out as { isError?: boolean; text?: string };
-                  useIde
-                    .getState()
-                    .pushMcpLog({
-                      at: started,
-                      server: sid,
-                      name: pickedTool.name,
-                      ok: !rec?.isError,
-                      detail: String(rec?.text || "Ergebnis empfangen").slice(0, 400),
-                    });
+                  useIde.getState().pushMcpLog({
+                    at: started,
+                    server: sid,
+                    name: pickedTool.name,
+                    ok: !rec?.isError,
+                    detail: String(rec?.text || "Ergebnis empfangen").slice(0, 400),
+                  });
                 })
               }
             >

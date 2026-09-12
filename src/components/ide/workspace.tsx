@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityBar } from "./activity-bar";
+import { HelpGuide } from "./help-guide";
+import { useHelpTour } from "@/lib/help-guide";
 import { FileTree } from "./file-tree";
 import { EditorPane } from "./editor-pane";
 import { ChatPane } from "./chat-pane";
@@ -26,7 +28,7 @@ import { hasOsFiles, importDropped } from "@/lib/dnd";
 import { restoreLocations, loadSlotAll, hasLocation } from "@/lib/disk";
 import { focusOutputWindow, openOutputWindow } from "@/lib/output-window";
 import { openRunWindow } from "@/lib/run-window";
-import { DEMO_PATHS, SEED_FILES } from "@/lib/seed-files";
+import { DEMO_PATHS, withoutStaleSeedFiles } from "@/lib/seed-files";
 import { loadSecrets, keyForProvider } from "@/lib/secrets";
 import { useLearn } from "@/lib/learn";
 import { matchKey, typingInField, KEY_IN_FIELD } from "@/lib/keymap";
@@ -134,7 +136,9 @@ export function Workspace() {
     void Promise.resolve(done).then(() => {
       const files = { ...useIde.getState().files };
       for (const p of DEMO_PATHS) delete files[p];
-      const merged = { ...SEED_FILES, ...files };
+      // Fresh workspaces already receive defaults in the store. Rehydration
+      // must preserve an existing project's file set, including an empty one.
+      const merged = files;
       for (const p of DEMO_PATHS) delete merged[p];
       const openPaths = useIde.getState().openPaths.filter((p) => p in merged && !DEMO_PATHS.includes(p));
       const current = useIde.getState().activePath;
@@ -182,8 +186,14 @@ export function Workspace() {
         if (tok) void import("@/lib/companion").then((c) => c.setCompanionToken(tok));
       });
       void restoreLocations().then(async (names) => {
+        const resumeRestore = async () => {
+          const pending = useIde.getState().checkpoints.find((c) => c.restoreIntent && (!c.workspace || c.workspace === (useIde.getState().workspaceCwd || useIde.getState().memoryWorkspace)));
+          if (pending) await useIde.getState().restoreCheckpoint(pending.id);
+        };
         const st = useIde.getState();
-        st.setDiskName(names.workspace);
+        st.setDiskName(st.workspaceCwd.trim()
+          ? st.workspaceCwd.replace(/\\/g, "/").split("/").filter(Boolean).pop() || st.workspaceCwd
+          : names.workspace);
         st.setBackupName(names.backup);
         const cwd = st.workspaceCwd?.trim();
         if (cwd) {
@@ -195,7 +205,7 @@ export function Workspace() {
             if (tree.ok && tree.files && st.workspaceEpoch === useIde.getState().workspaceEpoch && cwd === useIde.getState().workspaceCwd) {
               const { overlayDiskTree } = await import("@/lib/ws-skip");
               const cur = useIde.getState();
-              const merged = overlayDiskTree(tree.files, cur.files, cur.dirty);
+              const merged = overlayDiskTree(tree.files, withoutStaleSeedFiles(cur.files, tree.files, cur.dirty), cur.dirty);
               st.applyFiles(merged, tree.dirs, { keepDirty: true });
               void import("@/lib/disk-sync").then((d) => { if (cur.workspaceEpoch === useIde.getState().workspaceEpoch) d.noteDiskContents(tree.files!); });
               if (tree.skipped) st.setNotice(`${tree.n} Dateien, ${tree.skipped} übersprungen (Platten-Stand)`);
@@ -204,6 +214,7 @@ export function Workspace() {
           } catch {
             /* companion down — keep persisted cache */
           }
+          await resumeRestore();
           void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
           return;
         }
@@ -213,12 +224,13 @@ export function Workspace() {
             const { overlayDiskTree } = await import("@/lib/ws-skip");
             const cur = useIde.getState();
             if (st.workspaceEpoch !== cur.workspaceEpoch) return;
-            st.applyFiles(overlayDiskTree(pack.files, cur.files, cur.dirty), pack.dirs, { keepDirty: true });
+            st.applyFiles(overlayDiskTree(pack.files, withoutStaleSeedFiles(cur.files, pack.files, cur.dirty), cur.dirty), pack.dirs, { keepDirty: true });
             void import("@/lib/disk-sync").then((d) => { if (cur.workspaceEpoch === useIde.getState().workspaceEpoch) d.noteDiskContents(pack.files); });
           } catch {
             st.setNotice("Workspace-Ordner in Einstellungen → Speicher erneut erlauben");
           }
         }
+        await resumeRestore();
         void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
       });
       stopSync = startIdeSync();
@@ -352,6 +364,7 @@ export function Workspace() {
   useEffect(() => {
     async function runActive() { await import("@/lib/editor-run").then((r) => r.runFromEditor()); }
     function onKey(e: KeyboardEvent) {
+      if (useHelpTour.getState().step !== null || (e.key === "Escape" && document.querySelector("[data-help-card]"))) return;
       if ((window as Window & { __anvilBindKey?: boolean }).__anvilBindKey) return;
       const st = useIde.getState();
       if (e.key === "Escape") {
@@ -843,6 +856,7 @@ export function Workspace() {
         </div>
       ) : null}
       <CommandPalette />
+      <HelpGuide />
       {starterOpen ? (
         <div className="ui-overlay absolute inset-0 z-50 flex items-center justify-center bg-bg/70 p-4">
           <button type="button" className="absolute inset-0" aria-label="close" onClick={() => setStarterOpen(false)} />

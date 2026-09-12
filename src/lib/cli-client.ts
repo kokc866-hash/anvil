@@ -1,6 +1,7 @@
 import { agentBeat, withAgentTimeout, AgentAbortError } from "./abort";
 import { cliPrompt, parseCliChoice, type CliKind } from "./cli-protocol";
 import type { LlmChoice } from "./agent-core";
+import type { ThinkingMode } from "./llm-options";
 export { CLI_PROVIDERS, cliKindFor, type CliKind } from "./cli-protocol";
 
 export type CliStatus = {
@@ -10,7 +11,7 @@ export type CliStatus = {
   version: string;
 };
 type Reply = { ok: true; value: unknown } | { ok: false; error: string };
-type Request = { id: string; kind: CliKind; model?: string; prompt?: string; timeoutMs?: number };
+type Request = { id: string; kind: CliKind; model?: string; prompt?: string; timeoutMs?: number; thinking?: ThinkingMode };
 type Native = {
   cliProbe: (request: Request) => Promise<Reply>;
   cliLogin: (request: Request) => Promise<Reply>;
@@ -82,10 +83,11 @@ export async function completeViaCli(
   tools: { function: { name: string } }[],
   timeoutMs = 0,
   onDelta?: (text: string, kind?: "text" | "think") => void,
+  thinking: ThinkingMode = "auto",
 ): Promise<LlmChoice> {
   const raw = await invoke(
     "cliRun",
-    { kind, model, prompt: cliPrompt(messages, tools), timeoutMs },
+    { kind, model, prompt: cliPrompt(messages, tools), timeoutMs, thinking },
     withAgentTimeout(0),
   );
   const choice = parseCliChoice(

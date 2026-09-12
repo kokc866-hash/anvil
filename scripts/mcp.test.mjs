@@ -89,7 +89,7 @@ test("MCP catalog lifecycle, scoped calls and cancellation", async (t) => {
     configFile: false,
     root: process.cwd(),
     resolve: { alias: { "@": path.resolve("src") } },
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, watch: null },
     appType: "custom",
   });
   t.after(() => vite.close());

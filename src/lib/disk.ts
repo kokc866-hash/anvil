@@ -284,6 +284,43 @@ export async function removeDiskPath(path: string, target = diskWorkspaceHandle(
   }
 }
 
+/** Exact-file compare-and-delete; no recursive deletion of unknown folder contents. */
+export async function restoreDiskPlan(plan: import("./restore-plan").RestoreDiskPlan, target: FileSystemDirectoryHandle): Promise<string[]> {
+  const actual = async (path: string): Promise<Uint8Array | null> => {
+    try { const loc = await dirFor(path, false, target); return loc ? new Uint8Array(await (await (await loc.dir.getFileHandle(loc.name)).getFile()).arrayBuffer()) : null; }
+    catch (e) { if ((e as DOMException).name === "NotFoundError") return null; throw e; }
+  };
+  const matches = (a: Uint8Array | null, b: string | null) => a === null ? b === null : b !== null && sameBytes(a, fileBytes(b));
+  for (const f of plan.files) {
+    if (!f.path || f.path.split("/").some((p) => !p || p === "." || p === "..") || /[:\\]/.test(f.path)) throw new Error("Pfad ungültig.");
+    const current = await actual(f.path);
+    if (!matches(current, f.expected) && !matches(current, f.after)) throw new Error(`Datei extern geändert: ${f.path}. Rücknahme abgebrochen.`);
+  }
+  for (const p of plan.mkdir) await mkdirDisk(p, target);
+  for (const f of plan.files) {
+    if (f.after !== null) await writeDiskFile(f.path, f.after, target, f.expected);
+    else {
+      const current = await actual(f.path);
+      if (current === null) continue;
+      if (!matches(current, f.expected)) throw new Error(`Datei extern geändert: ${f.path}. Rücknahme abgebrochen.`);
+      const loc = await dirFor(f.path, false, target);
+      if (loc) await loc.dir.removeEntry(loc.name);
+    }
+  }
+  const removed: string[] = [];
+  for (const p of plan.rmdir) {
+    try {
+      const loc = await dirFor(p, false, target);
+      if (!loc) continue;
+      const directory = await loc.dir.getDirectoryHandle(loc.name);
+      let empty = true;
+      for await (const _ of (directory as DirHandle).entries()) { empty = false; break; }
+      if (empty) { await loc.dir.removeEntry(loc.name); removed.push(p); }
+    } catch (e) { if ((e as DOMException).name === "NotFoundError") removed.push(p); else throw e; }
+  }
+  return removed;
+}
+
 type ReadAcc = { n: number; bytes: number; skipped: number };
 
 const TEXT_OK =

@@ -25,10 +25,11 @@ type Props = {
   kbd?: string;
   side?: TipSide;
   delay?: number;
+  disabled?: boolean;
   children: ReactElement;
 };
 
-export function Tip({ label, kbd, side = "bottom", delay = 280, children }: Props) {
+export function Tip({ label, kbd, side = "bottom", delay = 280, disabled = false, children }: Props) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const t = useRef(0);
   const tooltip = useRef<HTMLDivElement>(null);
@@ -40,7 +41,7 @@ export function Tip({ label, kbd, side = "bottom", delay = 280, children }: Prop
   }, []);
 
   function show(el: HTMLElement) {
-    if (!el.isConnected) return;
+    if (disabled || !el.isConnected) return;
     const r = el.getBoundingClientRect();
     const pad = 8;
     let x = r.left + r.width / 2;
@@ -59,6 +60,7 @@ export function Tip({ label, kbd, side = "bottom", delay = 280, children }: Prop
   }
 
   useEffect(() => () => window.clearTimeout(t.current), []);
+  useEffect(() => { if (disabled) hide(); }, [disabled, hide]);
 
   // Measure the actual text, including long tool/file names, before painting.
   useLayoutEffect(() => {

@@ -15,7 +15,7 @@ test("settings backups, reset and model changes preserve connection and project 
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url) => { requests.push(String(url)); throw new Error("No network in settings fixture"); };
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
   t.after(async () => {
     const { flushPersistence } = await server.ssrLoadModule("/src/lib/persist-storage.ts");
     const { flushSecrets } = await server.ssrLoadModule("/src/lib/secrets.ts");
@@ -38,10 +38,12 @@ test("settings backups, reset and model changes preserve connection and project 
   const { exportSettingsPack, applySettingsPack, resetAllSettings, resetSettingsCategory } = await server.ssrLoadModule("/src/lib/settings-io.ts");
   const s = useIde.getState();
   const clone = (v) => JSON.parse(JSON.stringify(v));
+  assert.deepEqual(s.helpPreferences, { tips: false, pointer: true, delay: 900 });
+  s.setHelpPreferences({ tips: true, pointer: false, delay: 1800 });
   s.setLlmProvider("anthropic", "abo");
   s.setLlmApiKey("fixture-anthropic-secret");
   s.setLlmModel("claude-sonnet-4-5"); s.setLlmContextAuto(false); s.setLlmContext(8192);
-  s.setLlmThinking("high"); s.setLlmTemperature(0.7); s.setLlmMaxOut(4096);
+  s.setLlmThinking("max"); s.setLlmTemperature(0.7); s.setLlmMaxOut(4096);
   s.saveLlmProfile("Saved CLI");
   useIde.setState({ netCompiler: false, trailThinkH: 312, sidebarWidth: 210 });
   useBrain.setState({ autoLoad: true, autoUpdate: false, autoProfile: false });
@@ -52,6 +54,9 @@ test("settings backups, reset and model changes preserve connection and project 
   await flushPersistence().catch(assertNoIndexedDb);
   assert.equal(JSON.parse(values.get("anvil-llm")).llmAuthMode, "abo", "Recovery snapshot also retains CLI mode");
   assert.equal(backup.ide.llmAuthMode, "abo");
+  assert.equal(backup.ide.llmThinking, "max");
+  assert.deepEqual(backup.ide.helpPreferences, { tips: true, pointer: false, delay: 1800 });
+  s.setHelpPreferences({ tips: false, pointer: true, delay: 400 });
   assert.ok(backup.ide.llmSlots["anthropic:abo"]);
   assert.equal(JSON.stringify(backup).includes("fixture-anthropic-secret"), false);
   s.setLlmProvider("ollama", "key"); s.setLlmApiKey("fixture-local-secret");
@@ -59,6 +64,8 @@ test("settings backups, reset and model changes preserve connection and project 
   const observed = [];
   const unsubscribe = useIde.subscribe((state) => observed.push([state.llmProvider, state.llmAuthMode, state.llmApiKey]));
   applySettingsPack(backup); unsubscribe();
+  assert.deepEqual(useIde.getState().helpPreferences, { tips: true, pointer: false, delay: 1800 });
+  assert.equal(useIde.getState().llmThinking, "max");
   assert.equal(useIde.getState().llmAuthMode, "abo");
   assert.equal(useIde.getState().llmApiKey, "fixture-anthropic-secret");
   assert.ok(observed.every(([provider, , key]) => provider !== "anthropic" || key === "fixture-anthropic-secret"));
@@ -73,6 +80,7 @@ test("settings backups, reset and model changes preserve connection and project 
   for (const invalid of [
     { ide: { fontSize: 18, llmProfiles: null } },
     { ide: { fontSize: -100 } },
+    { ide: { helpPreferences: { tips: true, pointer: true, delay: -1 } } },
     { ide: { mcpServers: [{ id: "bad" }] } },
     { ide: { llmProvider: "unknown" } },
     { ide: { llmContext: 0 } },
@@ -115,6 +123,7 @@ test("settings backups, reset and model changes preserve connection and project 
   assert.equal(useIde.getState().trailWidth, 480, "Section reset leaves other categories alone");
   assert.equal(useIde.getState().llmProvider, "anthropic");
   resetAllSettings();
+  assert.deepEqual(useIde.getState().helpPreferences, { tips: false, pointer: true, delay: 900 });
   assert.deepEqual(useIde.getState().files, files);
   assert.deepEqual(clone(useLearn.getState().facts), facts);
   assert.deepEqual(clone(useIde.getState().llmProfiles), profiles);

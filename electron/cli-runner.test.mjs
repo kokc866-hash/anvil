@@ -1,7 +1,40 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cliEnvironment, completionArgs, parseCliOutput, runProcess } from "./cli-runner.mjs";
+import { cliEnvironment, completionArgs, completionEnvironment, parseCliOutput, runProcess } from "./cli-runner.mjs";
 const node = { file: process.execPath, args: [] };
+
+test("Thinking reaches each CLI as a per-request argument", () => {
+  assert.ok(completionArgs("codex", "gpt-5.6-terra", ".", "max").includes('model_reasoning_effort="max"'));
+  const claude = completionArgs("claude", "claude-fable-5", ".", "xhigh");
+  assert.equal(claude[claude.indexOf("--effort") + 1], "xhigh");
+  assert.ok(completionArgs("copilot", "claude-sonnet-5", ".", "max").includes("--effort=max"));
+});
+
+test("Auto preserves CLI defaults; unsupported or injected levels cannot become flags", () => {
+  for (const [kind, model] of [["codex", "gpt-5.5"], ["claude", "claude-fable-5"], ["copilot", "claude-sonnet-5"]]) {
+    const args = completionArgs(kind, model, ".", "auto");
+    assert.equal(args.some(v => /effort/.test(v)), false);
+    assert.throws(() => completionArgs(kind, model, ".", 'high" --allow-all'), /Thinking/);
+  }
+  assert.deepEqual(completionArgs("codex", "gpt-5.5", ".", "max"), completionArgs("codex", "gpt-5.5", ".", "auto"));
+  assert.deepEqual(completionArgs("claude", "claude-fable-5", ".", "off"), completionArgs("claude", "claude-fable-5", ".", "auto"));
+});
+
+test("Claude thinking overrides only request-local settings, including legacy budgets", () => {
+  const base = { PATH: "keep", MAX_THINKING_TOKENS: "0", CLAUDE_CODE_EFFORT_LEVEL: "low", CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", ANTHROPIC_API_KEY: "must-strip" };
+  const env = completionEnvironment("claude", "claude-opus-5", "max", base);
+  assert.equal(env.PATH, "keep");
+  assert.equal(env.MAX_THINKING_TOKENS, undefined);
+  assert.equal(env.CLAUDE_CODE_EFFORT_LEVEL, undefined);
+  assert.equal(env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING, undefined);
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(base.MAX_THINKING_TOKENS, "0");
+  assert.equal(completionEnvironment("claude", "claude-opus-5", "auto", base).CLAUDE_CODE_EFFORT_LEVEL, "low");
+  assert.equal(completionEnvironment("claude", "claude-sonnet-4-5", "high", base).MAX_THINKING_TOKENS, "32768");
+  assert.equal(completionEnvironment("claude", "claude-opus-5", "off", base).MAX_THINKING_TOKENS, "0");
+  const args = completionArgs("claude", "claude-opus-5", ".", "off");
+  assert.deepEqual(JSON.parse(args[args.indexOf("--settings") + 1]), { disableAllHooks: true, alwaysThinkingEnabled: false });
+});
 
 test("CLI input is delivered literally via stdin without a shell", async () => {
   const input = 'Quotes " and $(echo injected) `echo injected`\nUnicode: Grüße';

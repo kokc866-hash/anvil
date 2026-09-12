@@ -1,0 +1,212 @@
+// Real production Electron UI; no inference request, no normal user profile.
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { createServer } from "node:net";
+import { spawn } from "node:child_process";
+import { _electron } from "playwright";
+const root = process.cwd(), output = path.resolve("artifacts/product-experience");
+await mkdir(output, { recursive: true });
+const profile = await mkdtemp(path.resolve("data/product-experience-"));
+const socket = createServer(); await new Promise(r => socket.listen(0, "127.0.0.1", r));
+const port = socket.address().port; await new Promise(r => socket.close(r));
+const env = { ...process.env, ANVIL_PORT: String(port), ANVIL_COMPANION_PORT: "7845", ANVIL_QA_USER_DATA: profile, ANVIL_HOME: path.join(profile, "packages") }; delete env.ELECTRON_RUN_AS_NODE;
+const server = spawn(process.execPath, [path.join(root, ".output/server/index.mjs")], { cwd: root, windowsHide: true, env: { ...env, PORT: String(port), NITRO_PORT: String(port), HOST: "127.0.0.1", NITRO_HOST: "127.0.0.1" }, stdio: "ignore" });
+let app, page; const errors = [], checks = [];
+try {
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break; } catch {} await new Promise(r => setTimeout(r, 250)); }
+  app = await _electron.launch({ executablePath: path.join(root, "node_modules/electron/dist/electron.exe"), args: [`--user-data-dir=${profile}`, root], env, timeout: 45000 });
+  for (let i = 0; i < 360; i++) { page = app.windows().find(p => p.url() === `http://127.0.0.1:${port}/`); if (page) break; await new Promise(r => setTimeout(r, 125)); }
+  assert.ok(page); page.setDefaultTimeout(20000); page.on("pageerror", e => errors.push(e.message));
+  await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("/"))?.maximize());
+  await page.evaluate(() => window.__anvilIde.setState({ setupDone: false, autoUpdate: false, autoSaveDisk: false, formatOnSave: false, companionKeep: true, llmBaseUrl: "http://127.0.0.1:1/v1", files: { "my-project.txt": "keep my project" } }));
+  await page.getByRole("button", { name: "Beispiel ohne KI starten", exact: true }).waitFor();
+  const aiSetup = page.locator("summary").filter({ hasText: "KI für Chat und Änderungen verbinden" });
+  assert.equal(await page.getByRole("button", { name: "Verbindung testen", exact: true }).isVisible(), false);
+  await aiSetup.click();
+  await page.getByRole("button", { name: "Verbindung testen", exact: true }).waitFor();
+  await aiSetup.click();
+  assert.equal(await page.getByRole("button", { name: "Verbindung testen", exact: true }).isVisible(), false);
+  await page.screenshot({ path: path.join(output, "first-success.png") });
+  await page.getByRole("button", { name: "Beispiel ohne KI starten", exact: true }).click();
+  await page.waitForFunction(() => window.__anvilIde.getState().files["anvil-erster-test.html"]);
+  assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["my-project.txt"]), "keep my project");
+  let runPage;
+  for (let i = 0; i < 150; i++) { runPage = app.windows().find(p => p !== page && /run/i.test(p.url())); if (runPage) break; await new Promise(r => setTimeout(r, 100)); }
+  assert.ok(runPage);
+  const frame = runPage.frameLocator("iframe").first();
+  await frame.getByRole("button", { name: "Eins dazu", exact: true }).waitFor();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await frame.locator("body").evaluate(() => new Promise(resolve => {
+        if (document.readyState === "complete") resolve();
+        else window.addEventListener("load", () => resolve(), { once: true });
+      }));
+      break;
+    } catch (error) {
+      if (attempt === 2 || !/context was destroyed/.test(error.message)) throw error;
+      await frame.getByRole("button", { name: "Eins dazu", exact: true }).waitFor();
+    }
+  }
+  await frame.getByRole("button", { name: "Eins dazu", exact: true }).click();
+  await frame.locator("#count").filter({ hasText: /^1$/ }).waitFor();
+  assert.equal(await frame.locator("#count").innerText(), "1");
+  assert.match(await page.locator("#anvil-chat").inputValue(), /sichtbare Überschrift/);
+  await runPage.screenshot({ path: path.join(output, "example-run.png") });
+  checks.push("no-KI example starts and works; existing project preserved; editable next step");
+  await page.locator("summary").filter({ hasText: "Geführte Aufgaben" }).click();
+  for (const [name, mode] of [["Projekt verstehen", "ask"], ["Änderung umsetzen", "agent"], ["Fehler beheben", "agent"], ["Änderung prüfen", "ask"]]) {
+    await page.locator("#anvil-chat").fill("Nur meine Aufgabe");
+    await page.getByRole("button", { name: new RegExp(`^${name}`) }).click();
+    assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentMode), mode);
+    assert.match(await page.locator("#anvil-chat").inputValue(), /Mein Auftrag: Nur meine Aufgabe$/);
+    assert.equal(await page.evaluate(() => window.__anvilIde.getState().chat.length), 0, "Selecting a workflow never sends automatically");
+  }
+  await page.screenshot({ path: path.join(output, "workflows.png") });
+  checks.push("four workflows prepare drafts and enforce chosen read/write mode without sending");
+  await page.getByRole("button", { name: "Fragen", exact: true }).click();
+  assert.match(await page.getByTestId("chat-mode-hint").innerText(), /ohne Projektdateien zu ändern/);
+  await page.getByTitle("Agent kann Dateien ändern und Werkzeuge ausführen.", { exact: true }).click();
+  assert.match(await page.getByTestId("chat-mode-hint").innerText(), /Dateien ändern/);
+  checks.push("chat mode explains its effect and exposes selected mode accessibly");
+  await page.keyboard.press("Control+,");
+  const settingsNav = page.getByRole("navigation", { name: "Einstellungsbereiche" });
+  await settingsNav.getByRole("button", { name: "Orientierung", exact: true }).click();
+  await page.getByRole("heading", { name: "Was möchtest du tun?", exact: true }).waitFor();
+  const help = page.getByRole("region", { name: "Erklärhilfen und Tour", exact: true });
+  assert.equal(await help.getByRole("checkbox", { name: "Erklärhilfen anzeigen", exact: true }).isChecked(), false);
+  await help.getByRole("checkbox", { name: "Erklärhilfen anzeigen", exact: true }).check();
+  await help.getByRole("combobox").selectOption("400");
+  const beforeTour = await page.evaluate(() => JSON.stringify({ files: window.__anvilIde.getState().files, draft: window.__anvilIde.getState().agentDraft, chat: window.__anvilIde.getState().chat, panels: window.__anvilIde.getState().panels }));
+  await help.getByRole("button", { name: "Tour starten", exact: true }).click();
+  const guide = page.locator("[data-help-card]");
+  await guide.getByRole("heading", { name: "Dein Projekt", exact: true }).waitFor();
+  await page.getByTestId("tour-hand").waitFor();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await guide.getByRole("button", { name: "Überspringen", exact: true }).evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press("Tab");
+  assert.equal(await guide.getByRole("button", { name: "Hilfe schließen", exact: true }).evaluate(el => el === document.activeElement), true);
+  await guide.getByRole("button", { name: "Weiter", exact: true }).click();
+  await guide.getByRole("heading", { name: "Mit KI arbeiten", exact: true }).waitFor();
+  await guide.getByRole("button", { name: "Zurück", exact: true }).click();
+  await guide.getByRole("heading", { name: "Dein Projekt", exact: true }).waitFor();
+  await page.keyboard.press("Control+,");
+  assert.equal(await page.evaluate(() => window.__anvilIde.getState().settingsOpen), false, "Tour suppresses workspace shortcuts");
+  await page.screenshot({ path: path.join(output, "help-tour.png") });
+  for (let n = 0; n < 6; n++) await guide.getByRole("button", { name: "Weiter", exact: true }).click();
+  await guide.getByRole("button", { name: "Tour beenden", exact: true }).click();
+  assert.equal(await page.evaluate(() => JSON.stringify({ files: window.__anvilIde.getState().files, draft: window.__anvilIde.getState().agentDraft, chat: window.__anvilIde.getState().chat, panels: window.__anvilIde.getState().panels })), beforeTour);
+  await page.locator('[data-help="files"]').hover();
+  await guide.getByRole("heading", { name: "Dein Projekt", exact: true }).waitFor();
+  await page.keyboard.press("F1");
+  assert.equal(await guide.evaluate(el => el === document.activeElement), true);
+  await guide.getByRole("button", { name: "In der Tour ansehen", exact: true }).click();
+  await page.getByTestId("tour-highlight").waitFor();
+  await page.keyboard.press("Escape");
+  await guide.waitFor({ state: "hidden" });
+  await page.keyboard.press("Control+,");
+  await settingsNav.getByRole("button", { name: "Orientierung", exact: true }).click();
+  await help.getByRole("checkbox", { name: "Zeigende Hand in der Tour", exact: true }).uncheck();
+  await help.getByRole("button", { name: "Tour starten", exact: true }).click();
+  await guide.waitFor();
+  assert.equal(await page.getByTestId("tour-hand").count(), 0);
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("/")); w.unmaximize(); w.setSize(1000, 720); });
+  await guide.getByRole("button", { name: "Weiter", exact: true }).click();
+  const box = await guide.boundingBox(), viewport = await page.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+  assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.w && box.y + box.height <= viewport.h);
+  await guide.getByRole("button", { name: "Überspringen", exact: true }).click();
+  await page.evaluate(() => {
+    window.__helpEvents = [];
+    for (const type of ["focusin", "focusout", "pointerover", "pointerout", "resize", "scroll"]) window.addEventListener(type, e => {
+      if (window.__helpEvents.length < 40) window.__helpEvents.push([type, e.target?.tagName, e.target?.dataset?.help, e.relatedTarget?.tagName, document.activeElement?.outerHTML.slice(0, 150)]);
+    }, true);
+  });
+  await page.locator('[data-help="files"]').focus();
+  await guide.waitFor();
+  await guide.getByRole("button", { name: "Erklärhilfen ausschalten", exact: true }).click();
+  await guide.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => window.__anvilIde.getState().helpPreferences.tips), false);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("/"))?.maximize());
+  await page.waitForFunction(() => innerWidth > 1000);
+  await page.keyboard.press("Control+,");
+  await page.getByRole("textbox", { name: "Einstellungen durchsuchen", exact: true }).fill("Tooltip");
+  await help.waitFor();
+  await settingsNav.getByRole("button", { name: "Orientierung", exact: true }).click();
+  checks.push("optional help: hover and keyboard, interactive tour link, all seven steps, back/skip/Escape, shortcut isolation, optional hand, small viewport, settings search, no file/chat/layout changes");
+  assert.equal(await page.getByRole("button", { name: "Bereich zurücksetzen", exact: true }).isVisible(), false);
+  await page.locator(".ui-sheet").screenshot({ path: path.join(output, "orientation.png"), animations: "disabled" });
+  await page.getByRole("button", { name: /^Mit KI arbeiten/ }).click();
+  assert.equal(await settingsNav.getByRole("button", { name: "Agent", exact: true }).getAttribute("aria-current"), "page");
+  await settingsNav.getByRole("button", { name: "Orientierung", exact: true }).click();
+  await page.getByRole("button", { name: /^Dateien und Speicherorte/ }).click();
+  assert.equal(await settingsNav.getByRole("button", { name: "Speicher", exact: true }).getAttribute("aria-current"), "page");
+  // Isolate connection discovery; test disclosure and search through the real UI.
+  await page.route("**/v1/ping", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, version: "clarity-fixture", bins: {}, lsp: [], toolchains: [] }) }));
+  await settingsNav.getByRole("button", { name: "Companion", exact: true }).click();
+  await page.getByText(/Companion erreichbar.*clarity-fixture/).waitFor();
+  const connectionDetails = page.locator("details").filter({ has: page.locator("summary").filter({ hasText: "Verbindungsdetails · nur bei Bedarf ändern" }) });
+  assert.equal(await connectionDetails.evaluate(el => el.open), false);
+  await connectionDetails.locator("summary").click();
+  await connectionDetails.getByRole("button", { name: "Koppeln", exact: true }).waitFor();
+  await connectionDetails.locator("summary").click();
+  await page.getByRole("textbox", { name: "Einstellungen durchsuchen", exact: true }).fill("Companion Token");
+  await connectionDetails.getByRole("button", { name: "Koppeln", exact: true }).waitFor();
+  assert.equal(await connectionDetails.evaluate(el => el.open), true);
+  await settingsNav.getByRole("button", { name: "Orientierung", exact: true }).click();
+  await page.evaluate(() => window.__anvilIde.getState().setLocale("en"));
+  await page.getByRole("heading", { name: "What would you like to do?", exact: true }).waitFor();
+  await page.screenshot({ path: path.join(output, "orientation-en.png") });
+  await page.getByRole("button", { name: "Start tour", exact: true }).click();
+  await guide.getByRole("heading", { name: "Your project", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+,");
+  await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Getting started", exact: true }).click();
+  await page.evaluate(() => window.__anvilIde.getState().setLocale("de"));
+  const beforeIntro = await page.evaluate(() => JSON.stringify({ files: window.__anvilIde.getState().files, draft: window.__anvilIde.getState().agentDraft }));
+  await page.getByRole("button", { name: "Einstieg erneut öffnen", exact: true }).click();
+  await page.getByRole("button", { name: "Beispiel ohne KI starten", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => JSON.stringify({ files: window.__anvilIde.getState().files, draft: window.__anvilIde.getState().agentDraft })), beforeIntro);
+  await page.getByRole("button", { name: "Erstmal überspringen", exact: true }).click();
+  await page.keyboard.press("Control+,");
+  checks.push("orientation links reach settings, DE/EN copy renders, connection details reveal on search, reopening introduction preserves project and draft");
+  await page.getByRole("button", { name: "Hilfe", exact: true }).click();
+  await page.getByLabel("Erwartetes Verhalten", { exact: true }).fill("Datei speichern");
+  await page.getByLabel("Tatsächliches Verhalten", { exact: true }).fill("Eine Fehlermeldung erscheint");
+  await page.getByLabel("Schritte zum Nachstellen", { exact: true }).fill("1. Projekt öffnen\n2. Speichern");
+  await page.getByRole("button", { name: "Bericht vorbereiten", exact: true }).click();
+  const report = await page.getByLabel("Fehlerbericht Vorschau", { exact: true }).inputValue();
+  assert.match(report, /Erwartet: Datei speichern/); assert.ok(!report.includes("keep my project")); assert.ok(!report.includes("my-project.txt")); assert.ok(!report.includes("127.0.0.1"));
+  await page.screenshot({ path: path.join(output, "support.png") });
+  await page.getByRole("button", { name: "Bericht kopieren", exact: true }).click();
+  await page.getByText("Kopiert. Es wurde nichts versendet.", { exact: true }).waitFor();
+  checks.push("support discoverable; preview and copy; no private automatic context; publication deferred honestly");
+  await page.getByRole("button", { name: "Fertig", exact: true }).click();
+  await page.evaluate(() => { const s = window.__anvilIde.getState(); s.setLlmProvider("openai", "key"); s.setLlmModel("image-capable-fixture"); });
+  await page.locator('input[type="file"][accept="image/*"]').setInputFiles({ name: "test.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm6sAAAAASUVORK5CYII=", "base64") });
+  await page.locator("#anvil-chat").fill("Describe attached image");
+  await page.evaluate(() => window.__anvilIde.getState().setLlmProvider("codex", "abo"));
+  await page.getByRole("alert").filter({ hasText: "überträgt keine Bilder" }).waitFor();
+  await page.locator("#anvil-chat").press("Enter");
+  assert.equal(await page.locator("#anvil-chat").inputValue(), "Describe attached image");
+  assert.equal(await page.evaluate(() => window.__anvilIde.getState().chat.length), 0);
+  assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentBusy), false);
+  await page.screenshot({ path: path.join(output, "image-guard.png") });
+  checks.push("changing image draft to CLI blocks before send and retains draft");
+  await page.keyboard.press("Control+Alt+s");
+  await page.waitForFunction(() => !Object.values(window.__anvilIde.getState().dirty).some(Boolean));
+  await page.reload();
+  await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
+  assert.deepEqual(await page.evaluate(() => window.__anvilIde.getState().helpPreferences), { tips: false, pointer: false, delay: 400 });
+  assert.equal(await guide.count(), 0, "Tour does not restart on its own");
+  checks.push("help preferences survive reload; English tour works; tour keyboard focus stays within its controls");
+  assert.deepEqual(errors, []);
+  await writeFile(path.join(output, "result.json"), JSON.stringify({ ok: true, checks, errors, profile, modelCalls: 0 }, null, 2));
+  console.log(checks.map(c => `PASS: ${c}`).join("\n"));
+} catch (error) {
+  if (page && !page.isClosed()) {
+    await page.screenshot({ path: path.join(output, "failure.png") }).catch(() => {});
+    console.log(await page.evaluate(() => ({ helpEvents: window.__helpEvents, preferences: window.__anvilIde?.getState().helpPreferences, setupDone: window.__anvilIde?.getState().setupDone, settingsOpen: window.__anvilIde?.getState().settingsOpen })).catch(() => null));
+  }
+  throw error;
+} finally { await app?.close().catch(() => {}); server.kill(); }

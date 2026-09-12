@@ -98,6 +98,8 @@ describe("job", () => {
     const got = normalizeJob(parked, { revive: true });
     assert.equal(got?.status, "ask");
     assert.equal(got?.ask?.choices.length, 2);
+    assert.equal(normalizeJob({ ...parked, mode: "ask" }, { revive: true })?.mode, "ask");
+    assert.equal(normalizeJob({ ...parked, mode: "agent" }, { revive: true })?.mode, "agent");
     assert.equal(normalizeJob({ status: "ask", goal: "x" }, { revive: true }), null);
   });
 });

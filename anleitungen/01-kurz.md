@@ -1,4 +1,4 @@
-# Anvil 1.3.2 — Kurz
+# Anvil — Kurzstart
 
 Lokale IDE: Dateien, Agent, Run. Eigenes Fenster, kein Browser.
 
@@ -15,7 +15,7 @@ Oder aus dem Ordner:
 
 Oder nur **start.bat**: richtet beim ersten Mal selbst ein.
 
-Port 8080 belegt: start.bat räumt ihn. Electron fehlt: nochmal install.bat.
+Für die normale Nutzung das fertige Setup oder ZIP verwenden. `install.bat` und `start.bat` gehören zum Arbeiten am Quellcode. Nach Änderungen an Anvil selbst bei Bedarf vollständig schließen und neu starten.
 
 ## Modell (einmal)
 

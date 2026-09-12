@@ -16,7 +16,7 @@ test("workspace destinations remain exclusive across selection and restore", asy
   };
   let switching = true;
   globalThis.fixturePrepareSwitch = async () => switching;
-  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false }, appType: "custom", plugins: [{
+  const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", plugins: [{
     name: "workspace-switch-choice",
     transform(code, id) {
       if (id.endsWith("/src/lib/save.ts")) return "export const prepareWorkspaceSwitch = () => globalThis.fixturePrepareSwitch();";

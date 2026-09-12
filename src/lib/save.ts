@@ -19,6 +19,7 @@ export function saveNow(request: SaveRequest = {}): Promise<boolean> {
 async function saveCurrent(request: SaveRequest, path: string | null, target: ReturnType<typeof captureDiskTarget>): Promise<boolean> {
   const sameTarget = () => {
     const s = useIde.getState();
+    if (s.pathOperation?.from === "") { s.setNotice("Rücknahme zuerst abschließen lassen."); return false; }
     return s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && s.companionUrl === target.base && diskWorkspaceHandle() === target.handle;
   };
   if (!sameTarget()) return false;
@@ -75,6 +76,7 @@ export async function closeTabs(paths: string[]): Promise<void> {
 
 export async function prepareWorkspaceSwitch(): Promise<boolean> {
   const before = useIde.getState();
+  if (before.pathOperation?.from === "") { before.setNotice("Rücknahme zuerst abschließen lassen."); return false; }
   const paths = Object.keys(before.dirty).filter((p) => before.dirty[p]);
   if (paths.length) {
     const { saveChoice } = await import("./confirm");
@@ -111,6 +113,7 @@ export function prepareAppClose(): Promise<boolean> {
 async function closeCurrentApp(): Promise<boolean> {
   const { saveChoice, closeFailureChoice, confirmApp } = await import("./confirm");
   const before = useIde.getState();
+  if (before.pathOperation?.from === "") { before.setNotice("Rücknahme zuerst abschließen lassen."); return false; }
   const dirty = Object.keys(before.dirty).filter((p) => before.dirty[p]);
   const choice = dirty.length ? await saveChoice(`${dirty.length} Datei(en) vor dem Beenden speichern?`) : "save";
   if (choice === "cancel" || before.workspaceEpoch !== useIde.getState().workspaceEpoch) return false;

@@ -359,7 +359,7 @@ export function DataSection({ q }: { q: string }) {
         setNotice(msg);
         return;
       }
-      const msg = r.dir || r.path || "ok";
+      const msg = r.message || r.dir || r.path || "ok";
       setUpd(msg);
       setNotice(msg);
     } finally {

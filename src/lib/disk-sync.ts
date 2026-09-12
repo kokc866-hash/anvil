@@ -1,5 +1,6 @@
-import { companionDeleteFile, companionMoveFile, companionMkdir, companionWriteChecked } from "./companion";
-import { diskWorkspaceHandle, moveDiskPath, mkdirDisk, removeDiskPath, writeDiskFile } from "./disk";
+import { companionDeleteFile, companionMoveFile, companionMkdir, companionWriteChecked, companionRestore } from "./companion";
+import { diskWorkspaceHandle, moveDiskPath, mkdirDisk, removeDiskPath, writeDiskFile, restoreDiskPlan } from "./disk";
+import type { RestorePlan, RestoreDiskPlan } from "./restore-plan";
 import { withCompanion } from "./companion-life";
 import { WriteQueue } from "./write-queue";
 import { useIde } from "@/store/ide";
@@ -36,6 +37,25 @@ export function noteDiskContents(files: Record<string, string>, target = capture
   const prefix = targetKey(target);
   for (const key of knownDisk.keys()) if (key.startsWith(prefix)) knownDisk.delete(key);
   for (const [path, content] of Object.entries(files)) knownDisk.set(prefix + path, content);
+}
+export function prepareRestoreDisk(plan: RestorePlan, target = captureDiskTarget()): RestoreDiskPlan {
+  const s = useIde.getState();
+  return { mkdir: plan.mkdir, rmdir: plan.rmdir, files: plan.files.map((f) => {
+    const key = targetKey(target) + f.path;
+    const expected = knownDisk.has(key) ? knownDisk.get(key)! : f.path in s.editBases ? s.editBases[f.path] : f.before;
+    return { ...f, expected };
+  }) };
+}
+
+export async function syncRestore(plan: RestoreDiskPlan, target = captureDiskTarget()): Promise<string[]> {
+  let removedDirs = plan.rmdir;
+  await queue.run(async () => {
+    if (target.cwd && target.handle) throw new Error("Zwei Workspace-Ziele aktiv. Ordner erneut öffnen.");
+    if (target.cwd) removedDirs = await withCompanion(() => companionRestore(plan, target.cwd, target.base || undefined), target.base, target.cwd);
+    else if (target.handle) removedDirs = await restoreDiskPlan(plan, target.handle);
+    for (const f of plan.files) noteDiskFile(f.path, f.after, target);
+  });
+  return removedDirs;
 }
 async function write(path: string, content: string, target: DiskTarget, baseContent?: string | null) {
   const key = targetKey(target) + path;

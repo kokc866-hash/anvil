@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, statSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
-import { defineConfig } from "vite";
+import { defineConfig, normalizePath } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -15,6 +15,10 @@ import { lanLlmPlugin } from "./scripts/lan-llm-plugin.mjs";
 // @ts-expect-error JS helper
 import { isAbortNoise } from "./scripts/llm-agent.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
+
+const privateDataGlobs = [join(process.cwd(), "data"), process.env.ANVIL_USER_DATA, process.env.ANVIL_QA_USER_DATA]
+  .filter((value): value is string => Boolean(value))
+  .map((value) => `${normalizePath(value)}/**`);
 
 function hushAbortPlugin(): Plugin {
   return {
@@ -217,6 +221,11 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+    watch: { ignored: privateDataGlobs },
+    fs: {
+      // Retain Vite's default denials and exclude the portable desktop profile.
+      deny: [".env", ".env.*", "*.{crt,pem,key,p12,pfx,cer,der}", ".npmrc", ".yarnrc.yml", "**/.git/**", ...privateDataGlobs],
+    },
   },
   preview: {
     host: "127.0.0.1",

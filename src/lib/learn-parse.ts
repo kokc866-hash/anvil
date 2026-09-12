@@ -1,4 +1,5 @@
 /** Reine Parser/Heuristiken — ohne Store, testbar unter node --test. */
+import { load, dump, FAILSAFE_SCHEMA } from "js-yaml";
 
 export type LearnKind = "user" | "project" | "lesson";
 export type SkillKind = "guide" | "plugin";
@@ -77,23 +78,45 @@ export function parseSkillMd(
   body: string;
   kind: SkillKind;
   scope: LearnScope;
+  frontmatter?: string;
+  description?: string;
+  declaredName?: boolean;
 } | null {
-  const base = path.replace(/^.*[/\\]/, "").replace(/\.md$/i, "");
+  const normalized = path.replaceAll("\\", "/");
+  const base = normalized.replace(/^.*\//, "").replace(/\.md$/i, "");
   const fm = String(src).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   let name = base;
   let when = "";
   let body = String(src).trim();
   let kind: SkillKind = "guide";
   let scope: LearnScope = "project";
+  let description: string | undefined;
+  let declaredName = false;
   if (fm) {
     const head = fm[1];
+    let metadata: unknown;
+    try { metadata = load(head, { schema: FAILSAFE_SCHEMA }); } catch { return null; }
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+    const fields = metadata as Record<string, unknown>;
     body = fm[2].trim();
-    name = head.match(/^name:\s*(.+)$/m)?.[1]?.trim() || name;
-    when = head.match(/^when:\s*(.+)$/m)?.[1]?.trim() || "";
-    if (head.match(/^kind:\s*plugin\s*$/mi)) kind = "plugin";
-    if (head.match(/^scope:\s*user\s*$/mi)) scope = "user";
+    if ((fields.name !== undefined && typeof fields.name !== "string") || (fields.description !== undefined && typeof fields.description !== "string") || (fields.when !== undefined && typeof fields.when !== "string")) return null;
+    name = typeof fields.name === "string" ? fields.name.trim() : name;
+    declaredName = typeof fields.name === "string" && Boolean(fields.name.trim());
+    description = typeof fields.description === "string" ? fields.description.trim() : undefined;
+    when = description || (typeof fields.when === "string" ? fields.when.trim() : "");
+    if (fields.kind === "plugin") kind = "plugin";
+    if (fields.scope === "user") scope = "user";
   }
   if (!name || body.length < 8) return null;
-  const id = slugSkillId(base) || slugSkillId(name) || "skill";
-  return { id, name, when: when || name, body: body.slice(0, 8000), kind, scope };
+  const folder = normalized.replace(/\/SKILL\.md$/i, "").replace(/^\.anvil\/skills\//i, "");
+  const id = slugSkillId(base.toLowerCase() === "skill" && normalized.includes("/") ? folder : base) || slugSkillId(name) || "skill";
+  return { id, name, when: when || name, body, kind, scope, frontmatter: fm?.[1], description, declaredName };
+}
+
+/** Keep unfamiliar metadata (license, compatibility, allowed-tools, etc.) on export. */
+export function serializeSkillMd(skill: { name: string; when: string; body: string; kind: SkillKind; scope: LearnScope; frontmatter?: string }): string {
+  const existing = load(skill.frontmatter || "{}", { schema: FAILSAFE_SCHEMA });
+  const extras = existing && typeof existing === "object" && !Array.isArray(existing) ? Object.fromEntries(Object.entries(existing).filter(([key]) => !["name", "description", "when", "kind", "scope"].includes(key))) : {};
+  const head = dump({ name: skill.name, description: skill.when || skill.name, when: skill.when || skill.name, kind: skill.kind, scope: skill.scope, ...extras }, { schema: FAILSAFE_SCHEMA, lineWidth: -1 });
+  return `---\n${head}---\n${skill.body}\n`;
 }
