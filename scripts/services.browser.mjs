@@ -320,21 +320,29 @@ try {
   checks.push(
     "selected tool executes via renderer mcpCall/native SDK/real HTTP; unselected write tool never sent; encrypted vault",
   );
+  fixture.state.missingResourceMethods = true;
+  fixture.state.newTool = true;
   await app.close();
   app = null;
   await launch();
   await card().getByText("Anmeldung lokal gespeichert.", { exact: true }).waitFor();
   assert.deepEqual((await localState()).allowedTools, ["read_note"]);
-  await card().getByRole("button", { name: "Werkzeuge laden", exact: true }).click();
-  await card().getByText("Werkzeugkatalog erfolgreich geladen.", { exact: true }).waitFor();
+  await card().getByText("Katalog geladen: 3 Werkzeuge angeboten.", { exact: true }).waitFor();
+  assert.equal(await card().getByLabel("Lokaler QA-Dienst: newly_available freigeben", { exact: true }).isChecked(), false);
+  assert.equal(fixture.state.calls.length, 1, "automatic catalog refresh executes no tool");
+  assert.deepEqual((await localState()).allowedTools, ["read_note"], "new server tools gain no permission on restart");
   await readNote();
+  assert.equal(await card().getByText("Method not found", { exact: true }).count(), 0);
+  await page.screenshot({ path: path.join(output, "neon-resource-compatibility.png") });
+  checks.push("Neon-shaped missing resource methods retain catalog, selected read tool and stored login through real native transport");
+  fixture.state.missingResourceMethods = false;
   assert.equal(
     fixture.state.tokenExchanges,
     1,
     "restart reuses encrypted credentials without new browser login",
   );
   checks.push(
-    "full desktop restart preserves selected tools and encrypted login; real request works without reauthentication",
+    "full desktop restart automatically loads selected tools and encrypted login; real request works without clicking reload or reauthentication",
   );
   await card().getByLabel("Lokaler QA-Dienst aktiv", { exact: true }).uncheck();
   assert.equal((await localState()).enabled, false);

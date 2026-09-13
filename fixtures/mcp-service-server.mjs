@@ -7,7 +7,7 @@ export async function startServiceFixture() {
     requests: [], calls: [], registrations: 0, authorizations: 0,
     tokenExchanges: 0, pkceVerified: 0, failTools: false, holdTokens: false,
     heldTokens: [], note: "Notiz aus dem echten lokalen MCP-Testserver.",
-    errors: [],
+    errors: [], missingResourceMethods: false, newTool: false,
   };
   const clients = new Map(), codes = new Map(), tokens = new Set();
   let base;
@@ -64,6 +64,7 @@ export async function startServiceFixture() {
           return result({ tools: [
             { name: "read_note", description: "Testnotiz lesen", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: {}, additionalProperties: false } },
             { name: "update_note", description: "Testnotiz ändern", annotations: { readOnlyHint: false }, inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
+            ...(state.newTool ? [{ name: "newly_available", description: "Neu angebotene Funktion", inputSchema: { type: "object" } }] : []),
           ] });
         }
         if (message.method === "tools/call") {
@@ -72,6 +73,8 @@ export async function startServiceFixture() {
           else if (message.params.name !== "read_note") return error(-32602, "Unknown tool");
           return result({ content: [{ type: "text", text: state.note }] });
         }
+        if (state.missingResourceMethods && ["resources/list", "resources/templates/list"].includes(message.method))
+          return error(-32601, "Method not found");
         if (message.method === "resources/list") return result({ resources: [{ uri: "fixture://note", name: "Testnotiz", mimeType: "text/plain" }] });
         if (message.method === "resources/templates/list") return result({ resourceTemplates: [] });
         if (message.method === "resources/read") return result({ contents: [{ uri: "fixture://note", text: state.note, mimeType: "text/plain" }] });

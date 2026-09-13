@@ -23,6 +23,8 @@ test("external service permissions, stale callers, logout and persistence use th
   let authenticated = false,
     rejectLogout = false,
     failCatalog = false,
+    resourceError = "",
+    templateError = "",
     onLogout;
   globalThis.window = Object.assign(new EventTarget(), {
     localStorage,
@@ -69,6 +71,10 @@ test("external service permissions, stale callers, logout and persistence use th
               { name: "future_tool", inputSchema: { type: "object" } },
             ],
           });
+        if (r.method === "resources/list" && resourceError)
+          return { ok: false, error: resourceError };
+        if (r.method === "resources/templates/list" && templateError)
+          return { ok: false, error: templateError };
         if (r.method === "resources/list")
           return reply({ resources: [{ name: "Notes", uri: "fixture://notes" }] });
         if (r.method === "resources/templates/list") return reply({ resourceTemplates: [] });
@@ -162,6 +168,24 @@ test("external service permissions, stale callers, logout and persistence use th
   await mcp.mcpProbe(live(), useIde.getState().mcpServers);
   assert.equal(mcp.mcpServiceCatalog(live()).tools.length, 3);
   assert.equal(mcp.mcpSnapshot([live()]).tools.length, 0);
+  resourceError = "Method not found";
+  templateError = "Method not found";
+  await mcp.mcpProbe(live(), [live()]);
+  assert.equal(mcp.mcpServiceCatalog(live()).ready, true, "Neon-shaped missing optional methods retain tool selection");
+  assert.equal(mcp.mcpServiceCatalog(live()).tools.length, 3);
+  assert.equal(mcp.mcpSnapshot([live()]).tools.length, 0, "loading still grants no tools");
+  templateError = "";
+  await mcp.mcpProbe(live(), [live()]);
+  assert.equal(mcp.mcpServiceCatalog(live()).ready, true, "templates are queried independently of resources/list");
+  for (const failure of ["MCP 401: Unauthorized", "network unavailable"]) {
+    resourceError = failure;
+    await assert.rejects(() => mcp.mcpProbe(live(), [live()]), { message: failure });
+    assert.equal(mcp.mcpServiceCatalog(live()).ready, false, "real resource failures remain visible");
+  }
+  resourceError = "";
+  templateError = "MCP 403: Forbidden";
+  await assert.rejects(() => mcp.mcpProbe(live(), [live()]), /Forbidden/);
+  templateError = "";
   failCatalog = true;
   await assert.rejects(() => mcp.mcpProbe(live(), [live()]), /catalog unavailable/);
   assert.equal(

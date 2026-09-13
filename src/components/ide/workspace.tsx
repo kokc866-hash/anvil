@@ -21,6 +21,7 @@ import { CommandPalette } from "./command-palette";
 import { HSplit, VSplit } from "./splitter";
 import { startDebug, debugStep, debugStop } from "@/lib/debug-engine";
 import { startIdeSync } from "@/lib/ide-sync";
+import { startServiceAutoconnect } from "@/lib/service-autoconnect";
 import { reloadPlugins } from "@/lib/plugins";
 import { loadVscodeFromWorkspace } from "@/lib/plugins/vscode";
 import { pluginWatchPath, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
@@ -99,6 +100,8 @@ export function Workspace() {
     });
   }, [compact]);
   const [starterOpen, setStarterOpen] = useState(false);
+
+  useEffect(() => startServiceAutoconnect(), []);
 
   useEffect(() => {
     const refresh = () => { void import("@/lib/external-files").then((m) => m.refreshExternalFiles()); };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Puzzle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,7 +42,6 @@ export function ExtensionsPane() {
   const [market, setMarket] = useState<MarketItem[]>(FEATURED);
   const [marketMsg, setMarketMsg] = useState("");
   const q = filter.toLowerCase();
-  const abortRef = useRef<AbortController | null>(null);
 
   const shown = useMemo(() => {
     return plugins.filter((p) => {
@@ -53,10 +52,8 @@ export function ExtensionsPane() {
 
   useEffect(() => {
     if (tab !== "market") return;
+    const ac = new AbortController();
     const handle = window.setTimeout(() => {
-      abortRef.current?.abort();
-      const ac = new AbortController();
-      abortRef.current = ac;
       setMarketMsg(t("extSearching"));
       void searchMarket(filter || "snippets", ac.signal)
         .then((rows) => {
@@ -69,10 +66,11 @@ export function ExtensionsPane() {
           setMarketMsg(e instanceof Error ? e.message : t("extSearchFail"));
         });
     }, 280);
-    return () => window.clearTimeout(handle);
+    return () => {
+      window.clearTimeout(handle);
+      ac.abort();
+    };
   }, [filter, tab, t]);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function installItem(item: MarketItem) {
     if (!item.vsix) return;

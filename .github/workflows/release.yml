@@ -129,6 +129,12 @@ jobs:
       - name: Desktop onboarding, interactive help and tour
         run: node scripts/product-experience.browser.mjs
         timeout-minutes: 5
+      - name: Service login, automatic reconnect and Neon compatibility
+        run: node scripts/services.browser.mjs
+        timeout-minutes: 5
+      - name: Marketplace search stability and cancellation
+        run: node scripts/market.browser.mjs
+        timeout-minutes: 3
       - run: node scripts/pack-ui.mjs
       - name: Unsigned Windows packages
         if: needs.metadata.outputs.signed != 'true'

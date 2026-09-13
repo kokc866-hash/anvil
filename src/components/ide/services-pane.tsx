@@ -252,11 +252,13 @@ function ServiceConnection({ server }: { server: McpServer }) {
                 ? "Deaktiviert: Der Agent kann diesen Dienst nicht verwenden."
                 : catalog.ready
                   ? `Katalog geladen: ${catalog.tools.length} Werkzeuge angeboten.`
-                  : "Werkzeugkatalog noch nicht erfolgreich geladen."}
+                  : storedLogin && !catalogError
+                    ? "Werkzeugkatalog wird automatisch geladen…"
+                    : "Werkzeugkatalog noch nicht erfolgreich geladen."}
             </p>
             <p className="text-[10px]">
-              Der gespeicherte Login bestätigt keinen aktuellen Zugriff. „Werkzeuge laden“ prüft den
-              Dienst.
+              Aktive, angemeldete Dienste werden automatisch verbunden. „Werkzeuge laden“
+              aktualisiert die Liste zusätzlich. Deine Werkzeugfreigaben bleiben erhalten.
             </p>
           </div>
           {statusError && (

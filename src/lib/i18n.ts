@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useIde } from "@/store/ide";
 
 export type Locale = "de" | "en";
@@ -1406,7 +1407,10 @@ export function t(key: string, vars?: Record<string, string | number>) {
 
 export function useT() {
   const locale = useIde((s) => s.locale);
-  return (key: string, vars?: Record<string, string | number>) => lookup(locale || "de", key, vars);
+  return useCallback(
+    (key: string, vars?: Record<string, string | number>) => lookup(locale || "de", key, vars),
+    [locale],
+  );
 }
 
 export function applyLang(locale: Locale) {

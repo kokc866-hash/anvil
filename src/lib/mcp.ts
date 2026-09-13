@@ -526,6 +526,23 @@ async function listPaged(
   }
   throw new Error(`MCP ${method}: mehr als 128 Seiten. Katalog am Server eingrenzen.`);
 }
+async function listOptionalResources(
+  s: McpServer,
+  method: "resources/list" | "resources/templates/list",
+  key: "resources" | "resourceTemplates",
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>[]> {
+  try {
+    return await listPaged(s, method, key, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    // Some services (including Neon) advertise resources without implementing
+    // these optional catalog methods. Keep their tools; propagate real failures.
+    if (!/method.*(not found|not supported|nicht|unbekannt)|-32601/i.test(String(error)))
+      throw error;
+    return [];
+  }
+}
 function withServer<T>(s: McpServer, fn: () => Promise<T>, cwd?: string) {
   return companionTarget(s) ? withCompanion(fn, s.url, cwd) : fn();
 }
@@ -559,16 +576,11 @@ export async function mcpProbe(
           : [];
         const resources =
           !mcpPackage(s) && entry.caps.includes("resources")
-            ? await listPaged(s, "resources/list", "resources", signal)
+            ? await listOptionalResources(s, "resources/list", "resources", signal)
             : [];
         let templates: Record<string, unknown>[] = [];
         if (!mcpPackage(s) && entry.caps.includes("resources")) {
-          try {
-            templates = await listPaged(s, "resources/templates/list", "resourceTemplates", signal);
-          } catch (error) {
-            if (!/method.*(not found|not supported|nicht|unbekannt)|-32601/i.test(String(error)))
-              throw error;
-          }
+          templates = await listOptionalResources(s, "resources/templates/list", "resourceTemplates", signal);
         }
         signal?.throwIfAborted();
         if (entries.get(s.id) !== entry) return;
