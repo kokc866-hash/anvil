@@ -92,7 +92,8 @@ try {
   assert.ok(offered(1).length <= 8);
   console.log("PASS tool discovery updates the next request without executing selections");
 
-  r = await run("text", "text", "Schreibe a.txt", [text("write_file", { path: "a.txt", content: "new" }), done]);
+  const replacement = { path: "a.txt", content: "new", overwrite_reason: "The fixture request replaces the entire text document." };
+  r = await run("text", "text", "Ersetze den gesamten Inhalt von a.txt durch new", [text("write_file", replacement), done]);
   assert.equal(r.events.filter((e) => e.op === "write" && e.path === "a.txt").length, 1);
   assert.equal(requests[0].body.tools, undefined); assert.equal(requests[0].body.tool_choice, undefined); assert.equal(requests[0].body.think, "low");
   assert.match(JSON.stringify(requests[1].body.messages), /Tool result/); assert.equal(r.cap.tools, "unknown");
@@ -114,7 +115,7 @@ try {
 
   await run("answer", "compact", "Schreibe a.txt", [{ content: "Welche Variante möchtest du?", thinking: "Thinking. ".repeat(30) }]);
   assert.equal(requests.length, 1);
-  r = await run("fallback", "compact", "Schreibe a.txt und kompiliere das Projekt", [native("write_file", { path: "a.txt", content: "new" }), { content: "Keine Tools verfügbar" }, text("write_file", { content: "new", path: "a.txt" }), { content: "Keine Tools verfügbar" }]);
+  r = await run("fallback", "compact", "Ersetze a.txt vollständig und kompiliere das Projekt", [native("write_file", replacement), { content: "Keine Tools verfügbar" }, text("write_file", replacement), { content: "Keine Tools verfügbar" }]);
   assert.equal(requests.length, 4); assert.ok(requests[1].body.tools); assert.equal(requests[2].body.tools, undefined); assert.match(JSON.stringify(requests[2].body.messages), /Tool result/);
   assert.equal(r.events.filter((e) => e.op === "write" && e.path === "a.txt").length, 1); assert.equal(r.cap.tools, "ok"); assert.equal(r.result.ok, false);
   console.log("PASS normal questions do not retry; one stall fallback preserves writes and is never cached");
@@ -144,7 +145,7 @@ try {
   assert.ok(!JSON.stringify(r.learning).includes("private-canary"));
   r = await run("failed-dialect", "text", "Lies missing.txt", [alias("read", { file: "missing.txt" }), done]);
   assert.equal(r.learning.rules[0].successes, 0); assert.equal(r.learning.rules[0].failures, 1);
-  r = await run("replay-dialect", "compact", "Schreibe a.txt und kompiliere das Projekt", [native("write_file", { path: "a.txt", content: "new" }), { content: "Keine Tools verfügbar" }, alias("write", { file: "a.txt", text: "new" }), done]);
+  r = await run("replay-dialect", "compact", "Ersetze a.txt vollständig und kompiliere das Projekt", [native("write_file", replacement), { content: "Keine Tools verfügbar" }, alias("write", { file: "a.txt", text: "new", overwrite_reason: replacement.overwrite_reason }), done]);
   assert.equal(r.events.filter((e) => e.op === "write" && e.path === "a.txt").length, 1);
   assert.equal(r.learning.rules[0].successes, 0);
   console.log("PASS learned text/native aliases share history and executor; no probes, permission bypass or replay learning");

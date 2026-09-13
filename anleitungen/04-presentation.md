@@ -1,6 +1,6 @@
 # Anvil — Kurzpräsentation
 
-5 Minuten. Für Demo oder den ersten Blick. Stand: Release 1.3.27; aktuelle Möglichkeiten und Grenzen stehen in [Verbindungen](05-verbindungen.md) und [Editor](editor.md).
+5 Minuten. Für Demo oder den ersten Blick. Stand: Release 1.3.28; aktuelle Möglichkeiten und Grenzen stehen in [Verbindungen](05-verbindungen.md) und [Editor](editor.md).
 
 ---
 

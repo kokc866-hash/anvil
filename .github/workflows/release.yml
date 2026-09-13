@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: anvil-release
+  group: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && 'anvil-release-metadata' || 'anvil-release' }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:

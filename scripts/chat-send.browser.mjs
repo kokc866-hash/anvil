@@ -105,7 +105,9 @@ try {
         llmModel: provider === "ollama" ? "fixture-local" : "gpt-5.6-terra",
         llmAuthMode: "key", llmApiKey: provider === "ollama" ? "" : "fixture-key",
         llmContext: 8192, llmContextAuto: false, llmThinking: "low",
-        agentMode: mode, activeSurfaceId: "anvil", mcpServers: [],
+        // Keep request-count assertions focused on sending/Stop, without an
+        // automatically seeded plan that needs its own final reconciliation.
+        agentMode: mode, planWho: "agent", activeSurfaceId: "anvil", mcpServers: [],
         files: { "index.html": "<h1>Fixture</h1>", "README.md": "Fixture documentation" },
         activePath: null, openPaths: [], attached: [], autoRunAgent: false,
       }, version: 0 }));

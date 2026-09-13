@@ -1,8 +1,8 @@
 # Anleitungen
 
-Dokumentationsstand: **13.09.2026**, Release **1.3.27**. Die Anleitungen beschreiben diesen Stand; ältere Praxistests bleiben mit ihrem jeweiligen Prüfdatum gekennzeichnet.
+Dokumentationsstand: **13.09.2026**, Release **1.3.28**. Die Anleitungen beschreiben diesen Stand; ältere Praxistests bleiben mit ihrem jeweiligen Prüfdatum gekennzeichnet.
 
-Windows: [Anvil 1.3.27](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.27) — Setup-EXE oder portable ZIP. ZIP vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Beide Pakete enthalten die Laufzeit; Node.js wird nur für die Arbeit am Quellcode separat benötigt. Das Release ist auf Wunsch des Eigentümers unsigniert.
+Windows: [Anvil 1.3.28](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.28) — Setup-EXE oder portable ZIP. ZIP vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Beide Pakete enthalten die Laufzeit; Node.js wird nur für die Arbeit am Quellcode separat benötigt. Das Release ist auf Wunsch des Eigentümers unsigniert.
 
 | Datei | |
 |---|---|

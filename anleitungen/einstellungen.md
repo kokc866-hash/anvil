@@ -1,6 +1,6 @@
 # Einstellungen
 
-Die beschriebenen Einstellungen gelten für Release Anvil **1.3.27**. Die Bedienung ist für das Desktop-Programm ausgelegt.
+Die beschriebenen Einstellungen gelten für Release Anvil **1.3.28**. Die Bedienung ist für das Desktop-Programm ausgelegt.
 
 ## Sichern und wiederherstellen
 

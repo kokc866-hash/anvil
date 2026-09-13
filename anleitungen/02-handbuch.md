@@ -1,6 +1,6 @@
 # Anvil — Handbuch
 
-Ausführlich, mit Vorschau der Fenster. [Kurzfassung](01-kurz.md) · [Abläufe](03-workflow.md). Stand: 13.09.2026, Release 1.3.27. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
+Ausführlich, mit Vorschau der Fenster. [Kurzfassung](01-kurz.md) · [Abläufe](03-workflow.md). Stand: 13.09.2026, Release 1.3.28. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
 
 ---
 
@@ -28,7 +28,7 @@ Anvil handelt (Dateien, Run, Git). Das Hauptmodell denkt. Der Helfer ist optiona
 
 ### Installer
 
-[Anvil 1.3.27](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.27): **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; kein zusätzliches Node.js. Beide Pakete sind bewusst unsigniert. Vor einem Update Arbeit speichern und Anvil schließen. Die Daten liegen standardmäßig unter `data` neben der Anwendung; Details zu Updates und Datenerhalt stehen in der [Installationsanleitung](installation-abnahme.md).
+[Anvil 1.3.28](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.28): **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; kein zusätzliches Node.js. Beide Pakete sind bewusst unsigniert. Vor einem Update Arbeit speichern und Anvil schließen. Die Daten liegen standardmäßig unter `data` neben der Anwendung; Details zu Updates und Datenerhalt stehen in der [Installationsanleitung](installation-abnahme.md).
 
 ### Quellcode für die Entwicklung
 

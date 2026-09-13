@@ -1,6 +1,6 @@
 # Editor: Bearbeiten, Speichern und Wiederherstellen
 
-Stand: 13. September 2026, Release 1.3.27. Die unten beschriebenen erweiterten Projektsicherungspunkte gehören zu diesem Stand.
+Stand: 13. September 2026, Release 1.3.28. Die unten beschriebenen erweiterten Projektsicherungspunkte gehören zu diesem Stand.
 
 ## Dateien und Vorschläge
 
@@ -32,7 +32,7 @@ IndexedDB hält vollständige Datei- und Rücknahmeinhalte; die kleinere lokale 
 
 ## Projekt und Assets vor einer Agentenrunde sichern
 
-**Neu in Release 1.3.27:** Bei einem lokalen Desktop-Projekt mit der lokalen Standard-Companion-Verbindung erstellt Anvil vor jedem bearbeitenden Agentenauftrag einen Projektsicherungspunkt. Zunächst werden offene Änderungen ohne automatische Formatierung gespeichert. Erst nach erfolgreicher Sicherung beginnt die bearbeitende Modell-/Werkzeugrunde. Scheitert Speichern oder Sichern, startet der Auftrag nicht. Nach der Runde wird der Endstand separat festgehalten.
+**Neu in Release 1.3.28:** Bei einem lokalen Desktop-Projekt mit der lokalen Standard-Companion-Verbindung erstellt Anvil vor jedem bearbeitenden Agentenauftrag einen Projektsicherungspunkt. Zunächst werden offene Änderungen ohne automatische Formatierung gespeichert. Erst nach erfolgreicher Sicherung beginnt die bearbeitende Modell-/Werkzeugrunde. Scheitert Speichern oder Sichern, startet der Auftrag nicht. Nach der Runde wird der Endstand separat festgehalten.
 
 Der Sicherungspunkt erfasst die tatsächlichen Dateien im Projektordner, einschließlich noch nicht im Editor geöffneter Dateien, Bildern, Szenen, anderen Binärdateien, Lockdateien und leeren Ordnern. Die Runde zeigt den Projektumfang und die Dateianzahl. Es wird nicht der gesamte Projektordner blind auf einen alten Stand ersetzt: Anvil ermittelt die Änderungen zwischen Beginn und Ende dieser Runde.
 

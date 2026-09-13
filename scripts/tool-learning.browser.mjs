@@ -41,7 +41,8 @@ try {
       localStorage.setItem("anvil-ide", JSON.stringify({ state: {
         setupDone: true, autoUpdate: false, llmProvider: "ollama", llmBaseUrl: cfg.base, llmModel: "learning-fixture", llmAuthMode: "key",
         llmToolModes: { [cfg.key]: "text" }, llmContext: 8192, llmContextAuto: false, llmThinking: "low",
-        agentMode: "agent", activeSurfaceId: "anvil", files: { "README.md": "Fixture documentation" }, openPaths: [], activePath: null,
+        // This fixture tests transport learning, not automatic checklist creation.
+        agentMode: "agent", planWho: "agent", activeSurfaceId: "anvil", files: { "README.md": "Fixture documentation" }, openPaths: [], activePath: null,
         autoRunAgent: false, runLoop: false, graphLoop: false, testLoop: false, engineLoop: false, attached: [], mcpServers: [],
       }, version: 0 }));
       localStorage.setItem("anvil-brain", JSON.stringify({ state: { on: false, autoLoad: false }, version: 0 }));

@@ -37,7 +37,7 @@ Anvil prüft die Argumente gegen das vom Server gelieferte JSON-Schema. Kontextw
 
 ## Ergebnisse, Abbruch und Grenzen
 
-Strukturierte Daten, Text, Bilder, Ressourcen und `isError` bleiben im empfangenen Ergebnis erhalten. MCP-Bilder werden nicht als Canvas-/Graph-Aufnahme bezeichnet. Modelle ohne bekannte Bildunterstützung erhalten die Text-/Strukturdaten; Bilder bleiben in Anvil sichtbar. In Release 1.3.27 überträgt der CLI-Adapter passende MCP-Bilder zusätzlich an Codex, Claude Code und Copilot; dafür gelten die [CLI-Bildgrenzen](05-verbindungen.md#abo-über-cli) und die tatsächliche Bildfähigkeit des gewählten Modells.
+Strukturierte Daten, Text, Bilder, Ressourcen und `isError` bleiben im empfangenen Ergebnis erhalten. MCP-Bilder werden nicht als Canvas-/Graph-Aufnahme bezeichnet. Modelle ohne bekannte Bildunterstützung erhalten die Text-/Strukturdaten; Bilder bleiben in Anvil sichtbar. In Release 1.3.28 überträgt der CLI-Adapter passende MCP-Bilder zusätzlich an Codex, Claude Code und Copilot; dafür gelten die [CLI-Bildgrenzen](05-verbindungen.md#abo-über-cli) und die tatsächliche Bildfähigkeit des gewählten Modells.
 
 Im MCP-Modellkontext erscheinen höchstens vier passende Bilder bis jeweils 8 MiB Base64-Text; eine nachgelagerte Modellverbindung kann engere Grenzen haben. Große Ergebnisse erhalten einen Verweis zum Nachlesen. Der Sitzungsspeicher hält bis zu 16 Ergebnisse und insgesamt 32 MiB; ältere Ergebnisse können auslaufen. Ein ausgelaufener Verweis ist kein Anlass, eine schreibende Aktion automatisch zu wiederholen.
 

@@ -1,6 +1,6 @@
 # Unity, Unreal und Godot in Anvil
 
-Die beschriebenen Funktionen entsprechen dem Stand von Release 1.3.27. Die unten genannten lokalen Engine-Pfade und Praxistests dokumentieren die Prüfung vom 12. September 2026; sie werden nicht als Prüfung aller Engine-Versionen verstanden.
+Die beschriebenen Funktionen entsprechen dem Stand von Release 1.3.28. Die unten genannten lokalen Engine-Pfade und Praxistests dokumentieren die Prüfung vom 12. September 2026; sie werden nicht als Prüfung aller Engine-Versionen verstanden.
 
 ## Programme und Projekte
 
