@@ -65,6 +65,7 @@ export function partializeIde(s: IdeState) {
     loopTries: s.loopTries,
     harnessAfterWrite: s.harnessAfterWrite,
     harnessMaxRounds: s.harnessMaxRounds,
+    harnessAutoContinue: s.harnessAutoContinue,
     graphSees: s.graphSees,
     harnessBoardGrid: s.harnessBoardGrid,
     harnessBoardSnap: s.harnessBoardSnap,

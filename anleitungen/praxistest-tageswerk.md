@@ -2,7 +2,7 @@
 
 12. September 2026 · Anvil 1.3.24 · nativer Praxistest abgeschlossen
 
-**Nachfolgende Produktarbeit:** Einstieg ohne KI, vier geführte Aufgaben, Verbindungsgrenzen, Hilfe und vollständige Rücknahme geladener Dateien sind inzwischen implementiert. Der [Produktabschluss](produktabschluss.md) beschreibt den neueren Stand; Einschränkungen der damaligen Rücknahme im folgenden historischen Testbericht sind dadurch teilweise überholt.
+**Historischer Bericht:** Die folgenden Beobachtungen und Nachprüfungen dokumentieren den 12. September. Formulierungen wie „verbleibende Grenze“ und „nächste Produktpriorität“ beziehen sich auf diesen Zeitpunkt. Der [Produktabschluss](produktabschluss.md), die [Verbindungsanleitung](05-verbindungen.md) und das [Editor-Handbuch](editor.md) beschreiben den heutigen Stand; damalige Rücknahme- und CLI-Grenzen sind dadurch teilweise überholt.
 
 ## Nachprüfung der Reparaturen
 
@@ -18,7 +18,7 @@ Dieser gezielte Wiederholungstest verwendet vorbereitete Agentenantworten und ei
 
 **Verbleibende Grenze der Rücknahme:** Die Abnahme betrifft Änderungen an vorhandenen Dateien. Die bestehende Rücknahme löscht keine während einer Runde neu angelegten Dateien und unterstützt keinen völlig leeren Ausgangssnapshot. Diese beiden älteren Einschränkungen wurden bei der unabhängigen Codeprüfung ebenfalls reproduziert; eine vollständige Rücknahme beliebiger Projektänderungen wird hier nicht behauptet.
 
-Nachweise: [Ablauftest](I:/Anvil/scripts/product-workflow.browser.mjs), [Ergebnis](I:/Anvil/artifacts/product-workflow/result.json), [Rücknahme](I:/Anvil/artifacts/product-workflow/restart-rollback.png), [echter Konflikt](I:/Anvil/artifacts/product-workflow/real-conflict.png), [offene Prüfung](I:/Anvil/artifacts/product-workflow/unfinished-check.png).
+Nachweise: [Ablauftest](../scripts/product-workflow.browser.mjs), [Ergebnis](../artifacts/product-workflow/result.json), [Rücknahme](../artifacts/product-workflow/restart-rollback.png), [echter Konflikt](../artifacts/product-workflow/real-conflict.png), [offene Prüfung](../artifacts/product-workflow/unfinished-check.png).
 
 Abschließend wurde auch das normale Profil sauber neu gestartet: Tageswerk, Chat und das bisherige Ollama-Modell sind erhalten. Die Dateiliste stimmt mit den vier vorhandenen Projektdateien überein; die fehlende `rules.md`-Vorlage wird nicht mehr angezeigt. Run zeigt weiterhin die beiden gespeicherten Aufgaben. Alte, bereits gespeicherte Abbruchtexte werden durch die Änderung nicht nachträglich umgeschrieben.
 
@@ -108,15 +108,15 @@ Die gemessenen 5:20 Minuten des ersten lokalen Auftrags und 1:11 Minuten der CLI
 
 ## Nachweise und Grenzen
 
-![Aufgabe bleibt nach vollständigem Neustart erhalten](I:/Anvil/anleitungen/produktkonzept-bilder/15-tageswerk-neustart.png)
+![Aufgabe bleibt nach vollständigem Neustart erhalten](produktkonzept-bilder/15-tageswerk-neustart.png)
 
-![Sichtbare Validierung nach echter CLI-Korrektur](I:/Anvil/anleitungen/produktkonzept-bilder/16-tageswerk-validierung.png)
+![Sichtbare Validierung nach echter CLI-Korrektur](produktkonzept-bilder/16-tageswerk-validierung.png)
 
-![Fertige Testrunde und Abbruchtext](I:/Anvil/anleitungen/produktkonzept-bilder/17-tageswerk-ruecknahme-vorher.png)
+![Fertige Testrunde und Abbruchtext](produktkonzept-bilder/17-tageswerk-ruecknahme-vorher.png)
 
-![Arbeitsbereich mit zusätzlichen problematischen Standarddateien](I:/Anvil/anleitungen/produktkonzept-bilder/18-tageswerk-speicherkonflikt.png)
+![Arbeitsbereich mit zusätzlichen problematischen Standarddateien](produktkonzept-bilder/18-tageswerk-speicherkonflikt.png)
 
-![Endstand nach Rücknahme und erneutem Öffnen](I:/Anvil/anleitungen/produktkonzept-bilder/19-tageswerk-endstand.png)
+![Endstand nach Rücknahme und erneutem Öffnen](produktkonzept-bilder/19-tageswerk-endstand.png)
 
 Alle Anwendungsänderungen stammen aus Aufträgen, die in Anvils Oberfläche eingegeben wurden. Es wurde kein Anwendungscode als externe Testvorlage vorgeschrieben und keine Modellantwort simuliert. Die ergänzenden Datei- und Quelltextlesungen dienten der Kontrolle des Speicherergebnisses und der Eingrenzung beobachteter Probleme.
 

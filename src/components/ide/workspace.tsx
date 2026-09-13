@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityBar } from "./activity-bar";
+import { AgentSupportPane } from "./agent-support-pane";
 import { HelpGuide } from "./help-guide";
 import { useHelpTour } from "@/lib/help-guide";
 import { FileTree } from "./file-tree";
@@ -93,7 +94,7 @@ export function Workspace() {
     if (!compact) return;
     return useIde.subscribe((s, prev) => {
       if (s.activePath !== prev.activePath && s.activePath) setCompactPane("editor");
-      else if (s.sidebar !== prev.sidebar) setCompactPane(s.sidebar ? "files" : "editor");
+      else if (s.sidebar !== prev.sidebar) setCompactPane(s.sidebar ? "files" : prev.sidebar === "workflows" ? "agent" : "editor");
       else if (s.panels.agent !== prev.panels.agent && s.panels.agent) setCompactPane("agent");
       else if (s.panels.trail !== prev.panels.trail && s.panels.trail) setCompactPane("trail");
       else if (s.panels.output !== prev.panels.output && s.panels.output) setCompactPane("output");
@@ -880,6 +881,7 @@ export function Workspace() {
 }
 
 function sideBody(id: ReturnType<typeof useIde.getState>["sidebar"]): ReactNode {
+  if (id === "workflows" || id === "connection") return <AgentSupportPane section={id} />;
   if (id === "search") return <SearchPane />;
   if (id === "git") return <GitPane />;
   if (id === "ext") return <ExtensionsPane />;

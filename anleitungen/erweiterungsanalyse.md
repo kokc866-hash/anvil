@@ -1,8 +1,10 @@
-# Anvil: Welche Erweiterungen sich als Nächstes lohnen
+# Anvil: Erweiterungsanalyse vom 12. September 2026
 
-Stand: 12. September 2026 · Produkt- und Erweiterungsanalyse
+Historische Produkt- und Erweiterungsanalyse. Einordnung aktualisiert am 13. September 2026.
 
-**Umsetzungsstand:** Die erste Ausbaustufe dieser Analyse samt dauerhaftem Entfernen eigener Plugins ist inzwischen lokal implementiert. Bedienwege, Abnahmen und die ausdrücklich begrenzte ACP-Vorschau stehen in [Erweiterungen in Anvil](erweiterungen.md). Die folgenden Abschnitte dokumentieren die ursprüngliche Bewertung vor der Umsetzung.
+**Umsetzungsstand:** Die erste Ausbaustufe samt dauerhaftem Entfernen eigener Plugins, Skill-Paketen, Bedienprüfungen und Dienstanmeldung ist inzwischen veröffentlicht. Release 1.3.26 ergänzt automatische Kataloge nach Neustart, die Neon-Kompatibilitätskorrektur und eine stabile Marktsuche. Der Eigentümer hat funktionierende Erweiterungen und ihre Erkennung durch den Agenten bestätigt. Bedienwege und Nachweise stehen in [Erweiterungen in Anvil](erweiterungen.md) und [Dienste](dienste.md); ACP bleibt eine ausdrücklich begrenzte Vorschau.
+
+**Die folgenden Abschnitte sind historische Bewertung vor der Umsetzung.** Aussagen über fehlende Funktionen, Prioritäten und noch nicht erfolgte Veröffentlichung beschreiben den damaligen Stand, keine aktuelle Aufgabenliste. Den heutigen Umfang von Rücknahme und Projektsicherung erklärt das [Editor-Handbuch](editor.md).
 
 ## Executive Summary
 
@@ -117,4 +119,4 @@ Dies ist eine Analyse, keine Umsetzung oder neue Abnahme. Grundlage sind lokale 
 
 Die Aufwandseinstufungen beschreiben den begrenzten vorgeschlagenen Umfang und sind Schätzungen: klein = vorwiegend vorhandene Informationen zusammenführen; mittel = vorhandene Bausteine mit neuer Import-/Paketlogik verbinden; groß = neue Ausführungs- oder Sitzungssteuerung. Sie sind weder Termine noch ein Verhältnis von Arbeitsstunden.
 
-Die noch offene öffentliche Veröffentlichung — einschließlich der von dir vertagten Eigentümerangaben und Signierung sowie fehlender Abnahme in einer sauberen Windows-Umgebung — wird durch Erweiterungen nicht automatisch abgeschlossen.
+Zum Zeitpunkt der Analyse war die Veröffentlichung noch offen. Inzwischen ist 1.3.26 ausdrücklich unsigniert veröffentlicht und auf einem frischen GitHub-Windows-Runner geprüft. Die vertagten Eigentümerangaben und Signierung sowie zusätzliche Nachweise auf unverändertem Endnutzer-Windows und mit echten Altversionsmigrationen bleiben davon getrennt.

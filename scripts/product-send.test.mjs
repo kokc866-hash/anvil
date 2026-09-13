@@ -4,7 +4,7 @@ import path from "node:path";
 import { createServer } from "vite";
 
 test("product send boundaries preserve drafts and keep guided reviews read-only", async (t) => {
-  const savedGlobals = new Map(["window", "document", "localStorage", "fetch", "__productModelCalls", "__productNextResponse"].map(key => [key, globalThis[key]]));
+  const savedGlobals = new Map(["window", "document", "localStorage", "fetch", "__productModelCalls", "__productNextResponse", "__productNextRun", "__productNextPlan"].map(key => [key, globalThis[key]]));
   const values = new Map();
   const timers = new Set();
   globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
@@ -25,10 +25,14 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
     server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom",
     plugins: [{
       name: "product-test-model-boundary",
-      resolveId(id) { if (id === "virtual:product-model-boundary") return "\0product-model-boundary"; },
-      load(id) { if (id === "\0product-model-boundary") return `export async function chatWithProvider(options) { globalThis.__productModelCalls.push(options); const next=globalThis.__productNextResponse; delete globalThis.__productNextResponse; return next || {ok:true,reply:"Read-only fixture response; no execution performed."}; }`; },
+      resolveId(id) { if (id === "virtual:product-model-boundary") return "\0product-model-boundary"; if (id === "virtual:product-run-boundary") return "\0product-run-boundary"; if (id === "virtual:product-plan-boundary") return "\0product-plan-boundary"; },
+      load(id) {
+        if (id === "\0product-model-boundary") return `export async function chatWithProvider(options) { globalThis.__productModelCalls.push(options); const next=globalThis.__productNextResponse; delete globalThis.__productNextResponse; return typeof next === "function" ? next(options) : next || {ok:true,reply:"Read-only fixture response; no execution performed."}; }`;
+        if (id === "\0product-run-boundary") return `export async function runFile(path, files) { if (!globalThis.__productNextRun) throw Error("Unexpected automatic run"); return globalThis.__productNextRun(path, files); }`;
+        if (id === "\0product-plan-boundary") return `export async function brainPlanText() { const next=globalThis.__productNextPlan; delete globalThis.__productNextPlan; return next || []; }`;
+      },
       transform(code, id) {
-        if (id.replaceAll("\\", "/").endsWith("/src/lib/chat-session.ts")) return code.replace('import { chatWithProvider } from "@/lib/agent-client";', 'import { chatWithProvider } from "virtual:product-model-boundary";');
+        if (id.replaceAll("\\", "/").endsWith("/src/lib/chat-session.ts")) return 'import { brainPlanText } from "virtual:product-plan-boundary";\n' + code.replace(/  brainPlanText,\r?\n/, '').replace('import { chatWithProvider } from "@/lib/agent-client";', 'import { chatWithProvider } from "virtual:product-model-boundary";').replace('import { runFile } from "@/lib/run-client";', 'import { runFile } from "virtual:product-run-boundary";');
       },
     }],
   });
@@ -69,8 +73,8 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
     return JSON.stringify({ files: s.files, dirty: s.dirty, pendingDiffs: s.pendingDiffs, queue: s.agentQueue, chat: s.chat, draft: s.agentDraft, busy: s.agentBusy, job: s.agentJob, mode: s.agentMode, checkpoints: s.checkpoints });
   };
 
-  await t.test("unsupported CLI images reject before callbacks, queueing, checkpoints or model calls", async () => {
-    for (const [provider, busy] of [["codex", false], ["anthropic", false], ["github", true]]) {
+  await t.test("text-only helper images reject before callbacks, queueing, checkpoints or model calls", async () => {
+    for (const [provider, busy] of [["brain", false], ["brain", true]]) {
       reset({ llmProvider: provider, llmAuthMode: "abo", agentBusy: busy });
       const request = input("Keep this request", ["data:image/png;base64,AAAA"]);
       const before = unchangedData();
@@ -93,6 +97,18 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
     assert.match(useIde.getState().notice, /Entwurf bleibt erhalten/);
     assert.equal(globalThis.__productModelCalls.length, 0);
     assert.equal(networkCalls, 0);
+  });
+
+  await t.test("CLI image-only requests preserve images through chat routing for every supported subscription", async () => {
+    for (const provider of ["codex", "anthropic", "github"]) {
+      reset({ llmProvider: provider, llmAuthMode: "abo", llmModel: "gpt-5.6-terra" });
+      const image = "data:image/png;base64,AAAA";
+      const count = globalThis.__productModelCalls.length;
+      await sendChat(input("", [image]).value);
+      assert.equal(globalThis.__productModelCalls.length, count + 1, provider);
+      assert.deepEqual(useIde.getState().chat.find(m => m.role === "user").images, [image]);
+      assert.ok(JSON.stringify(globalThis.__productModelCalls.at(-1)).includes(image), `${provider} carries image to model boundary`);
+    }
   });
 
   await t.test("image-only API input reaches the model with a useful request and retained image", async () => {
@@ -188,5 +204,108 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
         assert.equal(useIde.getState().agentBusy, false);
       }
     }
+  });
+  await t.test("a no-write agent round preserves SVG source and binary image data", async () => {
+    const assets = { "badge.svg": '<svg width="128" height="128"><rect rx="16" fill="#ff3333"/></svg>', "icon.png": "data:image/png;base64,AQIDBA==" };
+    reset({ agentMode: "agent", files: assets, autoRunAgent: false, testLoop: false, autoAcceptDiffs: true });
+    globalThis.__productNextResponse = options => ({ ok: true, reply: "Nur geprüft, keine Änderung.", files: options.files, tools: [] });
+    await sendChat(input("Prüfe die vorhandenen Dateien ohne Änderungen.", []).value);
+    const options = globalThis.__productModelCalls.at(-1);
+    assert.deepEqual(Object.fromEntries(options.files.map(f => [f.path, f.content])), assets);
+    for (const [name, source] of Object.entries(assets)) assert.equal(useIde.getState().files[name], source, name);
+    assert.deepEqual(useIde.getState().pendingDiffs, []);
+  });
+  await t.test("an already applied snapshot cannot overwrite a newer edit at completion", async () => {
+    reset({ agentMode: "agent", files: { "index.html": "before" }, autoRunAgent: false, testLoop: false, autoAcceptDiffs: true });
+    globalThis.__productNextResponse = async options => {
+      await options.onWorkspace({ op: "write", path: "index.html", content: "agent edit" });
+      useIde.getState().writeFile("index.html", "newer user edit");
+      return { ok: true, reply: "Fertig", applied: true, files: [{ path: "index.html", content: "agent edit" }] };
+    };
+    await sendChat(input("Ändere den vorhandenen Text.", []).value);
+    assert.equal(useIde.getState().files["index.html"], "newer user edit");
+  });
+  await t.test("the real agent loop updates the visible locked checklist and replaces premature streamed completion", async () => {
+    const { runAgentLoop } = await server.ssrLoadModule('/src/lib/agent-core.ts');
+    reset({ agentMode: "agent", autoRunAgent: false, runLoop: false, testLoop: false, afterWrite: "none", planWho: "anvil" });
+    const labels = ['Bestandsaufnahme des Dokuments', 'Titelkorrektur'];
+    globalThis.__productNextResponse = async options => {
+      useIde.getState().setChatPlan(labels.map(text => ({ text, status: 'todo' })));
+      assert.equal(options.canReplacePlan(), false);
+      let n = 0;
+      const tool = (name, args) => ({ content: '', tool_calls: [{ id: `p${n}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
+      return runAgentLoop({ messages: options.messages, files: options.files, runLoop: false, afterWrite: 'none', maxRounds: 12 }, async () => {
+        if (++n === 1) return tool('read_file', { path: 'index.html' });
+        if (n === 2) return tool('edit_file', { path: 'index.html', old_string: 'Original project', new_string: 'Updated project' });
+        if (n === 3) { options.onDelta('Vorläufig schon fertig.'); return { content: 'Titel angepasst.' }; }
+        if (n === 4) return tool('set_plan', { updates: labels.map((_, i) => ({ step: i + 1, kind: i ? 'edit' : 'read', status: 'ok', evidence: [`e${i + 1}`], reason: 'Document inspected and title changed.' })) });
+        return { content: 'Titel geändert; Dokument vorher gelesen.' };
+      }, options);
+    };
+    await sendChat(input('Ändere den Titel im Dokument. Kein Run nötig.', []).value);
+    const message = useIde.getState().chat.at(-1);
+    assert.deepEqual(message.plan.map(s => s.text), labels);
+    assert.deepEqual(message.plan.map(s => s.status), ['ok', 'ok']);
+    assert.doesNotMatch(message.content, /Vorläufig/);
+    assert.match(message.content, /Titel geändert/);
+    assert.equal(useIde.getState().files['index.html'], '<p>Updated project</p>');
+  });
+
+  await t.test("a delayed helper cannot replace progress during or after the request", async () => {
+    for (const timing of ['during', 'after']) {
+      reset({agentMode:'agent',planWho:'helper',autoRunAgent:false,testLoop:false});
+      let resolvePlan;
+      globalThis.__productNextPlan = new Promise(resolve => { resolvePlan = resolve; });
+      globalThis.__productNextResponse = async () => {
+        useIde.getState().setChatPlan([{text:'Vorhandener Fortschritt',status:'ok'}]);
+        if (timing === 'during') { resolvePlan(['Neue Liste','Überschreibt Fortschritt','Nicht zulässig']); await new Promise(resolve => setTimeout(resolve,0)); }
+        return {ok:true,reply:'Abgeschlossen.'};
+      };
+      await sendChat(input('Erkläre das Projekt.',[]).value);
+      if (timing === 'after') { resolvePlan(['Späte Liste','Arbeit vorbei','Nicht zulässig']); await new Promise(resolve => setTimeout(resolve,0)); }
+      assert.deepEqual(useIde.getState().chat.at(-1).plan,[{text:'Vorhandener Fortschritt',status:'ok'}]);
+    }
+  });
+
+  await t.test("round limit stays visibly incomplete throughout a successful automatic Run", async () => {
+    reset({ agentMode: "agent", files: { "main.js": "console.log(1)" }, autoRunAgent: true, runInWindow: false, testLoop: false, planWho: "agent" });
+    const reply = "Unterbrochen: Rundenlimit 8/8 erreicht. Auftrag noch offen.";
+    globalThis.__productNextResponse = options => {
+      options.onHarness("Arbeit · Runden 8/8 · Run 3/3 · Tools 46/64");
+      return { ok: false, stopReason: "round-limit", error: "Rundenlimit", modelReply: reply, reply, runPaths: ["main.js"], tools: ["edit_file"] };
+    };
+    globalThis.__productNextRun = async () => {
+      const message = useIde.getState().chat.at(-1);
+      assert.match(message.harness, /^Unterbrochen · Rundenlimit/);
+      assert.match(message.harness, /Runden 8\/8/);
+      return { ok: true, stdout: "1", stderr: "", duration: 0.01, label: "main.js" };
+    };
+    await sendChat(input("Schreibe das Programm und prüfe es.", []).value);
+    const message = useIde.getState().chat.at(-1);
+    assert.match(message.harness, /^Unterbrochen · Rundenlimit/);
+    assert.match(message.harness, /Runden 8\/8/);
+    assert.equal(message.content, reply);
+    assert.equal(message.lastRun.ok, true, "successful Run is still recorded separately");
+  });
+
+  await t.test("automatic execution replaces stale completion text and updates the visible plan", async () => {
+    reset({ agentMode: "agent", files: { "main.js": "console.log(1)" }, autoRunAgent: true, runInWindow: false, testLoop: false, planWho: "agent" });
+    globalThis.__productNextResponse = options => {
+      options.onTool({ name: "set_plan", args: {}, result: { steps: ["Ändern", "Run"] } });
+      options.onToolStart({ name: "edit_file", args: { path: "main.js" } });
+      options.onTool({ name: "edit_file", args: { path: "main.js" }, result: { ok: true } });
+      return { ok: true, modelReply: "Berechnung korrigiert.", reply: "Noch nicht bestätigt: alter Stand\n\nModellantwort:\nBerechnung korrigiert.", verification: { state: "stale", detail: "alter Stand" }, runPaths: ["main.js"], tools: ["edit_file", "run_file"] };
+    };
+    globalThis.__productNextRun = async path => { assert.equal(path, "main.js"); return { ok: true, stdout: "1", stderr: "", duration: 0.01, label: path }; };
+    await sendChat(input("Korrigiere die Berechnung und führe sie aus.", []).value);
+    const message = useIde.getState().chat.at(-1);
+    assert.equal(message.content, "Berechnung korrigiert.\n\nAutomatischer Run nach der letzten Änderung erfolgreich.");
+    assert.ok(message.plan.every(step => step.status === "ok"));
+    assert.doesNotMatch(message.harness, /offen/);
+    globalThis.__productNextResponse = { ok: true, modelReply: "Alte Erfolgsaussage.", reply: "Alte Erfolgsaussage.", runPaths: ["main.js"] };
+    globalThis.__productNextRun = async () => { throw new Error("Run-Verbindung getrennt"); };
+    await sendChat(input("Führe den aktuellen Stand erneut aus.", []).value);
+    assert.match(useIde.getState().chat.at(-1).content, /Run-Verbindung getrennt/);
+    assert.doesNotMatch(useIde.getState().chat.at(-1).content, /Alte Erfolgsaussage/);
   });
 });

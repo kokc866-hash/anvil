@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fetchModels, normalizeBaseUrl } from "./connection.ts";
-import { cliKindFor, cliPrompt, parseCliChoice } from "./cli-protocol.ts";
+import { cliKindFor, cliPrompt, cliRequest, parseCliChoice } from "./cli-protocol.ts";
 
 test("explicit Custom prefixes and full completion URLs are normalized consistently", () => {
   assert.equal(normalizeBaseUrl("http://localhost:1234"), "http://localhost:1234/v1");
@@ -75,14 +75,24 @@ test("CLI tool requests return to Anvil; unadvertised tools and malformed output
   assert.match(cliPrompt([{ role: "tool", content: "file result" }], []), /file result/);
 });
 
-test("CLI keeps user image validation and MCP text results", () => {
+test("CLI keeps user/MCP images and text with ordered references", () => {
   const image = { type: "image_url", image_url: { url: "data:image/png;base64,dGVzdA==" } };
-  assert.throws(() => cliPrompt([{ role: "user", content: [{ type: "text", text: "Describe my image" }, image] }], []), /Bilder werden/);
+  assert.deepEqual(cliRequest([{ role: "user", content: [{ type: "text", text: "Describe my image" }, image] }], []).images, [image.image_url.url]);
   const original = [{ role: "user", mcpResult: true, content: [{ type: "text", text: "Structured result: 42" }, image] }];
   const copy = JSON.stringify(original);
-  const prompt = cliPrompt(original, []);
+  const { prompt, images } = cliRequest(original, []);
   assert.match(prompt, /Structured result: 42/);
-  assert.match(prompt, /keine Bildsicht behaupten/);
+  assert.match(prompt, /Attached image 1/);
+  assert.deepEqual(images, [image.image_url.url]);
   assert.doesNotMatch(prompt, /data:image/);
   assert.equal(JSON.stringify(original), copy);
+});
+
+test("CLI image mapping deduplicates repeated images and rejects URLs without fetching", () => {
+  const a = "data:image/png;base64,YQ==", b = "data:image/jpeg;base64,Yg==";
+  const part = (url: string) => ({ type: "image_url", image_url: { url } });
+  const request = cliRequest([{role:"user",content:[part(a),part(b),part(a)]}], []);
+  assert.deepEqual(request.images, [a,b]);
+  assert.equal((request.prompt.match(/Attached image 1/g)||[]).length,2);
+  assert.throws(()=>cliRequest([{role:"user",content:[part("https://private.example/image.png")]}], []),/Externe Bildadressen/);
 });

@@ -102,6 +102,7 @@ describe("ref paths", () => {
     assert.equal(modelSeesImages("grok", "grok-4"), true);
     assert.equal(modelSeesImages("ollama", "llama3.1"), false);
     assert.equal(modelSeesImages("ollama", "llava"), true);
+    assert.equal(modelSeesImages("github", "gpt-5.6-terra"), true);
   });
   it("imageStub is short", () => {
     const s = imageStub("ref/a.png", "data:image/png;base64," + "a".repeat(1000));

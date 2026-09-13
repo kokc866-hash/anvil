@@ -172,7 +172,7 @@ test("MCP catalog lifecycle, scoped calls and cancellation", async (t) => {
       async () => {
         const { beginAgent } = await vite.ssrLoadModule("/src/lib/abort.ts");
         const { runAgentLoop } = await vite.ssrLoadModule("/src/lib/agent-core.ts");
-        const { cliPrompt } = await vite.ssrLoadModule("/src/lib/cli-protocol.ts");
+        const { cliRequest } = await vite.ssrLoadModule("/src/lib/cli-protocol.ts");
         beginAgent();
         let round = 0;
         const routed = [],
@@ -232,7 +232,7 @@ test("MCP catalog lifecycle, scoped calls and cancellation", async (t) => {
           picture = last.find((m) => m.mcpResult);
         assert.ok(picture);
         assert.doesNotMatch(JSON.stringify(picture), /Graph.Frame|Bug →/);
-        assert.match(cliPrompt(last, []), /Über diese CLI nur Text/);
+        assert.ok(cliRequest(last, []).images.length > 0, "CLI now transports MCP result images");
         const result = JSON.parse(
           last.find((m) => m.role === "tool" && m.tool_call_id === "mcp_read_resource").content,
         );

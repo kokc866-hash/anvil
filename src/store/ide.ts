@@ -236,6 +236,7 @@ export const useIde = create<IdeState>()(
       loopTries: 3,
       harnessAfterWrite: "run",
       harnessMaxRounds: 24,
+      harnessAutoContinue: true,
       graphSees: 4,
       liveRun: true,
       liveEditor: true,
@@ -378,6 +379,7 @@ export const useIde = create<IdeState>()(
       setLoopTries: (n) => set({ loopTries: Math.min(5, Math.max(1, n | 0)) }),
       setHarnessAfterWrite: (harnessAfterWrite) => set({ harnessAfterWrite }),
       setHarnessMaxRounds: (n) => set({ harnessMaxRounds: Math.min(48, Math.max(8, n | 0) || 24) }),
+      setHarnessAutoContinue: (harnessAutoContinue) => set({ harnessAutoContinue }),
       setGraphSees: (n) => set({ graphSees: Math.min(8, Math.max(0, n | 0)) }),
       setLiveRun: (liveRun) => set({ liveRun }),
       setLiveEditor: (liveEditor) => set({ liveEditor }),
@@ -629,6 +631,7 @@ export const useIde = create<IdeState>()(
       restoreCheckpoint: async (id) => {
         const c = get().checkpoints.find((x) => x.id === id);
         if (!c) { get().setNotice("Kein gesicherter Rundenstand vorhanden."); return false; }
+        if (c.disk) return (await import("@/lib/project-checkpoints")).restoreProjectRound(id);
         if (c.workspace && c.workspace !== (get().workspaceCwd || get().memoryWorkspace)) { get().setNotice("Diese Rücknahme gehört zu einem anderen Projekt."); return false; }
         if (get().agentBusy || get().pathOperation) { get().setNotice("Laufende Arbeit zuerst abschließen lassen."); return false; }
         const initial = get(), target = captureDiskTarget();
@@ -1241,7 +1244,7 @@ export const useIde = create<IdeState>()(
             lastRequestTokens: null, agentJob: null, agentQueue: [], agentInbox: null,
           } : {}),
           workspaceEpoch: keepDirty ? prev.workspaceEpoch : prev.workspaceEpoch + 1,
-          ...(!keepDirty ? { lspProblems: [], compileProblems: [], companionProblems: [], runProblems: [], jumpStack: [], jumpIndex: -1 } : {}),
+          ...(!keepDirty ? { testResults: {}, testsRunning: false, output: [], lspProblems: [], compileProblems: [], companionProblems: [], runProblems: [], jumpStack: [], jumpIndex: -1 } : {}),
           editBases: keepDirty ? prev.editBases : {},
           dirs: [...new Set([...(extraDirs ?? []), ...fromFiles])].filter(Boolean),
           openPaths: keepOpen.length ? keepOpen : keepActive ? [keepActive] : [],
@@ -1340,6 +1343,7 @@ export const useIde = create<IdeState>()(
         const last = chat[chat.length - 1];
         if (last?.role === "assistant") {
           const stopped = /^(?:gestoppt|abgebrochen)\b/i.test(reply.trim());
+          const interrupted = stopped || Boolean(options?.incompleteReason);
           const echo = isToolTemplateEcho(last.content) || isToolTemplateEcho(reply);
           const now = Date.now();
           chat[chat.length - 1] = {
@@ -1347,16 +1351,16 @@ export const useIde = create<IdeState>()(
             content: stopped ? stoppedAssistantContent(last.content, reply) : options?.replace || echo ? reply : last.content.trim() ? last.content : reply,
             tools: tools ?? last.tools,
             ms: now - (last.at || now),
-            steps: last.steps?.map((s) => (s.status === "run" ? { ...s, status: stopped ? "err" : "ok", ms: now - (s.at || now) } : s)),
+            steps: last.steps?.map((s) => (s.status === "run" ? { ...s, status: interrupted ? "err" : "ok", ms: now - (s.at || now) } : s)),
             plan: last.plan?.map((s) => {
               if (s.status !== "run" && s.status !== "todo") return s;
               if (s.status === "run") {
                 const runFailed = last.lastRun && last.lastRun.ok === false && /run|ausführ/i.test(s.text);
-                return { ...s, status: stopped || runFailed ? "err" : "todo" };
+                return { ...s, status: interrupted || runFailed ? "err" : "todo" };
               }
               return s;
             }),
-            harness: finishedHarness(last.harness, last.plan, stopped, get().locale),
+            harness: finishedHarness(last.harness, last.plan, interrupted, get().locale, options?.incompleteReason),
           };
           set({ chat });
           return;
@@ -1366,10 +1370,12 @@ export const useIde = create<IdeState>()(
       setDiskName: (diskName) => set({ diskName }),
       setWorkspaceCwd: (value) => {
         const workspaceCwd = value.trim();
+        const switched = get().workspaceCwd !== workspaceCwd;
         // Clear the browser destination synchronously before publishing a native
         // target, including Git/ZIP paths that do not use openOsWorkspace.
         if (workspaceCwd) void clearLocation("workspace");
-        set({ workspaceCwd, workspaceEpoch: get().workspaceEpoch + (get().workspaceCwd === workspaceCwd ? 0 : 1),
+        set({ workspaceCwd, workspaceEpoch: get().workspaceEpoch + (switched ? 1 : 0),
+          ...(switched ? { testResults: {}, testsRunning: false, output: [] } : {}),
           ...(workspaceCwd ? { diskName: workspaceCwd.replace(/\\/g, "/").split("/").pop() || workspaceCwd } : {}),
         });
       },

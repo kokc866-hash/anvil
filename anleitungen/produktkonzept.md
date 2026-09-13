@@ -2,15 +2,15 @@
 
 Produktkonzept · 12. September 2026 · Entwurf zur Umsetzung
 
-**Umsetzung fortgeschrieben:** Die konkreten Produktarbeiten 1–6 sind im [Produktabschluss](produktabschluss.md) dokumentiert. Die folgenden konzeptionellen Aussagen sind weiterhin als Vorschläge beziehungsweise historische Beobachtungen zu lesen, nicht als aktuelle Fehlerliste.
+**Historisches Konzept:** Die folgenden Vorschläge, Verbindungstabellen und Beobachtungen beschreiben den Entwurfsstand vom 12. September. Die Produktarbeiten sind im [Produktabschluss](produktabschluss.md) dokumentiert; heutige CLI-Fähigkeiten und Projektsicherung stehen unter [Verbindungen](05-verbindungen.md) und [Editor](editor.md). Die damaligen Formulierungen sind keine aktuelle Fehlerliste oder Freigabe späterer Änderungen.
 
-**Neuester Praxisnachweis:** Im [Tageswerk-Test](I:/Anvil/anleitungen/praxistest-tageswerk.md) wurde ein Projekt über die echte Anvil-Oberfläche neu angelegt, durch Ollama gebaut, selbst bedient, über Codex korrigiert und nach Neustart weiterbearbeitet. Der Kernablauf trägt. Die dabei belegten Fehler bei Neustart/Rundenrücknahme und Prüf-/Abbruchmeldungen sind inzwischen repariert und in der neu gebauten Desktop-Oberfläche gezielt nachgeprüft. Damit ist die Verlässlichkeit dieses Projektablaufs verbessert; die unten beschriebene Produktpositionierung bleibt ein Vorschlag.
+**Neuester Praxisnachweis:** Im [Tageswerk-Test](praxistest-tageswerk.md) wurde ein Projekt über die echte Anvil-Oberfläche neu angelegt, durch Ollama gebaut, selbst bedient, über Codex korrigiert und nach Neustart weiterbearbeitet. Der Kernablauf trägt. Die dabei belegten Fehler bei Neustart/Rundenrücknahme und Prüf-/Abbruchmeldungen sind inzwischen repariert und in der neu gebauten Desktop-Oberfläche gezielt nachgeprüft. Damit ist die Verlässlichkeit dieses Projektablaufs verbessert; die unten beschriebene Produktpositionierung bleibt ein Vorschlag.
 
 **Empfehlung:** Anvil soll seinen Einstieg um eine erfolgreiche Arbeit am eigenen Projekt aufbauen: öffnen, KI verbinden, ändern, prüfen. Die vorhandenen Funktionen bleiben erhalten; technische Einzelheiten erscheinen dort, wo sie gebraucht werden.
 
 Dieses Konzept beantwortet die vier Punkte der Produktbewertung: Verständlichkeit, Vertrauen beim Start und bei Dateien, Unterschiede der Modellverbindungen und erkennbare Positionierung. Es enthält Vorschläge, keine bereits umgesetzte Neugestaltung.
 
-**Aktualisierung nach Praxistest und Reparatur:** Der [Testbericht](I:/Anvil/anleitungen/produkttest.md) dokumentiert den ursprünglichen Fehler und die erfolgreiche erneute Abnahme. Der Codex-CLI-Ablauf läuft nach der Reparatur trotz eigener Ergebnisbilder bis zum Abschluss. Eindeutige Einstiegskategorien, verständliche lokale Verbindungsfehler und native Ordnerwahl sind ebenfalls umgesetzt. Die positive Nachprüfung des großen Desktop-Layouts bleibt bestehen. Die folgenden früheren Beobachtungen sind jeweils ihrem damaligen Prüfstand zugeordnet; weitergehende Vereinfachungen sind weiterhin Vorschläge.
+**Aktualisierung nach Praxistest und Reparatur:** Der [Testbericht](produkttest.md) dokumentiert den ursprünglichen Fehler und die erfolgreiche erneute Abnahme. Der Codex-CLI-Ablauf läuft nach der Reparatur trotz eigener Ergebnisbilder bis zum Abschluss. Eindeutige Einstiegskategorien, verständliche lokale Verbindungsfehler und native Ordnerwahl sind ebenfalls umgesetzt. Die positive Nachprüfung des großen Desktop-Layouts bleibt bestehen. Die folgenden früheren Beobachtungen sind jeweils ihrem damaligen Prüfstand zugeordnet; weitergehende Vereinfachungen sind weiterhin Vorschläge.
 
 ## 1. Produktversprechen und erste Zielgruppe
 
@@ -34,7 +34,7 @@ Geprüft wurde die aktuelle lokale Oberfläche in einer getrennten Browser-Vorsc
 
 ### Schritt 1 – Ersteinrichtung: hoher Verbesserungsbedarf
 
-![Ersteinrichtung mit Modellfeldern und Verbindungsfehler](I:/Anvil/anleitungen/produktkonzept-bilder/01-einstieg.png)
+![Ersteinrichtung mit Modellfeldern und Verbindungsfehler](produktkonzept-bilder/01-einstieg.png)
 
 **Gut:** Der Einstieg benennt drei Schritte und einen Projektordner. **Problem:** Schon die Modellwahl verlangt Serveradresse, Schlüssel und Modellnamen. Zwei Kategorien heißen „Eingebaut“. Die nicht erreichbare Standardverbindung zeigt einen technischen Fehler einschließlich HTTP-/Verbindungsdetails. **Vorschlag:** verständliche Zugangsarten, Erkennung vorhandener Verbindungen und ein Fehler mit einer passenden Handlung.
 
@@ -42,7 +42,7 @@ Geprüft wurde die aktuelle lokale Oberfläche in einer getrennten Browser-Vorsc
 
 ### Schritt 2 – Einrichtung fortsetzen: zu viele Entscheidungen
 
-![Compiler- und Sprachserveroptionen vor Abschluss der Einrichtung](I:/Anvil/anleitungen/produktkonzept-bilder/02-einrichtung-details.png)
+![Compiler- und Sprachserveroptionen vor Abschluss der Einrichtung](produktkonzept-bilder/02-einrichtung-details.png)
 
 **Gut:** Überspringen ist möglich; die unterstützten Laufzeiten sind konkret benannt. **Problem:** Compiler, Sprachserver und deren Detailwerte verlängern den Einstieg erheblich. „Fertig, loslegen“ steht nach diesen Optionen. **Vorschlag:** Laufzeiten erst anbieten, wenn das gewählte Projekt sie benötigt; Details bleiben unter „Erweitert“.
 
@@ -50,7 +50,7 @@ Geprüft wurde die aktuelle lokale Oberfläche in einer getrennten Browser-Vorsc
 
 ### Schritt 3 – Arbeitsplatz: im tatsächlichen Desktop-Fenster klar aufgeteilt
 
-![Anvil direkt auf dem Rechner im maximierten Fenster](I:/Anvil/anleitungen/produktkonzept-bilder/05-arbeitsplatz-desktop.png)
+![Anvil direkt auf dem Rechner im maximierten Fenster](produktkonzept-bilder/05-arbeitsplatz-desktop.png)
 
 **Gut:** Der Editor hat viel Platz; Spur und Chat stehen klar getrennt rechts, die Konsole darunter. Im betrachteten Zustand sind keine überlagerten Arbeitsbereiche zu sehen. Die Spur zeigt konkrete Lese-, Änderungs-, Run- und Play-Schritte einschließlich Ergebnisbildern. Das macht Anvils Arbeitsablauf am vorhandenen Projekt nachvollziehbar. **Korrektur:** Der Eindruck eines zusammengedrängten Arbeitsplatzes entstand durch das zu kleine Vorschaufenster. Eine Umgestaltung oder zusätzliche Einklappfunktion lässt sich daraus nicht begründen.
 
@@ -60,7 +60,7 @@ Geprüft wurde die aktuelle lokale Oberfläche in einer getrennten Browser-Vorsc
 
 ### Schritt 4 – Verbindungseinstellungen: leistungsfähig, erklärungsbedürftig
 
-![Agenteneinstellungen mit zahlreichen Kategorien und Anbieterwahl](I:/Anvil/anleitungen/produktkonzept-bilder/04-verbindung.png)
+![Agenteneinstellungen mit zahlreichen Kategorien und Anbieterwahl](produktkonzept-bilder/04-verbindung.png)
 
 **Gut:** Suche, Anbietergruppen und der Hinweis auf Einschränkungen der Browser-Vorschau sind vorhanden. **Problem:** Dreizehn Kategorien sowie die Erklärung von Hauptmodell, App und Helfer vermitteln zuerst Anvils Aufbau. Anbieterbeschreibungen gehen schnell in Serverdetails über. **Vorschlag:** vor den Details eine kurze Zusammenfassung der gewählten Verbindung und eine aufgabenbezogene Orientierung.
 

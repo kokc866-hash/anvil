@@ -6,7 +6,7 @@ import { LongRequestHint } from "./request-status";
 export { ThinkBlock, Trail, AgentTodo, HelperLaneBits, LiveTools } from "./chat-trail";
 import { sendChat } from "@/lib/chat-session";
 import { queuedChatRequest } from "@/lib/chat-queue";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ImagePlus, Plus, Send, Square, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -26,8 +26,6 @@ import { cn } from "@/lib/cn";
 import { useIde, type AgentMode } from "@/store/ide";
 import { SurfaceSwitch } from "./surface-switch";
 import { HelperPrompts } from "./helper-prompts";
-import { ProductWorkflows } from "./product-workflows";
-import { ConnectionSummary } from "./connection-summary";
 import { connectionCapabilities, imageAttachmentError } from "@/lib/connection-capabilities";
 import { t, useT } from "@/lib/i18n";
 import { getDrag, importDropped } from "@/lib/dnd";
@@ -75,8 +73,29 @@ export function ChatPane() {
   const agentJob = useIde((s) => s.agentJob);
   const agentQueue = useIde((s) => s.agentQueue);
   const scroller = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   const pin = useRef(true);
   const [away, setAway] = useState(false);
+
+  useLayoutEffect(() => {
+    const field = input.current, panel = pane.current;
+    if (!field || !panel) return;
+    let width = -1, height = -1;
+    const resize = () => {
+      const nextWidth = field.clientWidth, nextHeight = panel.clientHeight;
+      if (width === nextWidth && height === nextHeight) return;
+      width = nextWidth; height = nextHeight;
+      field.style.height = "0px";
+      const limit = Math.max(56, Math.min(360, Math.floor(height * 0.45)));
+      field.style.height = `${Math.min(limit, field.scrollHeight + 2)}px`;
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(field);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [draft]);
 
   useEffect(() => {
     if (chat.length) return;
@@ -225,6 +244,7 @@ export function ChatPane() {
 
   return (
     <div
+      ref={pane}
       className={cn("flex h-full min-h-0 flex-col bg-surface", dropOn ? "ring-1 ring-inset ring-accent/40" : "")}
       onDragOver={(e) => {
         e.preventDefault();
@@ -465,9 +485,6 @@ export function ChatPane() {
             </button>
           </div>
         ) : null}
-        <ProductWorkflows />
-        {capabilities.response === "final" && agentBusy ? <p role="status" className="px-3 py-1 text-[11px] text-muted">{locale === "en" ? "CLI working. The answer appears when each model call finishes; stop remains available." : "CLI arbeitet. Die Antwort erscheint nach Abschluss des jeweiligen Modellaufrufs; Abbrechen bleibt möglich."}</p> : null}
-        <details className="px-3 py-1 text-[11px] text-muted"><summary className="cursor-pointer">{locale === "en" ? "Connection and supported inputs" : "Verbindung und unterstützte Eingaben"}</summary><ConnectionSummary /></details>
         {images.length && capabilities.images === "unsupported" ? <p role="alert" className="px-3 py-1 text-xs text-danger">{imageAttachmentError(connection, images.length, locale)} <button type="button" className="underline" onClick={() => setSettingsOpen(true)}>{locale === "en" ? "Choose connection" : "Verbindung wählen"}</button></p> : null}
         {images.length ? (
           <div className="mb-1.5 flex flex-wrap gap-1">
@@ -554,6 +571,7 @@ export function ChatPane() {
                 </label>
               </Tip>
               <textarea
+                ref={input}
                 id="anvil-chat"
                 value={draft}
                 rows={2}
@@ -566,7 +584,7 @@ export function ChatPane() {
                         ? t("chatAsk")
                         : t("chatAgent")
                 }
-                className="min-h-11 flex-1 resize-none rounded-[10px] border border-border bg-bg px-3 py-2 text-sm text-fg outline-none placeholder:text-subtle focus:border-fg/30 focus:ring-0"
+                className="min-h-14 min-w-0 flex-1 resize-none overflow-y-auto rounded-[10px] border border-border bg-bg px-3 py-2 text-sm text-fg outline-none placeholder:text-subtle focus:border-fg/30 focus:ring-0"
                 onPointerDown={(e) => e.currentTarget.focus()}
                 onContextMenu={(e) => {
                   e.preventDefault();

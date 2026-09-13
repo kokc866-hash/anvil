@@ -1,6 +1,7 @@
 import type { TokenUsage, RequestTokens } from "./token-usage";
 import { isExecutablePath } from "./run-target";
-import { automaticRunVerification } from "./agent-evidence";
+import { automaticRunVerification, verifiedReply } from "./agent-evidence";
+import { finishedHarness } from "./chat-finalize";
 import { connectionCapabilities, imageAttachmentError, historyForConnection } from "./connection-capabilities";
 import { chatWithProvider } from "@/lib/agent-client";
 import { completeText } from "@/lib/complete";
@@ -13,7 +14,6 @@ import {
   isSecretPath,
   isRefPath,
   isRefImage,
-  imageStub,
   modelSeesImages,
   REF_DIR,
 } from "@/lib/ref";
@@ -76,6 +76,7 @@ import { resetLiveWrite } from "@/lib/live-write";
 import { attachmentHints } from "@/lib/attachment-hints";
 import { selectFileKeys } from "@/lib/workspace-index";
 import { requestPhase, useRequestState } from "@/lib/request-state";
+import { beginProjectCheckpoint, sealProjectCheckpoint } from "./project-checkpoints";
 
 export async function applyWorkspace(ev: WorkspaceEvent) {
   const s = useIde.getState();
@@ -182,6 +183,9 @@ export async function sendChat(
   const my = beginAgent();
   const workspaceEpoch = useIde.getState().workspaceEpoch;
   let roundVerification: import("./agent-evidence").Verification | undefined;
+  let roundStopReason: import("./agent-core").AgentResult["stopReason"];
+  let roundStopLabel: string | undefined;
+  let diskCheckpointId: string | undefined;
   setAgentBusy(true);
   await import("@/lib/model-context").then((m) => m.applyCloudContext()).catch(() => null);
   if (my !== agentGen()) return;
@@ -204,7 +208,6 @@ export async function sendChat(
         if (my === agentGen()) setTitle(value);
       })
       .catch(() => undefined);
-  emitPlugin("agent", work);
   reflectUtterance(work, "ask");
   try {
     const routed = observeRequest ? { hand: "model" as const } : await anvilHandle(work);
@@ -213,10 +216,14 @@ export async function sendChat(
       finalizeAssistant(routed.reply);
       return;
     }
-    const ck = asking
-      ? [...useIde.getState().chat].reverse().find((m) => m.checkpointId)?.checkpointId ||
-        useIde.getState().pushCheckpoint(work.slice(0, 60))
-      : useIde.getState().pushCheckpoint(work.slice(0, 60));
+    const ck = useIde.getState().pushCheckpoint(work.slice(0, 60));
+    if (!observeRequest) {
+      diskCheckpointId = ck;
+      useIde.setState((state) => ({ chat: state.chat.map((m) => m.id === asstId ? { ...m, checkpointId: ck } : m) }));
+      await beginProjectCheckpoint(ck);
+      if (my !== agentGen()) return;
+    }
+    emitPlugin("agent", work);
     resetLoopFails();
     let s = useIde.getState();
     let extraFiles = [
@@ -292,7 +299,9 @@ export async function sendChat(
       .filter(([path]) => !isSecretPath(path))
       .map(([path, content]) => ({
         path,
-        content: isRefImage(content) ? imageStub(path, content) : content,
+        // This is the execution snapshot, not model prose. read_file creates
+        // binary placeholders at the model boundary; originals must survive the round.
+        content,
       }));
     const onUsage = (usage: TokenUsage, request?: RequestTokens) => {
       if (my !== agentGen()) return;
@@ -353,6 +362,7 @@ export async function sendChat(
           locale: s.locale,
           observeOnly: true,
           maxRounds: 8,
+          autoContinueRounds: false,
           loopTries: 1,
           runLoop: false,
           graphLoop: false,
@@ -416,10 +426,14 @@ export async function sendChat(
       }
       return { chat };
     });
+    const planMessageId = useIde.getState().chat.at(-1)?.id;
     void brainPlanText(work).then((steps) => {
       if (my !== agentGen()) return;
       const st = useIde.getState();
       const last = st.chat.at(-1);
+      // A delayed helper must not install a fresh 0/N list after work has ended
+      // or replace the progress of the active assistant message.
+      if (!st.agentBusy || last?.id !== planMessageId || last?.plan?.some(step => step.status !== "todo") || last?.steps?.some(step => step.status === "ok")) return;
       const who = normalizePlanWho(st.planWho);
       if (!last?.role || !planHelperNow(who, Boolean(last.plan?.length), Boolean(last.planLocked)))
         return;
@@ -475,6 +489,7 @@ export async function sendChat(
       loopTries: s.loopTries,
       afterWrite: s.harnessAfterWrite,
       maxRounds: s.harnessMaxRounds,
+      autoContinueRounds: s.harnessAutoContinue,
       graphSees: s.graphSees,
       onHarness: (bar) => {
         if (my !== agentGen()) return;
@@ -490,7 +505,7 @@ export async function sendChat(
       },
       onToolStart: ({ name, args }) => {
         if (my !== agentGen()) return;
-        const started = planStart(name, useIde.getState().chat.at(-1)?.plan);
+        const started = planStart(name, useIde.getState().chat.at(-1)?.plan, args);
         if (started) useIde.getState().setChatPlan(started);
         addAgentStep({
           name,
@@ -524,6 +539,11 @@ export async function sendChat(
           });
         }
       },
+      getPlan: () => my === agentGen() ? useIde.getState().chat.at(-1)?.plan : undefined,
+      canReplacePlan: () => {
+        const st = useIde.getState();
+        return my === agentGen() && planAgentMayReplace(normalizePlanWho(st.planWho), Boolean(st.chat.at(-1)?.planLocked));
+      },
       onTool: ({ name, args, result: out }) => {
         if (my !== agentGen()) return;
         const err = Boolean(out && typeof out === "object" && ((out as { error?: unknown }).error || (out as { isError?: boolean }).isError));
@@ -533,7 +553,10 @@ export async function sendChat(
             out && typeof out === "object" && "ok" in out && (out as { ok?: boolean }).ok === false,
           );
         if (name === "skill_run") markSkills([String(args.name ?? "")]);
-        if (name === "set_plan" && out && typeof out === "object" && "steps" in out) {
+        if (name === "set_plan" && !failed && out && typeof out === "object" && "plan" in out && Array.isArray(out.plan)) {
+          // Validated by the loop against this request's actual tool results.
+          useIde.getState().setChatPlan(out.plan);
+        } else if (name === "set_plan" && !failed && out && typeof out === "object" && "steps" in out) {
           const st = useIde.getState();
           const last = st.chat.at(-1);
           const who = normalizePlanWho(st.planWho);
@@ -542,10 +565,11 @@ export async function sendChat(
             last?.plan,
             steps,
             !planAgentMayReplace(who, Boolean(last?.planLocked)),
+            (out as { kinds?: unknown[] }).kinds,
           );
           if (next) useIde.getState().setChatPlan(next);
         } else {
-          const bumped = planFromTool(name, useIde.getState().chat.at(-1)?.plan, failed);
+          const bumped = planFromTool(name, useIde.getState().chat.at(-1)?.plan, failed, args, out);
           if (bumped) useIde.getState().setChatPlan(bumped);
         }
         addAgentStep({
@@ -605,13 +629,15 @@ export async function sendChat(
     });
     if (my !== agentGen()) return;
     roundVerification = result.verification;
+    roundStopReason = result.stopReason;
+    roundStopLabel = roundStopReason === "round-limit" ? (s.locale === "en" ? "Round limit" : "Rundenlimit") : roundStopReason === "no-progress" ? (s.locale === "en" ? "No progress" : "Kein Fortschritt") : roundStopReason === "tool-limit" ? (s.locale === "en" ? "Tool limit" : "Werkzeuglimit") : undefined;
     if (!result.ok) requestPhase(my, "error");
     if (result.parked && result.ask) {
       parked = true;
       const cur = useIde.getState().agentJob;
       if (cur) useIde.getState().setAgentJob({ ...cur, status: "ask", ask: result.ask });
     }
-    finalizeAssistant(result.reply, result.tools, { replace: !result.ok });
+    finalizeAssistant(result.reply, result.tools, { replace: !result.ok || Boolean(result.plan?.length), incompleteReason: roundStopLabel });
     if (result.ok) {
       void import("@/lib/intern").then((m) => m.resolveKind("agent"));
       void import("@/lib/problems").then((m) => m.refreshProblems());
@@ -650,7 +676,7 @@ export async function sendChat(
     if (result.files?.length) {
       const cur = useIde.getState().files;
       const map: Record<string, string> = {};
-      for (const f of result.files) {
+      for (const f of result.applied ? [] : result.files) {
         if ((cur[f.path] ?? "") !== f.content) map[f.path] = f.content;
       }
       if (Object.keys(map).length) {
@@ -689,18 +715,22 @@ export async function sendChat(
               let ok = true;
               const executable = result.runPaths!.filter(isExecutablePath);
               for (const p of executable) {
+                const started = planStart("run_file", useIde.getState().chat.at(-1)?.plan, { path: p });
+                if (started) useIde.getState().setChatPlan(started);
                 useIde.getState().setRunPath(p);
                 const r = await runFile(p, latest);
                 if (my !== agentGen()) return;
                 pushOutput(r);
                 if (!r.ok) ok = false;
+                const finished = planFromTool("run_file", useIde.getState().chat.at(-1)?.plan, !r.ok, { path: p }, r);
+                if (finished) useIde.getState().setChatPlan(finished);
                 addAgentStep({ name: "run_file", detail: p, status: r.ok ? "ok" : "err" });
                 useIde.getState().setChatLastRun({ ok: r.ok, path: p, stdout: r.stdout, stderr: r.stderr, attempt: 1, max: 1, running: false });
               }
               if (executable.length) {
                 roundVerification = automaticRunVerification(roundVerification, ok, latest === useIde.getState().files);
                 if (!ok) requestPhase(my, "error");
-                finalizeAssistant(`${result.reply}\n\n${roundVerification.detail}`, result.tools, { replace: true });
+                finalizeAssistant(verifiedReply(result.modelReply ?? result.reply, roundVerification, !roundStopReason), result.tools, { replace: true, incompleteReason: roundStopLabel });
               }
               skillOutcome(ok ? "ok" : "fail");
               if (!ok) useLearn.getState().track("fail", result.runPaths![0]);
@@ -720,7 +750,7 @@ export async function sendChat(
       return;
     }
     requestPhase(my, isAbortLike(err) ? "stopped" : "error");
-    finalizeAssistant(isAbortLike(err) ? explainAbort(err) : explainLlmError(err));
+    finalizeAssistant(isAbortLike(err) ? explainAbort(err) : explainLlmError(err), undefined, { replace: !isAbortLike(err) });
     if (isAbortLike(err)) {
       const last = useIde.getState().chat.at(-1);
       void brainStopNote(last?.steps ?? []).then((note) => {
@@ -737,6 +767,10 @@ export async function sendChat(
       });
     }
   } finally {
+    if (diskCheckpointId) {
+      try { await sealProjectCheckpoint(diskCheckpointId); }
+      catch (error) { useIde.getState().setNotice(`Projektsicherung nicht abgeschlossen: ${String(error)}`); }
+    }
     const live = my === agentGen();
     const busy = useIde.getState().agentBusy;
     if (live) {
@@ -744,12 +778,16 @@ export async function sendChat(
       if (!parked) {
         useIde.getState().setAgentJob(null);
         const last = useIde.getState().chat.at(-1);
-        const failed = ["error", "stopped"].includes(useRequestState.getState().phase) || /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test(
+        const failed = Boolean(roundStopReason) || ["error", "stopped"].includes(useRequestState.getState().phase) || /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test(
           (last?.content || "").trim(),
         );
         const proved = roundVerification?.state === "passed";
-        const fin = planFinish(last?.plan, failed, proved && !failed);
+        const fin = planFinish(last?.plan, failed, proved && !failed, Boolean(last?.content?.trim()));
         if (fin) useIde.getState().setChatPlan(fin);
+        const final = useIde.getState();
+        const message = final.chat.at(-1);
+        const bar = finishedHarness(message?.harness, message?.plan, failed, final.locale, roundStopLabel);
+        if (bar) final.setChatHarness(bar);
       }
       void idleCompanion().catch(() => undefined);
       if (!["error", "stopped"].includes(useRequestState.getState().phase)) requestPhase(my, "done");

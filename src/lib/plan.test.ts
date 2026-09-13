@@ -4,6 +4,76 @@ import { applySetPlan, guessPlan, normalizePlanWho, planAgentMayReplace, planFin
 import type { PlanStep } from "@/store/ide";
 
 describe("plan", () => {
+  function perform(plan: PlanStep[], name: string, args: Record<string, unknown> = {}, ok = true, extra = {}) {
+    const started = planStart(name, plan, args)!;
+    return planFromTool(name, started, !ok, args, { ok, ...extra })!;
+  }
+  it("classified plans advance independently of wording and only after their prerequisites", () => {
+    let plan = applySetPlan(undefined, ["Badge und Projektdaten prüfen", "Grünes Abzeichen", "Originalmaße vergleichen", "Godot-Projekt validieren", "Szene zeigen"], false, ["read", "edit", "read", "check", "run"])!;
+    plan = perform(plan, "read_file");
+    plan = perform(plan, "read_file");
+    assert.deepEqual(plan.map(s => s.status), ["ok", "todo", "todo", "todo", "todo"]);
+    plan = perform(plan, "edit_file");
+    plan = perform(plan, "read_file");
+    plan = perform(plan, "engine_run", { action: "check" });
+    plan = perform(plan, "engine_run", { action: "play" });
+    assert.ok(plan.every(s => s.status === "ok"));
+    const bad = applySetPlan(undefined, ["A", "B"], false, ["read", "invented"]);
+    assert.ok(bad?.every(s => s.kind === undefined));
+  });
+  it("engine discovery completes its explicit step without consuming the import check", () => {
+    let plan = applySetPlan(undefined, ["Godot-Projekt und Verbindung erkennen", "Godot-Importprüfung ausführen", "Szene starten"], false, ["check", "check", "run"])!;
+    plan = perform(plan, "engine_detect");
+    assert.deepEqual(plan.map(s => s.status), ["ok", "todo", "todo"]);
+    plan = perform(plan, "engine_run", { action: "check" });
+    plan = perform(plan, "engine_run", { action: "play" });
+    assert.ok(plan.every(s => s.status === "ok"));
+  });
+  it("follows the real discount repair steps without marking everything on final prose", () => {
+    let plan = ["Projektdateien prüfen", "Rabattursache finden", "Korrektur umsetzen", "Tests ausführen", "Browseroberfläche starten"].map(text => ({ text, status: "todo" as const })) as PlanStep[];
+    plan = perform(plan, "read_file", { path: "cart.mjs" });
+    plan = perform(plan, "read_file", { path: "cart.test.mjs" });
+    plan = perform(plan, "edit_file", { path: "cart.mjs" });
+    assert.deepEqual(plan.map(s => s.status), ["ok", "ok", "ok", "todo", "todo"]);
+    plan = perform(plan, "shell", { command: "npm test" });
+    plan = perform(plan, "run_file", { path: "index.html" });
+    assert.ok(plan.every(s => s.status === "ok"));
+  });
+  it("does not certify test or service mutations from unrelated successful commands", () => {
+    assert.equal(perform([{ text: "Tests ausführen", status: "todo" }], "shell", { command: "echo test" })[0].status, "todo");
+    assert.equal(perform([{ text: "Dienst-Datensatz löschen", status: "todo" }], "mcp_call", { name: "notion-search" })[0].status, "todo");
+    for (const text of ["Rundungen anpassen", "Bestehende Funktion erweitern", "Versandlogik gezielt ergänzen", "Oberfläche und Tests anpassen"])
+      assert.equal(perform([{ text, status: "todo" }], "edit_file")[0].status, "ok");
+    assert.equal(perform([{ text: "Tests ergänzen und ausführen", status: "todo" }], "edit_file")[0].status, "todo");
+    assert.equal(perform([{ text: "Tests ergänzen und ausführen", status: "todo" }], "shell", { command: "npm test" })[0].status, "ok");
+  });
+  it("engine discovery is not a check; check and play each complete their own step", () => {
+    let plan = ["Projektdateien und Regeln lesen", "Szene und Badge gezielt anpassen", "Godot-Projekt prüfen", "Szene starten und Ergebnis berichten"].map(text => ({ text, status: "todo" as const })) as PlanStep[];
+    plan = perform(plan, "read_file");
+    plan = perform(plan, "edit_file");
+    plan = perform(plan, "engine_detect");
+    assert.equal(plan[2].status, "todo");
+    plan = perform(plan, "engine_run", { action: "check" }, false);
+    assert.equal(plan[2].status, "err");
+    plan = perform(plan, "engine_run", { action: "check" }, true, { running: true });
+    assert.notEqual(plan[2].status, "ok");
+    plan = perform(plan, "engine_run", { action: "check" });
+    assert.equal(plan[2].status, "ok");
+    assert.equal(plan[3].status, "todo");
+    plan = perform(plan, "engine_run", { action: "play" });
+    assert.ok(plan.every(s => s.status === "ok"));
+  });
+  it("a service catalogue does not prove access; actual fetch/search and delivered summary do", () => {
+    let plan = ["Verbindung prüfen", "Nach Anvil suchen", "Ergebnis zusammenfassen"].map(text => ({ text, status: "todo" as const })) as PlanStep[];
+    plan = perform(plan, "mcp_list");
+    assert.ok(plan.every(s => s.status === "todo"));
+    plan = perform(plan, "mcp_call", { name: "notion-fetch" });
+    plan = perform(plan, "mcp_call", { name: "notion-search" });
+    assert.deepEqual(plan.map(s => s.status), ["ok", "ok", "todo"]);
+    plan = planFinish(plan, false, false, true)!;
+    assert.ok(plan.every(s => s.status === "ok"));
+    assert.equal(planFinish([{ text: "Alles überprüfen", status: "todo" }], false, true, true), null);
+  });
   it("does not check Prüfen while Verstehen is still running", () => {
     let plan = guessPlan("mach das spiel bunt");
     plan = planStart("read_file", plan)!;

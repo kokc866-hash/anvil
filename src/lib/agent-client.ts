@@ -73,7 +73,7 @@ function isBrowserTarget(spec: ProviderSpec, baseUrl: string): boolean {
 
 function corsHint(spec: ProviderSpec, baseUrl = ""): string {
   if (spec.kind === "local" || isBrowserTarget(spec, baseUrl)) {
-    return `${spec.label} nicht erreichbar. Anvil holt das Modell selbst (kein CORS). URL prüfen, z. B. http://192.168.178.41:11434/v1 — Anbieter Ollama.`;
+    return `${spec.label} nicht erreichbar. API-Adresse, Serverstatus und Netzwerkverbindung prüfen. Anbieter und API-Adresse müssen zum verwendeten Modellserver passen.`;
   }
   return `${spec.label} nicht erreichbar. URL und Key prüfen.`;
 }
@@ -137,6 +137,8 @@ export async function chatWithProvider(opts: {
   onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
   onTool?: (info: { name: string; args: Record<string, unknown>; result: unknown }) => void;
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
+  getPlan?: () => import("@/store/ide").PlanStep[] | undefined;
+  canReplacePlan?: () => boolean;
   onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
   onHarness?: (bar: string) => void;
   runLoop?: boolean;
@@ -147,6 +149,7 @@ export async function chatWithProvider(opts: {
   engineOk?: boolean;
   afterWrite?: "run" | "engine" | "preview" | "none";
   maxRounds?: number;
+  autoContinueRounds?: boolean;
   graphSees?: number;
   journal?: SessionJournal;
   memory?: string;
@@ -343,6 +346,7 @@ function harnessFrom(opts: {
   engineOk?: boolean;
   afterWrite?: "run" | "engine" | "preview" | "none";
   maxRounds?: number;
+  autoContinueRounds?: boolean;
   graphSees?: number;
 }) {
   const st = useIde.getState();
@@ -355,6 +359,7 @@ function harnessFrom(opts: {
     engineOk: opts.engineOk ?? Boolean(st.engineLink?.ok),
     afterWrite: opts.afterWrite ?? st.harnessAfterWrite,
     maxRounds: opts.maxRounds ?? st.harnessMaxRounds,
+    autoContinueRounds: opts.autoContinueRounds ?? st.harnessAutoContinue,
     graphSees: opts.graphSees ?? st.graphSees,
   };
 }
@@ -368,6 +373,8 @@ function clientTools(opts: {
   onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
   onTool?: (info: { name: string; args: Record<string, unknown>; result: unknown }) => void;
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
+  getPlan?: () => import("@/store/ide").PlanStep[] | undefined;
+  canReplacePlan?: () => boolean;
 }) {
   const mcpStart = useIde.getState();
   const mcpGeneration = agentGen();
@@ -392,6 +399,8 @@ function clientTools(opts: {
     onWorkspace: opts.onWorkspace,
     onTool: opts.onTool,
     onToolStart: opts.onToolStart,
+    getPlan: opts.getPlan,
+    canReplacePlan: opts.canReplacePlan,
     fetchUrl: async (url: string) => {
       const r = await fetchWeb({ data: { url } });
       if (!r.ok) throw new Error(r.text);
@@ -550,7 +559,7 @@ function clientTools(opts: {
         return companionRun({ cmd: plan.cmd, action: plan.action, cwd: st.workspaceCwd, timeoutMs: Number(args?.timeoutMs) || 90000 }, url);
       }, url, st.workspaceCwd);
       current();
-      st.pushOutput({ ...job, label: `${plan.hit?.label || "Engine"} · ${plan.action}` });
+      st.pushOutput({ ...job, duration: job.duration / 1000, label: `${plan.hit?.label || "Engine"} · ${plan.action}` });
       st.revealOutput();
       return { ...job, engineId: plan.hit?.id, engine: plan.hit?.label, projectRoot: plan.hit?.root,
         ...(job.running ? { status: "Engine läuft. Das bestätigt den Start, keinen erfolgreichen Build oder Test." } : {}) };
@@ -1191,9 +1200,12 @@ export async function completeLocal(opts: {
   }
   const cli = cliKindFor(spec.id, useIde.getState().llmAuthMode);
   if (cli) {
-    if (opts.images?.length) throw new Error("Bilder werden über die Abo-CLI noch nicht übertragen.");
-    const choice = await completeViaCli(cli, model, [{ role: "user", content: opts.prompt }], [], hardStopMs(useIde.getState().llmHardStopMin));
-    opts.onUsage?.(resolvedUsage(choice, [{ role: "user", content: opts.prompt }]));
+    const content = opts.images?.length
+      ? [{ type: "text", text: opts.prompt }, ...opts.images.map(url => ({ type: "image_url", image_url: { url } }))]
+      : opts.prompt;
+    const messages = [{ role: "user", content }];
+    const choice = await completeViaCli(cli, model, messages, [], hardStopMs(useIde.getState().llmHardStopMin));
+    opts.onUsage?.(resolvedUsage(choice, messages));
     return choice.content?.trim() || "";
   }
   if (isBrowserTarget(spec, opts.baseUrl)) {

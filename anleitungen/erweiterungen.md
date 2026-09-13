@@ -1,6 +1,6 @@
 # Erweiterungen in Anvil
 
-Stand: 12. September 2026. Lokaler Entwicklungsstand; keine neue veröffentlichte Version.
+Stand: 13. September 2026. Die beschriebenen Erweiterungen gehören zum veröffentlichten Release 1.3.26.
 
 Die erste Ausbaustufe aus der [Erweiterungsanalyse](erweiterungsanalyse.md) ist umgesetzt. Die vorhandenen Bereiche bleiben erhalten. Die neuen Funktionen sind dort ergänzt, wo man sie verwendet.
 
@@ -35,7 +35,9 @@ Ein echter Erwartungsfehler ergibt **Fehlgeschlagen**. Abbruch und fehlende Vora
 
 ## Verbindungen ergänzen
 
-Für Anmeldungen bei externen Diensten und deren Werkzeugauswahl gibt es inzwischen **Erweiterungen → Dienste**, zunächst mit Notion, Linear und eigenen OAuth-MCP-Adressen. Dieser Ablauf verwendet die vorhandene Brücke; siehe [Externe Dienste](dienste.md).
+Für Anmeldungen bei externen Diensten und deren Werkzeugauswahl gibt es **Erweiterungen → Dienste** mit Notion, Linear, weiteren Einträgen aus dem [Dienstkatalog](dienstkatalog.md) und eigenen OAuth-MCP-Adressen. Aktive, angemeldete Dienste laden ihren Katalog nach einem Neustart automatisch; bestehende Freigaben bleiben erhalten und neue Werkzeuge ausgeschaltet. Dieser Ablauf verwendet die vorhandene Brücke; siehe [Externe Dienste](dienste.md).
+
+Im **Markt** lädt Anvil die Ergebnisse beim Öffnen und bei geänderter Suche. Die Ergebnisanzeige löst keine neue Suche aus; überholte Anfragen werden beim Such- oder Tabwechsel abgebrochen. Eine fehlgeschlagene Suche bleibt als Fehler sichtbar, statt sich endlos neu zu laden.
 
 Im **MCP-Bereich → Aufgabenpakete** steht **GitHub · Projektquelle lesen** bereit. Es wird zunächst deaktiviert hinzugefügt und begrenzt die Verbindung auf drei Lese-Werkzeuge. Der eigene Token und die Verbindung lassen sich wieder entfernen. Einzelheiten und Datenwege: [MCP-Pakete](mcp-pakete.md).
 
@@ -53,4 +55,4 @@ Zusätzliche automatisierte Tests prüfen unter anderem Skill-Import, bestehende
 
 Der abschließende vollständige Testlauf bestand mit **929 erfolgreichen Tests, 5 übersprungenen Tests und 0 Fehlern** (`artifacts/extensions-product/tests-final.log`). TypeScript-Prüfung und Desktop-Build bestanden ebenfalls; der fertige Build wurde nach `ui-build` übernommen. Ein früherer, mit weiteren Prüfjobs überlappender Lauf hatte zwei Fehler; beide bestanden einzeln und anschließend im vollständigen ruhigen Lauf. Der genaue Auslöser dieser zwischenzeitlichen Fehler ist nicht abschließend belegt.
 
-Zum Starten des lokalen Quellstands weiterhin `I:\Anvil\Anvil.vbs` verwenden. Ein bereits laufendes Anvil muss für die neuen Desktop-Funktionen nach dem Speichern vollständig beendet und erneut geöffnet werden.
+Zum Starten aus dem Quellcode `Anvil.vbs` im Anvil-Projektordner verwenden. Eine installierte oder portable Ausgabe wird über `Anvil.exe` gestartet. Nach einem Update Arbeit speichern und Anvil vollständig beenden und erneut öffnen, damit die neuen Desktop-Funktionen geladen werden.

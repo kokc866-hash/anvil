@@ -96,7 +96,7 @@ export function modelSeesImages(provider: string, model: string): boolean {
   if (/ollama|lmstudio|llamacpp|gpt4all|jan|kobold|textgen|vllm|localai|openwebui/.test(p)) {
     return /llava|moondream|vision|minicpm|qwen2.?vl|qwen-vl|pixtral|gemma-3|llama-?3\.2.*vision|gpt-4o/.test(m);
   }
-  if (/anthropic|grok|openai|gemini|openrouter|codex|xai/.test(p)) return true;
+  if (/anthropic|grok|openai|gemini|openrouter|codex|github|xai/.test(p)) return true;
   return /gpt-4o|gpt-4\.1|claude|gemini|grok|vision|llava/.test(m);
 }
 

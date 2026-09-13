@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import {
   Brain,
+  ListChecks,
+  Cable,
   FlaskConical,
   FolderTree,
   GitBranch,
@@ -38,6 +40,7 @@ export function ActivityBar() {
   const setSettingsOpen = useIde((s) => s.setSettingsOpen);
   const setHarnessBoardOpen = useIde((s) => s.setHarnessBoardOpen);
   const t = useT();
+  const en = useIde(s => s.locale === "en");
   const kFiles = useKbd("files");
   const kRefs = useKbd("refs");
   const kSearch = useKbd("search");
@@ -55,7 +58,7 @@ export function ActivityBar() {
   }
 
   return (
-    <nav className="flex w-11 shrink-0 flex-col items-center border-r border-border bg-surface py-1">
+    <nav className="flex w-11 shrink-0 flex-col items-center overflow-y-auto border-r border-border bg-surface py-1">
       <IconBtn help="files" label={t("files")} kbd={kFiles} on={sidebar === "files"} onClick={() => side("files")}>
         <FolderTree className="size-4" />
       </IconBtn>
@@ -111,6 +114,12 @@ export function ActivityBar() {
           {ANVIL_VERSION}
         </button>
       </Tip>
+      <IconBtn label={en ? "Guided workflows" : "Geführte Aufgaben"} on={sidebar === "workflows"} onClick={() => side("workflows")}>
+        <ListChecks className="size-4" />
+      </IconBtn>
+      <IconBtn label={en ? "Connection and supported inputs" : "Verbindung und unterstützte Eingaben"} on={sidebar === "connection"} onClick={() => side("connection")}>
+        <Cable className="size-4" />
+      </IconBtn>
       <IconBtn help="settings" label={t("settings")} kbd={kSet} on={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>
         <Settings className="size-4" />
       </IconBtn>
@@ -149,7 +158,7 @@ function IconBtn({
         aria-pressed={on}
         onClick={onClick}
         className={cn(
-          "relative flex size-10 items-center justify-center rounded-md hover:bg-hover",
+          "relative flex size-10 shrink-0 items-center justify-center rounded-md hover:bg-hover",
           on ? "text-fg" : "text-subtle hover:text-fg",
           pulse && "think-live",
         )}

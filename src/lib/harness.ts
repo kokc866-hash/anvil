@@ -23,6 +23,7 @@ export type HarnessBudget = {
 };
 
 export type HarnessState = {
+  autoContinueRounds?: boolean;
   phase: HarnessPhase;
   budget: HarnessBudget;
   used: HarnessBudget;
@@ -50,6 +51,7 @@ export type HarnessOpts = {
   engineLoop?: boolean;
   loopTries: number;
   maxRounds?: number;
+  autoContinueRounds?: boolean;
   maxTools?: number;
   afterWrite?: AfterWrite;
   graphSees?: number;
@@ -73,6 +75,7 @@ export function startHarness(opts: HarnessOpts): HarnessState {
   const tries = clamp(opts.loopTries ?? 3, 1, 5);
   const rounds = clamp(opts.maxRounds ?? 24, 8, 128);
   return {
+    autoContinueRounds: Boolean(opts.autoContinueRounds),
     phase: "plan",
     budget: {
       rounds,
@@ -137,7 +140,7 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
     return { state, allow: [], hint: state.reason, stop: false };
   }
 
-  const overBudget = state.used.tools >= state.budget.tools || state.used.rounds >= state.budget.rounds;
+  const overBudget = !state.autoContinueRounds && (state.used.tools >= state.budget.tools || state.used.rounds >= state.budget.rounds);
   if (overBudget) {
     const stopBudget = (opts.stopOn ?? []).some((s) => /budget/i.test(s));
     if (stopBudget && /budget/i.test(state.reason)) {
@@ -252,9 +255,10 @@ export function harnessBar(state: HarnessState): string {
   const b = state.budget;
   const u = state.used;
   const bits = [`${PHASE[state.phase]}`];
+  bits.push(state.autoContinueRounds ? `Runden ${u.rounds} · Auto` : `Runden ${u.rounds}/${b.rounds}`);
   if (b.runs > 1 || u.runs > 0) bits.push(`Run ${u.runs}/${Math.max(b.runs, u.runs)}`);
   if (b.sees > 0) bits.push(`See ${u.sees}/${b.sees}`);
-  bits.push(`Tools ${u.tools}/${b.tools}`);
+  bits.push(state.autoContinueRounds ? `Tools ${u.tools}` : `Tools ${u.tools}/${b.tools}`);
   return bits.join(" · ");
 }
 

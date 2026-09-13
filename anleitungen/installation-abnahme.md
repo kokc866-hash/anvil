@@ -1,6 +1,8 @@
 # Installation, Updates und Freigabe
 
-Anvil kann ohne Signatur gebaut und getestet werden. Auf Wunsch des Eigentümers wird auch Release 1.3.25 ausdrücklich unsigniert veröffentlicht. `product-release.json` enthält noch keine Herausgeber-, Support-, Lizenz- oder Signaturangaben; die Prüfung für eine signierte Freigabe lehnt diesen Zustand weiterhin ab.
+Stand: 13. September 2026. [Anvil 1.3.26](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.26) ist als Setup-EXE und portable ZIP veröffentlicht. Auf Wunsch des Eigentümers sind beide Pakete unsigniert. `product-release.json` enthält noch keine Herausgeber-, Support-, Lizenz- oder Signaturangaben; die Prüfung für eine signierte Freigabe lehnt diesen Zustand weiterhin ab. Das blockiert nicht den ausdrücklich freigegebenen unsignierten Veröffentlichungsweg.
+
+Die Release-Prüfungen für 1.3.26 liefen erfolgreich auf einem frischen GitHub-Windows-Runner, einschließlich Installer- und ZIP-Abnahme. Beide veröffentlichten Downloads wurden geprüft. Ein solcher Runner ist keine unveränderte Endnutzer-Windows-Installation: Der App-Start wird ohne externes Node.js im Anwendungspfad geprüft, der Baujob selbst besitzt Entwicklungswerkzeuge. Eine echte Migration von einem älteren Nutzer-Release bleibt ein zusätzlicher Nachweis.
 
 ## Verhalten für Nutzer
 
@@ -27,7 +29,7 @@ Eine erneute Installation derselben Version prüft den Installer-Updateweg und d
 
 ## Öffentliche Windows-Freigabe
 
-Ein passender Versions-Tag (zum Beispiel `v1.3.25`) veröffentlicht nach bestandenen Prüfungen Setup-EXE und portable ZIP. Ein normaler Push auf `main` veröffentlicht nichts. Alternativ kann der Workflow manuell mit `publish: true` gestartet werden. Ohne `signed: true` sind die Pakete unsigniert; das steht ausdrücklich in den Release-Hinweisen.
+Ein neuer passender Versions-Tag (zum Beispiel `v1.3.26`) veröffentlicht nach bestandenen Prüfungen Setup-EXE und portable ZIP. Bereits veröffentlichte Tags und Pakete werden nicht für spätere Änderungen wiederverwendet. Ein normaler Push auf `main` veröffentlicht nichts. Alternativ kann der Workflow manuell mit `publish: true` gestartet werden. Ohne `signed: true` sind die Pakete unsigniert; das steht ausdrücklich in den Release-Hinweisen.
 
 Für eine spätere **signierte** Veröffentlichung:
 

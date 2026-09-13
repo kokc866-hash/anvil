@@ -1,6 +1,6 @@
 # Einstellungen
 
-Stand: Anvil **1.3.20**. Die Bedienung ist für das Desktop-Programm ausgelegt.
+Die beschriebenen Einstellungen gelten für Release Anvil **1.3.27**. Die Bedienung ist für das Desktop-Programm ausgelegt.
 
 ## Sichern und wiederherstellen
 
@@ -21,6 +21,8 @@ Benannte Profile, gespeicherte Anbieterzustände, MCP-Verbindungen, gelernte Too
 Beim Wechsel des Modells bleiben manuell eingestellte Kontextlänge, Thinking, Temperatur und Ausgabelimit erhalten. Ist die Kontext-Automatik aktiv, wird die Kontextlänge weiterhin anhand des gewählten Modells bestimmt. Ein Wechsel zwischen bereits verwendeten Anbietern oder API-/Abo-Modi stellt die jeweils gespeicherten Vorgaben wieder her.
 
 ## Projektvorgaben und Tafel
+
+Unter **Agent → Harness-Loop → Automatisch weiterarbeiten** lässt sich die Fortsetzung langer Aufträge steuern. Standardmäßig ist sie eingeschaltet: Derselbe Auftrag arbeitet ohne festes Runden- oder Werkzeugbudget weiter. **Runden ohne Fortschritt** legt fest, nach wie vielen aufeinanderfolgenden Modellrunden ohne neuen erfolgreichen Arbeitsschritt Anvil unterbricht (12, 24, 32 oder 48). Wiederholte Aufrufe zählen nicht erneut. Ohne Automatik gilt die Zahl als festes Rundenlimit. Stop und eingestellte Zeitlimits gelten weiterhin. Die Auswahl wird mit den Anvil-Einstellungen gespeichert, exportiert und importiert; **Bereich zurücksetzen** stellt die Automatik wieder an.
 
 **Agent → Ins Projekt** aktualisiert die angezeigten Vorgaben in `.anvil/harness.json`. Weitere Felder wie `maxTools` und `stopOn` bleiben erhalten. Eine vorhandene `.anvil/graph.json` und die Tafel mit ihren Positionen, Verbindungen und Kameraeinstellungen werden beim normalen Speichern nicht verändert. Fehlende Dateien werden für neue Projekte angelegt.
 

@@ -38,6 +38,8 @@ test("settings backups, reset and model changes preserve connection and project 
   const { exportSettingsPack, applySettingsPack, resetAllSettings, resetSettingsCategory } = await server.ssrLoadModule("/src/lib/settings-io.ts");
   const s = useIde.getState();
   const clone = (v) => JSON.parse(JSON.stringify(v));
+  assert.equal(s.harnessAutoContinue, true, "New and older profiles continue productive agent rounds by default");
+  s.setHarnessAutoContinue(false);
   assert.deepEqual(s.helpPreferences, { tips: false, pointer: true, delay: 900 });
   s.setHelpPreferences({ tips: true, pointer: false, delay: 1800 });
   s.setLlmProvider("anthropic", "abo");
@@ -55,6 +57,8 @@ test("settings backups, reset and model changes preserve connection and project 
   assert.equal(JSON.parse(values.get("anvil-llm")).llmAuthMode, "abo", "Recovery snapshot also retains CLI mode");
   assert.equal(backup.ide.llmAuthMode, "abo");
   assert.equal(backup.ide.llmThinking, "max");
+  assert.equal(backup.ide.harnessAutoContinue, false, "Explicit round limit survives settings export");
+  s.setHarnessAutoContinue(true);
   assert.deepEqual(backup.ide.helpPreferences, { tips: true, pointer: false, delay: 1800 });
   s.setHelpPreferences({ tips: false, pointer: true, delay: 400 });
   assert.ok(backup.ide.llmSlots["anthropic:abo"]);
@@ -64,6 +68,12 @@ test("settings backups, reset and model changes preserve connection and project 
   const observed = [];
   const unsubscribe = useIde.subscribe((state) => observed.push([state.llmProvider, state.llmAuthMode, state.llmApiKey]));
   applySettingsPack(backup); unsubscribe();
+  assert.equal(useIde.getState().harnessAutoContinue, false, "Import restores the explicit round limit");
+  const { partializeIde } = await server.ssrLoadModule("/src/store/ide-persist.ts");
+  assert.equal(partializeIde(useIde.getState()).harnessAutoContinue, false, "Restart persistence includes the choice");
+  resetSettingsCategory("agent");
+  assert.equal(useIde.getState().harnessAutoContinue, true, "Agent reset restores automatic continuation");
+  applySettingsPack(backup);
   assert.deepEqual(useIde.getState().helpPreferences, { tips: true, pointer: false, delay: 1800 });
   assert.equal(useIde.getState().llmThinking, "max");
   assert.equal(useIde.getState().llmAuthMode, "abo");
@@ -80,6 +90,7 @@ test("settings backups, reset and model changes preserve connection and project 
   for (const invalid of [
     { ide: { fontSize: 18, llmProfiles: null } },
     { ide: { fontSize: -100 } },
+    { ide: { harnessAutoContinue: "false" } },
     { ide: { helpPreferences: { tips: true, pointer: true, delay: -1 } } },
     { ide: { mcpServers: [{ id: "bad" }] } },
     { ide: { llmProvider: "unknown" } },
@@ -123,6 +134,7 @@ test("settings backups, reset and model changes preserve connection and project 
   assert.equal(useIde.getState().trailWidth, 480, "Section reset leaves other categories alone");
   assert.equal(useIde.getState().llmProvider, "anthropic");
   resetAllSettings();
+  assert.equal(useIde.getState().harnessAutoContinue, true);
   assert.deepEqual(useIde.getState().helpPreferences, { tips: false, pointer: true, delay: 900 });
   assert.deepEqual(useIde.getState().files, files);
   assert.deepEqual(clone(useLearn.getState().facts), facts);

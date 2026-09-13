@@ -8,7 +8,7 @@ test("agent completion follows tool outcomes and fresh diagnostic results", asyn
   try {
     const { runAgentLoop } = await server.ssrLoadModule("/src/lib/agent-core.ts");
     const { beginAgent } = await server.ssrLoadModule("/src/lib/abort.ts");
-    const call = (name, args) => ({ id: Math.random().toString(16).slice(2), type: "function", function: { name, arguments: JSON.stringify(args) } });
+    const call = (name, args) => ({ id: Math.random().toString(16).slice(2), type: "function", function: { name, arguments: JSON.stringify(name === "write_file" ? { overwrite_reason: "Replace the complete one-line fixture to test execution and persistence evidence.", ...args } : args) } });
     const script = (rounds) => async () => ({ content: "Alles behoben und Run bestätigt.", toolContract: { transport: "native", names: ["write_file", "run_file"] }, tool_calls: rounds.shift() || [] });
     const data = (ask = "Korrigiere das Programm.") => ({ messages: [{ role: "user", content: ask }], files: [{ path: "snake.ts", content: "const n = 1;" }], runLoop: false, afterWrite: "none", maxRounds: 8 });
     await t.test("failed run followed by an edit cannot finish successfully", async () => {

@@ -92,6 +92,8 @@ test("subscription child cannot inherit API credentials and does retain CLI home
     CLAUDE_CODE_USE_BEDROCK: "1",
     COPILOT_GITHUB_TOKEN: "api",
     GITHUB_TOKEN: "api",
+    COPILOT_ALLOW_ALL: "true",
+    GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true",
   });
   assert.equal(env.CODEX_HOME, "/codex");
   assert.equal(env.PATH, "/bin");
@@ -102,6 +104,8 @@ test("subscription child cannot inherit API credentials and does retain CLI home
     "CLAUDE_CODE_USE_BEDROCK",
     "COPILOT_GITHUB_TOKEN",
     "GITHUB_TOKEN",
+    "COPILOT_ALLOW_ALL",
+    "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
   ])
     assert.equal(env[k], undefined);
 });
@@ -115,7 +119,7 @@ test("CLI output contracts distinguish final answers from errors and diagnostics
     reply,
   );
   assert.equal(parseCliOutput("claude", JSON.stringify({ type: "result", result: reply })), reply);
-  assert.equal(parseCliOutput("copilot", reply), reply);
+  assert.equal(parseCliOutput("copilot", JSON.stringify({type:"assistant.message",data:{content:reply}})), reply);
   assert.throws(
     () =>
       parseCliOutput(

@@ -1,5 +1,5 @@
 import { agentBeat, withAgentTimeout, AgentAbortError } from "./abort";
-import { cliPrompt, parseCliChoice, type CliKind } from "./cli-protocol";
+import { cliRequest, parseCliChoice, type CliKind } from "./cli-protocol";
 import type { LlmChoice } from "./agent-core";
 import type { ThinkingMode } from "./llm-options";
 export { CLI_PROVIDERS, cliKindFor, type CliKind } from "./cli-protocol";
@@ -11,7 +11,7 @@ export type CliStatus = {
   version: string;
 };
 type Reply = { ok: true; value: unknown } | { ok: false; error: string };
-type Request = { id: string; kind: CliKind; model?: string; prompt?: string; timeoutMs?: number; thinking?: ThinkingMode };
+type Request = { id: string; kind: CliKind; model?: string; prompt?: string; images?: string[]; timeoutMs?: number; thinking?: ThinkingMode };
 type Native = {
   cliProbe: (request: Request) => Promise<Reply>;
   cliLogin: (request: Request) => Promise<Reply>;
@@ -40,6 +40,7 @@ async function invoke(
   if (signal?.aborted) throw new AgentAbortError();
   const id = crypto.randomUUID();
   const off = api.onCliEvent(id, (e) => {
+    if (signal?.aborted) return;
     agentBeat();
     if (e.text) onOutput?.(e.text);
   });
@@ -85,15 +86,20 @@ export async function completeViaCli(
   onDelta?: (text: string, kind?: "text" | "think") => void,
   thinking: ThinkingMode = "auto",
 ): Promise<LlmChoice> {
+  let streamed = "";
   const raw = await invoke(
     "cliRun",
-    { kind, model, prompt: cliPrompt(messages, tools), timeoutMs, thinking },
+    { kind, model, ...cliRequest(messages, tools), timeoutMs, thinking },
     withAgentTimeout(0),
+    (text) => { streamed += text; onDelta?.(text, "text"); },
   );
   const choice = parseCliChoice(
     String(raw),
     tools.map((t) => t.function.name),
   );
-  if (choice.content) onDelta?.(choice.content, "text");
+  const content = choice.content || "";
+  if (!content.startsWith(streamed)) throw new Error("CLI-Endantwort widerspricht der gestreamten Antwort. Bitte erneut versuchen.");
+  const remaining = content.slice(streamed.length);
+  if (remaining) onDelta?.(remaining, "text");
   return choice;
 }

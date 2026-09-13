@@ -1,6 +1,6 @@
-# Anvil 1.3.2 — Kurzpräsentation
+# Anvil — Kurzpräsentation
 
-5 Minuten. Für Demo, Pitch oder den ersten Blick. Stand: 05.09.2026.
+5 Minuten. Für Demo oder den ersten Blick. Stand: Release 1.3.27; aktuelle Möglichkeiten und Grenzen stehen in [Verbindungen](05-verbindungen.md) und [Editor](editor.md).
 
 ---
 
@@ -50,7 +50,7 @@ Das ist der Kreis. Alles andere ist Beiwerk.
 - **Companion** — kein Internet. Startet bei Run auf diesem PC, Go/Rust bleiben in Anvil.
 - **Graph** — Frames zurück an den Agenten, wenn es ums Bild geht.
 - **Referenzen** — Specs und Screenshots in `ref/`, nicht den ganzen Workspace durchsuchen.
-- **Checkpoint** — eine Runde zurück, ohne Git-Kunst.
+- **Runde zurücknehmen** — Dateiänderungen einer Agentenrunde vor der Bestätigung ansehen und zurücksetzen; externe Aktionen bleiben getrennt.
 - **Deutsch / English** — Umschalter in den Einstellungen.
 
 ---

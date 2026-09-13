@@ -90,6 +90,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
   cliProbe: (request) => ipcRenderer.invoke("cli-probe", request),
   cliLogin: (request) => ipcRenderer.invoke("cli-login", request),
   cliRun: (request) => ipcRenderer.invoke("cli-run", request),
+  projectCheckpoint: (request) => ipcRenderer.invoke("project-checkpoint", request),
   cliCancel: (id) => ipcRenderer.invoke("cli-cancel", id),
   onCliEvent: (id, fn) => {
     const wrap = (_e, p) => { if (p?.id === id) fn(p); };

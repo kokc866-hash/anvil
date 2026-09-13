@@ -26,15 +26,16 @@ export const AGENT_TOOLS = [
     start_line: { type: "integer" },
     end_line: { type: "integer" },
   }, ["path"]),
-  tool("write_file", "Create or overwrite a file. Prefer edit_file/append_file for existing large files. If truncated, append_file — do not rewrite.", {
+  tool("write_file", "Create a new file. Replacing an existing file requires overwrite_reason explaining why the task needs a whole-file replacement. For partial changes, use edit_file and preserve unrelated content, including asset dimensions and geometry. If truncated, append_file — do not rewrite.", {
     path: { type: "string" },
     content: { type: "string" },
+    overwrite_reason: { type: "string", description: "Required only when changing an existing file in full: why the user's task needs replacement instead of a focused edit. Not needed for new files or identical content." },
   }, ["path", "content"]),
   tool("append_file", "Append text to an existing file (or create). Use when write_file was truncated or to add at the end.", {
     path: { type: "string" },
     content: { type: "string" },
   }, ["path", "content"]),
-  tool("edit_file", "Replace exact text. old_string must be unique unless replace_all. Safer than rewriting the whole file.", {
+  tool("edit_file", "Make a focused change to an existing file. Read it first, then replace the smallest exact unique snippet; preserve unrelated content and asset properties. old_string must be unique unless replace_all is needed for the requested change.", {
     path: { type: "string" },
     old_string: { type: "string" },
     new_string: { type: "string" },
@@ -115,9 +116,17 @@ export const AGENT_TOOLS = [
   tool("skill_outcome", "Report whether the last skill helped: ok, fail, reject.", {
     kind: { type: "string" },
   }, ["kind"]),
-  tool("set_plan", "Visible checklist. Call once at start with 3-7 short steps in the user's language.", {
+  tool("set_plan", "Create checklist with steps/kinds; update status with updates and evidence IDs. Reconcile before final answer. Use 3-7 steps in the user's language, kinds read/edit/run/check/service/report. Keep checking and launching separate. Updates preserve existing steps, including locked user checklists. Completion needs matching successful tool evidence from the current checklist context.", {
     steps: { type: "array", items: { type: "string" } },
-  }, ["steps"]),
+    kinds: { type: "array", items: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"] } },
+    updates: { type: "array", maxItems: 10, items: { type: "object", properties: {
+      step: { type: "integer", description: "Existing 1-based step number." },
+      status: { type: "string", enum: ["todo", "run", "ok", "err"] },
+      kind: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"] },
+      evidence: { type: "array", items: { type: "string" } },
+      reason: { type: "string" },
+    }, required: ["step", "status", "reason"] } },
+  }),
   tool("ask_user", "Ask the user a question with 2–5 options. Use when a choice, missing fact, or risky write needs a decision. Do not guess. After the answer, continue the same job.", {
     prompt: { type: "string" },
     why: { type: "string" },

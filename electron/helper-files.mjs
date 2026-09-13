@@ -18,10 +18,14 @@ export function jsonFileOk(path) {
  * Read only bounded manifests and file metadata, never recursively walk gigabytes. */
 export async function helperModelInfo(dir) {
   try {
-    const [config, receipt] = await Promise.all([
+    // A missing/invalid receipt must not return while the other read still
+    // holds a handle: recovery may immediately rename this directory on Windows.
+    const metadata = await Promise.allSettled([
       readFile(join(dir, "mlc-chat-config.json"), "utf8").then(JSON.parse),
       readFile(join(dir, "anvil-model.json"), "utf8").then(JSON.parse),
     ]);
+    if (metadata.some(read => read.status === "rejected")) return { ready: false, bytes: 0 };
+    const [config, receipt] = metadata.map(read => read.value);
     const manifest = await readFile(join(dir, "tensor-cache.json"), "utf8").then(JSON.parse);
     const files = Array.isArray(receipt.files) ? receipt.files : [];
     if (!files.length || files.length > MAX_JOB_FILES || !manifest.records?.length) return { ready: false, bytes: 0 };

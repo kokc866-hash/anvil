@@ -1,6 +1,6 @@
 # Dienstkatalog und Anmeldestatus
 
-Stand: 12. September 2026. Lokaler Entwicklungsstand.
+Katalogrecherche: 12. September 2026. Die Auswahl gehört zum veröffentlichten Release 1.3.26; Anmeldestatus und tatsächliche Werkzeuge werden beim jeweiligen Dienst geprüft.
 
 50 Angebote: 35 für den vorhandenen Anmeldeweg vorbereitet, 15 mit zusätzlicher Einrichtung. Die Cloudflare-Produkte zählen als getrennte Angebote; die Anzahl bezeichnet nicht ausschließlich unabhängige Unternehmen.
 

@@ -1,6 +1,6 @@
 # Editor: Bearbeiten, Speichern und Wiederherstellen
 
-Stand: Anvil 1.3.23. Bestehende Editor-, Agent-, Canvas- und Tool-Funktionen bleiben verfügbar.
+Stand: 13. September 2026, Release 1.3.27. Die unten beschriebenen erweiterten Projektsicherungspunkte gehören zu diesem Stand.
 
 ## Dateien und Vorschläge
 
@@ -29,6 +29,29 @@ Es ist nur ein Arbeitsordner aktiv: ein Desktop-Pfad oder ein Browser-Ordner. Be
 - Externe Änderungen an ungespeicherten Dateien erscheinen als Konflikt: „Editorstand speichern“ behält den Editortext, „Plattenstand laden“ lädt die externe Fassung. Schreibvorgänge prüfen den zuletzt bekannten Plattenstand vor dem Überschreiben.
 
 IndexedDB hält vollständige Datei- und Rücknahmeinhalte; die kleinere lokale Wiederherstellungskopie nimmt nur vollständige Einträge auf. Undo ist pro Datei begrenzt und wird beim Wechsel zu einem anderen Projekt getrennt. Lokale Versionsstände ersetzen keine externe Datensicherung.
+
+## Projekt und Assets vor einer Agentenrunde sichern
+
+**Neu in Release 1.3.27:** Bei einem lokalen Desktop-Projekt mit der lokalen Standard-Companion-Verbindung erstellt Anvil vor jedem bearbeitenden Agentenauftrag einen Projektsicherungspunkt. Zunächst werden offene Änderungen ohne automatische Formatierung gespeichert. Erst nach erfolgreicher Sicherung beginnt die bearbeitende Modell-/Werkzeugrunde. Scheitert Speichern oder Sichern, startet der Auftrag nicht. Nach der Runde wird der Endstand separat festgehalten.
+
+Der Sicherungspunkt erfasst die tatsächlichen Dateien im Projektordner, einschließlich noch nicht im Editor geöffneter Dateien, Bildern, Szenen, anderen Binärdateien, Lockdateien und leeren Ordnern. Die Runde zeigt den Projektumfang und die Dateianzahl. Es wird nicht der gesamte Projektordner blind auf einen alten Stand ersetzt: Anvil ermittelt die Änderungen zwischen Beginn und Ende dieser Runde.
+
+**Runde zurücknehmen / Zurück vor diese Runde** öffnet die gemeinsame Vorschau für Editor-Dateien und Projekt-Assets. Sie zeigt wiederherzustellende oder zu entfernende Dateien, Ordner, Konflikte und ausgeschlossene Pfade. Die Bestätigung speichert die Rücknahme. Spätere eigene oder externe Bearbeitungen und Löschungen führen bei betroffenen Dateien zu einem Konflikt; neue unbeteiligte Dateien bleiben bestehen. Bei einem unterbrochenen Wiederherstellungsvorgang kann Anvil den gesicherten Plan erneut abgleichen. Ein fehlender verlässlicher Endstand erlaubt keine pauschale Rücknahme.
+
+### Umfang und Grenzen
+
+- Ausgenommen sind Abhängigkeiten, Build- und Cache-Verzeichnisse wie `node_modules`, `.git`, `dist`, `.godot`, Unity-`Library`/`Temp` und Unreal-`Binaries`/`Intermediate`/`Saved`. Auch `.anvil/work`, `.anvil/out` und Anvils eigener Datenordner werden nicht mitgesichert. Die konkreten Ausschlüsse sind in der Vorschau sichtbar.
+- Bekannte Geheimnispfade wie `.env`, Schlüsseldateien und Tresorverzeichnisse sind ausgenommen; `.env.example`, `.env.sample` und `.env.template` bleiben erfassbar. Das ist eine Pfadregel, keine inhaltliche Suche nach sämtlichen Geheimnissen.
+- Verknüpfungen und Windows-Junctions werden nicht verfolgt. Unsichere Pfade, Änderungen während der Erfassung oder überschrittene Grenzen brechen die Sicherung mit einer Meldung ab. Die Grenzen sind 8 GiB je Datei, 64 GiB je Sicherungsstand und 100.000 Einträge. Ein unvollständiger Stand wird nicht als vollständig gesichert ausgegeben.
+- Externe Dienste, außerhalb des Projektordners liegende Dateien und laufende Datenbanktransaktionen werden nicht zurückgesetzt. Ausgeführte MCP-Werkzeuge werden in der Rücknahme mit Dienst und Werkzeugname aufgeführt; diese Liste nimmt ihre Aktionen nicht zurück. Ein Stop garantiert ebenfalls keine Rücknahme beim Anbieter.
+- Lokale Datenbankdateien können als Dateien erfasst werden. Für einen konsistenten Datenbankstand müssen schreibende Programme beendet oder die eigenen Sicherungsfunktionen der Datenbank verwendet werden. Der Projektsicherungspunkt ist keine Transaktionssicherung einer laufenden Datenbank.
+- Ältere Runden sowie Browser- und entfernte Companion-Projekte behalten die Rücknahme der geladenen Dateien. Sie werden nicht nachträglich zu vollständigen Projektsicherungspunkten erklärt.
+
+Die Sicherungsinhalte liegen unter `project-checkpoints` im Anvil-Datenordner. Identische Inhalte werden gemeinsam gespeichert, statt pro Runde erneut kopiert. Es gibt derzeit keine automatische Bereinigung alter Sicherungsinhalte. Siehe [Datenablage](datenablage.md).
+
+Vor der Rücknahme werden benötigte Editorinhalte aus der unveränderten Sicherung geladen und geprüft, einschließlich bytegetreuer Binärdaten. Für diesen Editor-Abgleich gelten 32 MiB je Datei und 256 MiB insgesamt; nicht im Editor geladene Assets werden direkt auf der Platte wiederhergestellt. Wird eine Rücknahme unterbrochen, bleiben ihr Plan und die Schreibsperre erhalten. Dieselbe Runde erneut zurücknehmen, um den Abgleich abzuschließen; alte Editorpuffer werden bis dahin nicht automatisch gespeichert.
+
+## Fenster und Spur
 
 Auf schmalen Fenstern sind Dateien, Editor, Agent, Spur und Ausgabe einzeln über eine Bereichsleiste erreichbar. Desktop-Breiten und gespeicherte Panel-Einstellungen bleiben erhalten.
 

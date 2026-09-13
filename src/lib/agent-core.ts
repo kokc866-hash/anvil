@@ -1,5 +1,5 @@
 import { resolvedUsage, type ReportedUsage, type TokenUsage, type RequestTokens } from "./token-usage";
-import { AgentEvidence, type Verification } from "./agent-evidence.ts";
+import { AgentEvidence, verifiedReply, type Verification } from "./agent-evidence.ts";
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { parseTextTool, validateToolCall, isToolStall, toolCallKey, type ToolContract } from "./tool-compat";
 import type { ToolLearningBridge } from "./tool-learning";
@@ -11,7 +11,7 @@ import { enginePrompt, primaryEngine } from "./engines";
 import { afterTool, applyHarnessTool, loadProjectGraph, loadProjectHarness, mergeOpts, projectHarnessPrompt } from "./harness-project";
 import { harnessBar, startHarness, effectiveAfterWrite } from "./harness";
 import { applyBoardTool, BOARD_PATH, filesFromBoard, parseBoard, settingsFromFiles, syncBoardFromFiles, syncBoardSettings } from "./harness-board";
-import { isSecretPath as secretPath, isRefPath, isRefImage, refWriteBlocked, imageStub } from "./ref";
+import { isSecretPath as secretPath, isRefPath, refWriteBlocked, imageStub } from "./ref";
 import { skipPath } from "./ws-skip";
 import { extractFileBlocks, looksLikeNoTools, looksIncomplete, looksStoppedEarly, jobOpen, harvestTools, parseToolArgs, isToolTemplateEcho, blocksToWriteCalls, decodeWriteEscapes, pickRunPath, skipAutoRunPath, askPickedNone } from "./agent-parse";
 import { workspaceIndex, workspaceMap } from "./ws-index";
@@ -23,6 +23,9 @@ import { applyGitClone, keepAgentTool, pinHistory, type ToolPick } from "./agent
 import { journalPrompt, type SessionJournal } from "./session";
 import { parseAsk, type JobAsk } from "./agent-ask";
 import { ANVIL_RUN_FRAME } from "./agent-image.ts";
+import { PlanProgress } from "./plan-progress.ts";
+import { planFromTool } from "./plan.ts";
+import type { PlanStep } from "@/store/ide";
 
 export type AgentFile = { path: string; content: string };
 
@@ -64,6 +67,7 @@ export type AgentResult = {
   ok: boolean;
   verification?: Verification;
   reply: string;
+  modelReply?: string;
   files?: AgentFile[];
   runPaths?: string[];
   tools?: string[];
@@ -72,8 +76,10 @@ export type AgentResult = {
   usage?: TokenUsage;
   compacted?: boolean;
   error?: string;
+  stopReason?: "round-limit" | "no-progress" | "tool-limit";
   ask?: JobAsk;
   parked?: boolean;
+  plan?: PlanStep[];
 };
 
 export const AGENT_TOOLS = TOOL_REGISTRY.filter((t) => t.function.name !== "select_tools");
@@ -106,9 +112,9 @@ export const AGENT_SYSTEM = `You are Anvil's main model. Change the workspace on
 Always reply in the user's language (German if they write German).
 
 Flow:
-1. set_plan — 3–7 short steps in the user's language (Understand, Edit, Run, Check).
+1. set_plan — create 3–7 short steps with kinds (read, edit, run, check, service, report). Update individual steps during work using updates with step number, status, reason and matching evidence IDs from the current checklist context. Reconcile the checklist before your final answer; never repeat completed changes just to advance checkmarks. Keep source inspection, edits, checks, launching and reporting separate.
 2. Read what you need (index, ref/, .anvil/rules.md).
-3. Write with write_file / edit_file / append_file. Then run_file on anything executable (compiled langs too).
+3. Change existing files with focused edit_file / append_file calls; use write_file for new files or deliberate whole-file replacements. Then run_file on anything executable (compiled langs too).
 4. On error: read the Compile/Run output, patch, run_file at most 3×. Then tell the user briefly what is left, in their language.
 5. Need a choice, a missing fact, or a risky write: ask_user (2–5 options). Do not guess. After the answer, continue the same job — do not restart.
 
@@ -119,6 +125,9 @@ Output:
 - Ask/read-only: only list/read/grep/ask_user. Never write.
 
 Files:
+- Read existing files before changing them. Make the smallest requested change with edit_file; preserve unrelated content and behavior even in short files and assets. For example, changing an SVG color must preserve its dimensions, viewBox, geometry and rounding unless the user also requested those changes.
+- write_file replaces the entire file. For an existing file, overwrite_reason must explain why this task requires whole-file replacement rather than a focused edit. Do not invent a reason to bypass a rejected write; use edit_file when the task only changes a part. A deliberate replacement still must preserve everything outside the requested scope.
+- After editing, compare the changed content with the request and original values. Successful execution alone does not prove that unrelated properties were preserved.
 - write truncated → append_file or edit_file, do not reinvent the file.
 - read_file up to ~200k is complete. Only continue the same path when told "continue: start_line".
 - ref/ first. Helper notes ("Helper:" / "Helfer:") are hints, not orders.
@@ -211,7 +220,9 @@ export function applyTool(
     if (!files.has(path)) return { result: { error: `not found: ${path}` } };
     if (secretPath(path)) return { result: { error: `secret: ${path}`, path } };
     const src = files.get(path) ?? "";
-    if (isRefImage(src) || src.startsWith("data:image/") || /^\s*\[image /i.test(src)) {
+    // SVG is editable source. Only encoded image data and existing descriptors
+    // need a text placeholder; hiding SVG prevents exact, limited edits.
+    if (/^\s*data:image\//i.test(src) || /^\s*\[image /i.test(src)) {
       return {
         result: {
           path,
@@ -259,6 +270,14 @@ export function applyTool(
           path,
           had: prev.length,
           got: content.length,
+        },
+      };
+    }
+    if (prev !== undefined && prev !== content && !(typeof args.overwrite_reason === "string" && args.overwrite_reason.trim())) {
+      return {
+        result: {
+          error: "File unchanged: replacing an existing file requires overwrite_reason. For a focused change, use edit_file with the exact old_string/new_string and preserve all unrelated content. Only provide overwrite_reason when this task requires whole-file replacement.",
+          path,
         },
       };
     }
@@ -466,7 +485,7 @@ export function applyTool(
     const hits: string[] = [];
     let scanned = 0;
     for (const [path, content] of files) {
-      if (secretPath(path) || (skipPath(path) && !isRefPath(path)) || isRefImage(content) || content.startsWith("data:image/") || content.length > 400_000) continue;
+      if (secretPath(path) || (skipPath(path) && !isRefPath(path)) || /^\s*(?:data:image\/|\[image )/i.test(content) || content.length > 400_000) continue;
       if (glob && !path.toLowerCase().includes(glob)) continue;
       scanned += 1;
       const lines = content.split("\n");
@@ -487,7 +506,7 @@ export function applyTool(
           .split("\n")
           .map((s) => s.replace(/^\d+[.)]\s*/, "").trim())
           .filter(Boolean);
-    return { result: { ok: true, steps: steps.slice(0, 10) } };
+    return { result: { ok: true, steps: steps.slice(0, 10), kinds: Array.isArray(args.kinds) && args.kinds.length === steps.length ? args.kinds.slice(0, 10) : [] } };
   }
   if (name === "ask_user") {
     const parsed = parseAsk(args);
@@ -576,6 +595,7 @@ export async function runAgentLoop(
     engineOk?: boolean;
     afterWrite?: "run" | "engine" | "preview" | "none";
     maxRounds?: number;
+    autoContinueRounds?: boolean;
     graphSees?: number;
     mcpCatalog?: string;
     surfaceId?: string;
@@ -594,6 +614,8 @@ export async function runAgentLoop(
     onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
     onTool?: (info: { name: string; args: Record<string, unknown>; result: unknown }) => void;
     onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
+    getPlan?: () => PlanStep[] | undefined;
+    canReplacePlan?: () => boolean;
     formatFile?: (path: string, content: string) => Promise<string>;
     gitClone?: (url: string) => Promise<AgentFile[]>;
     gitPush?: (message: string, files: Record<string, string>) => Promise<{ sha: string; repo: string }>;
@@ -621,6 +643,8 @@ export async function runAgentLoop(
   for (const p of files.keys()) for (const d of parents(p)) dirs.add(d);
   const runPaths: string[] = [];
   const evidence = new AgentEvidence();
+  const planProgress = new PlanProgress();
+  if (opts?.getPlan) planProgress.sync(opts.getPlan());
   const askText = data.messages.filter((m) => m.role === "user").at(-1)?.content ?? "";
   const diagnosticTask = !data.observeOnly && /Behebe diese Probleme im Workspace/.test(askText);
   const diagnosticPaths = [...new Set([...askText.matchAll(/^(.+?):\d+ \[/gm)].map((m) => m[1]).filter((path) => files.has(path)))];
@@ -656,6 +680,7 @@ export async function runAgentLoop(
       loopTries: data.loopTries ?? 3,
       afterWrite: data.afterWrite,
       maxRounds: data.maxRounds,
+      autoContinueRounds: data.autoContinueRounds,
       graphSees: data.graphSees,
     },
     projH,
@@ -707,6 +732,11 @@ export async function runAgentLoop(
   await pack();
 
   const packResult = (reply: string, extra: Partial<AgentResult> = {}): AgentResult => {
+    if (opts?.getPlan) planProgress.sync(opts.getPlan());
+    const openPlan = !data.observeOnly && !extra.parked && planProgress.hasOpenWork();
+    if (openPlan) reply += data.locale === "en"
+      ? "\n\nChecklist not fully confirmed: open steps remain visible."
+      : "\n\nTo-do noch nicht vollständig bestätigt: Offene Schritte bleiben sichtbar.";
     let verification = evidence.status();
     if (diagnosticTask && !extra.parked) {
       if (!diagnosticCheck || diagnosticCheck.revision !== evidence.revision) {
@@ -721,22 +751,26 @@ export async function runAgentLoop(
       files: [...files.entries()].map(([path, content]) => ({ path, content })),
       runPaths: [...new Set(runPaths)], tools: used, deleted: [...new Set(deleted)],
       applied: Boolean(opts?.onWorkspace), usage, compacted, ...extra,
+      plan: planProgress.plan,
       ok: (extra.ok ?? true) && !failed && !(diagnosticTask && unverified),
       verification,
       error: failed ? verification.detail : extra.error,
-      reply: (failed || unverified) && !extra.parked
-        ? `${failed ? "Nicht abgeschlossen" : "Noch nicht bestätigt"}: ${verification.detail}\n\nModellantwort:\n${reply}`
-        : reply,
+      modelReply: reply,
+      reply: extra.parked ? reply : verifiedReply(reply, verification),
     };
   };
 
   let nudged = 0;
+  let planNudges = 0;
   let emptyHits = 0;
   let stopAfter = false;
   let lastRead = "";
   let lastReadN = 0;
   let lastFail = "";
   const cap = Math.min(128, Math.max(8, hopts.maxRounds ?? data.maxRounds ?? 24));
+  const autoContinue = Boolean(harness.autoContinueRounds);
+  const progressKeys = new Set<string>();
+  let lastProgressRound = -1;
   const loopGen = agentGen();
   const de = data.locale !== "en";
   const say = (a: string, b: string) => (de ? a : b);
@@ -747,15 +781,27 @@ export async function runAgentLoop(
     /^(write_file|append_file|edit_file|delete_file|rename|mkdir|git_clone|harness_write|graph_write|board_write|board_reset)$/.test(n);
   let allow: string[] = [];
   let strictAllow = false;
-  for (let round = 0; round < cap; round++) {
+  for (let round = 0; autoContinue || round < cap; round++) {
     if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
     throwIfAborted();
+    if (autoContinue && round >= cap && round - lastProgressRound >= cap) {
+      const detail = say(
+        `Unterbrochen: Seit ${cap} Modellrunden kein neuer erfolgreicher Arbeitsschritt. ${round} Runden ausgeführt. Bisherige Änderungen bleiben erhalten. Hindernis klären und hier fortsetzen.`,
+        `Paused: No new successful action in ${cap} model rounds. ${round} rounds executed. Existing changes are preserved. Resolve the blocker and continue here.`,
+      );
+      return packResult(detail, { ok: false, error: detail, stopReason: "no-progress" });
+    }
     harness = { ...harness, used: { ...harness.used, rounds: round + 1 } };
     opts?.onHarness?.(harnessBar(harness));
     await pack();
     let choice: LlmChoice;
     try {
-      choice = await complete(messages, true, opts?.onDelta);
+      if (opts?.getPlan) planProgress.sync(opts.getPlan());
+      const planContext = !data.observeOnly && planProgress.context();
+      // Inject after compaction without accumulating a second stale plan in history.
+      const requestMessages = planContext ? messages.map((m, i) => i === 0 && m.role === "system"
+        ? { ...m, content: `${m.content}\n\n${planContext}` } : m) : messages;
+      choice = await complete(requestMessages, true, opts?.onDelta);
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       if (isAbortLike(err) || /Gestoppt|replaced|Neustart/i.test(msg)) throw err;
@@ -824,7 +870,7 @@ export async function runAgentLoop(
       if (tiny || thinkOnly) emptyHits += 1;
       else emptyHits = 0;
       if (observeOnly) {
-        if (!toolContract && (tiny || thinkOnly) && nudged < 2 && round + 1 < cap) {
+        if (!toolContract && (tiny || thinkOnly) && nudged < 2 && (autoContinue || round + 1 < cap)) {
           nudged += 1;
           messages.push({
             role: "user",
@@ -834,11 +880,22 @@ export async function runAgentLoop(
         }
         return packResult(text || say("Fertig.", "Done."));
       }
+      if (planProgress.hasOpenWork() && planNudges < 2 && (autoContinue || round + 1 < cap)) {
+        planNudges++;
+        // Compact/text catalogs rotate their six work tools. Make the status tool
+        // available for reconciliation without depending on another model guess.
+        opts?.selectTools?.(["set_plan"]);
+        messages.push({ role: "user", content: say(
+          "Vor der Abschlussantwort die sichtbare To-do-Liste abgleichen: set_plan mit updates für vorhandene Schrittnummern, passendem kind, status, reason und erfolgreichen evidence-IDs. Nur tatsächlich erledigte Punkte abhaken. Fehlende Arbeit ausführen oder den konkreten Blocker benennen; nichts bereits Erledigtes wiederholen. Falls das Werkzeug gerade fehlt, über select_tools auswählen.",
+          "Before your final answer reconcile the visible checklist: call set_plan with updates for existing step numbers, kind, status, reason and successful evidence IDs. Check only completed steps. Perform missing work or explain the specific blocker; never replay completed work. If the tool is absent, select it using select_tools.",
+        ) });
+        continue;
+      }
       if (toolContract) {
         // A normal answer/question is not a capability failure. Retry only an unfinished
         // response or an explicit refusal to use tools while concrete work is outstanding.
         const stalled = !askPickedNone(ask) && isToolStall(ask, completedTools, text, choice.finish_reason);
-        if (stalled && round + 1 < cap && opts?.tryTextFallback?.()) {
+        if (stalled && (autoContinue || round + 1 < cap) && opts?.tryTextFallback?.()) {
           beforeTextFallback = new Set(completedChanges);
           void import("./app-log").then((m) => m.appLog("cap", "Für diesen Auftrag einmal auf Text-Tools gewechselt; keine dauerhafte Einschränkung."));
           messages.push({ role: "user", content: say(
@@ -856,7 +913,7 @@ export async function runAgentLoop(
       if (must && askPickedNone(ask)) {
         return packResult(text || say("Fertig.", "Done."));
       }
-      if (must && nudged < 3 && round + 1 < cap) {
+      if (must && nudged < 3 && (autoContinue || round + 1 < cap)) {
         nudged += 1;
         const runAt = pickRunPath(files.keys());
         messages.push({
@@ -963,6 +1020,9 @@ export async function runAgentLoop(
         result = { error: `Harness budget: only ${allow.join(", ")}` };
       } else if (tc.function.name === "select_tools" && opts?.selectTools) {
         result = opts.selectTools(args.names as string[]);
+      } else if (tc.function.name === "set_plan") {
+        if (opts?.getPlan) planProgress.sync(opts.getPlan());
+        result = planProgress.set(args, opts?.canReplacePlan?.() ?? true);
       } else if (tc.function.name === "read_file") {
         const p = String(args.path || "");
         const key = readKey(p, Number(args.start_line) || 1);
@@ -1043,13 +1103,28 @@ export async function runAgentLoop(
       if ((writes && Object.keys(writes).length) || event) evidence.changed();
       opts?.onTool?.({ name: tc.function.name, args, result: frame ? { ...(result as object), image: frame } : result });
       const rec = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
-      evidence.record(tc.function.name, args, rec);
+      planProgress.record(tc.function.name, args, frame ? { ...rec, image: frame } : rec, Boolean((writes && Object.keys(writes).length) || event));
+      if (opts?.getPlan) planProgress.sync(opts.getPlan());
+      else if (tc.function.name !== "set_plan") {
+        const next = planFromTool(tc.function.name, planProgress.plan, Boolean(rec.error || rec.isError || rec.ok === false), args, rec);
+        if (next) planProgress.sync(next);
+      }
+      // A rejected envelope has no valid file target. Keep its failure separate
+      // until a corrected invocation succeeds, rather than inventing a filename.
+      if (checked?.error) evidence.invalid(tc.function.name, checked.error);
+      else evidence.record(tc.function.name, args, rec);
       if (!blocked && !denied && !batchFail && agentGen() === loopGen) opts?.toolLearning?.after(tc, rec);
       if (args.path && rec.path == null) rec.path = String(args.path);
       if (tc.function.name === "shell" && args.command && rec.command == null) rec.command = String(args.command);
       if (!rec.error && rec.ok !== false) {
         completedTools.push(tc.function.name);
         if (mutateTool(tc.function.name) || /^(mcp_call|shell|git_commit|git_push|memory_add|memory_forget)$/.test(tc.function.name)) completedChanges.add(toolCallKey(tc.function.name, args));
+        // Repeated calls and plan/configuration churn cannot buy more rounds.
+        // This measures new successful actions, not semantic task completion.
+        if (!rec.isError && !blocked && !denied && !checked?.error && !/^(set_plan|harness_|graph_|board_)/.test(tc.function.name)) {
+          const key = toolCallKey(tc.function.name, args);
+          if (!progressKeys.has(key)) { progressKeys.add(key); lastProgressRound = round; }
+        }
       }
       if (mutateTool(tc.function.name) && (rec.error || rec.ok === false)) batchFail = true;
       const w = afterTool(harness, tc.function.name, rec, {
@@ -1105,7 +1180,7 @@ export async function runAgentLoop(
           const nextFail = String(rec.error || rec.stderr || rec.stdout || "");
           const same = lastFail && scrubRunError(lastFail).slice(0, 180) === scrubRunError(nextFail).slice(0, 180);
           lastFail = nextFail;
-          if (round + 1 < cap && !w.inject) {
+          if ((autoContinue || round + 1 < cap) && !w.inject) {
             messages.push({
               role: "user",
               content: same
@@ -1134,6 +1209,7 @@ export async function runAgentLoop(
             loopTries: data.loopTries ?? 3,
             afterWrite: data.afterWrite,
             maxRounds: data.maxRounds,
+            autoContinueRounds: data.autoContinueRounds,
             graphSees: data.graphSees,
           },
           projH,
@@ -1161,6 +1237,10 @@ export async function runAgentLoop(
       }
     }
     if (stopAfter) {
+      if (/budget/i.test(harness.reason)) {
+        const detail = say(`Unterbrochen: Werkzeug-/Rundenbudget erreicht. Runden ${harness.used.rounds}/${cap}, Werkzeuge ${harness.used.tools}/${harness.budget.tools}. Auftrag noch offen.`, `Paused: Tool/round budget reached. Rounds ${harness.used.rounds}/${cap}, tools ${harness.used.tools}/${harness.budget.tools}. Task still open.`);
+        return packResult(detail, { ok: false, error: detail, stopReason: "tool-limit" });
+      }
       const last = await complete(messages, true, opts?.onDelta);
       recordUsage(last);
       const extra = extractFileBlocks(last.content ?? "");
@@ -1176,9 +1256,9 @@ export async function runAgentLoop(
   const clean = lastFail ? scrubRunError(lastFail) : "";
   return packResult(
     lastFail
-      ? `Runden-Limit. Letzter Fehler:\n${clean}\nNoch einmal senden — fehlende Datei anlegen oder den Bundler anpassen. Nicht von vorn.`
-      : "Runden-Limit. Auftrag nicht zu Ende. Noch einmal senden, nicht von vorn.",
-    { ok: !lastFail, error: lastFail ? clean : "Runden-Limit" },
+      ? say(`Unterbrochen: Rundenlimit ${cap}/${cap} erreicht. Letzter Fehler:\n${clean}\nBisherige Änderungen bleiben erhalten. Hier fortsetzen, nicht neu beginnen.`, `Paused: Round limit ${cap}/${cap} reached. Last error:\n${clean}\nExisting changes are preserved. Continue here, do not restart.`)
+      : say(`Unterbrochen: Rundenlimit ${cap}/${cap} erreicht. Auftrag noch offen. Automatisch weiterarbeiten unter Einstellungen → Agent aktivieren oder hier fortsetzen.`, `Paused: Round limit ${cap}/${cap} reached. Task still open. Enable automatic continuation under Settings → Agent or continue here.`),
+    { ok: false, error: lastFail ? clean : "Rundenlimit", stopReason: "round-limit" },
   );
 }
 

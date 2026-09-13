@@ -1,6 +1,6 @@
 # Externe Dienste in Anvil
 
-Stand: 12. September 2026. Lokaler Entwicklungsstand.
+Stand: 13. September 2026. Veröffentlicht in Anvil 1.3.26.
 
 Unter **Erweiterungen → Dienste** verbindet sich Anvil mit externen Anbietern und nutzt deren angebotene Werkzeuge über die vorhandene MCP-Brücke. Notion ist vorausgewählt. Der [Dienstkatalog](dienstkatalog.md) enthält 50 Angebote für Aufgaben, Wissen, Gestaltung, Dateien, Kundenarbeit, Code, Datenbanken, Hosting und Spieleentwicklung. Suche und Bereiche erleichtern die Auswahl. Anbieter mit zusätzlichem Einrichtungsbedarf sind gekennzeichnet; ihre fehlenden Voraussetzungen werden vor dem Hinzufügen angezeigt. Unter **Engines & 3D-Werkzeuge** stehen zusätzlich sieben lokale Verbindungsvorlagen bereit; siehe [Unity, Unreal und Godot](engines.md).
 
@@ -22,6 +22,8 @@ Erscheint nach dem Konto-Login nur die normale Notion-Seite, fehlt die Rückmeld
 
 Ist die Anmeldung bereits gespeichert, aber der anschließende Katalogabruf fehlgeschlagen, bleibt die Anmeldung erhalten. **Werkzeuge laden** wiederholt dann nur den Katalogabruf.
 
+**Nach einem Neustart musst du die Werkzeuge nicht erneut von Hand laden.** Anvil lädt die Kataloge aktiver, bereits angemeldeter Dienste automatisch und aktualisiert sie im Hintergrund. Nach Rückkehr ins Fenster oder wiederhergestellter Internetverbindung wird bei Bedarf erneut geprüft. Deaktivierte oder nicht angemeldete Dienste bleiben unverändert. Deine Werkzeugauswahl wird gespeichert; neu angebotene Werkzeuge bleiben ausgeschaltet. Diese Aktualisierung führt keine Werkzeuge aus und öffnet keine Anmeldefenster. Wenn die Anmeldung abgelaufen ist oder widerrufen wurde, ist eine bewusste erneute Anmeldung nötig.
+
 - **Werkzeuge laden** fragt den aktuellen Katalog erneut ab. Fehlgeschlagene Abfragen und verlorene Verbindungen entwerten den Bereitschaftsstatus. Ein Katalogabruf ist noch kein erfolgreicher Zugriff auf eine konkrete Seite.
 - **Werkzeug selbst ausführen** zeigt die freigegebenen Werkzeuge, deren Beschreibung und Eingabeschema. Nach Eingabe der Argumente führt **Jetzt ausführen** einen tatsächlichen Aufruf aus und zeigt die Antwort oder den Fehler. Schreibwerkzeuge können dabei echte Daten beim Anbieter verändern.
 - **Aktiv ausschalten** stoppt die Verwendung durch den Agenten; die Anmeldung bleibt für später gespeichert.
@@ -29,6 +31,8 @@ Ist die Anmeldung bereits gespeichert, aber der anschließende Katalogabruf fehl
 - **Verbindung entfernen → Endgültig entfernen** entfernt anschließend auch die Verbindung aus Anvil. Andere Verbindungen bleiben erhalten. Schlägt das Löschen der Zugangsdaten fehl, bleibt der deaktivierte Eintrag für einen erneuten Versuch sichtbar.
 
 Anmeldungen können abgebrochen werden. Verspätete Tokenantworten dürfen eine abgebrochene oder entfernte Verbindung nicht wiederherstellen. Ein bereits abgesendeter externer Werkzeugaufruf kann trotz Abbruch beim Anbieter ausgeführt worden sein; Anvil wiederholt solche Aufträge nicht automatisch.
+
+**Neon und ähnliche Dienste:** Bietet ein Server Werkzeuge an, aber antwortet bei einer optionalen Ressourcen-Methode mit „Method not found“, bleiben seine Werkzeuge nutzbar. Echte Zugriffs- und Verbindungsfehler werden weiterhin angezeigt. Die Anzeige einer gespeicherten Anmeldung allein ersetzt keinen erfolgreichen Katalogabruf.
 
 ## Weitere Dienste
 
@@ -47,6 +51,8 @@ Die OAuth-Daten bleiben im Betriebssystem-verschlüsselten `mcp-oauth.enc` im ko
 Die Desktop-Abnahme verwendet einen eindeutig benannten lokalen OAuth-Testdienst mit echten HTTP-Anfragen, dynamischer Client-Registrierung, PKCE, Zustandsprüfung und dem tatsächlichen nativen MCP-Client. Nur die Benutzerzustimmung des Testdienstes wird simuliert; die MCP-Brücke und der verschlüsselte Speicher werden nicht ersetzt. Geprüft wurden Werkzeugauswahl und Aufruf, nicht freigegebene Werkzeuge, Neustart ohne erneute Anmeldung, Deaktivieren, Abmelden, Entfernen sowie eine verspätete Tokenantwort nach Abbruch. Nachweis: `artifacts/services/result.json`.
 
 Zusätzliche Integrationstests prüfen entzogene Freigaben gegen alte Aufrufer, fehlgeschlagene Katalogaktualisierung, verspätete Ereignisse einer alten Verbindung und eine während des Entfernens ersetzte Verbindung. Für die automatisierte Abnahme wird ein lokaler Testdienst verwendet. Die separate [Live-Abnahme für Notion und Linear](dienste-live-test.md) hat anschließend erfolgreiche lesende Aufrufe über die verbundenen Konten bestätigt.
+
+Seit 1.3.26 prüft die Desktop-Abnahme außerdem den automatischen Katalogabruf nach einem vollständigen Neustart, erhaltene Freigaben, ausgeschaltete neue Werkzeuge und fehlende optionale Ressourcen-Methoden. Ein Katalogabruf erzeugt dabei keinen Werkzeugaufruf. Der Eigentümer hat anschließend bestätigt, dass die Erweiterungen funktionieren und der Agent sie erkennt. Das ersetzt keine Einzelabnahme aller Dienste des Katalogs.
 
 Vor der Ergänzung zum Fortsetzen der Browser-Anmeldung bestand der vollständige Testlauf mit **942 erfolgreichen Tests, 5 übersprungenen Tests und 0 Fehlern** (`artifacts/services/tests-final.log`). Für die Ergänzung bestanden erneut Typprüfung, Desktop-Build, die MCP-Tests und 15 gezielte Integrations- und OAuth-Tests (`artifacts/services-login`). Die Desktop-Abnahme prüft zusätzlich das Fortsetzen desselben Anmeldelinks nach fehlender Rückmeldung sowie einen Katalogfehler nach erfolgreicher Anmeldung. `ui-build` wurde aktualisiert. Die MCP-Testsammlung traf beim ersten Lauf auf eine durch das offene Anvil gesperrte Windows-Cookiedatei; nach dem Schließen bestand sie.
 

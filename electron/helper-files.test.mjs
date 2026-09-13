@@ -5,6 +5,8 @@ import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
+import fileSystem from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { downloadFile } from "./hf-get.mjs";
 import { helperModelInfo, downloadHelperBundle, jsonFileOk, cancelHelperDownload, adoptLegacyHelper, deleteHelperBundle, recoverHelperBundles } from "./helper-files.mjs";
 
@@ -200,6 +202,44 @@ test("startup can finish a complete first install but never publishes an incompl
   assert.deepEqual(await recoverHelperBundles(root), { restored: [id], issues: [] });
   assert.equal((await helperModelInfo(join(root, id))).ready, true);
   assert.deepEqual(await readdir(root), [id]);
+});
+
+test("readiness settles concurrent metadata reads before returning a missing-receipt result", async (t) => {
+  const root = await folder(t), { dir } = await legacy(root);
+  const originalRead = fileSystem.readFile;
+  const opened = deferred(), receiptFailed = deferred(), release = deferred(), closed = deferred();
+  let configClosed = false, returned = false;
+  fileSystem.readFile = async (path, ...args) => {
+    if (path === join(dir, "mlc-chat-config.json")) {
+      const handle = await fileSystem.open(path, "r");
+      opened.resolve();
+      try { await release.promise; return await handle.readFile(...args); }
+      finally { await handle.close(); configClosed = true; closed.resolve(); }
+    }
+    if (path === join(dir, "anvil-model.json")) {
+      await opened.promise;
+      try { return await originalRead(path, ...args); }
+      catch (error) { receiptFailed.resolve(); throw error; }
+    }
+    return originalRead(path, ...args);
+  };
+  syncBuiltinESMExports();
+  try {
+    const checking = helperModelInfo(dir).then(result => { returned = true; return result; });
+    await receiptFailed.promise;
+    // Drain promise continuations while the real config file handle stays open.
+    await new Promise(setImmediate);
+    const returnedWithOpenHandle = returned && !configClosed;
+    release.resolve();
+    assert.deepEqual(await checking, { ready: false, bytes: 0 });
+    await closed.promise;
+    assert.equal(returnedWithOpenHandle, false, "recovery must not rename a directory while readiness still reads its files");
+  } finally {
+    release.resolve();
+    await closed.promise;
+    fileSystem.readFile = originalRead;
+    syncBuiltinESMExports();
+  }
 });
 
 test("recovery preserves legacy originals and uncertain backups; delete removes their recovery copies", async (t) => {

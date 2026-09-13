@@ -6,6 +6,9 @@ import { delimiter, join, resolve } from "node:path";
 import os from "node:os";
 import { nodeCommand } from "./node-cmd.mjs";
 import { THINKING_MODES, claudeAdaptive, effectiveThinking } from "./thinking-support.mjs";
+import { validateCliImages, writeCliImages, claudeInput } from "./cli-images.mjs";
+import { createCliStream } from "./cli-stream.mjs";
+import { completeCodexServer } from "./cli-codex-server.mjs";
 
 export const CLI_KINDS = ["codex", "claude", "copilot"];
 const PACKAGES = {
@@ -25,7 +28,7 @@ export function cliEnvironment(base = process.env) {
   // An API key inherited by the desktop must never override the selected subscription.
   for (const k of Object.keys(env)) {
     if (
-      /^(OPENAI_|CODEX_API_KEY$|ANTHROPIC_|CLAUDE_CODE_OAUTH_TOKEN$|CLAUDE_CODE_USE_|COPILOT_API_|COPILOT_PROVIDER_|COPILOT_GITHUB_TOKEN$|GITHUB_TOKEN$|GH_TOKEN$|ELECTRON_RUN_AS_NODE$|NODE_OPTIONS$)/i.test(
+      /^(OPENAI_|CODEX_API_KEY$|ANTHROPIC_|CLAUDE_CODE_OAUTH_TOKEN$|CLAUDE_CODE_USE_|COPILOT_API_|COPILOT_PROVIDER_|COPILOT_GITHUB_TOKEN$|COPILOT_ALLOW_ALL$|GITHUB_COPILOT_PROMPT_MODE_|GITHUB_TOKEN$|GH_TOKEN$|ELECTRON_RUN_AS_NODE$|NODE_OPTIONS$)/i.test(
         k,
       )
     )
@@ -131,7 +134,7 @@ export function runProcess(
         if (bytes > LIMIT) return stop("CLI-Ausgabe ist zu groß.");
         if (name === "stdout") stdout += part;
         else stderr += part;
-        onOutput?.(part, name);
+        try { onOutput?.(part, name); } catch (error) { stop(error.message || "CLI-Ausgabe ungültig."); }
       });
     }
     child.on("error", (err) => {
@@ -229,7 +232,7 @@ export const CHOICE_SCHEMA = {
   },
 };
 
-export function completionArgs(kind, model, dir, thinking = "auto") {
+export function completionArgs(kind, model, dir, thinking = "auto", images = []) {
   if (!CLI_KINDS.includes(kind)) throw new Error("Unbekannte CLI.");
   if (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+\-]{0,199}$/.test(model))
     throw new Error("Ungültige CLI-Modell-ID.");
@@ -261,6 +264,7 @@ export function completionArgs(kind, model, dir, thinking = "auto") {
       model,
       "--output-schema",
       join(dir, "schema.json"),
+      ...images.flatMap(path => ["--image", path]),
       "-",
     ];
   if (kind === "claude")
@@ -269,6 +273,9 @@ export function completionArgs(kind, model, dir, thinking = "auto") {
       "--output-format",
       "stream-json",
       "--verbose",
+      "--include-partial-messages",
+      "--input-format",
+      "stream-json",
       "--no-session-persistence",
       "--tools",
       "",
@@ -288,7 +295,8 @@ export function completionArgs(kind, model, dir, thinking = "auto") {
   return [
     "--silent",
     "--output-format",
-    "text",
+    "json",
+    "--stream=on",
     "--no-color",
     "--no-custom-instructions",
     "--disable-builtin-mcps",
@@ -298,6 +306,7 @@ export function completionArgs(kind, model, dir, thinking = "auto") {
     ...(mode !== "auto" ? [`--effort=${mode}`] : []),
     "--model",
     model,
+    ...images.flatMap(path => ["--attachment", path]),
   ];
 }
 
@@ -316,10 +325,6 @@ export function completionEnvironment(kind, model, thinking = "auto", base = pro
 }
 
 export function parseCliOutput(kind, stdout) {
-  if (kind === "copilot") {
-    if (!stdout.trim()) throw new Error("Copilot: Leere Modellantwort.");
-    return stdout.trim();
-  }
   let result = "",
     error = "";
   for (const line of stdout.split(/\r?\n/)) {
@@ -336,6 +341,7 @@ export function parseCliOutput(kind, stdout) {
       if (e.is_error) error = e.result || e.errors?.join(" · ") || "Claude CLI fehlgeschlagen.";
       else result = e.structured_output ? JSON.stringify(e.structured_output) : e.result;
     }
+    if (kind === "copilot" && e.type === "assistant.message" && !e.data?.parentToolCallId) result = e.data?.content;
     if (e.type === "error" || e.type === "turn.failed" || e.type === "session.error")
       error = e.message || e.error?.message || e.data?.message || "CLI fehlgeschlagen.";
   }
@@ -348,29 +354,36 @@ export function parseCliOutput(kind, stdout) {
 }
 
 export async function completeCli(
-  { kind, model, prompt, thinking = "auto" },
-  { signal, onActivity, timeoutMs = 0 } = {},
+  { kind, model, prompt, thinking = "auto", images = [] },
+  { signal, onActivity, onText, timeoutMs = 0 } = {},
 ) {
   if (typeof prompt !== "string" || !prompt.trim() || Buffer.byteLength(prompt) > 8 * 1024 * 1024)
     throw new Error("CLI-Anfrage leer oder zu groß (max. 8 MiB).");
   // Validate all options before probing or spawning any CLI.
   completionArgs(kind, model, ".", thinking);
+  const attachments = validateCliImages(images);
   const status = await probeCli(kind, signal);
   if (status.authenticated === false)
     throw new Error(`${kind}: Abo-Anmeldung fehlt. Einstellungen → Abo → Anmelden.`);
   const dir = await mkdtemp(join(os.tmpdir(), "anvil-cli-"));
   try {
+    const imagePaths = kind === "claude" ? [] : await writeCliImages(attachments, dir);
+    if (kind === "codex") return await completeCodexServer(findCli(kind), {
+      model, prompt, imagePaths, effort: effectiveThinking("", model, thinking, kind), schema: CHOICE_SCHEMA, cwd: dir,
+    }, { env: completionEnvironment(kind, model, thinking), signal, timeoutMs, onActivity, onText });
+    const stream = createCliStream(kind, onText);
     await writeFile(join(dir, "schema.json"), JSON.stringify(CHOICE_SCHEMA), { mode: 0o600 });
-    const r = await runProcess(findCli(kind), completionArgs(kind, model, dir, thinking), {
+    const r = await runProcess(findCli(kind), completionArgs(kind, model, dir, thinking, imagePaths), {
       env: completionEnvironment(kind, model, thinking),
       cwd: dir,
-      input: prompt,
+      input: kind === "claude" ? claudeInput(prompt, attachments) : prompt,
       signal,
       timeoutMs,
-      onOutput: () => onActivity?.(),
+      onOutput: (part, name) => { onActivity?.(); if (name === "stdout") stream.push(part); },
     });
     if (r.code !== 0)
       throw new Error(safeCliText(r.stderr || r.stdout || `${kind}: Exit ${r.code}`).slice(-1800));
+    stream.finish();
     return parseCliOutput(kind, r.stdout);
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -6,6 +6,8 @@ Verfügbar ab Anvil 1.3.20. Bestehende HTTP-Konfigurationen bleiben verwendbar. 
 
 Im Bereich **MCP** einen Server hinzufügen, aktivieren und **Tools laden** wählen. Der Status zeigt den geladenen Katalog mit Tool- und Ressourcenanzahl. Ein geladener Katalog bestätigt noch keinen erfolgreichen Tool-Aufruf.
 
+Für verwaltete OAuth-Verbindungen unter **Erweiterungen → Dienste** ist der Ablauf einfacher: Bereits angemeldete und aktive Dienste laden ihre Werkzeuge seit 1.3.26 nach einem Neustart automatisch. **Werkzeuge laden** bleibt für eine sofortige zusätzliche Prüfung verfügbar. Freigaben werden erhalten; neue Werkzeuge bleiben ausgeschaltet. Details: [Externe Dienste](dienste.md).
+
 | Verbindung | Eingaben |
 |---|---|
 | HTTP | Vollständige MCP-URL, optional Bearer. Auch LAN-Adressen sind erlaubt. Die Desktop-App überträgt die Anfragen nativ, ohne Browser-CORS. |
@@ -35,11 +37,15 @@ Anvil prüft die Argumente gegen das vom Server gelieferte JSON-Schema. Kontextw
 
 ## Ergebnisse, Abbruch und Grenzen
 
-Strukturierte Daten, Text, Bilder, Ressourcen und `isError` bleiben im empfangenen Ergebnis erhalten. MCP-Bilder werden nicht als Canvas-/Graph-Aufnahme bezeichnet. Modelle ohne bekannte Bildunterstützung und Abo-CLIs erhalten die Text-/Strukturdaten; Bilder bleiben in Anvil sichtbar. Im Modellkontext erscheinen höchstens vier passende Bilder bis jeweils 8 MiB Base64-Text. Große Ergebnisse erhalten einen Verweis zum Nachlesen. Der Sitzungsspeicher hält bis zu 16 Ergebnisse und insgesamt 32 MiB; ältere Ergebnisse können auslaufen. Ein ausgelaufener Verweis ist kein Anlass, eine schreibende Aktion automatisch zu wiederholen.
+Strukturierte Daten, Text, Bilder, Ressourcen und `isError` bleiben im empfangenen Ergebnis erhalten. MCP-Bilder werden nicht als Canvas-/Graph-Aufnahme bezeichnet. Modelle ohne bekannte Bildunterstützung erhalten die Text-/Strukturdaten; Bilder bleiben in Anvil sichtbar. In Release 1.3.27 überträgt der CLI-Adapter passende MCP-Bilder zusätzlich an Codex, Claude Code und Copilot; dafür gelten die [CLI-Bildgrenzen](05-verbindungen.md#abo-über-cli) und die tatsächliche Bildfähigkeit des gewählten Modells.
+
+Im MCP-Modellkontext erscheinen höchstens vier passende Bilder bis jeweils 8 MiB Base64-Text; eine nachgelagerte Modellverbindung kann engere Grenzen haben. Große Ergebnisse erhalten einen Verweis zum Nachlesen. Der Sitzungsspeicher hält bis zu 16 Ergebnisse und insgesamt 32 MiB; ältere Ergebnisse können auslaufen. Ein ausgelaufener Verweis ist kein Anlass, eine schreibende Aktion automatisch zu wiederholen.
 
 **Stop** bricht die ausstehende MCP-Anfrage ab. Bei gemeinsam genutztem Katalogaufbau kann eine reine Kataloganfrage für einen anderen wartenden Aufrufer weiterlaufen. Deaktivieren, Entfernen und Verbindungsänderungen löschen den betroffenen Katalog und schließen die native Verbindung. Nach einem Verbindungsverlust wird ein möglicherweise bereits ausgeführtes Tool nicht automatisch wiederholt. Ein Abbruch kann eine serverseitig bereits abgeschlossene Änderung nicht rückgängig machen.
 
 Der native Client handelt das aktuelle MCP-Protokoll mit Rückfall auf ältere Initialisierung aus. HTTP verwendet Streamable HTTP einschließlich SSE-Antworten; separate alte GET-SSE-Endpunkte sind damit nicht gemeint. Server, die interaktive Elicitation/Sampling-Schritte benötigen, werden nicht durch erfundene Antworten bedient: Anvil meldet den zusätzlichen Interaktionsbedarf. Kataloge mit endlosen oder wiederholten Seitencursorn werden als Serverfehler angezeigt.
+
+Fehlende optionale Methoden für Ressourcen oder Ressourcenvorlagen blockieren seit 1.3.26 den Werkzeugkatalog nicht mehr. Damit bleibt beispielsweise ein Dienst mit funktionierendem `tools/list` nutzbar, obwohl er auf eine Ressourcenabfrage mit `Method not found` antwortet. Authentifizierungs-, Netzwerk- und andere tatsächliche Fehler bleiben Fehler; sie werden nicht pauschal übergangen.
 
 ## Gezielte Entwicklerprüfung
 

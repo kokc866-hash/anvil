@@ -1,15 +1,16 @@
 # Anleitungen
 
-Anvil **1.3.24** (12.09.2026)
+Dokumentationsstand: **13.09.2026**, Release **1.3.27**. Die Anleitungen beschreiben diesen Stand; ältere Praxistests bleiben mit ihrem jeweiligen Prüfdatum gekennzeichnet.
 
-Windows-Installer: [GitHub Releases](https://github.com/kokc866-hash/anvil/releases) — Setup-exe oder ZIP (Ordner wählen, `Anvil.exe`). Kein Portable-Exe.
+Windows: [Anvil 1.3.27](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.27) — Setup-EXE oder portable ZIP. ZIP vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Beide Pakete enthalten die Laufzeit; Node.js wird nur für die Arbeit am Quellcode separat benötigt. Das Release ist auf Wunsch des Eigentümers unsigniert.
 
 | Datei | |
 |---|---|
-| [produktreife.md](produktreife.md) | Prioritäten und Abnahme bis zur Windows-Beta |
+| [produktreife.md](produktreife.md) | Historischer Arbeitsplan mit Verweis auf den aktuellen Umsetzungsstand |
 | [produktabschluss.md](produktabschluss.md) | Umgesetzte Produktarbeit 1–6, Bedienwege und bekannte Grenzen |
 | [erweiterungen.md](erweiterungen.md) | Plugins entfernen, Skill-Pakete, Projektprüfung, Bedienprüfungen, MCP und ACP-Vorschau |
 | [dienste.md](dienste.md) | Bei Notion und anderen Diensten anmelden und deren Werkzeuge über Anvils Brücke nutzen |
+| [dienstkatalog.md](dienstkatalog.md) | Verfügbare Dienste und erforderliche Einrichtung |
 | [engines.md](engines.md) | Unity, Unreal und Godot einrichten, Engine-Erweiterungen und echte Testnachweise |
 | [orientierung.md](orientierung.md) | Einstieg, Fragen und Agent sowie die Aufgaben der einzelnen Bereiche |
 | [installation-abnahme.md](installation-abnahme.md) | Sichere Updates, echte Paketprüfung und spätere Signierung |

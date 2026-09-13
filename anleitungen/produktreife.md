@@ -1,8 +1,10 @@
-# Anvil bis zur Produktreife
+# Anvil bis zur Produktreife — historischer Arbeitsplan
 
-12. September 2026 · Arbeitsplan auf Grundlage des lokalen Codes und der Desktop-Praxistests
+Ursprünglicher Arbeitsplan vom 12. September 2026. Einordnung aktualisiert am 13. September 2026.
 
-**Fortgeschriebener Stand:** Die folgenden Abschnitte dokumentieren die ursprünglichen Lücken und Abnahmekriterien. Punkte 1 bis 6 wurden inzwischen technisch umgesetzt und nachgeprüft; die aktuellen Funktionen, Nachweise und verbleibenden Grenzen stehen im [Produktabschluss](produktabschluss.md). Insbesondere sind Zwangsbeenden und die unvollständige Dateirücknahme aus der ursprünglichen Bestandsaufnahme inzwischen behoben. Herausgeber, Lizenz, Supportkontakt und Signierung bleiben auf ausdrücklichen Wunsch für später offen. Die Freigabe ist damit nicht als erteilt zu verstehen.
+**Historische Bestandsaufnahme:** Alle folgenden Befunde und Formulierungen wie „fehlt“, „noch nicht“ oder „als Nächstes“ beziehen sich auf den damaligen Stand vor der Umsetzung. Sie sind keine aktuelle Fehlerliste. Die damaligen Punkte 1 bis 6 wurden technisch umgesetzt und nachgeprüft; Funktionen und verbleibende Grenzen stehen im [Produktabschluss](produktabschluss.md), [Editor-Handbuch](editor.md) und in der [Verbindungsanleitung](05-verbindungen.md).
+
+**Heute:** Anvil 1.3.26 ist mit Zustimmung des Eigentümers als unsignierte Setup-EXE und portable ZIP veröffentlicht. Release-Prüfungen auf einem frischen GitHub-Windows-Runner und beide Downloads wurden geprüft. Herausgeber, Lizenz, Supportkontakt und Signierung bleiben für später offen; daraus folgt keine ausstehende Freigabe des bereits veröffentlichten unsignierten Pakets. Echte Altversionsmigration und unabhängige Erstnutzer bleiben zusätzliche Nachweise. Die späteren Arbeiten an CLI und Projektsicherung werden in den aktuellen Fachanleitungen beschrieben.
 
 ## Entscheidung
 

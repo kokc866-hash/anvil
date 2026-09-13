@@ -49,6 +49,10 @@ function withTimeout(p: Promise<RunResult>, ms: number, label: string): Promise<
 
 export async function runTestFiles(paths: string[], onlyName?: string): Promise<RunResult> {
   const st = useIde.getState();
+  const current = () => useIde.getState().workspaceEpoch === st.workspaceEpoch;
+  const assertCurrent = () => {
+    if (!current()) throw new Error("Projekt inzwischen gewechselt. Testergebnis gehört zum vorherigen Projekt.");
+  };
   if (st.testsRunning) {
     return { ok: false, stdout: "", stderr: "Tests laufen schon.", duration: 0, label: "tests" };
   }
@@ -79,6 +83,7 @@ export async function runTestFiles(paths: string[], onlyName?: string): Promise<
       const scope: Record<string, string> = {};
       for (const p of g.members) scope[p] = st.files[p] ?? "";
       const r = await withTimeout(runFile(g.entry, prepared(st.files, g.entry, onlyName), { asTest: true }), FILE_MS, g.entry);
+      assertCurrent();
       parts.push(`${r.ok ? "PASS" : "FAIL"} ${g.entry}\n${[r.stdout, r.stderr].filter(Boolean).join("\n")}`.trim());
       if (!r.ok) ok = false;
       const hits = parseTests(r.stdout, r.stderr, scope);
@@ -120,7 +125,6 @@ export async function runTestFiles(paths: string[], onlyName?: string): Promise<
     st.pushOutput(result);
     return result;
   } catch (err) {
-    useIde.getState().setTestsRunning(false);
     const msg = err instanceof Error ? err.message : String(err);
     const result: RunResult = {
       ok: false,
@@ -129,10 +133,10 @@ export async function runTestFiles(paths: string[], onlyName?: string): Promise<
       duration: (performance.now() - started) / 1000,
       label: "tests",
     };
-    useIde.getState().pushOutput(result);
+    if (current()) useIde.getState().pushOutput(result);
     return result;
   } finally {
-    useIde.getState().setTestsRunning(false);
+    if (current()) useIde.getState().setTestsRunning(false);
   }
 }
 

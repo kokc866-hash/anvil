@@ -2,11 +2,11 @@
 
 12. September 2026 · Anvil 1.3.24 · lokaler Entwicklungsstand
 
-**Neuerer Umsetzungsstand:** [Produktarbeit 1–6](produktabschluss.md) mit Einstieg ohne KI, geführten Aufgaben, Verbindungsgrenzen, Hilfe und erweiterten Rücknahmeprüfungen. Dieser Bericht erhält die ursprüngliche Untersuchung und Reparaturgeschichte.
+**Historischer Bericht:** Die folgenden Fehler, Reparaturen und Nachweise beziehen sich auf den Test vom 12. September. „Aktuell“, „neu“ und die damaligen CLI-/Rücknahmegrenzen beschreiben diesen Prüfzeitpunkt. Der heutige Stand steht unter [Produktarbeit 1–6](produktabschluss.md), [Verbindungen](05-verbindungen.md) und [Editor](editor.md). Die ursprüngliche Untersuchung wird nicht als neuer Test nachträglich umgeschrieben.
 
-**Aktuelle Reparaturabnahme:** Die drei anschließend im Tageswerk-Test gefundenen Fehler sind behoben: keine erneut eingefügten Standarddateien beim Neustart, Rücknahme ohne künstliche Speicherkonflikte, verständliche Abbruch- und Abschlussmeldungen. Die gebaute Desktop-Version besteht den gezielten Wiederholungstest einschließlich Schutz bei echter externer Dateiänderung. [Nachweise und Grenzen](I:/Anvil/anleitungen/praxistest-tageswerk.md).
+**Aktuelle Reparaturabnahme:** Die drei anschließend im Tageswerk-Test gefundenen Fehler sind behoben: keine erneut eingefügten Standarddateien beim Neustart, Rücknahme ohne künstliche Speicherkonflikte, verständliche Abbruch- und Abschlussmeldungen. Die gebaute Desktop-Version besteht den gezielten Wiederholungstest einschließlich Schutz bei echter externer Dateiänderung. [Nachweise und Grenzen](praxistest-tageswerk.md).
 
-**Anschließender ausführlicher Produkttest:** [Tageswerk vollständig in Anvil erstellen und bedienen](I:/Anvil/anleitungen/praxistest-tageswerk.md). Dieser neue Test verwendet den echten Ordnerdialog und echte Modellaufträge, umfasst einen vollständigen App-Neustart und dokumentiert zusätzliche Befunde bei Standarddateien, Rundenrücknahme und Abbruchdarstellung.
+**Anschließender ausführlicher Produkttest:** [Tageswerk vollständig in Anvil erstellen und bedienen](praxistest-tageswerk.md). Dieser neue Test verwendet den echten Ordnerdialog und echte Modellaufträge, umfasst einen vollständigen App-Neustart und dokumentiert zusätzliche Befunde bei Standarddateien, Rundenrücknahme und Abbruchdarstellung.
 
 ## Reparatur und erneute Abnahme am selben Tag
 
@@ -23,11 +23,11 @@ Die native Abnahme lief über `scripts/produkt-fixes.browser.mjs`: Einstieg und 
 
 Testgrenze: Nur der Windows-Ordnerdialog wurde automatisiert mit dem vorbereiteten Testpfad beantwortet; der restliche native IPC-/Companion-/Dateiweg wurde tatsächlich ausgeführt. Die Testprofile und Projekte waren getrennt; verwendet wurde der reguläre Companion-Endpunkt. Zwei erste Versuche mit einem abweichenden Companion-Port scheiterten an der Testkonfiguration, bevor ein Modellauftrag startete. Diese werden nicht als erfolgreiche Abnahmen gezählt. Die allgemeine Vereinfachung des Einstiegs und eine umfassende Barrierefreiheitsprüfung bleiben Produktvorschläge. Die heuristische Zuordnung einzelner freier To-do-Texte wurde nicht überarbeitet.
 
-![Reparierte Ersteinrichtung](I:/Anvil/anleitungen/produktkonzept-bilder/12-reparatur-einrichtung.png)
+![Reparierte Ersteinrichtung](produktkonzept-bilder/12-reparatur-einrichtung.png)
 
-![Echter CLI-Auftrag sauber abgeschlossen](I:/Anvil/anleitungen/produktkonzept-bilder/13-reparatur-cli-abgeschlossen.png)
+![Echter CLI-Auftrag sauber abgeschlossen](produktkonzept-bilder/13-reparatur-cli-abgeschlossen.png)
 
-![Zurücksetzen nach erfolgreicher Reparatur geprüft](I:/Anvil/anleitungen/produktkonzept-bilder/14-reparatur-reset.png)
+![Zurücksetzen nach erfolgreicher Reparatur geprüft](produktkonzept-bilder/14-reparatur-reset.png)
 
 ## Ursprünglicher Befund vor der Reparatur
 
@@ -65,7 +65,7 @@ Ausgangsdatei: eine einfache HTML-Seite mit Zähler und Erhöhen-Button, ohne ex
 
 Die Spur zeigt Lesen, Ändern und Run. Der Patch ist funktional richtig. Danach lautet die abschließende Nachricht: „Bilder werden über die Abo-CLI noch nicht übertragen. Bitte Text verwenden oder eine API-Verbindung wählen.“ Es wurde kein Bild an den Auftrag angehängt. Der Nutzer hat somit bereits Text verwendet und erhält eine unpassende Handlungsanweisung. Die Spur nennt den Lauf gleichzeitig „Fertig“, während die Aufgabenliste bei 2/3 steht.
 
-![CLI-Abbruch trotz erzeugtem Patch und erfolgreichem Run](I:/Anvil/anleitungen/produktkonzept-bilder/08-praxistest-cli-abbruch.png)
+![CLI-Abbruch trotz erzeugtem Patch und erfolgreichem Run](produktkonzept-bilder/08-praxistest-cli-abbruch.png)
 
 **Quellcode bestätigt den Mechanismus:** `src/lib/agent-core.ts` fügt einen vorhandenen Run-/Play-Frame als `image_url` in die Folgekonversation ein. `src/lib/cli-protocol.ts` entfernt Bilder nur bei besonders markierten MCP-Ergebnissen und weist sonstige Bilder mit genau der beobachteten Meldung zurück. Die transportabhängige Behandlung fehlt damit in diesem geprüften Run-Pfad.
 
@@ -87,11 +87,11 @@ Die Ordnerwahl verdient einen gezielten Regressionstest: Der Einstieg verwendet 
 
 Die Prüfung des Patches ist unmittelbar erreichbar. Übernehmen führt zurück zum bearbeiteten Code; Run zeigt das Ergebnis in einem eigenen Fenster. Das sind konkrete Stärken des Produkts und eine bessere Grundlage für die Positionierung als eine reine Funktionsliste.
 
-![Ausführung nach Änderung, Zähler bei 2](I:/Anvil/anleitungen/produktkonzept-bilder/09-praxistest-zaehler-zwei.png)
+![Ausführung nach Änderung, Zähler bei 2](produktkonzept-bilder/09-praxistest-zaehler-zwei.png)
 
-![Zurücksetzen funktioniert](I:/Anvil/anleitungen/produktkonzept-bilder/10-praxistest-reset.png)
+![Zurücksetzen funktioniert](produktkonzept-bilder/10-praxistest-reset.png)
 
-![Thinking Low bei erkannter Codex-CLI](I:/Anvil/anleitungen/produktkonzept-bilder/07-praxistest-thinking.png)
+![Thinking Low bei erkannter Codex-CLI](produktkonzept-bilder/07-praxistest-thinking.png)
 
 ## Ergänzende automatisierte Prüfungen
 

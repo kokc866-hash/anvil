@@ -26,6 +26,9 @@ async function saveCurrent(request: SaveRequest, path: string | null, target: Re
   let note = "Gespeichert";
   try {
     const initial = useIde.getState();
+    if (initial.checkpoints.some((c) => c.projectRestore && c.disk?.root === target.cwd)) {
+      initial.setNotice("Unterbrochene Projektrücknahme zuerst über dieselbe Runde abschließen. Alte Editorstände werden nicht auf die Platte geschrieben."); return false;
+    }
     const paths = request.all ? Object.keys(initial.dirty).filter((p) => initial.dirty[p] && p in initial.files) : path && path in initial.files ? [path] : [];
     if (paths.some((p) => initial.pendingDiffs.some((d) => d.path === p && d.source !== "round"))) {
       initial.setNotice("Änderungsvorschläge zuerst übernehmen oder zurücknehmen."); return false;

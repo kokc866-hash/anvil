@@ -8,7 +8,7 @@ test("Anvil run images stay visible while a CLI edit/run conversation finishes",
   try {
     const { runAgentLoop } = await server.ssrLoadModule("/src/lib/agent-core.ts");
     const { beginAgent } = await server.ssrLoadModule("/src/lib/abort.ts");
-    const { cliPrompt } = await server.ssrLoadModule("/src/lib/cli-protocol.ts");
+    const { cliRequest } = await server.ssrLoadModule("/src/lib/cli-protocol.ts");
     const frame = "data:image/png;base64,dGVzdC1mcmFtZQ==";
     const changed = '<button id="reset">Zurücksetzen</button>';
     const events = [];
@@ -17,19 +17,19 @@ test("Anvil run images stay visible while a CLI edit/run conversation finishes",
     beginAgent();
     const result = await runAgentLoop({ messages: [{ role: "user", content: "Ergänze einen Reset-Button und führe index.html aus." }], files: [{ path: "index.html", content: "<p>Zähler</p>" }], runLoop: false, afterWrite: "none", maxRounds: 5 }, async (messages) => {
       const before = JSON.stringify(messages);
-      const prompt = cliPrompt(messages, []);
+      const { prompt, images } = cliRequest(messages, []);
       assert.equal(JSON.stringify(messages), before, "CLI conversion must not change messages used by image-capable transports");
       rounds++;
       if (rounds === 3) {
         assert.ok(before.includes(frame), "The original conversation retains the run image");
         const wireFrame = JSON.parse(before).find(m => Array.isArray(m.content) && m.content.some(p => p.image_url?.url === frame));
         assert.deepEqual(Object.keys(wireFrame).sort(), ["content", "role"], "Image API requests gain no unsupported transport metadata");
-        assert.ok(!prompt.includes(frame), "No image is sent through the text-only CLI");
-        assert.match(prompt, /keine Bildsicht behaupten/);
-        assert.doesNotMatch(prompt, /Kurz sagen, was du siehst/);
+        assert.ok(!prompt.includes(frame), "Image bytes use native image blocks, not text tokens");
+        assert.deepEqual(images, [frame]);
+        assert.match(prompt, /Attached image 1/);
         assert.match(prompt, /fixture run completed/);
       }
-      return { content: rounds > 2 ? "Reset-Button ergänzt; Ausführung erfolgreich. Keine visuelle Prüfung." : "", toolContract: { transport: "native", names: ["write_file", "run_file"] }, tool_calls: rounds === 1 ? [call("write_file", { path: "index.html", content: changed })] : rounds === 2 ? [call("run_file", { path: "index.html" })] : [] };
+      return { content: rounds > 2 ? "Reset-Button ergänzt; Ausführung erfolgreich. Keine visuelle Prüfung." : "", toolContract: { transport: "native", names: ["write_file", "run_file"] }, tool_calls: rounds === 1 ? [call("write_file", { path: "index.html", content: changed, overwrite_reason: "Replace the complete test fixture to exercise a run after a persisted change." })] : rounds === 2 ? [call("run_file", { path: "index.html" })] : [] };
     }, { onWorkspace: async () => {}, runFile: async () => ({ ok: true, stdout: "fixture run completed", image: frame }), onTool: event => events.push(event) });
     assert.equal(result.ok, true);
     assert.equal(result.verification.state, "passed");

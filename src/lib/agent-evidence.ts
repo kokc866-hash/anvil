@@ -1,5 +1,13 @@
 export type Verification = { state: "none" | "passed" | "failed" | "stale"; detail: string };
 
+/** Render once from current evidence; keep the model's text separate from status chrome. */
+export function verifiedReply(reply: string, verification?: Verification, includeSuccess = false): string {
+  if (verification?.state === "failed" || verification?.state === "stale") {
+    return `${verification.state === "failed" ? "Nicht abgeschlossen" : "Noch nicht bestätigt"}: ${verification.detail}\n\nModellantwort:\n${reply}`;
+  }
+  return includeSuccess && verification?.state === "passed" ? `${reply}\n\n${verification.detail}` : reply;
+}
+
 function executesProject(command: string): boolean {
   const first = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s]+))\s*([\s\S]*)$/.exec(command);
   if (!first) return false;
@@ -27,10 +35,13 @@ export function automaticRunVerification(previous: Verification | undefined, ok:
 /** Only a successful execution of the same target can replace its failure. Edits invalidate prior runs. */
 export class AgentEvidence {
   revision = 0;
+  private invalidCalls = new Map<string, string>();
   private writes = new Map<string, string>();
   private runs = new Map<string, { revision: number; ok: boolean; pending?: boolean; detail: string }>();
   changed() { this.revision++; }
+  invalid(name: string, detail: string) { this.invalidCalls.set(name, `${name}: ${detail}`); }
   record(name: string, args: Record<string, unknown>, result: Record<string, unknown>) {
+    if (!result.error && result.ok !== false && !result.isError) this.invalidCalls.delete(name);
     if (/^(write_file|edit_file|append_file|delete_file|rename_file|mkdir)$/.test(name)) {
       const path = String(args.path ?? args.from ?? name);
       if (result.error || result.ok === false || result.isError) this.writes.set(path, `${path}: ${String(result.error || "Dateiänderung fehlgeschlagen").slice(0, 1000)}`);
@@ -46,6 +57,7 @@ export class AgentEvidence {
     this.runs.set(`${name}:${target}`, { revision: this.revision, pending, ok: result.ok === true && !result.error && !result.isError, detail: `${target}: ${pending ? "Engine gestartet; keine abgeschlossene Prüfung." : String(result.error || result.stderr || (result.ok === true ? "Run erfolgreich" : "Run nicht erfolgreich bestätigt")).slice(0, 1000)}` });
   }
   status(): Verification {
+    if (this.invalidCalls.size) return { state: "failed", detail: [...this.invalidCalls.values(), ...this.writes.values()].join("\n") };
     if (this.writes.size) return { state: "failed", detail: [...this.writes.values()].join("\n") };
     const runs = [...this.runs.values()];
     const failed = runs.filter((r) => !r.ok);

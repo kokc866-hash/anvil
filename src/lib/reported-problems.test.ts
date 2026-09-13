@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lintWorkspace } from "./lsp-lint.ts";
-import { AgentEvidence, automaticRunVerification } from "./agent-evidence.ts";
+import { AgentEvidence, automaticRunVerification, verifiedReply } from "./agent-evidence.ts";
 import { WriteQueue } from "./write-queue.ts";
 
 test("Python floor division, inline suites, comments and multiline strings do not invent syntax errors", () => {
@@ -78,6 +78,17 @@ test("automatic runs cannot hide failed writes or certify changed files", () => 
   assert.equal(stale.state, "stale");
   assert.match(stale.detail, /noch nicht bestätigt/);
   assert.equal(automaticRunVerification(undefined, true, true).state, "passed");
+});
+
+test("automatic run completion renders current evidence without a stale warning", () => {
+  const model = "Die Versandkosten sind eingebaut.";
+  const old = { state: "stale" as const, detail: "Dateien nach dem letzten Run geändert." };
+  assert.match(verifiedReply(model, old), /Noch nicht bestätigt/);
+  const current = verifiedReply(model, automaticRunVerification(old, true, true), true);
+  assert.equal(current, `${model}\n\nAutomatischer Run nach der letzten Änderung erfolgreich.`);
+  assert.doesNotMatch(current, /Noch nicht bestätigt|Modellantwort/);
+  assert.match(verifiedReply(model, automaticRunVerification(old, false, true), true), /^Nicht abgeschlossen/);
+  assert.match(verifiedReply(model, automaticRunVerification(old, true, false), true), /^Noch nicht bestätigt/);
 });
 
 test("canceling a failed or in-flight write prevents resurrection and allows closing", async () => {

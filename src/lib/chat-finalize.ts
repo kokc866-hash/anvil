@@ -39,13 +39,14 @@ export function finishedHarness(
   plan: readonly { status: string }[] | undefined,
   stopped = false,
   locale: "de" | "en" = "de",
+  incompleteReason?: string,
 ): string | undefined {
   const open = plan?.filter((step) => step.status !== "ok").length || 0;
   if (!harness && !open && !stopped) return harness;
-  const label = stopped ? (locale === "en" ? "Stopped" : "Stop") : open
+  const label = incompleteReason ? `${locale === "en" ? "Paused" : "Unterbrochen"} · ${incompleteReason}` : stopped ? (locale === "en" ? "Stopped" : "Stop") : open
     ? locale === "en" ? `Ended · ${open} step${open === 1 ? "" : "s"} remaining` : `Beendet · ${open} Schritt${open === 1 ? "" : "e"} offen`
     : locale === "en" ? "Done" : "Fertig";
   // Keep the useful run/tool counters, not an earlier completion assertion.
-  const counters = (harness || "").split(" · ").filter((part) => /^(Run|See|Tools) \d/.test(part));
+  const counters = (harness || "").split(" · ").filter((part) => /^(Runden|Run|See|Tools) \d/.test(part) || part === "Auto");
   return [label, ...counters].join(" · ");
 }

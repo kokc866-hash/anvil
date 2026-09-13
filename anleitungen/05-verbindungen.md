@@ -2,6 +2,8 @@
 
 Unter **Einstellungen → Agent** den Verbindungstyp wählen.
 
+Dokumentationsstand: 13. September 2026, Release 1.3.27. Die beschriebenen CLI-Erweiterungen gehören zu diesem Stand.
+
 | Typ | Zugang | Einrichtung |
 | --- | --- | --- |
 | Lokal | HTTP zum eigenen Modellserver | Anbieter, API-URL und Modell; API-Key bei Bedarf |
@@ -23,7 +25,19 @@ Anvil übergibt Gespräch und Werkzeugkatalog an die CLI. Werkzeuganforderungen 
 
 **CLI-Status laden** zeigt Installation und den von Codex bzw. Claude gemeldeten Kontotyp. Copilot bietet hierfür keinen entsprechenden nichtinteraktiven Statusbefehl: Anvil zeigt die erkannte CLI-Version; die eigentliche Berechtigung wird beim Senden durch Copilot geprüft. Ein Statuscheck verbraucht keine Modellanfrage.
 
-Der Adapter überträgt derzeit Text. Bilder benötigen eine API-Verbindung. Thinking, Temperatur und Antwortlimit werden von der CLI gesteuert; Anvils Kontextbudget gilt für das übergebene Gespräch. Das eingestellte harte Zeitlimit und **Stop** beenden laufende CLI-Prozesse. Antworten werden nach Abschluss des CLI-Aufrufs in Anvil übernommen; CLI-Ausgaben signalisieren währenddessen Aktivität.
+**Neu in Release 1.3.27:** Alle drei CLI-Verbindungen können angehängte Bilder übertragen und eintreffenden Antworttext während der Anfrage anzeigen. Eine API-Verbindung ist dafür nicht grundsätzlich erforderlich. Das gewählte Modell muss Bilder verstehen können; die Fähigkeit des Transports ist keine Zusage für jedes Modell.
+
+| CLI | Bildübertragung | Antwortanzeige |
+| --- | --- | --- |
+| Codex | Bildinhalte über den Codex-App-Server | Eintreffende Textteile aus dem App-Server |
+| Claude Code | Bildinhalte im strukturierten Eingabeformat | Teilantworten aus dem strukturierten Ausgabestrom |
+| GitHub Copilot | Bildinhalte mit der CLI-Anfrage | Eintreffende Textteile aus dem strukturierten Ausgabestrom |
+
+Unterstützt werden mitgelieferte PNG-, JPEG-, WebP- und GIF-Bilddaten: höchstens acht Bilder, 5 MiB je Bild und 20 MiB insgesamt je CLI-Anfrage. Das gilt auch für Bilder aus Run/Play und MCP-Ergebnissen; ihre Zuordnung zum Gespräch bleibt erhalten. Externe Bildadressen werden nicht stillschweigend heruntergeladen. Unzulässige Formate oder zu große Eingaben führen zu einer verständlichen Meldung. Ein in Anvil angezeigtes Bild beweist weiterhin nicht, dass ein bestimmtes Modell es inhaltlich geprüft hat.
+
+Thinking lässt sich in Anvil anhand der unterstützten CLI- und Modellstufen wählen; **Auto** verwendet die Vorgabe. [Thinking im Detail](thinking.md). Temperatur und Antwortlimit bleiben beim jeweiligen CLI-Verhalten. Anvils Kontextbudget gilt für das übergebene Gespräch. Das eingestellte harte Zeitlimit und **Stop** beenden laufende CLI-Prozesse. Die CLI führt Anvils Projektwerkzeuge nicht eigenständig aus: Nur vollständig geprüfte Werkzeuganforderungen laufen durch Anvils Agentenablauf. Eintreffender unvollständiger Text verändert noch keine Datei.
+
+Für die beschriebenen Bild- und Teilantwortfunktionen ist Anvil 1.3.27 erforderlich. Der ältere Adapter in 1.3.26 überträgt nur Text und übernimmt die Antwort nach Abschluss.
 
 Offizielle Referenzen: [Codex CLI](https://developers.openai.com/codex/cli/reference), [Codex im nichtinteraktiven Modus](https://developers.openai.com/codex/noninteractive), [Claude Code CLI](https://code.claude.com/docs/en/cli-reference), [Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference), [Copilot mit Standardeingabe](https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/run-cli-programmatically).
 
@@ -56,6 +70,10 @@ Anvil Desktop speichert API-Schlüssel, GitHub-Token, Companion-Token und Tresor
 ## Entwicklung und Prüfung
 
 Die Regressionstests liegen bei `electron/cli-runner.test.mjs`, `electron/llm-pipe.test.mjs`, `src/lib/connection.test.ts` und `scripts/connection-state.test.mjs`. Sie prüfen echte Unterprozesse und HTTP-Streams mit lokalen Testservern sowie die tatsächlichen Einstellungsfunktionen. Sie benötigen keine persönlichen Zugangsdaten und erzeugen keine kostenpflichtigen Modellanfragen.
+
+Die neue CLI-Erweiterung wird zusätzlich durch `scripts/cli-stream.test.mjs`, `scripts/cli-client.test.mjs` und `scripts/cli-run-frame.test.mjs` geprüft: getrennte Bilddaten, Ausgabe vor Abschluss, keine Werkzeugargumente im sichtbaren Antwortstrom, Abbruch, spätere Ereignisse, unbekannte Werkzeuge und eine widersprüchliche Endantwort. Claude Code und Copilot wurden für diesen Ausbau anhand ihrer offiziellen Schnittstellen und mit isolierten Protokoll-Fixtures geprüft. Eine echte Anmeldung und Modellanfrage dieser beiden Anbieter wurde dabei nicht durchgeführt.
+
+Ein separater echter Codex-Aufruf mit `gpt-5.6-terra` und Thinking Low erkannte die dominante Farbe eines neu erzeugten roten Testbildes korrekt. Die erste dekodierte Textausgabe traf nach 3.400 ms ein, der Aufruf endete nach 3.647 ms; gestreamter Text und Endantwort stimmten überein, ohne Werkzeugaufruf. Nachweis: `artifacts/cli-live-smoke-result.json`. Das belegt Bildübertragung und Teilantworten für diesen Aufruf, keine allgemeine Laufzeit- oder Qualitätszusage für alle Modelle.
 
 ```sh
 npm run test:connections

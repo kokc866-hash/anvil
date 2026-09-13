@@ -5,16 +5,16 @@ import { FIRST_SUCCESS_HTML, firstSuccessPath, firstSuccessPrompt } from "./firs
 import { thinkingModes } from "../../electron/thinking-support.mjs";
 import vm from "node:vm";
 
-test("Anvil CLI capability matches its text-only, final-answer adapter and existing thinking contract", () => {
+test("Anvil CLI capability matches image transport, streamed answers and existing thinking contract", () => {
   for (const [provider, model, cli] of [["codex", "gpt-5.6-terra", "codex"], ["anthropic", "claude-fable-5", "claude"], ["github", "gpt-5.6-terra", "copilot"]]) {
     const config = { provider, model, authMode: "abo" as const, baseUrl: "http://localhost" };
     const cap = connectionCapabilities(config);
-    assert.equal(cap.images, "unsupported");
-    assert.equal(cap.response, "final");
+    assert.equal(cap.images, "model-dependent");
+    assert.equal(cap.response, "stream");
     assert.equal(cap.location, "cloud");
     assert.equal(cap.auth, "cli-login");
     assert.deepEqual(cap.thinking, thinkingModes(provider, model, cli));
-    assert.ok(imageAttachmentError(config, 1));
+    assert.equal(imageAttachmentError(config, 1), "");
     assert.equal(imageAttachmentError(config, 0), "");
   }
 });
@@ -45,13 +45,13 @@ test("probe results distinguish reachability and authentication from actual mode
   assert.match(connectionProbeSummary("cli", { installed: true, authenticated: true }), /Modellantwort und Werkzeuge sind noch nicht geprüft/);
 });
 
-test("switching an existing image conversation to CLI preserves saved images but adapts outgoing history", () => {
+test("switching an existing image conversation to CLI preserves images for transmission", () => {
   const history = [{ role: "user", content: "Look here", images: ["data:image/png;base64,AAAA"] }, { role: "assistant", content: "Earlier answer" }];
   const before = JSON.stringify(history);
   const cli = { provider: "codex", authMode: "abo" as const, baseUrl: "", model: "gpt-5.6-terra" };
   const wire = historyForConnection(history, cli);
-  assert.equal(wire[0].images, undefined);
-  assert.match(wire[0].content, /not transmitted/);
+  assert.equal(wire, history);
+  assert.deepEqual(wire[0].images, history[0].images);
   assert.equal(JSON.stringify(history), before);
   assert.equal(wire[1], history[1]);
   assert.equal(historyForConnection(history, { ...cli, provider: "openai", authMode: "key" }), history);

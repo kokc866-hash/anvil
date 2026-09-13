@@ -18,10 +18,9 @@ Doppelklick:
 companion\start.bat
 ```
 
-Oder PowerShell, **als Administrator nicht nötig**:
+Oder PowerShell im Anvil-Projektordner öffnen, **als Administrator nicht nötig**:
 
 ```powershell
-cd I:\AnvilTest\anvil
 node companion\server.mjs
 ```
 
@@ -40,7 +39,7 @@ Stoppen: im Fenster `Strg+C`, oder `companion\stop.bat`.
 Beim ersten Start schreibt Companion eine Datei:
 
 ```
-C:\Users\<du>\.anvil-companion-token
+%USERPROFILE%\.anvil-companion-token
 ```
 
 Inhalt kopieren. In Anvil: Einstellungen → Companion → Token einfügen → **Prüfen**.

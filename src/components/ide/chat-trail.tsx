@@ -21,6 +21,7 @@ import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { AgentPulse } from "./agent-pulse";
 import { finishedHarness } from "@/lib/chat-finalize";
 import { checkpointRestorePlan } from "@/lib/restore-plan";
+import { requestCheckpointRestore } from "@/lib/restore-request";
 
 export function ThinkBlock({
   text,
@@ -215,7 +216,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
   const frames = (m.steps ?? []).filter((s) => s.image).slice(-8);
   const work = [...steps].reverse().find((s) => s.status === "run");
   const clip = (s: string) => s.trim().split("\n").slice(-24).join("\n").slice(0, 1600);
-  const hasRound = Boolean(m.changes?.length);
+  const hasRound = Boolean(m.changes?.length || m.checkpointId);
   const hasRun = Boolean(run?.path || run?.running || run?.stdout || run?.stderr);
   const labelOf = (name: string) => stepLabel(name, locale);
   const harness = live ? m.harness : finishedHarness(m.harness, m.plan, /^Stop(?:ped)?\b/.test(m.harness || ""), locale);
@@ -376,7 +377,7 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
             {plus || minus ? ` · +${plus} −${minus}` : ""}
           </span>
         ) : live ? null : (
-          <span>{t("roundNone")}</span>
+          <span>{ck?.disk ? (en ? "No loaded text files changed" : "Keine geladenen Textdateien geändert") : t("roundNone")}</span>
         )}
         {!live && hasSnap ? (
           ask ? (
@@ -390,12 +391,22 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
               </button>
             </span>
           ) : (
-            <button type="button" className="ml-auto text-fg hover:underline" onClick={() => setAsk(true)}>
+            <button type="button" disabled={restoring} className="ml-auto text-fg hover:underline disabled:opacity-50" onClick={() => {
+              if (!ck?.disk) { setAsk(true); return; }
+              setRestoring(true);
+              void requestCheckpointRestore(ck.id).finally(() => setRestoring(false));
+            }}>
               {t("restoreRound")}
             </button>
           )
         ) : null}
       </div>
+      {ck?.disk ? <p className={`mt-1 text-[10px] ${ck.disk.status === "error" ? "text-danger" : "text-muted"}`}>
+        {ck.disk.status === "sealed"
+          ? (en ? `Project snapshot including assets · ${ck.disk.files ?? 0} files. External actions stay separate.` : `Projektsicherung mit Assets · ${ck.disk.files ?? 0} Dateien. Externe Aktionen bleiben separat.`)
+          : ck.disk.status === "error" ? (ck.disk.error || (en ? "Project snapshot incomplete" : "Projektsicherung unvollständig"))
+          : (en ? "Project snapshot is being prepared/sealed…" : "Projektsicherung wird vorbereitet/abgeschlossen…")}
+      </p> : null}
       {ask && restorePlan ? <div className="my-2 max-h-52 overflow-auto rounded border border-border p-2 text-[11px]" aria-label={en ? "Restore preview" : "Vorschau der Rücknahme"}>
         <p className="mb-1 text-muted">{en ? "Only this round’s changes. Later edits are protected. New files listed below will be deleted." : "Nur Änderungen dieser Runde. Spätere Bearbeitungen sind geschützt. Unten aufgeführte neue Dateien werden gelöscht."}</p>
         {restorePlan.files.map((f) => <p key={f.path}><span className={f.after === null ? "text-danger" : "text-fg"}>{f.after === null ? (en ? "Delete" : "Löschen") : f.before === null ? (en ? "Recreate" : "Wiederherstellen") : (en ? "Restore content" : "Inhalt zurücksetzen")}</span>: <code>{f.path}</code></p>)}

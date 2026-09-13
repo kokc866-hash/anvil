@@ -51,7 +51,7 @@ export type MotionLevel = "off" | "reduced" | "full";
 
 export type SplitMode = "auto" | "side" | "stack";
 
-export type SidebarId = "files" | "search" | "git" | "ext" | "learn" | "tests" | "ref" | "mcp" | null;
+export type SidebarId = "files" | "search" | "git" | "ext" | "learn" | "tests" | "ref" | "mcp" | "workflows" | "connection" | null;
 
 export type PaletteMode = "files" | "commands" | "symbols" | null;
 
@@ -97,7 +97,7 @@ export type FileDiff = {
   source?: "round" | "propose" | "external";
 };
 
-export type PlanStep = { text: string; status: "todo" | "run" | "ok" | "err" };
+export type PlanStep = { text: string; status: "todo" | "run" | "ok" | "err"; kind?: "read" | "edit" | "run" | "check" | "service" | "report" };
 
 export type Checkpoint = {
   id: string;
@@ -111,6 +111,9 @@ export type Checkpoint = {
   endDirs?: string[];
   sealedBy?: string;
   restoreIntent?: import("@/lib/restore-plan").RestoreDiskPlan;
+  disk?: { id: string; root: string; epoch: number; status: "capturing" | "before" | "sealed" | "error"; files?: number; bytes?: number; excluded?: string[]; error?: string };
+  externalCalls?: { server: string; name: string; ok: boolean }[];
+  projectRestore?: { paths: string[]; touched: string[]; mkdir: string[]; rmdir: string[] };
 };
 
 export type ChatVoice = "agent" | "helper";
@@ -228,6 +231,7 @@ export type IdeState = {
   loopTries: number;
   harnessAfterWrite: AfterWrite;
   harnessMaxRounds: number;
+  harnessAutoContinue: boolean;
   graphSees: number;
   liveRun: boolean;
   liveEditor: boolean;
@@ -366,6 +370,7 @@ export type IdeState = {
   setLoopTries: (n: number) => void;
   setHarnessAfterWrite: (v: AfterWrite) => void;
   setHarnessMaxRounds: (n: number) => void;
+  setHarnessAutoContinue: (on: boolean) => void;
   setGraphSees: (n: number) => void;
   setLiveRun: (v: boolean) => void;
   setLiveEditor: (v: boolean) => void;
@@ -499,7 +504,7 @@ export type IdeState = {
   addChat: (msg: Omit<ChatMsg, "id">) => void;
   startAssistant: (opts?: { voice?: ChatVoice }) => void;
   appendAssistant: (s: string) => void;
-  finalizeAssistant: (reply: string, tools?: string[], options?: { replace?: boolean }) => void;
+  finalizeAssistant: (reply: string, tools?: string[], options?: { replace?: boolean; incompleteReason?: string }) => void;
   setDiskName: (v: string) => void;
   setWorkspaceCwd: (v: string) => void;
   setSetupDone: (v: boolean) => void;

@@ -31,16 +31,21 @@ export function summarizeHits(hits: TestHit[]): { ok: boolean; pass: number; fai
 
 export async function testAfterRound(): Promise<void> {
   const st = useIde.getState();
+  const current = () => {
+    const live = useIde.getState();
+    return live.workspaceEpoch === st.workspaceEpoch && live.chat.at(-1)?.id === st.chat.at(-1)?.id;
+  };
   st.setChatLastTests({ ok: false, pass: 0, fail: 0, running: true });
   try {
     const r = await runAllTests();
+    if (!current()) return;
     const sum = summarizeHits(Object.values(useIde.getState().testResults));
     useIde.getState().setChatLastTests({ ...sum, ok: r.ok && sum.fail === 0 && sum.pass > 0, running: false });
     if (sum.fail) {
       useIde.getState().setNotice(`${sum.fail} Tests rot`);
     }
   } catch {
-    useIde.getState().setChatLastTests({ ok: false, pass: 0, fail: 0, running: false });
+    if (current()) useIde.getState().setChatLastTests({ ok: false, pass: 0, fail: 0, running: false });
   }
 }
 

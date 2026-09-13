@@ -1,6 +1,6 @@
 # Helfer
 
-Stand: Anvil 1.3.23. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
+Die beschriebenen Helferfunktionen sind im veröffentlichten Anvil 1.3.26 enthalten. Vorhandene Helferideen, Schalter, Profile und Projektinhalte bleiben erhalten.
 
 ## Verlässliche Zuordnung
 

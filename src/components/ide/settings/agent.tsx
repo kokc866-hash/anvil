@@ -338,10 +338,10 @@ export function AgentSection({ q }: { q: string }) {
         </div>
         <p className="pt-1 text-xs text-subtle text-pretty">
           {spec.kind === "local"
-            ? "Ollama/LM Studio/LAN holt Anvil selbst — ohne CORS. URL z. B. http://192.168.178.41:11434/v1."
+            ? "Für Ollama, LM Studio oder andere Modellserver die API-Adresse des jeweiligen Servers eintragen. Anvil stellt die Verbindung her."
             : spec.needsSub
-              ? "Abo-Login bleibt auf diesem Rechner. Kein API-Key."
-              : "Keys bleiben auf diesem Rechner. Cloud geht über Anvil."}
+              ? "CLI-Anmeldungen werden lokal gespeichert. Dafür ist kein API-Key nötig."
+              : "API-Keys werden lokal gespeichert. Anfragen gehen an den gewählten Anbieter."}
         </p>
       </Vis>
       <Vis q={q} label="Context Länge Fenster Tokens">
@@ -570,6 +570,7 @@ export function AgentSection({ q }: { q: string }) {
 }
 
 function HarnessFields({ q }: { q: string }) {
+  const en = useIde(s => s.locale === "en");
   const runLoop = useIde((s) => s.runLoop);
   const testLoop = useIde((s) => s.testLoop);
   const graphLoop = useIde((s) => s.graphLoop);
@@ -577,6 +578,7 @@ function HarnessFields({ q }: { q: string }) {
   const loopTries = useIde((s) => s.loopTries);
   const afterWrite = useIde((s) => s.harnessAfterWrite);
   const maxRounds = useIde((s) => s.harnessMaxRounds);
+  const autoContinue = useIde((s) => s.harnessAutoContinue);
   const graphSees = useIde((s) => s.graphSees);
   const files = useIde((s) => s.files);
   const setRunLoop = useIde((s) => s.setRunLoop);
@@ -586,6 +588,7 @@ function HarnessFields({ q }: { q: string }) {
   const setLoopTries = useIde((s) => s.setLoopTries);
   const setAfter = useIde((s) => s.setHarnessAfterWrite);
   const setRounds = useIde((s) => s.setHarnessMaxRounds);
+  const setAutoContinue = useIde((s) => s.setHarnessAutoContinue);
   const setSees = useIde((s) => s.setGraphSees);
   const writeFile = useIde((s) => s.writeFile);
   const setNotice = useIde((s) => s.setNotice);
@@ -644,7 +647,7 @@ function HarnessFields({ q }: { q: string }) {
 
   return (
     <SettingsSection q={q}>
-      <Vis q={q} label="Harness Loop Run-Schleife nach write patch Tests Runde">
+      <Vis q={q} label="Harness Loop Run-Schleife nach write patch Tests Runde automatisch weiterarbeiten Rundenlimit Prüfintervall">
         <Head>Harness-Loop</Head>
         <Row
           label="An"
@@ -682,7 +685,18 @@ function HarnessFields({ q }: { q: string }) {
             ]}
           />
         </Row>
-        <Row label="Runden" hint="Modell-Runden mit Tools. Lange Aufträge: 24–48.">
+        <Row
+          label={en ? "Continue automatically" : "Automatisch weiterarbeiten"}
+          hint={en ? "Continue the same task without a fixed round or tool budget while new successful actions occur. Stop and configured time limits remain active." : "Im selben Auftrag ohne festes Runden- oder Werkzeugbudget weiterarbeiten, solange neue erfolgreiche Arbeitsschritte vorliegen. Stop und eingestellte Zeitlimits bleiben wirksam."}
+        >
+          <Toggle on={autoContinue} onChange={setAutoContinue} />
+        </Row>
+        <Row
+          label={autoContinue ? (en ? "Rounds without progress" : "Runden ohne Fortschritt") : (en ? "Fixed round limit" : "Festes Rundenlimit")}
+          hint={autoContinue
+            ? (en ? "Pause after this many model rounds without a new successful action. A round may use several tools. Repeated calls do not count as new progress." : "Erst nach so vielen Modellrunden ohne neuen erfolgreichen Arbeitsschritt unterbrechen. Eine Runde kann mehrere Werkzeuge verwenden. Wiederholte Aufrufe zählen nicht als neuer Fortschritt.")
+            : (en ? "Pause after this many model rounds. Send again to continue with the existing history." : "Nach dieser Anzahl Modellrunden hält der Auftrag an. Zum Fortsetzen erneut senden; der bisherige Verlauf bleibt erhalten.")}
+        >
           <Seg
             value={String(maxRounds ?? 24)}
             onChange={(v) => setRounds(Number(v))}
@@ -729,7 +743,7 @@ function HarnessFields({ q }: { q: string }) {
         {proj ? (
           <details className="my-2 rounded-md border border-border px-2 py-2">
             <summary className="cursor-pointer text-xs text-muted">Wirksame Einstellungen im Projekt</summary>
-            <p className="py-2 text-xs text-subtle">Run-, Test-, Graph- und Engine-Schalter sowie Runden gelten aus Anvil. Die Versuchszahl kann das Projekt vorgeben. „Laden“ übernimmt Projektwerte in die Anvil-Vorgaben.</p>
+            <p className="py-2 text-xs text-subtle">Run-, Test-, Graph- und Engine-Schalter sowie Runden gelten aus Anvil. Automatisches Weiterarbeiten wird in Anvil eingestellt. Die Versuchszahl kann das Projekt vorgeben. „Laden“ übernimmt Projektwerte in die Anvil-Vorgaben.</p>
             <table className="w-full text-left text-xs">
               <thead><tr><th className="py-1">Einstellung</th><th>Wirksam</th><th>Quelle</th></tr></thead>
               <tbody>{[
@@ -739,7 +753,8 @@ function HarnessFields({ q }: { q: string }) {
                 ["Engine", effective.engineLoop ? "An" : "Aus", "Anvil"],
                 ["Nach Write", effective.afterWrite ?? "none", "Anvil-Schalter"],
                 ["Versuche", effective.loopTries, proj.loopTries != null ? "Projekt" : "Anvil"],
-                ["Runden", effective.maxRounds, "Anvil"],
+                ["Automatisch weiterarbeiten", autoContinue ? "An" : "Aus", "Anvil"],
+                [autoContinue ? "Prüfintervall (Runden)" : "Festes Rundenlimit", effective.maxRounds, "Anvil"],
                 ["Frames", effective.graphSees, "Anvil"],
               ].map(([label, value, source]) => <tr key={label}><td className="py-1">{label}</td><td>{value}</td><td className="text-muted">{source}</td></tr>)}</tbody>
             </table>

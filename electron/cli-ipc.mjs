@@ -39,6 +39,7 @@ export function bindCliIpc(isTrusted) {
         signal: controller.signal,
         onOutput: emit,
         onActivity: () => emit(),
+        onText: emit,
         timeoutMs: Math.min(480 * 60000, Math.max(0, Number(request.timeoutMs) || 0)),
       };
       const value =

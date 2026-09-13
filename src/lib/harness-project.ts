@@ -76,6 +76,7 @@ export function mergeOpts(base: HarnessOpts, proj: ProjectHarness | null): Harne
     engineLoop,
     loopTries: clamp(proj?.loopTries ?? base.loopTries, 1, 5),
     maxRounds: base.maxRounds ?? proj?.maxRounds,
+    autoContinueRounds: base.autoContinueRounds,
     maxTools: base.maxTools ?? proj?.maxTools,
     afterWrite: base.afterWrite ?? proj?.afterWrite ?? (engineLoop ? "engine" : undefined),
     graphSees: base.graphSees ?? proj?.graphSees,

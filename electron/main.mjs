@@ -16,6 +16,7 @@ import { bindCliIpc, stopCliJobs } from "./cli-ipc.mjs";
 import { bindAcpIpc, stopAcpJobs } from "./acp-ipc.mjs";
 import { registerInteractionChecks } from "./interaction-checks.mjs";
 import { bindRecoveryIpc } from "./recovery.mjs";
+import { bindProjectCheckpointIpc } from "./project-checkpoint-ipc.mjs";
 import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -504,6 +505,7 @@ if (!gotLock) {
   bindMcpIpc(isAppUrl);
     bindUpdateIpc(isAppUrl);
     bindRecoveryIpc(isAppUrl);
+    bindProjectCheckpointIpc(isAppUrl);
     onSync("companion-token-sync", () => readCompanionToken());
     handleOnce("companion-token", () => readCompanionToken());
     handleOnce("companion-ensure", () => ensureCompanion());

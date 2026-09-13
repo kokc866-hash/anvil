@@ -58,6 +58,7 @@ export async function syncRestore(plan: RestoreDiskPlan, target = captureDiskTar
   return removedDirs;
 }
 async function write(path: string, content: string, target: DiskTarget, baseContent?: string | null) {
+  if (useIde.getState().checkpoints.some((c) => c.projectRestore && c.disk?.root === target.cwd)) throw new Error("Unterbrochene Projektrücknahme zuerst abschließen; Speichern ist vorübergehend gesperrt.");
   const key = targetKey(target) + path;
   const expected = knownDisk.has(key) ? knownDisk.get(key) : baseContent;
   try {

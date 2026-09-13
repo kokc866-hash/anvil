@@ -1,14 +1,14 @@
 # Unity, Unreal und Godot in Anvil
 
-Stand: 12. September 2026, lokaler Entwicklungsstand.
+Die beschriebenen Funktionen entsprechen dem Stand von Release 1.3.27. Die unten genannten lokalen Engine-Pfade und Praxistests dokumentieren die Prüfung vom 12. September 2026; sie werden nicht als Prüfung aller Engine-Versionen verstanden.
 
 ## Programme und Projekte
 
 Unter **Einstellungen → Companion → Unity, Unreal & Godot einrichten** zuerst **Engine-Pfade prüfen** wählen. Gefundene Editoren erscheinen unter den Feldern. Falls nötig den vollständigen Programmpfad eingeben und **Engine-Pfade speichern** wählen. Leere Felder verwenden die automatische Suche; eine explizite Umgebungsvariable hat Vorrang. Das Speichern startet keinen Editor.
 
-Auf diesem Rechner sind Godot unter `F:\Godot\Godot_v4.7.1-stable_win64.exe` und Unreal unter `I:\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe` hinterlegt. Unter Unity Hub existiert zwar ein Versionsordner, die erwartete Editor-Datei fehlt jedoch. Die Unity CLI ersetzt keinen Unity-Editor; Anvil zeigt deshalb korrekt „Editor nicht gefunden“ an. Unity wurde in dieser Abnahme nicht gestartet.
+Für jede gewünschte Engine muss ein passender Editor auf dem Rechner des Companion installiert sein. Den Pfad zur ausführbaren Editor-Datei auswählen. Ein Versionsordner allein reicht nicht aus; auch die Unity CLI ersetzt keinen Unity-Editor. Fehlt die ausführbare Datei, meldet Anvil „Editor nicht gefunden“.
 
-Die Pfade speichert der Companion im konfigurierten Paketordner unter `toolchains/engine-paths.json`. Hier ist das `I:\AnvilTest\compiler\toolchains\engine-paths.json`. Die Einstellungen gelten auf dem Rechner des Companion.
+Die Pfade speichert der Companion im konfigurierten Paketordner unter `toolchains/engine-paths.json`. Die Einstellungen gelten auf dem Rechner des Companion und richten sich nach dessen Installation.
 
 Den Projektordner in Anvil öffnen und beispielsweise beauftragen: „Erkenne das Godot-Projekt, prüfe den Import und zeige mir die Fehler.“ Bei mehreren Projekten kann der Agent Engine und Projektunterordner gezielt wählen. Vor dem Start speichert Anvil die Änderungen auf die Festplatte. Ein bloß im Arbeitsspeicher angelegtes Projekt braucht zuerst einen Projektordner.
 
@@ -45,6 +45,8 @@ Die jeweilige Karte nennt Voraussetzungen, Herkunft und Anleitung. **In MCP vorb
 Epic Remote Control ist eine HTTP-/WebSocket-Schnittstelle und wird deshalb nicht als fertiger OAuth-MCP-Dienst ausgegeben. Eine lokale Engine-Installation allein stellt ebenfalls noch keinen MCP-Werkzeugkatalog bereit.
 
 ## Geprüfter Umfang
+
+Die folgenden Angaben beschreiben ausschließlich die Testumgebung vom 12. September 2026; sie sind keine erforderlichen Installationspfade. Dort waren Godot unter `F:\Godot\Godot_v4.7.1-stable_win64.exe` und Unreal unter `I:\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe` hinterlegt. Die Pfadkonfiguration lag unter `I:\AnvilTest\compiler\toolchains\engine-paths.json`. Unter Unity Hub existierte ein Versionsordner, aber keine erwartete Editor-Datei; Unity wurde deshalb nicht gestartet.
 
 Die Tests liefen in neuen, getrennten Projekten unter `I:\Anvil\artifacts\engines`. Bestehende Spielprojekte wurden nicht verändert.
 

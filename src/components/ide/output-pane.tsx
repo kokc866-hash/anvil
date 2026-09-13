@@ -4,9 +4,8 @@ import { Button } from "@/components/ui/button";
 import { CopyBtn } from "@/components/ui/copy-btn";
 import { mergeTests, testsPrompt, discoverTests } from "@/lib/test-parse";
 import { problemsPrompt } from "@/lib/lsp";
-import { evalSnippet } from "@/lib/run-client";
+import { runReplCommand } from "@/lib/run-repl";
 import { runAllTests } from "@/lib/run-tests";
-import { parseTestCommand, runAgentShell } from "@/lib/agent-shell";
 import { closeOutputWindow, openOutputWindow } from "@/lib/output-window";
 import { cn } from "@/lib/cn";
 import { gotoFile } from "@/lib/goto";
@@ -24,7 +23,6 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
   const openFile = useIde((s) => s.openFile);
   const files = useIde((s) => s.files);
   const activePath = useIde((s) => s.activePath);
-  const pushOutput = useIde((s) => s.pushOutput);
   const outputDock = useIde((s) => s.outputDock);
   const setOutputDock = useIde((s) => s.setOutputDock);
   const debug = useIde((s) => s.debug);
@@ -97,27 +95,7 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
       /* ignore */
     }
     setRepl("");
-    if (parseTestCommand(code)) {
-      setTab("test");
-      const r = await runAgentShell(code, useIde.getState().files);
-      if (!r.ok && r.stderr) {
-        pushOutput({ ok: false, stdout: r.stdout, stderr: r.stderr, duration: 0, label: "tests" });
-      }
-      return;
-    }
-    setTab("out");
-    if (/^(python3?|py|node|bun|deno)\s+\S+/i.test(code)) {
-      const r = await runAgentShell(code, useIde.getState().files);
-      pushOutput({
-        ok: r.ok,
-        stdout: r.stdout,
-        stderr: r.stderr,
-        duration: 0,
-        label: code,
-      });
-      return;
-    }
-    pushOutput(await evalSnippet(code, files, activePath ?? "repl.js"));
+    await runReplCommand(code, setTab);
   }
 
   return (

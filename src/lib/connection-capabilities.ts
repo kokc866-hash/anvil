@@ -18,8 +18,8 @@ export function connectionCapabilities(config: ConnectionConfig) {
     cli, location, host,
     auth: cli ? "cli-login" : config.provider === "grok" ? "provided" : config.provider === "brain" ? "local" : spec.needsKey ? "api-key" : "optional-key",
     billing: cli ? "subscription" : location === "device" ? "local" : "provider",
-    images: cli || config.provider === "brain" ? "unsupported" : "model-dependent",
-    response: cli ? "final" : "stream",
+    images: config.provider === "brain" ? "unsupported" : "model-dependent",
+    response: "stream",
     thinking: thinkingModes(config.provider, config.model, cli),
   } as const;
 }

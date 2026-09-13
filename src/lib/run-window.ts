@@ -87,6 +87,9 @@ function watchPopup() {
 }
 
 export function openRunWindow(opts?: { agent?: boolean }) {
+  // A preceding edit may still have a delayed close queued. A new Run owns the
+  // output now, including automatic Runs that do not emit agentToolUi("run_file").
+  keepAgentRun();
   if (opts?.agent || useIde.getState().agentBusy) agentHeld = true;
   else agentHeld = false;
   const g = ++gen;
@@ -252,6 +255,7 @@ export function releaseAgentUi() {
 
 /** Open the actual output before a Run command waits for its canvas handshake. */
 export async function ensureCanvasOutput() {
+  keepAgentRun();
   if (window.location.pathname.startsWith("/run")) return;
   const st = useIde.getState();
   if (st.runInWindow || st.runPopout) await openRunWindow({ agent: st.agentBusy });
