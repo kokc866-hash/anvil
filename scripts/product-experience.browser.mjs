@@ -55,13 +55,15 @@ try {
   assert.match(await page.locator("#anvil-chat").inputValue(), /sichtbare Überschrift/);
   await runPage.screenshot({ path: path.join(output, "example-run.png") });
   checks.push("no-KI example starts and works; existing project preserved; editable next step");
-  await page.locator("summary").filter({ hasText: "Geführte Aufgaben" }).click();
   for (const [name, mode] of [["Projekt verstehen", "ask"], ["Änderung umsetzen", "agent"], ["Fehler beheben", "agent"], ["Änderung prüfen", "ask"]]) {
+    await page.getByRole("button", { name: "Geführte Aufgaben", exact: true }).click();
+    await page.getByRole("region", { name: "Geführte Aufgaben", exact: true }).waitFor();
     await page.locator("#anvil-chat").fill("Nur meine Aufgabe");
     await page.getByRole("button", { name: new RegExp(`^${name}`) }).click();
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentMode), mode);
     assert.match(await page.locator("#anvil-chat").inputValue(), /Mein Auftrag: Nur meine Aufgabe$/);
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().chat.length), 0, "Selecting a workflow never sends automatically");
+    await page.getByRole("region", { name: "Geführte Aufgaben", exact: true }).waitFor({ state: "hidden" });
   }
   await page.screenshot({ path: path.join(output, "workflows.png") });
   checks.push("four workflows prepare drafts and enforce chosen read/write mode without sending");
@@ -186,13 +188,16 @@ try {
   await page.locator('input[type="file"][accept="image/*"]').setInputFiles({ name: "test.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm6sAAAAASUVORK5CYII=", "base64") });
   await page.locator("#anvil-chat").fill("Describe attached image");
   await page.evaluate(() => window.__anvilIde.getState().setLlmProvider("codex", "abo"));
+  assert.equal(await page.getByRole("alert").filter({ hasText: "überträgt keine Bilder" }).count(), 0, "CLI supports image attachments");
+  assert.equal(await page.locator("#anvil-chat").inputValue(), "Describe attached image");
+  await page.evaluate(() => window.__anvilIde.getState().setLlmProvider("brain", "key"));
   await page.getByRole("alert").filter({ hasText: "überträgt keine Bilder" }).waitFor();
   await page.locator("#anvil-chat").press("Enter");
   assert.equal(await page.locator("#anvil-chat").inputValue(), "Describe attached image");
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().chat.length), 0);
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentBusy), false);
   await page.screenshot({ path: path.join(output, "image-guard.png") });
-  checks.push("changing image draft to CLI blocks before send and retains draft");
+  checks.push("CLI retains image drafts; text-only connection blocks before send and retains draft");
   await page.keyboard.press("Control+Alt+s");
   await page.waitForFunction(() => !Object.values(window.__anvilIde.getState().dirty).some(Boolean));
   await page.reload();

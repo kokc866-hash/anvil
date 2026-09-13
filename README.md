@@ -6,7 +6,7 @@ Anvil verbindet Editor, KI-Agent, Änderungsverlauf und Run in einer Windows-Anw
 
 ## Anvil benutzen
 
-Windows-Release: [Anvil 1.3.28](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.28). Verwende das Windows-Setup oder entpacke das ZIP vollständig in einen beschreibbaren Ordner und starte `Anvil.exe`. Diese Pakete enthalten die Oberfläche und ihre Laufzeit; eine separate Node.js-Installation ist nicht nötig.
+Windows-Release: [Anvil 1.3.29](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.29). Verwende das Windows-Setup oder entpacke das ZIP vollständig in einen beschreibbaren Ordner und starte `Anvil.exe`. Diese Pakete enthalten die Oberfläche und ihre Laufzeit; eine separate Node.js-Installation ist nicht nötig.
 
 1. **Projekt öffnen:** Wähle in der Ersteinrichtung einen Ordner. Später findest du die Ordnerwahl im Dateibereich unter **Mehr → Desktop-Ordner**.
 2. **KI wählen:** Öffne **Einstellungen → Agent**. Wähle einen vorhandenen Modellserver, einen unterstützten CLI-Zugang oder einen API-Anbieter. Die jeweiligen Zugänge und Laufzeiten werden separat benötigt.
@@ -19,7 +19,7 @@ Zum Kennenlernen wähle in der Ersteinrichtung **Beispiel ohne KI starten**. Anv
 ## Verbindungen und Daten
 
 - **Modellserver:** Der gewählte Server verarbeitet die Modellanfragen. Ein Server im LAN läuft nicht unbedingt auf diesem Rechner.
-- **CLI-Zugang:** Anvil verwendet die vorhandene Anmeldung von Codex, Claude Code oder GitHub Copilot. Release 1.3.28 unterstützt Bildübertragung und eintreffende Teilantworten; das gewählte Modell muss Bilder verstehen. [Möglichkeiten und Grenzen](anleitungen/05-verbindungen.md).
+- **CLI-Zugang:** Anvil verwendet die vorhandene Anmeldung von Codex, Claude Code oder GitHub Copilot. Release 1.3.29 unterstützt Bildübertragung und eintreffende Teilantworten; das gewählte Modell muss Bilder verstehen. [Möglichkeiten und Grenzen](anleitungen/05-verbindungen.md).
 - **API-Zugang:** Verwendet deinen Anbieter und dessen Abrechnung. Bildunterstützung und Thinking hängen von Modell und Anvil-Adapter ab.
 - **Projektdateien:** Bleiben im gewählten Projektordner. Das Anvil-Profil liegt standardmäßig in `data` neben Anvil; ausdrücklich konfigurierte Speicherorte können abweichen. Externe CLIs und Werkzeuge haben gegebenenfalls eigene Datenordner.
 
@@ -29,11 +29,11 @@ Der Praxistest vom 12. September erprobte einen echten Aufgabenplaner über Olla
 
 **Runde zurücknehmen:** Die Vorschau zeigt betroffene Dateien. Bestätigte Rücknahmen werden sofort gespeichert und schützen spätere eigene oder externe Änderungen. Alte Runden ohne verlässlich gespeicherten Endstand sind nur lesbar.
 
-**Neu in Release 1.3.28:** Lokale Desktop-Projekte mit der Standard-Companion-Verbindung erhalten vor bearbeitenden Agentenaufträgen Projektsicherungspunkte einschließlich Bildern, Binärdateien und ungeöffneten Dateien. Die Rücknahme zeigt Assets, Konflikte, ausgeschlossene Pfade und externe Werkzeugaktionen gemeinsam an. Externe Aktionen und laufende Datenbanktransaktionen werden nicht rückgängig gemacht; Browser-/Remote-Projekte behalten den bisherigen Umfang. Bedienung, Speicherbedarf und Grenzen stehen im [Editor-Handbuch](anleitungen/editor.md#projekt-und-assets-vor-einer-agentenrunde-sichern).
+**Neu in Release 1.3.29:** Lokale Desktop-Projekte mit der Standard-Companion-Verbindung erhalten vor bearbeitenden Agentenaufträgen Projektsicherungspunkte einschließlich Bildern, Binärdateien und ungeöffneten Dateien. Die Rücknahme zeigt Assets, Konflikte, ausgeschlossene Pfade und externe Werkzeugaktionen gemeinsam an. Externe Aktionen und laufende Datenbanktransaktionen werden nicht rückgängig gemacht; Browser-/Remote-Projekte behalten den bisherigen Umfang. Bedienung, Speicherbedarf und Grenzen stehen im [Editor-Handbuch](anleitungen/editor.md#projekt-und-assets-vor-einer-agentenrunde-sichern).
 
 Unter **Erweiterungen → Dienste** meldest du dich bei unterstützten Anbietern an und wählst ihre Werkzeuge. Aktive, bereits angemeldete Dienste laden ihren Katalog nach dem Neustart automatisch. Deine Freigaben bleiben erhalten; neue Werkzeuge bleiben ausgeschaltet. Ein Katalogabruf führt keine Werkzeuge aus. Der Eigentümer hat die funktionierenden Erweiterungen und ihre Erkennung durch den Agenten bestätigt. Details: [Dienste](anleitungen/dienste.md).
 
-Unter **Einstellungen → Orientierung** kannst du interaktive Erklärhilfen einschalten und die geführte Tour starten. Unter **Einstellungen → Hilfe** kannst du einen Fehlerbericht vorbereiten, vollständig ansehen und kopieren. Es wird nichts automatisch versendet. Release 1.3.28 ist auf Wunsch des Eigentümers weiterhin unsigniert; Herausgeberangaben, Supportkontakt, Lizenz und Signierung sind für später offen.
+Unter **Einstellungen → Orientierung** kannst du interaktive Erklärhilfen einschalten und die geführte Tour starten. Unter **Einstellungen → Hilfe** kannst du einen Fehlerbericht vorbereiten, vollständig ansehen und kopieren. Es wird nichts automatisch versendet. Release 1.3.29 ist auf Wunsch des Eigentümers weiterhin unsigniert; Herausgeberangaben, Supportkontakt, Lizenz und Signierung sind für später offen.
 
 ## Am Quellcode arbeiten
 

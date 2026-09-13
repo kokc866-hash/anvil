@@ -27,6 +27,6 @@ ausgenommen. Der Entwicklungsserver liefert seine Dateien nicht über HTTP aus.
 
 ## Projektsicherungspunkte
 
-In Release 1.3.28 liegen Projektsicherungspunkte unter `data/project-checkpoints` beziehungsweise im entsprechend konfigurierten Anvil-Profil. Sie enthalten auch ungeöffnete Projektdateien und Binärinhalte, getrennt von den Projektordnern. Identische Inhalte werden über ihren SHA-256-Wert gemeinsam abgelegt. Beginn, Ende und ein möglicher Wiederherstellungsplan bleiben getrennt erhalten.
+In Release 1.3.29 liegen Projektsicherungspunkte unter `data/project-checkpoints` beziehungsweise im entsprechend konfigurierten Anvil-Profil. Sie enthalten auch ungeöffnete Projektdateien und Binärinhalte, getrennt von den Projektordnern. Identische Inhalte werden über ihren SHA-256-Wert gemeinsam abgelegt. Beginn, Ende und ein möglicher Wiederherstellungsplan bleiben getrennt erhalten.
 
 Der Speicher wächst mit neuen und geänderten Inhalten; alte Sicherungsinhalte werden derzeit nicht automatisch bereinigt. Anvils eigener Datenordner wird von diesen Sicherungspunkten ausgeschlossen, auch wenn er innerhalb des geöffneten Quellcodeprojekts liegt. Ein Projektsicherungspunkt ersetzt keine gesonderte Sicherung des Anvil-Profils und keine externe Datensicherung. Bedienung und Ausschlüsse stehen im [Editor-Handbuch](editor.md#projekt-und-assets-vor-einer-agentenrunde-sichern).

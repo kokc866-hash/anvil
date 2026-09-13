@@ -1,6 +1,6 @@
 # Agent und Chat
 
-Chat-Verhalten in Release Anvil 1.3.28. Anbieterabhängige Bild- und Antwortmöglichkeiten stehen unter [Verbindungen](05-verbindungen.md).
+Chat-Verhalten in Release Anvil 1.3.29. Anbieterabhängige Bild- und Antwortmöglichkeiten stehen unter [Verbindungen](05-verbindungen.md).
 
 - Links über den Einstellungen öffnen das Checklisten-Symbol **Geführte Aufgaben** und das Kabel-Symbol **Verbindung und unterstützte Eingaben**. Die Bereiche belegen keinen Platz mehr über der Texteingabe. Erneutes Anklicken schließt den Bereich. Eine Aufgabenauswahl öffnet den Chat und setzt den Fokus in den bearbeitbaren Entwurf.
 - Das Texteingabefeld wächst bei langen Entwürfen nach oben, bis etwa zur halben Chathöhe (höchstens 360 Pixel). Noch längere Texte bleiben scrollbar. Beim Kürzen, Leeren oder Absenden schrumpft das Feld automatisch. Enter sendet, Shift+Enter fügt eine neue Zeile ein.

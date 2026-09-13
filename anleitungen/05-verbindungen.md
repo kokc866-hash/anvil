@@ -2,7 +2,7 @@
 
 Unter **Einstellungen → Agent** den Verbindungstyp wählen.
 
-Dokumentationsstand: 13. September 2026, Release 1.3.28. Die beschriebenen CLI-Erweiterungen gehören zu diesem Stand.
+Dokumentationsstand: 13. September 2026, Release 1.3.29. Die beschriebenen CLI-Erweiterungen gehören zu diesem Stand.
 
 | Typ | Zugang | Einrichtung |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ Anvil übergibt Gespräch und Werkzeugkatalog an die CLI. Werkzeuganforderungen 
 
 **CLI-Status laden** zeigt Installation und den von Codex bzw. Claude gemeldeten Kontotyp. Copilot bietet hierfür keinen entsprechenden nichtinteraktiven Statusbefehl: Anvil zeigt die erkannte CLI-Version; die eigentliche Berechtigung wird beim Senden durch Copilot geprüft. Ein Statuscheck verbraucht keine Modellanfrage.
 
-**Neu in Release 1.3.28:** Alle drei CLI-Verbindungen können angehängte Bilder übertragen und eintreffenden Antworttext während der Anfrage anzeigen. Eine API-Verbindung ist dafür nicht grundsätzlich erforderlich. Das gewählte Modell muss Bilder verstehen können; die Fähigkeit des Transports ist keine Zusage für jedes Modell.
+**Neu in Release 1.3.29:** Alle drei CLI-Verbindungen können angehängte Bilder übertragen und eintreffenden Antworttext während der Anfrage anzeigen. Eine API-Verbindung ist dafür nicht grundsätzlich erforderlich. Das gewählte Modell muss Bilder verstehen können; die Fähigkeit des Transports ist keine Zusage für jedes Modell.
 
 | CLI | Bildübertragung | Antwortanzeige |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ Unterstützt werden mitgelieferte PNG-, JPEG-, WebP- und GIF-Bilddaten: höchste
 
 Thinking lässt sich in Anvil anhand der unterstützten CLI- und Modellstufen wählen; **Auto** verwendet die Vorgabe. [Thinking im Detail](thinking.md). Temperatur und Antwortlimit bleiben beim jeweiligen CLI-Verhalten. Anvils Kontextbudget gilt für das übergebene Gespräch. Das eingestellte harte Zeitlimit und **Stop** beenden laufende CLI-Prozesse. Die CLI führt Anvils Projektwerkzeuge nicht eigenständig aus: Nur vollständig geprüfte Werkzeuganforderungen laufen durch Anvils Agentenablauf. Eintreffender unvollständiger Text verändert noch keine Datei.
 
-Für die beschriebenen Bild- und Teilantwortfunktionen ist Anvil 1.3.28 erforderlich. Der ältere Adapter in 1.3.26 überträgt nur Text und übernimmt die Antwort nach Abschluss.
+Für die beschriebenen Bild- und Teilantwortfunktionen ist Anvil 1.3.29 erforderlich. Der ältere Adapter in 1.3.26 überträgt nur Text und übernimmt die Antwort nach Abschluss.
 
 Offizielle Referenzen: [Codex CLI](https://developers.openai.com/codex/cli/reference), [Codex im nichtinteraktiven Modus](https://developers.openai.com/codex/noninteractive), [Claude Code CLI](https://code.claude.com/docs/en/cli-reference), [Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference), [Copilot mit Standardeingabe](https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/run-cli-programmatically).
 

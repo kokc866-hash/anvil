@@ -4,7 +4,7 @@ Lokale IDE: Dateien, Agent, Run. Eigenes Fenster, kein Browser.
 
 ## Start
 
-**Windows, Release 1.3.28:** [Anvil 1.3.28](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.28) → **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; Node.js muss dafür nicht installiert werden. Beide Pakete sind bewusst unsigniert. Die GitHub-Dateien „Source code“ sind keine fertige Anwendung.
+**Windows, Release 1.3.29:** [Anvil 1.3.29](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.29) → **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; Node.js muss dafür nicht installiert werden. Beide Pakete sind bewusst unsigniert. Die GitHub-Dateien „Source code“ sind keine fertige Anwendung.
 
 Oder aus dem Ordner:
 
