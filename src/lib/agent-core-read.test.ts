@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { packToolContent, readKey, readWindow, READ_CHAR_CAP } from "./agent-read.ts";
+import { packToolContent, packToolEvidence, readKey, readWindow, READ_CHAR_CAP } from "./agent-read.ts";
+
+test("plan references preserve structured MCP results and readable run output", () => {
+  const structured = { ok: true, structuredContent: { value: 42 }, content: [{ type: "text", text: "Result" }] };
+  const result = JSON.parse(packToolEvidence("mcp_read_resource", structured, "e7"));
+  assert.deepEqual(result, { ...structured, plan_evidence_id: "e7" });
+  assert.equal("plan_evidence_id" in structured, false);
+  assert.match(packToolEvidence("run_file", { ok: true, stdout: "Tests passed" }, "e8"), /^Plan evidence ID: e8[\s\S]*RUN OK[\s\S]*Tests passed/);
+});
 
 test("small file reads in full", () => {
   const src = "a\nb\nc";

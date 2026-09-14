@@ -78,3 +78,16 @@ export function packToolContent(name: string, result: unknown): string {
   if (raw.length <= 80_000) return raw;
   return `${raw.slice(0, 80_000)}\n… [tool output truncated]`;
 }
+
+/** Keep structured tool results machine-readable when attaching plan references. */
+export function packToolEvidence(name: string, result: unknown, evidenceId?: string): string {
+  const content = packToolContent(name, result);
+  if (!evidenceId) return content;
+  try {
+    const value = JSON.parse(content);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return JSON.stringify({ ...value, plan_evidence_id: evidenceId });
+    }
+  } catch { /* Read windows and run output intentionally use plain text. */ }
+  return `Plan evidence ID: ${evidenceId} (use only if this result supports the step; a running check is not complete).\n${content}`;
+}

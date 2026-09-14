@@ -16,7 +16,7 @@ import { isSecretPath as secretPath, isRefPath, refWriteBlocked, imageStub } fro
 import { skipPath } from "./ws-skip";
 import { extractFileBlocks, looksLikeNoTools, looksIncomplete, looksStoppedEarly, jobOpen, harvestTools, parseToolArgs, isToolTemplateEcho, blocksToWriteCalls, decodeWriteEscapes, pickRunPath, skipAutoRunPath, askPickedNone } from "./agent-parse";
 import { workspaceIndex, workspaceMap } from "./ws-index";
-import { packToolContent, readKey, readWindow } from "./agent-read";
+import { packToolContent, packToolEvidence, readKey, readWindow } from "./agent-read";
 import type { ToolCall } from "./tool-call";
 import { stampToolCalls } from "./tool-call";
 import { runFailHint, scrubRunError } from "./run-error";
@@ -1152,7 +1152,7 @@ export async function runAgentLoop(
       messages.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: `${planEvidenceId ? `Plan evidence ID: ${planEvidenceId} (use only if this result supports the step; a running check is not complete).\n` : ""}${packToolContent(tc.function.name, result)}`,
+        content: packToolEvidence(tc.function.name, result, planEvidenceId),
       });
       if (tc.function.name === "ask_user" && rec.ok && rec.ask && typeof rec.ask === "object") {
         const ask = rec.ask as JobAsk;
