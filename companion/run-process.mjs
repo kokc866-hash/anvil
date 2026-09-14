@@ -13,6 +13,7 @@ export function exitDescription(code, signal, { timedOut = false, aborted = fals
     C0000135: "Eine benötigte DLL fehlt.",
     C000007B: "Programm oder DLL hat ein unpassendes Binärformat/eine andere Architektur.",
     C0000005: "Speicherzugriffsverletzung im gestarteten Programm.",
+    C0000017: "Windows konnte nicht genug virtuellen Speicher bereitstellen (RAM/Auslagerungsdatei).",
     C000001D: "Der Prozessor unterstützt eine ausgeführte Maschineninstruktion nicht.",
     C0000142: "DLL-Initialisierung fehlgeschlagen.",
     C000013A: "Programm wurde beendet oder das Konsolenfenster geschlossen.",

@@ -15,6 +15,51 @@ test('agent reconciles descriptive checklists against actual tool results', asyn
     const data = { messages: [{ role: 'user', content: 'Erweitere Tags, Statistik, Hilfe und Sortierung. Teste das Projekt.' }], files: [{ path: 'index.html', content: '<p>Old</p>' }], runLoop: false, afterWrite: 'none', maxRounds: 24 };
     const steps = ['Bestandsaufnahme: CSS existiert bereits, JS fehlt', 'Tags-Funktion: Eingabe, Anzeige, Filter', 'Statistik-Karten: offen, überfällig, heute fällig, erledigt heute', 'Hilfe-Overlay: Tastenkürzel anzeigen', 'Sortierung nach Fälligkeitsdatum ergänzen', 'Testen und prüfen'];
     const kinds = ['read', 'edit', 'edit', 'edit', 'edit', 'check'];
+    await t.test('evidence IDs are visible in native/text tool results and rejected updates include recovery context', async () => {
+      const { prepareTextTools } = await server.ssrLoadModule('/src/lib/tool-fallback.ts');
+      const { AGENT_TOOLS } = await server.ssrLoadModule('/src/lib/agent-tools.ts');
+      for (const transport of ['native', 'text']) {
+        beginAgent(); let n = 0;
+        const result = await runAgentLoop(data, async messages => {
+          const wire = { messages };
+          if (transport === 'text') prepareTextTools(wire, AGENT_TOOLS);
+          const last = String(wire.messages.at(-1)?.content || '');
+          let choice;
+          if (++n === 1) choice = call('set_plan', { steps: ['Datei prüfen', 'Ergebnis berichten'], kinds: ['read', 'report'] });
+          else if (n === 2) choice = call('read_file', { path: 'index.html' });
+          else if (n === 3) {
+            assert.match(last, /Plan evidence ID: e1/);
+            assert.match(last, /Old/);
+            choice = call('set_plan', { updates: [{ step: 1, status: 'ok', evidence: [], reason: 'Read completed' }] });
+          } else if (n === 4) {
+            assert.match(last, /No evidence IDs supplied/);
+            assert.match(last, /e1: read_file index.html/);
+            assert.match(last, /Do not guess IDs/);
+            choice = call('set_plan', { updates: [{ step: 1, status: 'ok', evidence: ['e1'], reason: 'Read completed' }] });
+          } else choice = { content: 'Datei geprüft.' };
+          if (transport === 'text' && choice.tool_calls) {
+            const c = choice.tool_calls[0]; choice = { content: JSON.stringify({ name: c.function.name, arguments: JSON.parse(c.function.arguments) }) };
+          }
+          return { ...choice, toolContract: { transport, names: ['set_plan', 'read_file'] } };
+        });
+        assert.equal(result.plan[0].status, 'ok');
+        assert.equal(n, 5);
+      }
+    });
+    await t.test('rejected status churn stops without checking open work or replaying edits', async () => {
+      beginAgent(); let n = 0; let visible = [];
+      const result = await runAgentLoop({ ...data, autoContinueRounds: true }, async () => {
+        if (++n === 1) return call('set_plan', { steps: ['Datei ändern', 'Ergebnis berichten'], kinds: ['edit', 'report'] });
+        if (n === 2) return call('edit_file', { path: 'index.html', old_string: 'Old', new_string: 'Changed' });
+        return call('set_plan', { updates: [{ step: 1, status: 'ok', evidence: [n % 2 ? 'guessed' : 'missing'], reason: 'I think it is done' }] });
+      }, { getPlan: () => visible, onTool: ({ result }) => { if (result?.plan) visible = result.plan; } });
+      assert.equal(n, 5);
+      assert.equal(result.stopReason, 'no-progress');
+      assert.equal(result.ok, false);
+      assert.equal(result.files.find(f => f.path === 'index.html').content, '<p>Changed</p>');
+      assert.equal(result.plan[0].status, 'todo');
+      assert.equal(result.tools.filter(name => name === 'edit_file').length, 1);
+    });
     await t.test('a final answer with 0/6 triggers one status reconciliation, including text-tool mode', async () => {
       for (const transport of ['native', 'text']) {
         beginAgent(); let n = 0; let visible;

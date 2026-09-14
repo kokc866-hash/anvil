@@ -2,6 +2,7 @@ import { companionLint, companionPing } from "./companion";
 import { isSecretPath } from "./ref";
 import { useIde } from "@/store/ide";
 import type { LspHit } from "./lsp";
+import { lintSummary } from "./lint-summary";
 
 const WANT: Record<string, RegExp> = {
   pyright: /\.py$/i,
@@ -84,9 +85,8 @@ export async function refreshCompanionLint(): Promise<void> {
     severity: d.severity === "warning" ? "warning" : "error",
   }));
   st.setCompanionProblems(hits);
-  const bad = (r.tools || []).filter((t) => !t.ok).map((t) => t.name);
-  if (bad.length) st.pushLspLog(false, `${bad.join(", ")} mit Fehler · ${hits.length} Meldungen`);
-  else st.pushLspLog(true, `${hits.length} Meldungen · ${(r.tools || []).map((t) => t.name).join(", ") || "ok"}`);
+  const summary = lintSummary(r.tools || [], hits.length);
+  st.pushLspLog(summary.ok, summary.text);
   } finally { running = false; if (again) { again = false; scheduleCompanionLint(); } }
 }
 

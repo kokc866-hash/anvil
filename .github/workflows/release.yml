@@ -129,6 +129,9 @@ jobs:
       - name: Desktop onboarding, interactive help and tour
         run: node scripts/product-experience.browser.mjs
         timeout-minutes: 5
+      - name: Long-run screenshot retention and renderer crash recovery
+        run: node scripts/renderer-recovery.browser.mjs
+        timeout-minutes: 3
       - name: Service login, automatic reconnect and Neon compatibility
         run: node scripts/services.browser.mjs
         timeout-minutes: 5

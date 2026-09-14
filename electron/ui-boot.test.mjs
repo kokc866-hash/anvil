@@ -33,3 +33,16 @@ test("unpackaged does not require ui-build", () => {
   assert.match(r.error, /Vite fehlt/);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("local production mode uses the built server and never falls back to Vite", () => {
+  const dir = mkdtempSync(join(tmpdir(), "anvil-ui-"));
+  try {
+    assert.match(serverLaunch(dir, false, 8080, "production").error, /test.bat/);
+    mkdirSync(join(dir, "ui-build", "server"), { recursive: true });
+    writeFileSync(packedServerPath(dir), "export {}\n");
+    const plan = serverLaunch(dir, false, 8080, "production");
+    assert.equal(plan.kind, "packed");
+    assert.equal(plan.args[0], packedServerPath(dir));
+    assert.equal(plan.extraEnv.HOST, "127.0.0.1");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

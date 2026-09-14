@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { extraLspDiagnostics, lspBin } from "./lsp.mjs";
+import { cliInvocation, extraLspDiagnostics, lspBin } from "./lsp.mjs";
 import { toolEnv, resolveBin } from "./toolchain.mjs";
 import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
 
@@ -40,12 +40,20 @@ function findTsc(cwd) {
   return g;
 }
 
-function spawnArgs(file, args, cwd, timeoutMs) {
+export function spawnArgs(file, args, cwd, timeoutMs) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const child = spawn(file, args, { cwd, shell: false, env: toolEnv(), windowsHide: true });
+    let child;
+    try {
+      const command = cliInvocation(file);
+      child = spawn(command.file, [...command.args, ...args], { cwd, shell: false, env: toolEnv(), windowsHide: true });
+    } catch (err) {
+      resolve({ ok: false, code: 1, stdout: "", stderr: String(err.message), error: String(err.message), duration: Date.now() - start });
+      return;
+    }
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     const cap = (s, add) => (s + add).slice(-80_000);
     child.stdout?.on("data", (d) => {
       stdout = cap(stdout, d.toString());
@@ -54,18 +62,31 @@ function spawnArgs(file, args, cwd, timeoutMs) {
       stderr = cap(stderr, d.toString());
     });
     const t = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 1500);
     }, timeoutMs || 45000);
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(t);
-      resolve({ ok: code === 0, code: code ?? 1, stdout, stderr, duration: Date.now() - start });
+      resolve({ ok: code === 0 && !timedOut, code: code ?? 1, signal, timedOut, stdout, stderr, duration: Date.now() - start });
     });
     child.on("error", (err) => {
       clearTimeout(t);
-      resolve({ ok: false, code: 1, stdout, stderr: String(err.message), duration: Date.now() - start });
+      resolve({ ok: false, code: 1, stdout, stderr: String(err.message), error: String(err.message), duration: Date.now() - start });
     });
   });
+}
+
+/** A check can finish normally and still report errors in the user's code. */
+export function lintToolResult(name, result, hits, validOutput = true) {
+  const findingCodes = name === "tsc" ? [1, 2] : [1];
+  const completed = !result.error && !result.timedOut && !result.signal && validOutput &&
+    (result.code === 0 || (findingCodes.includes(result.code) && hits.length > 0));
+  return {
+    name, ok: result.ok,
+    status: completed ? (hits.length ? "findings" : "passed") : "failed",
+    ...(completed ? {} : { error: result.error || (result.timedOut ? "Zeitlimit der Prüfung erreicht." : result.signal ? `Prüfung durch ${result.signal} beendet.` : (result.stderr || "").trim().slice(-500) || `Prüfung fehlgeschlagen (Exitcode ${result.code}).`) }),
+  };
 }
 
 export function parseTsc(text) {
@@ -172,14 +193,19 @@ export async function runLint({ files = [], timeoutMs = 40000, enabled = null, l
         ? ["-3", "-m", "py_compile", ...pyFiles]
         : ["-m", "py_compile", ...pyFiles];
       const r = await spawnArgs(python, args, dir, timeoutMs);
-      tools.push({ name: "py_compile", ok: r.ok });
-      diagnostics.push(...parsePyCompile(r.stderr + "\n" + r.stdout).map((h) => ({ ...h, path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path })));
+      const pyHits = parsePyCompile(r.stderr + "\n" + r.stdout);
+      tools.push(lintToolResult("py_compile", r, pyHits));
+      diagnostics.push(...pyHits.map((h) => ({ ...h, path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path })));
       const pr = on("pyright") ? lspBin("pyright") || which("pyright") : null;
       if (pr) {
         const p = await spawnArgs(pr, ["--outputjson", "-p", dir], dir, timeoutMs);
-        tools.push({ name: "pyright", ok: p.ok });
+        const pyrightOutput = p.stdout || p.stderr;
+        const pyrightHits = parsePyright(pyrightOutput);
+        let validOutput = false;
+        try { const report = JSON.parse(pyrightOutput); validOutput = Array.isArray(report.generalDiagnostics || report.diagnostics); } catch { /* incomplete or invalid report */ }
+        tools.push(lintToolResult("pyright", p, pyrightHits, validOutput));
         diagnostics.push(
-          ...parsePyright(p.stdout || p.stderr).map((h) => ({
+          ...pyrightHits.map((h) => ({
             ...h,
             path: relFrom(dir, h.path) || h.path,
           })),
@@ -208,11 +234,11 @@ export async function runLint({ files = [], timeoutMs = 40000, enabled = null, l
           noEmit: true, allowJs: true, skipLibCheck: true, target: "ES2022", module: "ESNext", moduleResolution: "bundler", jsx: "react-jsx", strict: false,
         }, files: members }));
         if (Date.now() >= deadline) { tools.push({ name: "tsc", project, ok: false }); break; }
-        const file = tsc.endsWith(".js") || tsc.includes("typescript") ? process.execPath : tsc;
-        const args = [...(file === process.execPath ? [tsc] : []), "--noEmit", "--pretty", "false", "-p", path.join(dir, project)];
-        const r = await spawnArgs(file, args, dir, Math.max(1000, deadline - Date.now()));
-        tools.push({ name: "tsc", project, ok: r.ok });
-        diagnostics.push(...parseTsc(r.stdout + "\n" + r.stderr).map((h) => ({
+        const args = ["--noEmit", "--pretty", "false", "-p", path.join(dir, project)];
+        const r = await spawnArgs(tsc, args, dir, Math.max(1000, deadline - Date.now()));
+        const tsHits = parseTsc(r.stdout + "\n" + r.stderr);
+        tools.push({ ...lintToolResult("tsc", r, tsHits), project });
+        diagnostics.push(...tsHits.map((h) => ({
           ...h, path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path,
         })).filter((h) => !/\.[cm]?tsx?$/.test(h.path) || members.includes(h.path)));
       }

@@ -23,3 +23,25 @@ Die gezielten Chat-Regressionen verwenden simulierte Anbieterantworten. Sie prü
 - Unter **Einstellungen → Agent → Harness-Loop** ist **Automatisch weiterarbeiten** standardmäßig eingeschaltet. Ohne festes Runden- oder Werkzeugbudget arbeitet derselbe Auftrag weiter. **Runden ohne Fortschritt** (12, 24, 32 oder 48) bestimmt, nach wie vielen aufeinanderfolgenden Modellrunden ohne neuen erfolgreichen Arbeitsschritt Anvil unterbricht. Wiederholte Aufrufe und reine Planänderungen zählen nicht als Fortschritt; neue erfolgreiche Aufrufe sind allerdings noch kein Beweis für die inhaltliche Qualität des Ergebnisses. Stop und eingestellte Zeitlimits bleiben wirksam. Ohne Automatik gilt die gewählte Zahl als festes Rundenlimit. Die Anvil-Automatik hat Vorrang vor alten Budget-Stopps in Projektdateien; interne Hilfsaufrufe bleiben begrenzt.
 - Die Statuszeile zeigt die verbrauchten **Runden**, bei Automatik zusätzlich **Auto**, sonst die feste Obergrenze. Ein Limit oder ausbleibender Fortschritt ergibt **Unterbrochen** mit Grund. Ein erfolgreicher nachlaufender Run hebt die Unterbrechung nicht auf. Eine Modellrunde kann mehrere Werkzeuge verwenden, daher ist der Werkzeugzähler kein Rundenzähler.
 - Fettdruck, Inline-Code und Listen in Agentenantworten werden formatiert angezeigt. Codeblöcke behalten ihre bisherigen Aktionen.
+
+## Ergänzung im lokalen Entwicklungsstand nach 1.3.29
+
+- Bei langen Agentenläufen bleiben pro Chat höchstens acht aktuelle Werkzeug-Vorschaubilder mit zusammen höchstens 8 MiB Bilddaten erhalten. Ältere Bildvorschauen entfallen; Texte, Werkzeugschritte, Status und eigene Bildanhänge bleiben erhalten. Das begrenzt den Bildspeicher, nicht die Anzahl der Arbeitsrunden.
+- Falls der Prozess der Oberfläche ausfällt, erscheint ein Wiederherstellungsdialog. Er öffnet auf Wunsch den zuletzt gespeicherten Stand. Ungespeicherte Änderungen können fehlen; der unterbrochene Auftrag und externe Aktionen werden nicht automatisch erneut ausgeführt. Der Absturzgrund wird in `anvil-desktop.log` im eingestellten Logordner erfasst.
+
+### Externer Wächter für Langzeittests (Windows)
+
+**Vergleichslauf ohne Entwicklungsdiagnose:** Anvil regulär schließen und im Quellordner `test.bat` starten. Der Starter baut den aktuellen Stand und öffnet die fertige Oberfläche mit dem externen Wächter. Das Datenprofil und die Adresse bleiben gleich, damit Projekte, Einstellungen und Anmeldungen weiter verfügbar sind. `start.bat` ist weiterhin der Entwicklungsstart. Ein belegter Anschluss führt beim Produktionsstart zu einer verständlichen Meldung; die Testversion verbindet sich nicht stillschweigend mit einem noch laufenden Entwicklungsserver. Das Desktop-Log nennt `desktop-mode production`, die Wächter-Konfiguration enthält `mode: production`.
+
+Beim Start dieser Entwicklungsversion startet automatisch ein separater, unsichtbarer Windows-Prozess. Er braucht weder eine Node-Installation noch ein zusätzliches Programm und zeichnet alle zehn Sekunden auf. Nach dem Ende von Anvil läuft er noch zwei Minuten weiter und beendet sich selbst. Er startet Anvil oder Aufträge nicht erneut.
+
+Die Aufzeichnungen liegen im eingestellten Logordner unter `waechter`, je Start in einem eigenen Zeitstempel-Ordner:
+
+- `samples.jsonl`: unabhängig gemessene Prozessspeicher, CPU-Zeit, Handles, Threads, freier Systemspeicher und zugesicherter Speicher samt Grenze; zusätzlich die letzte Rückmeldung von Anvil und der Oberfläche, deren Alter und der JavaScript-Speicher.
+- `events.jsonl`: Absturz-, Wiederherstellungs- und Beendigungsereignisse von Anvil.
+- `summary.json`: Messdauer, Höchstwerte, fehlende Rückmeldungen und Ende der Aufzeichnung. Fehlende Rückmeldungen können auch beim Start oder nach dem Beenden entstehen; sie beweisen allein keinen Fehler.
+- `main.json`: letzte technische Rückmeldung von Anvil. Bleibt sie aus, misst der externe Wächter trotzdem weiter. Nicht verfügbare Windows-Abfragen werden ausdrücklich gekennzeichnet.
+
+Prompts, Projektdateien, Zugangsdaten und Prozess-Befehlszeilen werden nicht aufgezeichnet. Die Messdaten rotieren pro Lauf in zwei Dateien mit je ungefähr 16 MiB. Alte Laufordner können nach der Auswertung gelöscht werden. Zum vorzeitigen Beenden des Wächters eine leere Datei `stop` im jeweiligen Laufordner anlegen. Eine Datei `disabled` direkt im Ordner `waechter` deaktiviert den Wächter für spätere Starts; Entfernen dieser Datei aktiviert ihn wieder.
+
+Für die Auswertung den zugehörigen Laufordner zusammen mit `anvil-desktop.log` verwenden. Der Wächter verbessert die Diagnose; ein fehlerfreier mehrstündiger Lauf ist damit noch nicht nachgewiesen. Die öffentlich veröffentlichte Version 1.3.29 enthält diesen Wächter noch nicht.

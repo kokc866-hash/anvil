@@ -626,6 +626,7 @@ export function ChatPane() {
                   onClick={stop}
                   aria-label={t("stop")}
                   title={t("stop")}
+                  tipSide="left"
                 >
                   <Square className="size-3.5" />
                 </Button>
@@ -636,6 +637,7 @@ export function ChatPane() {
                   disabled={!draft.trim() && !images.length && !pendingAsk}
                   aria-label={t("send")}
                   title={t("send")}
+                  tipSide="left"
                   kbd="Enter"
                   type="submit"
                 >

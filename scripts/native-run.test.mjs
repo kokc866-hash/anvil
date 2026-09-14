@@ -35,6 +35,8 @@ test("silent failure, both output streams and timeout remain observable", async 
   assert.equal(timeout.timedOut, true);
   assert.match(timeout.stderr, /Zeitlimit/);
   assert.match(exitDescription(-1073741515), /0xC0000135.*DLL/);
+  assert.match(exitDescription(3221225495), /0xC0000017.*virtuellen Speicher/);
+  assert.match(exitDescription(-1073741801), /0xC0000017.*virtuellen Speicher/);
 });
 
 test("process cancellation terminates the run", async () => {

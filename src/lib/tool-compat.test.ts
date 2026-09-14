@@ -4,7 +4,25 @@ import { AGENT_TOOLS, AGENT_TOOL_NAMES } from "./agent-tools.ts";
 import { ToolSession, isToolStall, parseTextTool, toolTargetKey, validateToolCall } from "./tool-compat.ts";
 import { prepareTextTools } from "./tool-fallback.ts";
 import { harvestTools } from "./agent-parse.ts";
+import { toolCallFingerprint } from "./tool-call-fingerprint.ts";
 import { getCap, setCap, resetCap, capLabel, classifyLlmError } from "./model-caps.ts";
+
+test("tool fingerprints preserve replay equivalence without retaining document-sized keys", async () => {
+  const original = { path: "a.txt", options: { z: 2, a: [1, 2] }, content: "hello" };
+  const key = await toolCallFingerprint("write_file", original);
+  assert.match(key, /^[0-9a-f]{64}$/);
+  assert.equal(key, await toolCallFingerprint("write_file", { content: "hello", options: { a: [1, 2], z: 2 }, path: "a.txt" }));
+  for (const [name, args] of [
+    ["append_file", original],
+    ["write_file", { ...original, content: "Hello" }],
+    ["write_file", { ...original, path: "b.txt" }],
+    ["write_file", { ...original, options: { z: 2, a: [2, 1] } }],
+  ] as const) assert.notEqual(key, await toolCallFingerprint(name, args));
+  const large = "long document 😀\n".repeat(200_000);
+  const largeKey = await toolCallFingerprint("write_file", { content: large });
+  assert.equal(largeKey.length, key.length);
+  assert.notEqual(largeKey, await toolCallFingerprint("write_file", { content: `${large}x` }));
+});
 
 test("strict text executes only one complete allowed envelope, including ask_user", () => {
   const call = JSON.stringify({ name: "ask_user", arguments: { prompt: "Welche Variante?", choices: ["A", { id: "b", label: "B" }] } });

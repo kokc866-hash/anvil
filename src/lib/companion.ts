@@ -263,7 +263,7 @@ export async function companionLint(
   files: { path: string; content: string }[],
   base = DEFAULT_COMPANION,
   opts?: { enabled?: string[]; timeoutMs?: number; lspTimeoutMs?: number; maxFiles?: number },
-): Promise<{ ok: boolean; diagnostics: CompanionDiag[]; tools?: { name: string; ok: boolean }[]; error?: string }> {
+): Promise<{ ok: boolean; diagnostics: CompanionDiag[]; tools?: { name: string; ok: boolean; error?: string; status?: "passed" | "findings" | "failed" }[]; error?: string }> {
   try {
     const max = Math.max(8, Math.min(48, opts?.maxFiles ?? 40));
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/lint`, {
@@ -278,7 +278,11 @@ export async function companionLint(
       signal: AbortSignal.timeout(Math.min(60000, (opts?.timeoutMs ?? 40000) + 10000)),
     });
     if (r.status === 401) return { ok: false, diagnostics: [], error: "Token" };
-    if (!r.ok) return { ok: false, diagnostics: [], error: `HTTP ${r.status}` };
+    if (!r.ok) {
+      const body = await r.json().catch(() => null);
+      const detail = typeof body?.error === "string" ? body.error.slice(0, 500) : "";
+      return { ok: false, diagnostics: [], error: detail || `HTTP ${r.status}` };
+    }
     return r.json() as Promise<{ ok: boolean; diagnostics: CompanionDiag[]; tools?: { name: string; ok: boolean }[] }>;
   } catch (err) {
     return { ok: false, diagnostics: [], error: err instanceof Error ? err.message : "lint fail" };

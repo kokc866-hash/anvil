@@ -16,7 +16,9 @@ import { lanLlmPlugin } from "./scripts/lan-llm-plugin.mjs";
 import { isAbortNoise } from "./scripts/llm-agent.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
 
-const privateDataGlobs = [join(process.cwd(), "data"), process.env.ANVIL_USER_DATA, process.env.ANVIL_QA_USER_DATA]
+// QA artifacts contain live Electron profiles as well as screenshots and logs.
+// Keep these out of both the source watcher and the development file server.
+const privateDataGlobs = [join(process.cwd(), "data"), join(process.cwd(), "artifacts"), process.env.ANVIL_USER_DATA, process.env.ANVIL_QA_USER_DATA]
   .filter((value): value is string => Boolean(value))
   .map((value) => `${normalizePath(value)}/**`);
 

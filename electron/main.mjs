@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, session, shell, ipcMain } from "electron";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, appendFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,8 @@ import { bindAcpIpc, stopAcpJobs } from "./acp-ipc.mjs";
 import { registerInteractionChecks } from "./interaction-checks.mjs";
 import { bindRecoveryIpc } from "./recovery.mjs";
 import { bindProjectCheckpointIpc } from "./project-checkpoint-ipc.mjs";
+import { bindRendererRecovery } from "./renderer-recovery.mjs";
+import { startWatchdog } from "./watchdog.mjs";
 import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -40,6 +42,7 @@ try {
   app.exit(1);
 }
 const PORT = Number(process.env.ANVIL_PORT || 8080);
+const desktopMode = app.isPackaged || process.env.ANVIL_DESKTOP_MODE === "production" ? "production" : "development";
 const APP_URL = `http://127.0.0.1:${PORT}/`;
 const isAppUrl = appOrigin(PORT);
 function appTitle() {
@@ -106,6 +109,7 @@ let win = null;
 let splash = null;
 let helperSrv = null;
 let pipeSrv = null;
+let watchdog = null;
 
 function showSplash() {
   splash = new BrowserWindow({
@@ -253,7 +257,7 @@ function startChild(args, extraEnv = {}) {
 }
 
 function startServer() {
-  const plan = serverLaunch(ROOT, app.isPackaged, PORT);
+  const plan = serverLaunch(ROOT, app.isPackaged, PORT, desktopMode);
   if (plan.error) {
     bootFail = plan.error;
     throw new Error(plan.error);
@@ -421,6 +425,17 @@ async function createWindow() {
   });
   const editorWindow = win;
   let closeReady = false, waiting = false, ticket = 0;
+  bindRendererRecovery({
+    window: editorWindow, dialog,
+    log(event, details) {
+      watchdog?.event(event, details);
+      try { appendFileSync(logFile(), `${new Date().toISOString()} ${event} ${JSON.stringify(details)}\n`); } catch { /* logging must not prevent recovery */ }
+    },
+    stopJobs() { stopCliJobs(); stopAcpJobs(); return stopMcpConnections(); },
+    resetClose() { closeReady = false; waiting = false; ticket++; quitRequested = false; },
+    restore: () => editorWindow.loadURL(APP_URL),
+    close() { closingApproved = true; app.quit(); },
+  });
   const readyToClose = (event) => { if (event.sender === editorWindow.webContents) closeReady = true; };
   const finishClose = (event, reply, ok) => {
     if (event.sender !== editorWindow.webContents || !waiting || reply !== ticket) return;
@@ -465,6 +480,8 @@ if (!gotLock) {
     win.focus();
   });
   app.whenReady().then(async () => {
+    try { watchdog = startWatchdog({ app, getWindow: () => win, logs: loadPaths().logs, mode: desktopMode }); }
+    catch (error) { try { appendFileSync(logFile(), `${new Date().toISOString()} watchdog-start-failed ${error?.code || "unknown"}\n`); } catch {} }
     if (process.platform === "win32") {
       app.setAppUserModelId("app.anvil.ide");
     }
@@ -525,10 +542,14 @@ if (!gotLock) {
     bindHelperIpc((p) => win?.webContents.send("helper-progress", p));
     showSplash();
     const up = await portOpen(PORT);
+    if (up && desktopMode === "production") {
+      throw new Error("Der Anvil-Anschluss ist noch belegt. Bitte die bisherige Anvil-Version vollständig schließen und den Teststart erneut öffnen.");
+    }
     if (!up) {
       server = startServer();
-      await waitForServer(app.isPackaged ? 180000 : 60000);
+      await waitForServer(desktopMode === "production" ? 180000 : 60000);
     }
+    try { appendFileSync(logFile(), `${new Date().toISOString()} desktop-mode ${desktopMode}\n`); } catch {}
     await createWindow();
   }).catch((err) => {
     hideSplash();

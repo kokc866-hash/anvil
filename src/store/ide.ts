@@ -1,5 +1,6 @@
 import { idFromPins } from "@/lib/learn-parse";
 import { persistedChatQueue } from "@/lib/chat-queue";
+import { boundChatImages } from "@/lib/chat-image-budget";
 import { invalidateMemory, captureMemory } from "@/lib/memory-scope";
 import { tokenCount } from "@/lib/token-usage";
 import { toolTargetKey, toolCompatibility } from "@/lib/tool-compat";
@@ -1238,7 +1239,7 @@ export const useIde = create<IdeState>()(
           memoryWorkspace, workspaceMemoryId, workspaceSessions,
           sessionJournal: isJournalEmpty(prev.sessionJournal) && next[".anvil/session.md"] ? parseSessionFile(next[".anvil/session.md"]) : prev.sessionJournal,
           ...(switched ? {
-            chat: saved?.chat ?? [],
+            chat: boundChatImages(saved?.chat ?? []),
             sessionJournal: saved?.sessionJournal ?? parseSessionFile(next[".anvil/session.md"] || ""),
             sessionTokens: saved?.sessionTokens ?? { prompt: 0, completion: 0, estimated: false },
             lastRequestTokens: null, agentJob: null, agentQueue: [], agentInbox: null,
@@ -1267,7 +1268,7 @@ export const useIde = create<IdeState>()(
         }).catch(() => undefined);
       },
       addChat: (msg) => {
-        set({ chat: [...get().chat, { ...msg, id: nid() }] });
+        set({ chat: boundChatImages([...get().chat, { ...msg, id: nid() }]) });
         if (msg.role === "user") noteLearn("ask", msg.content);
       },
       startAssistant: (opts) => {
@@ -1320,7 +1321,7 @@ export const useIde = create<IdeState>()(
           steps.push({ ...step, id: nid(), at: Date.now() });
         }
         chat[chat.length - 1] = { ...last, steps };
-        set({ chat });
+        set({ chat: boundChatImages(chat) });
       },
       addSessionTokens: (prompt, completion, estimated = true) => {
         const cur = get().sessionTokens;
@@ -1581,6 +1582,7 @@ export const useIde = create<IdeState>()(
         return {
           ...current,
           ...p,
+          chat: boundChatImages(Array.isArray(p.chat) ? p.chat as ChatMsg[] : current.chat),
           llmAuthMode: connectionMode(String(p.llmProvider || current.llmProvider), String(p.llmAuthMode || "key")),
           ...(p.llmProvider === "codex" || p.llmProvider === "github" ? { llmBaseUrl: "" } : {}),
           llmModel: modelForProvider(String(p.llmProvider || current.llmProvider),
@@ -1635,7 +1637,9 @@ export const useIde = create<IdeState>()(
             workspaceMemoryId: typeof p.workspaceMemoryId === "string" ? p.workspaceMemoryId : current.workspaceMemoryId,
           }),
           workspaceSessions: p.workspaceSessions && typeof p.workspaceSessions === "object" && !Array.isArray(p.workspaceSessions)
-            ? p.workspaceSessions as IdeState["workspaceSessions"] : {},
+            ? Object.fromEntries(Object.entries(p.workspaceSessions as IdeState["workspaceSessions"])
+              .filter(([, session]) => session && Array.isArray(session.chat))
+              .map(([key, session]) => [key, { ...session, chat: boundChatImages(session.chat) }])) : {},
           workspaceCwd: typeof p.workspaceCwd === "string" ? p.workspaceCwd : "",
         };
       },

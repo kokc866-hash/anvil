@@ -1,7 +1,8 @@
 import { resolvedUsage, type ReportedUsage, type TokenUsage, type RequestTokens } from "./token-usage";
 import { AgentEvidence, verifiedReply, type Verification } from "./agent-evidence.ts";
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
-import { parseTextTool, validateToolCall, isToolStall, toolCallKey, type ToolContract } from "./tool-compat";
+import { parseTextTool, validateToolCall, isToolStall, type ToolContract } from "./tool-compat";
+import { toolCallFingerprint } from "./tool-call-fingerprint.ts";
 import type { ToolLearningBridge } from "./tool-learning";
 import { CANVAS_AGENT_GUIDE } from "./canvas/reference";
 import { compactMessages, COMPACT_MARK, type CompactMode } from "./compact.ts";
@@ -762,6 +763,7 @@ export async function runAgentLoop(
 
   let nudged = 0;
   let planNudges = 0;
+  let planRejections = 0;
   let emptyHits = 0;
   let stopAfter = false;
   let lastRead = "";
@@ -784,6 +786,13 @@ export async function runAgentLoop(
   for (let round = 0; autoContinue || round < cap; round++) {
     if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
     throwIfAborted();
+    if (planRejections >= 3) {
+      const detail = say(
+        "To-do-Abgleich unterbrochen: Drei Statusaktualisierungen wurden ohne neuen Arbeitserfolg abgelehnt. Vorhandene Änderungen bleiben erhalten; offene Schritte sind nicht bestätigt. Nachweis-Zuordnung klären, statt erledigte Arbeit zu wiederholen.",
+        "Checklist reconciliation paused: Three status updates were rejected without new successful work. Existing changes are preserved; open steps remain unconfirmed. Resolve the evidence mapping instead of repeating completed work.",
+      );
+      return packResult(detail, { ok: false, error: detail, stopReason: "no-progress" });
+    }
     if (autoContinue && round >= cap && round - lastProgressRound >= cap) {
       const detail = say(
         `Unterbrochen: Seit ${cap} Modellrunden kein neuer erfolgreicher Arbeitsschritt. ${round} Runden ausgeführt. Bisherige Änderungen bleiben erhalten. Hindernis klären und hier fortsetzen.`,
@@ -982,6 +991,8 @@ export async function runAgentLoop(
         automaticCalls.has(tc) && !observeOnly ? ["run_file"] : toolContract.names) : undefined;
       if (checked && !checked.error) { args = checked.args; argsCut = false; }
       if (argsCut) args.truncated = true;
+      // Hash once: these sets live across automatic continuation and must not retain full files.
+      const callFingerprint = await toolCallFingerprint(tc.function.name, args);
       used.push(tc.function.name);
       opts?.onToolStart?.({ name: tc.function.name, args });
       throwIfAborted();
@@ -1012,7 +1023,7 @@ export async function runAgentLoop(
       let writes: Record<string, string> | undefined;
       if (blocked) {
         result = { error: blocked };
-      } else if (beforeTextFallback?.has(toolCallKey(tc.function.name, args))) {
+      } else if (beforeTextFallback?.has(callFingerprint)) {
         result = { ok: true, already_executed: true, message: "Already completed before the transport change. No action repeated." };
       } else if (batchFail && (mutateTool(tc.function.name) || automaticCalls.has(tc))) {
         result = { error: say("Vorheriges Tool fehlgeschlagen — Rest übersprungen.", "Previous tool failed — remaining writes skipped.") };
@@ -1022,7 +1033,9 @@ export async function runAgentLoop(
         result = opts.selectTools(args.names as string[]);
       } else if (tc.function.name === "set_plan") {
         if (opts?.getPlan) planProgress.sync(opts.getPlan());
-        result = planProgress.set(args, opts?.canReplacePlan?.() ?? true);
+        const update = planProgress.set(args, opts?.canReplacePlan?.() ?? true);
+        result = update;
+        planRejections = update.error ? planRejections + 1 : 0;
       } else if (tc.function.name === "read_file") {
         const p = String(args.path || "");
         const key = readKey(p, Number(args.start_line) || 1);
@@ -1103,7 +1116,7 @@ export async function runAgentLoop(
       if ((writes && Object.keys(writes).length) || event) evidence.changed();
       opts?.onTool?.({ name: tc.function.name, args, result: frame ? { ...(result as object), image: frame } : result });
       const rec = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
-      planProgress.record(tc.function.name, args, frame ? { ...rec, image: frame } : rec, Boolean((writes && Object.keys(writes).length) || event));
+      const planEvidenceId = planProgress.record(tc.function.name, args, frame ? { ...rec, image: frame } : rec, Boolean((writes && Object.keys(writes).length) || event));
       if (opts?.getPlan) planProgress.sync(opts.getPlan());
       else if (tc.function.name !== "set_plan") {
         const next = planFromTool(tc.function.name, planProgress.plan, Boolean(rec.error || rec.isError || rec.ok === false), args, rec);
@@ -1118,12 +1131,11 @@ export async function runAgentLoop(
       if (tc.function.name === "shell" && args.command && rec.command == null) rec.command = String(args.command);
       if (!rec.error && rec.ok !== false) {
         completedTools.push(tc.function.name);
-        if (mutateTool(tc.function.name) || /^(mcp_call|shell|git_commit|git_push|memory_add|memory_forget)$/.test(tc.function.name)) completedChanges.add(toolCallKey(tc.function.name, args));
+        if (mutateTool(tc.function.name) || /^(mcp_call|shell|git_commit|git_push|memory_add|memory_forget)$/.test(tc.function.name)) completedChanges.add(callFingerprint);
         // Repeated calls and plan/configuration churn cannot buy more rounds.
         // This measures new successful actions, not semantic task completion.
         if (!rec.isError && !blocked && !denied && !checked?.error && !/^(set_plan|harness_|graph_|board_)/.test(tc.function.name)) {
-          const key = toolCallKey(tc.function.name, args);
-          if (!progressKeys.has(key)) { progressKeys.add(key); lastProgressRound = round; }
+          if (!progressKeys.has(callFingerprint)) { progressKeys.add(callFingerprint); lastProgressRound = round; planRejections = 0; }
         }
       }
       if (mutateTool(tc.function.name) && (rec.error || rec.ok === false)) batchFail = true;
@@ -1140,7 +1152,7 @@ export async function runAgentLoop(
       messages.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: packToolContent(tc.function.name, result),
+        content: `${planEvidenceId ? `Plan evidence ID: ${planEvidenceId} (use only if this result supports the step; a running check is not complete).\n` : ""}${packToolContent(tc.function.name, result)}`,
       });
       if (tc.function.name === "ask_user" && rec.ok && rec.ask && typeof rec.ask === "object") {
         const ask = rec.ask as JobAsk;

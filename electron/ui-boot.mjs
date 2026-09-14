@@ -20,11 +20,13 @@ export function packedServerEnv(port) {
 }
 
 /** Packaged installer runs the built UI. start.bat keeps Vite. */
-export function serverLaunch(root, isPackaged, port = 8080) {
-  if (isPackaged) {
+export function serverLaunch(root, isPackaged, port = 8080, mode = "development") {
+  if (isPackaged || mode === "production") {
     const packed = packedServerPath(root);
     if (!existsSync(packed)) {
-      return { error: "UI fehlt in der Installation. Bitte die aktuelle Setup-exe von GitHub Releases nehmen." };
+      return { error: isPackaged
+        ? "UI fehlt in der Installation. Bitte die aktuelle Setup-exe von GitHub Releases nehmen."
+        : "Die gebaute Testversion fehlt. Bitte zuerst test.bat ausführen." };
     }
     return { kind: "packed", args: [packed], extraEnv: packedServerEnv(port) };
   }

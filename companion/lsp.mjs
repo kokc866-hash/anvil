@@ -648,3 +648,20 @@ export async function checkLsp(id) {
     });
   });
 }
+
+/** Resolve npm launchers to Node entry points, including Windows/global shims. */
+export function cliInvocation(bin) {
+  const name = path.basename(bin).replace(/\.(cmd|bat|exe)$/i, "");
+  const spec = LSP_CATALOG.find((s) => s.kind === "cli" && s.bin === name && s.npm);
+  if (spec) {
+    const folder = path.dirname(bin);
+    const home = path.basename(folder) === ".bin" ? path.dirname(path.dirname(folder)) : folder;
+    const entry = jsEntry(spec, home) || jsEntry(spec);
+    if (entry && nodeScript(entry)) return { file: process.execPath, args: [entry] };
+  }
+  if (!/\.(exe|cmd|bat)$/i.test(bin) && nodeScript(bin)) return { file: process.execPath, args: [bin] };
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(bin)) {
+    throw new Error(`${name}: Node-Einstiegspunkt fehlt. Sprachserver bitte erneut laden.`);
+  }
+  return { file: bin, args: [] };
+}

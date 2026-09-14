@@ -23,6 +23,7 @@ export class PlanProgress {
     const target = Object.fromEntries(["path", "from", "to", "command", "name", "action", "engine", "projectRoot", "cmd", "server"].filter(k => args[k] !== undefined).map(k => [k, args[k]]));
     const status = Object.fromEntries(["ok", "error", "isError", "running", "pending", "truncated", "already_executed"].filter(k => row[k] !== undefined).map(k => [k, row[k]]));
     this.evidence.push({ id: `e${this.evidence.length + 1}`, name, args: target, result: { ...status, image: Boolean(row.image || row.frame) }, revision: this.revision });
+    return this.evidence.at(-1)!.id;
   }
 
   private contradicted(row: Evidence) {
@@ -31,7 +32,16 @@ export class PlanProgress {
       && (failed(e.result) || e.result.running === true));
   }
 
-  set(args: Args, mayReplace = true): { ok?: boolean; error?: string; plan?: PlanStep[] } {
+  set(args: Args, mayReplace = true): { ok?: boolean; error?: string; plan?: PlanStep[]; checklist_context?: string; recovery?: string } {
+    const result = this.apply(args, mayReplace);
+    return result.error ? {
+      ...result,
+      checklist_context: this.context(),
+      recovery: "Use actual evidence IDs listed below or printed with tool results. Do not guess IDs or retry empty evidence. If no matching successful evidence exists, leave the step todo/err with the concrete blocker; do not repeat completed work just to update the checklist.",
+    } : result;
+  }
+
+  private apply(args: Args, mayReplace: boolean): { ok?: boolean; error?: string; plan?: PlanStep[] } {
     if (args.updates !== undefined) {
       if (args.steps !== undefined) return { error: "Use either steps or updates, never both." };
       if (!this.plan.length) return { error: "No checklist yet. Create it with steps and kinds first." };
@@ -54,7 +64,7 @@ export class PlanProgress {
           const rows = refs.map(id => this.evidence.find(e => e.id === id));
           if (!rows.length || rows.some(e => !e || failed(e.result) || this.contradicted(e)
             || (e.result.running === true && !(kind === "run" && e.result.ok === true && (e.name === "run_file" || (e.name === "engine_run" && /^(editor|play)$/.test(String(e.args.action))))))))
-            return { error: "Completion requires existing successful evidence IDs, without newer contradictory results. Running checks are not completed checks." };
+            return { error: `Step ${i + 1}: ${!refs.length ? "No evidence IDs supplied." : "A supplied evidence ID is missing, failed, contradicted or still running."} Completion requires existing successful evidence IDs, without newer contradictory results. Running checks are not completed checks.` };
           const matched = rows.some(e => {
             if (!e) return false;
             if ((kind === "check" || kind === "run") && e.revision !== this.revision) return false;
@@ -91,6 +101,6 @@ export class PlanProgress {
     for (const e of this.evidence) if (!first.has(e.name) && !failed(e.result) && !this.contradicted(e)) first.set(e.name, e);
     const visible = [...new Set([...first.values()].slice(0, 25).concat(this.evidence.slice(-60)))];
     const evidence = visible.map(e => `${e.id}: ${e.name} ${String(e.args.path || e.args.command || e.args.name || e.args.action || "").slice(0, 160)} — ${failed(e.result) || this.contradicted(e) ? "failed/incomplete/superseded" : e.result.running ? "running" : "success"}${e.revision !== this.revision ? " (before latest change)" : ""}`);
-    return `Current visible checklist (authoritative; keep its steps):\n${rows.join("\n")}\nUpdate individual steps with set_plan({"updates":[{"step":1,"kind":"read","status":"ok","evidence":["e1"],"reason":"What the tool result establishes for this step"}]}). Use only relevant successful evidence, never infer all tasks complete from one run. For unfinished/blocked steps use todo/err and explain why. Do not repeat completed edits just to fix the checklist.\nEvidence IDs from this request:\n${evidence.join("\n") || "None yet."}`;
+    return `Current visible checklist (authoritative; keep its steps):\n${rows.join("\n")}\nUpdate individual steps with set_plan updates: step (1-based), kind, status, evidence (actual IDs listed below), reason (what the result establishes). Evidence IDs are printed directly before tool results; they are not API tool-call IDs. Never invent IDs or infer all tasks complete from one run. For unfinished/blocked steps use todo/err and explain why. Do not repeat completed edits just to fix the checklist.\nEvidence IDs from this request:\n${evidence.join("\n") || "None yet. Do not mark a step ok without evidence."}`;
   }
 }

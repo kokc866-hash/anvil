@@ -577,6 +577,7 @@ html[data-theme="light"] .tok-text { color: #1c1c1f; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
+  width: max-content;
   max-width: min(16rem, calc(100vw - 16px));
   padding: 0.28rem 0.5rem;
   border-radius: 6px;
