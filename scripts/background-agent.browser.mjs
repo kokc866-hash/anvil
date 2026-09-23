@@ -44,7 +44,7 @@ try {
   await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
   await page.evaluate(baseUrl => {
     const store = window.__anvilIde;
-    store.setState({ setupDone: true, autoUpdate: false, backgroundAgent: true, agentMode: 'agent',
+    store.setState({ setupDone: true, autoUpdate: false, backgroundAgent: true, agentMode: 'agent', planWho: 'agent',
       files: { 'notes.md': '# Ausgang\n' }, dirty: {}, pendingDiffs: [], chat: [], workspaceCwd: '',
       llmProvider: 'custom', llmAuthMode: 'key', llmBaseUrl: baseUrl, llmModel: 'qa-local', llmApiKey: '', llmContext: 32768,
       llmContextAuto: false, llmThinking: 'auto', llmHardStopMin: 0, autoRunAgent: false, runLoop: false, graphLoop: false });

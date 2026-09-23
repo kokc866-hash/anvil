@@ -68,9 +68,9 @@ try {
   await page.screenshot({ path: path.join(output, "workflows.png") });
   checks.push("four workflows prepare drafts and enforce chosen read/write mode without sending");
   await page.getByRole("button", { name: "Fragen", exact: true }).click();
-  assert.match(await page.getByTestId("chat-mode-hint").innerText(), /ohne Projektdateien zu ändern/);
-  await page.getByTitle("Agent kann Dateien ändern und Werkzeuge ausführen.", { exact: true }).click();
-  assert.match(await page.getByTestId("chat-mode-hint").innerText(), /Dateien ändern/);
+  assert.match(await page.getByTestId("chat-mode-hint").innerText(), /Projektdateien bleiben unverändert/);
+  await page.getByTitle("Der Agent kann Dateien bearbeiten und Werkzeuge ausführen.", { exact: true }).click();
+  assert.match(await page.getByTestId("chat-mode-hint").innerText(), /Dateien bearbeiten/);
   checks.push("chat mode explains its effect and exposes selected mode accessibly");
   await page.keyboard.press("Control+,");
   const settingsNav = page.getByRole("navigation", { name: "Einstellungsbereiche" });
@@ -169,7 +169,7 @@ try {
   await page.getByRole("button", { name: "Einstieg erneut öffnen", exact: true }).click();
   await page.getByRole("button", { name: "Beispiel ohne KI starten", exact: true }).waitFor();
   assert.equal(await page.evaluate(() => JSON.stringify({ files: window.__anvilIde.getState().files, draft: window.__anvilIde.getState().agentDraft })), beforeIntro);
-  await page.getByRole("button", { name: "Erstmal überspringen", exact: true }).click();
+  await page.getByRole("button", { name: "Vorerst überspringen", exact: true }).click();
   await page.keyboard.press("Control+,");
   checks.push("orientation links reach settings, DE/EN copy renders, connection details reveal on search, reopening introduction preserves project and draft");
   await page.getByRole("button", { name: "Hilfe", exact: true }).click();

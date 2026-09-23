@@ -65,7 +65,7 @@ try {
   const beforeReturn = requests.length;
   await page.getByRole('button', { name: 'Marktplatz', exact: true }).click();
   await search.fill('failure');
-  await page.getByText('Marktplatz: HTTP 503', { exact: true }).waitFor();
+  await page.getByText('Markt: HTTP 503', { exact: true }).waitFor();
   await pause(900);
   assert.equal(requests.length, beforeReturn + 1, 'failed search remains stable without retry loop');
   await search.fill('final');

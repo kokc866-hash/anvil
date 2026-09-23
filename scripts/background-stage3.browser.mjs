@@ -208,6 +208,8 @@ try {
   const base = {
     project,
     files,
+    // Direct IPC starts must carry the same permissions as the restored UI.
+    knowledge: { enabled: true, personEnabled: true, projectEnabled: true, skillsEnabled: true, skillBodies: true, pluginSkills: true, memories: [], skills: [] },
     execution: true,
     writeThrough: false,
     services: [f.config],
@@ -243,7 +245,7 @@ try {
   );
   assert.equal(logout.ok, true, logout.error);
   await until(async () => (await status()).status === "failed", "OAuth logout aborts owned call");
-  assert.match((await status()).error, /nicht automatisch wiederholen/);
+  assert.match((await status()).error, /Prüfe dort das Ergebnis, bevor du sie erneut startest/);
   assert.equal(f.state.calls.length, 3);
   await evalEditor(
     'window.anvilNative.agentJob("status").then(r=>window.anvilNative.agentJob("dismiss",{id:r.state.id}))',
