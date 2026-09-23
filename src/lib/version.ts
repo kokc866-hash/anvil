@@ -1,3 +1,3 @@
 /** App-Version. Ein Ort, Anleitungen und Companion ziehen mit. */
-export const ANVIL_VERSION = "1.3.32";
+export const ANVIL_VERSION = "1.3.33";
 export const ANVIL_BUILD = "2026-09-23";

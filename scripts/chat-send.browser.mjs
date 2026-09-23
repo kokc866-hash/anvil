@@ -289,13 +289,13 @@ try {
     assert.equal(state.restartedBusy, true, "a previous Stop must not stop the new request");
     assert.deepEqual(state.removed, { busy: false, aborted: true, first: "first answer" });
 
-    const label = "Werkzeug läuft · read_file · " + "long-path/".repeat(16);
+    const label = "Werkzeug wird ausgeführt · read_file · " + "long-path/".repeat(16);
     await page.evaluate(async (label) => {
       const st = window.__anvilIde;
       const { beginAgent } = await import("/src/lib/abort.ts");
       const { useRequestState } = await import("/src/lib/request-state.ts");
       beginAgent();
-      useRequestState.setState({ phase: "tool", detail: label.replace("Werkzeug läuft · ", "") });
+      useRequestState.setState({ phase: "tool", detail: label.replace("Werkzeug wird ausgeführt · ", "") });
       st.setState({ locale: "de", agentBusy: true, agentStartedAt: Date.now(), panels: { ...st.getState().panels, agent: true, trail: false }, chat: [{ id: "status-fixture", role: "assistant", content: "Current answer", at: Date.now() }] });
     }, label);
     const status = page.getByRole("status", { name: label, exact: true });
@@ -445,7 +445,7 @@ try {
     assert.equal(await page.evaluate(() => window.fixturePreparationEntered), true, "send must reach context preparation");
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentBusy), true, "send must enter preparation before Stop");
     assert.equal(requests.length, before, "preparation must still be pending before Stop");
-    await page.getByRole("button", { name: "Abbrechen", exact: true }).dispatchEvent("click");
+    await page.getByRole("button", { name: "Stoppen", exact: true }).dispatchEvent("click");
     await page.evaluate(() => {
       delete window.fixturePrepareContext;
       window.fixtureReleasePreparation();
