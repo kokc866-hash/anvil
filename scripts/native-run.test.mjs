@@ -92,20 +92,23 @@ test("late native window failure replaces the running status and keeps stderr", 
   assert.equal(activeRunCount(), 0);
 });
 
-test("Windows terminal gives Python real input/output console handles", { skip: process.platform !== "win32" || !resolveBin("python"), timeout: 15000 }, async () => {
+test("Windows terminal gives Python real input/output console handles", { skip: process.platform !== "win32" || !resolveBin("python"), timeout: 60000 }, async () => {
   const result = await compileLang({ lang: "python", entry: "terminal.py", files: [{ path: "terminal.py", content: "# input(): require interactive console\nimport sys, pathlib\npathlib.Path(__file__).with_suffix('.tty').write_text(str(sys.stdin.isatty()) + ',' + str(sys.stdout.isatty()))\n" }] });
   let final = result;
-  for (let i = 0; i < 50 && final.running; i++) {
+  // A fresh Windows runner compiles the PowerShell console helper on first use.
+  // Wait for its actual exit rather than treating the background-start result as done.
+  for (let i = 0; i < 450 && final.running; i++) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     final = runStatus(result.stage.id);
   }
-  assert.equal(final.ok, true, final.stderr);
   const file = path.join(path.dirname(final.stage.out), "src", "terminal.tty");
   const runDir = path.dirname(final.stage.out);
   const diagnostic = [JSON.stringify(final), "terminal.json.launch", "terminal.json.result"].map((value) => {
     const log = path.join(runDir, value);
     return existsSync(log) ? readFileSync(log, "utf8") : value;
   }).join("\n");
+  assert.equal(final.running, false, diagnostic);
+  assert.equal(final.ok, true, diagnostic);
   assert.ok(existsSync(file), diagnostic);
   assert.equal(readFileSync(file, "utf8"), "True,True");
 });

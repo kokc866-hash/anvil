@@ -28,7 +28,7 @@ const folder = readdirSync(dir, { withFileTypes: true }).find((f) => f.isDirecto
 if (!folder) throw new Error("Zig folder missing.");
 const zig = path.join(dir, folder.name, "zig.exe");
 const terminal = spawnSync(process.execPath, ["--test", "--test-name-pattern=Windows terminal", "scripts/native-run.test.mjs"], {
-  env: { ...process.env, ANVIL_NATIVE_ZIG: zig }, stdio: "inherit", timeout: 30000,
+  env: { ...process.env, ANVIL_NATIVE_ZIG: zig }, stdio: "inherit", timeout: 75000,
 });
 if (terminal.status !== 0) throw new Error("Interactive Windows terminal verification failed.");
 const result = spawnSync(process.execPath, ["--test", "scripts/native-run.test.mjs"], {
