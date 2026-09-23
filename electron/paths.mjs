@@ -42,6 +42,7 @@ export function savePaths(next) {
   mkdirSync(join(cur.packages, "toolchains"), { recursive: true });
   mkdirSync(join(cur.packages, "lsp"), { recursive: true });
   writeFileSync(pointer(), JSON.stringify(cur, null, 2), "utf8");
+  process.env.ANVIL_HOME = cur.packages;
   return cur;
 }
 

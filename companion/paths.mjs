@@ -30,19 +30,21 @@ function readPointer() {
 let home = readPointer();
 
 export function anvilHome() {
-  return home;
+  // Electron selects its profile after ESM imports have loaded. Read its
+  // current package location at use time, including after a settings change.
+  return clean(process.env.ANVIL_HOME) || home;
 }
 
 export function toolHome() {
   const override = clean(process.env.ANVIL_TOOLCHAIN_HOME);
   if (override) return override;
-  return path.join(home, "toolchains");
+  return path.join(anvilHome(), "toolchains");
 }
 
 export function lspHome() {
   const override = clean(process.env.ANVIL_LSP_HOME);
   if (override) return override;
-  return path.join(home, "lsp");
+  return path.join(anvilHome(), "lsp");
 }
 
 export function snapshot() {
@@ -58,6 +60,7 @@ export function setAnvilHome(raw) {
   mkdirSync(path.dirname(POINTER), { recursive: true });
   writeFileSync(POINTER, next, { encoding: "utf8" });
   home = next;
+  process.env.ANVIL_HOME = next;
   return snapshot();
 }
 

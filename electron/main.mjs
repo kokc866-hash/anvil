@@ -43,6 +43,9 @@ try {
   app.exit(1);
 }
 const PORT = Number(process.env.ANVIL_PORT || 8080);
+// In-process background tools and their bundled helpers use the same package
+// directory as the Companion, even when no compiler exists on the system PATH.
+process.env.ANVIL_HOME = loadPaths().packages;
 const desktopMode = app.isPackaged || process.env.ANVIL_DESKTOP_MODE === "production" ? "production" : "development";
 const APP_URL = `http://127.0.0.1:${PORT}/`;
 const isAppUrl = appOrigin(PORT);
