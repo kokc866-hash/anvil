@@ -84,7 +84,14 @@ export async function formatAgentFile(input, {signal,tools={},run=spawnRun,timeo
     }else{
       bin=get('clang-format','clang');via='clang-format';
       const style=`{BasedOnStyle: LLVM, IndentWidth: ${width}, TabWidth: ${width}, UseTab: ${input.options?.insertSpaces===false?'Always':'Never'}}`;
-      args=['-i','--style='+style,'--fallback-style=none','--fail-on-incomplete-format',full];
+      args=['-i','--style='+style,'--fallback-style=none',full];
+      if(bin){
+        // XML diagnostics also work with clang-format versions before 19.
+        const check=await execute(bin,['--output-replacements-xml',...args.slice(1)]);
+        if(!check.ok)return fail(String(check.stderr||'Formatter-Prüfung fehlgeschlagen.').slice(-2000),via);
+        if(!/<replacements\b[^>]*\bincomplete_format=['"]false['"]/.test(check.stdout||''))
+          return fail('C/C++-Code konnte nicht vollständig formatiert werden. Bitte Syntax prüfen.',via);
+      }
     }
     if(!bin)return fail(`Kein installierter Formatter verfügbar (${ext==='.py'||ext==='.pyi'?'Ruff oder Black':via}). Es wurde nichts heruntergeladen.`);
     const result=await execute(bin,args);

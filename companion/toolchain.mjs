@@ -1,6 +1,6 @@
 /** Portable compilers into <anvil-home>/toolchains — not the Anvil install, not Wandbox. */
 import { spawn, execFileSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { toolHome } from "./paths.mjs";
@@ -146,8 +146,8 @@ export function toolEnv(base = process.env) {
   };
   const go = add("go");
   if (go) {
-    const root = path.resolve(path.dirname(go), "..");
-    if (existsSync(path.join(root, "src")) || existsSync(path.join(root, "lib"))) extra.GOROOT = root;
+    const root = path.resolve(path.dirname(realpathSync(go)), "..");
+    if (existsSync(path.join(root, "src", "runtime")) && existsSync(path.join(root, "src", "fmt"))) extra.GOROOT = root;
   }
   add("cargo");
   add("rustc");

@@ -22,6 +22,7 @@ test('background Canvas uses the packaged shared runtime in real isolated Chromi
    timer=setTimeout(()=>{child.kill();reject(Error('Isolated Canvas Electron test timed out'));},60000);
   });
   writeFileSync(join(root,'electron.log'),logs);
+  assert.equal(code,0,logs);
   const result=JSON.parse(readFileSync(join(root,'result.json'),'utf8'));
   assert.equal(code,0,JSON.stringify(result));assert.equal(result.ok,true,JSON.stringify(result));
   assert.equal(result.outcomes.length,5);

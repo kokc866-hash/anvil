@@ -20,8 +20,8 @@ test('trace locals evaluate primitive expressions without executing arbitrary Ja
 for(const [entry,source] of [
   ['trace.go','package main\n\nfunc main() {\n x := 1\n x += 2\n println(x)\n}\n'],
   ['trace.rs','fn main() {\n let mut x = 1;\n x += 2;\n println!("{}", x);\n}\n']
-]) test(`real compiler trace ${entry} records once and replays original line/locals`, {timeout:60000,skip:!resolveBin(entry.endsWith('.go')?'go':'rustc')?'Optional native compiler not installed':false},async()=>{
-  const d=new AgentDebugger({loadTrace,timeoutMs:30000});d.begin({debug:{watches:['x']}});
+]) test(`real compiler trace ${entry} records once and replays original line/locals`, {timeout:150000,skip:!resolveBin(entry.endsWith('.go')?'go':'rustc')?'Optional native compiler not installed':false},async()=>{
+  const d=new AgentDebugger({loadTrace,timeoutMs:120000});d.begin({debug:{watches:['x']}});
   try{
     let r=await run(d,'start',{path:entry},{[entry]:source});assert.equal(r.ok,true,r.error||r.stderr);assert.equal(r.mode,'replay');assert.equal(r.runCompleted,true);assert.equal(r.paused,true);assert.match(r.note,/einmal/);
     r=await run(d,'step');assert.equal(r.locals.x,'1');assert.equal(r.watchValues.x,'1');

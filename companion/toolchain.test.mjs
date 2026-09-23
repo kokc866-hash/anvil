@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { listToolchains, pullToolchain, removeToolchain, abortPull, toolchainProgress, TOOLS, zigArchiveName, zigGithubUrl, toolEnv } from "./toolchain.mjs";
 
 describe("toolchain", () => {
@@ -40,5 +43,19 @@ describe("toolchain", () => {
   it("toolEnv keeps PATH", () => {
     const e = toolEnv({ PATH: "/usr/bin", HOME: "/tmp" });
     assert.ok(typeof e.PATH === "string" && e.PATH.includes("/usr/bin"));
+  });
+  it('Go root follows a system symlink and never mistakes generic lib/src folders for Go', {skip:process.platform==='win32'}, () => {
+    const root=mkdtempSync(path.join(os.tmpdir(),'anvil-go-env-'));
+    const bin=path.join(root,'bin'), sdk=path.join(root,'sdk');
+    for(const dir of [bin,path.join(root,'lib'),path.join(sdk,'bin'),path.join(sdk,'src','runtime'),path.join(sdk,'src','fmt')])mkdirSync(dir,{recursive:true});
+    writeFileSync(path.join(sdk,'bin','go'),'');symlinkSync(path.join(sdk,'bin','go'),path.join(bin,'go'));
+    const previous=process.env.PATH;
+    try{
+      process.env.PATH=bin;
+      assert.equal(toolEnv({PATH:bin}).GOROOT,sdk);
+      process.env.PATH=path.join(root,'plain','bin');mkdirSync(process.env.PATH,{recursive:true});
+      mkdirSync(path.join(root,'plain','lib'));writeFileSync(path.join(process.env.PATH,'go'),'');
+      assert.equal(toolEnv({PATH:process.env.PATH}).GOROOT,undefined);
+    }finally{process.env.PATH=previous;}
   });
 });

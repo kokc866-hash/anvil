@@ -78,7 +78,17 @@ jobs:
       - name: Signed release identity and support gate
         if: needs.metadata.outputs.signed == 'true'
         run: node scripts/verify-release-readiness.mjs
-      - run: npm test
+      - run: xvfb-run --auto-servernum npm test
+      - name: Preserve failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-failure-diagnostics
+          path: |
+            artifacts/**/electron.log
+            runs/**/run.json
+            runs/**/run.log
+            runs/**/*-stderr.log
       - run: npm run typecheck
       - run: npx playwright install --with-deps chromium
       - name: Tool compatibility, transports and permissions

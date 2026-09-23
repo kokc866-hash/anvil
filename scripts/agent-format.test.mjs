@@ -36,7 +36,10 @@ test('native adapters use explicit isolated configuration and return only format
     assert.equal(env.NODE_OPTIONS,undefined);assert.equal(env.PYTHONPATH,undefined);
     const full=args.at(-1);assert.equal(readFileSync(full,'utf8'),'original');
     if(name==='rustfmt'){assert.ok(args.includes('--config-path'));assert.match(readFileSync(args[1],'utf8'),/tab_spaces = 4/);}
-    if(name==='clang-format')assert.ok(args.some(x=>x.includes('BasedOnStyle: LLVM')));
+    if(name==='clang-format'){
+     assert.ok(args.some(x=>x.includes('BasedOnStyle: LLVM')));
+     if(args.includes('--output-replacements-xml'))return {ok:true,stdout:"<replacements incomplete_format='false'></replacements>",stderr:''};
+    }
     if(name==='ruff')assert.ok(args.includes('--isolated'));
     if(name==='black'){assert.ok(args.includes('--config'));assert.equal(readFileSync(args[1],'utf8'),'');}
     writeFileSync(full,'formatted');return {ok:true,stdout:'',stderr:''};
@@ -44,6 +47,17 @@ test('native adapters use explicit isolated configuration and return only format
   assert.deepEqual(result,{ok:true,content:'formatted',via:name});assert.equal(existsSync(work),false);
  }
  assert.equal(readFileSync(original,'utf8'),'USER ORIGINAL');
+});
+
+test('clang-format rejects incomplete or missing XML diagnostics before changing the copy',async()=>{
+ for(const stdout of ["<replacements incomplete_format='true'></replacements>",'']){
+  let calls=0;
+  const result=await formatAgentFile({path:'main.cpp',content:'int main( {'},{tools:{...noTools,'clang-format':process.execPath},run:async(_file,args)=>{
+   calls++;assert.ok(args.includes('--output-replacements-xml'));assert.ok(!args.includes('--fail-on-incomplete-format'));
+   return {ok:true,stdout,stderr:''};
+  }});
+  assert.equal(result.ok,false);assert.equal(result.content,'int main( {');assert.equal(calls,1);
+ }
 });
 
 test('Python module selection and formatter failures are explicit, not successful unchanged code',async()=>{
