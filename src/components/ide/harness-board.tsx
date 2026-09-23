@@ -346,20 +346,20 @@ export function HarnessBoard() {
     if (wire) {
       const backbone = wire.id === "plan-act" || wire.id === "act-obs" || wire.id === "obs-done";
       return [
-        { label: wire.on ? "Leitung aus" : "Leitung an", onClick: () => { const next = toggleWire(board, wire.id); commit(next); syncStore(next); } },
+        { label: wire.on ? "Verbindung deaktivieren" : "Verbindung aktivieren", onClick: () => { const next = toggleWire(board, wire.id); commit(next); syncStore(next); } },
         { label: "Name kopieren", onClick: () => void navigator.clipboard.writeText(WIRE_LABEL[wire.kind]) },
-        { label: "Agent: diese Leitung", onClick: () => ask(`Tafel: Leitung ${WIRE_LABEL[wire.kind]} (${wire.from} → ${wire.to}) ist ${wire.on ? "an" : "aus"}. Nutze oder erkläre sie.`) },
+        { label: "Verbindung mit dem Agenten besprechen", onClick: () => ask(`Tafel: Leitung ${WIRE_LABEL[wire.kind]} (${wire.from} → ${wire.to}) ist ${wire.on ? "an" : "aus"}. Nutze oder erkläre sie.`) },
         { label: "", sep: true, onClick: () => undefined },
-        { label: backbone ? "Hauptleitung bleibt" : "Leitung weg", danger: !backbone, disabled: backbone, onClick: () => { if (!backbone) { commit(removeWire(board, wire.id)); setSel(null); } } },
+        { label: backbone ? "Hauptverbindung kann nicht entfernt werden" : "Verbindung entfernen", danger: !backbone, disabled: backbone, onClick: () => { if (!backbone) { commit(removeWire(board, wire.id)); setSel(null); } } },
       ];
     }
 
     if (node?.kind === "phase") {
       return [
-        { label: "Leitung ziehen", onClick: () => startLinkFrom(node.id) },
-        { label: "Kante hier", items: toolItems(node.id) },
+        { label: "Verbindung erstellen", onClick: () => startLinkFrom(node.id) },
+        { label: "Werkzeug zuordnen", items: toolItems(node.id) },
         { label: "", sep: true, onClick: () => undefined },
-        { label: "Agent: diese Phase", onClick: () => ask(`Tafel-Phase ${node.label}. Was soll in diesem Schritt passieren? Kanten vorschlagen oder setzen.`) },
+        { label: "Phase mit dem Agenten besprechen", onClick: () => ask(`Tafel-Phase ${node.label}. Was soll in diesem Schritt passieren? Kanten vorschlagen oder setzen.`) },
         { label: "Einpassen", onClick: () => fit() },
       ];
     }
@@ -367,19 +367,19 @@ export function HarnessBoard() {
     if (node?.kind === "edge") {
       const w = board.wires.find((x) => x.to === node.id);
       return [
-        { label: "Leitung ziehen", onClick: () => startLinkFrom(node.id) },
-        { label: w?.on ? "Kante aus" : "Kante an", onClick: () => { if (w) { const next = toggleWire(board, w.id); commit(next); syncStore(next); } } },
+        { label: "Verbindung erstellen", onClick: () => startLinkFrom(node.id) },
+        { label: w?.on ? "Werkzeug deaktivieren" : "Werkzeug aktivieren", onClick: () => { if (w) { const next = toggleWire(board, w.id); commit(next); syncStore(next); } } },
         { label: "Duplizieren", onClick: () => node.edge && commit(addEdgeNode(board, { ...node.edge }, w?.from)) },
-        { label: "Tool kopieren", onClick: () => void navigator.clipboard.writeText(node.edge?.tool ?? node.label) },
+        { label: "Werkzeugname kopieren", onClick: () => void navigator.clipboard.writeText(node.edge?.tool ?? node.label) },
         { label: "", sep: true, onClick: () => undefined },
-        { label: "Agent: diese Kante", onClick: () => ask(`Tafel-Kante ${node.edge?.tool ?? node.label} (${node.edge?.glob ?? "*"}). Nutze sie im nächsten Lauf.`) },
-        { label: "Knoten weg", danger: true, onClick: () => { commit(removeNode(board, node.id)); setSel(null); } },
+        { label: "Werkzeug mit dem Agenten besprechen", onClick: () => ask(`Tafel-Kante ${node.edge?.tool ?? node.label} (${node.edge?.glob ?? "*"}). Nutze sie im nächsten Lauf.`) },
+        { label: "Knoten entfernen", danger: true, onClick: () => { commit(removeNode(board, node.id)); setSel(null); } },
       ];
     }
 
     return [
-      { label: "Kante anlegen", items: toolItems() },
-      { label: "Raten", onClick: () => guess() },
+      { label: "Werkzeug hinzufügen", items: toolItems() },
+      { label: "Ablauf vorschlagen", onClick: () => guess() },
       { label: "", sep: true, onClick: () => undefined },
       { label: grid ? "Raster aus" : "Raster an", onClick: () => setGrid(!grid) },
       { label: snap ? "Frei bewegen" : "Einrasten", onClick: () => setSnap(!snap) },
@@ -401,7 +401,7 @@ export function HarnessBoard() {
     });
     commit(next);
     syncStore(next);
-    setNotice(`Pipeline: ${g.harness.name ?? "app"}`);
+    setNotice(`Vorgeschlagener Ablauf: ${g.harness.name ?? "Anwendung"}`);
   }
 
   const selectedNode = board.nodes.find((n) => n.id === sel);
@@ -426,15 +426,15 @@ export function HarnessBoard() {
         <Button className="h-8" variant="quiet" onClick={fit} title="Einpassen (0)">
           <Maximize2 className="size-3.5" />
         </Button>
-        <Button className="h-8" variant="quiet" onClick={() => { const next = defaultBoard(settings); commit(next); syncStore(next); }} title="Standard wie am Anfang">
+        <Button className="h-8" variant="quiet" onClick={() => { const next = defaultBoard(settings); commit(next); syncStore(next); }} title="Standardablauf wiederherstellen">
           <RotateCcw className="size-3.5" />
           Standard
         </Button>
         <Button className="h-8" variant="quiet" onClick={guess}>
-          Raten
+          Vorschlagen
         </Button>
         <Button className="h-8" variant="quiet" onClick={() => addKante()}>
-          <Plus className="size-3.5" /> Kante
+          <Plus className="size-3.5" /> Werkzeug
         </Button>
         <Button className="h-8" onClick={() => save()}>
           Speichern
@@ -580,7 +580,7 @@ function NodeEl({ n, sel, live, pulse, linking }: { n: BoardNode; sel: boolean; 
           key={p.k}
           type="button"
           data-port={n.id}
-          title="Leitung ziehen"
+          title="Verbindung erstellen"
           className={cn(
             "absolute z-10 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-accent bg-surface hover:scale-150",
             linking || sel ? "opacity-100" : "opacity-0 group-hover:opacity-100",
@@ -641,10 +641,10 @@ function WireEl({ r, w, sel }: { r?: { d: string; lx: number; ly: number; label:
 const PHASE_LIST: { id: string; label: string }[] = [
   { id: "plan", label: "Plan" },
   { id: "act", label: "Arbeit" },
-  { id: "observe", label: "Run" },
+  { id: "observe", label: "Ausführung" },
   { id: "done", label: "Fertig" },
   { id: "see", label: "Vorschau" },
-  { id: "patch", label: "Patch" },
+  { id: "patch", label: "Korrektur" },
   { id: "engine", label: "Engine" },
 ];
 
@@ -674,7 +674,7 @@ function Inspector({
     return (
       <div className="mb-3">
         <p className="text-xs text-muted">Phasen</p>
-        <p className="mt-0.5 mb-1.5 text-[11px] text-subtle">Punkt am Knoten oder Shift+Klick, dann Ziel. Esc bricht ab.</p>
+        <p className="mt-0.5 mb-1.5 text-[11px] text-subtle">Klicke auf den Punkt am Knoten oder mit Umschalt auf den Knoten. Wähle danach das Verbindungsziel. Mit Esc brichst du ab.</p>
         <div className="flex flex-wrap gap-1">
           {PHASE_LIST.map((p) => (
             <button
@@ -697,8 +697,8 @@ function Inspector({
     const groups = [...new Set(GRAPH_TOOLS.map((t) => t.group))];
     return (
       <div>
-        <p className="text-xs text-muted">Graph-Tools</p>
-        <p className="mt-1 mb-2 text-[11px] text-subtle">Zusatzkanten. Nicht Plan/Arbeit/Fertig — die sind oben.</p>
+        <p className="text-xs text-muted">Graph-Werkzeuge</p>
+        <p className="mt-1 mb-2 text-[11px] text-subtle">Hier ergänzt du Werkzeuge für die einzelnen Phasen. Die Phasen selbst wählst du oben.</p>
         {groups.map((g) => (
           <div key={g} className="mb-2">
             <p className="text-[10px] tracking-wide text-subtle uppercase">{g}</p>
@@ -727,10 +727,10 @@ function Inspector({
         <p className="text-xs text-muted">Kante</p>
         <p className="mt-1 text-sm text-fg">{WIRE_LABEL[wire.kind]}</p>
         <label className="mt-3 flex items-center gap-2 text-xs text-muted">
-          <input type="checkbox" checked={wire.on} onChange={(e) => onWire({ ...wire, on: e.target.checked })} /> an
+          <input type="checkbox" checked={wire.on} onChange={(e) => onWire({ ...wire, on: e.target.checked })} /> Aktiv
         </label>
         <button type="button" className="mt-3 text-[11px] text-danger" onClick={() => onDel(wire.id)}>
-          Leitung weg
+          Verbindung entfernen
         </button>
       </div>
     );
@@ -750,7 +750,7 @@ function Inspector({
         <p className="text-xs text-muted">Phase</p>
         <p className="mt-1 text-sm text-fg">{node.label}</p>
         <p className="mt-2 mb-3 text-[11px] text-subtle">
-          {node.phase === "observe" ? `Run. Bei Fehler bis ${tries}× Patch.` : "Graph-Tools unten hängen an dieser Phase."}
+          {node.phase === "observe" ? `Führt das Programm aus. Bei Fehlern sind bis zu ${tries} Korrekturversuche vorgesehen.` : "Die unten gewählten Graph-Werkzeuge werden dieser Phase zugeordnet."}
         </p>
         <Tools />
       </div>
@@ -762,7 +762,7 @@ function Inspector({
       <Phasen />
       <p className="text-xs text-muted">Graph-Kante</p>
       <label className="block text-[11px] text-subtle">
-        wenn
+        Bedingung
         <input
           value={e.when}
           className="mt-0.5 h-8 w-full rounded-md border border-border bg-bg px-2 text-xs text-fg"
@@ -770,7 +770,7 @@ function Inspector({
         />
       </label>
       <label className="block text-[11px] text-subtle">
-        glob
+        Dateimuster
         <input
           value={e.glob ?? ""}
           className="mt-0.5 h-8 w-full rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg"
@@ -778,7 +778,7 @@ function Inspector({
         />
       </label>
       <label className="block text-[11px] text-subtle">
-        tool
+        Werkzeug
         <select
           value={e.tool ?? "run_file"}
           className="mt-0.5 h-8 w-full rounded-md border border-border bg-bg px-2 text-xs text-fg"
@@ -799,7 +799,7 @@ function Inspector({
         </select>
       </label>
       <button type="button" className="text-[11px] text-danger" onClick={() => onDel(node.id)}>
-        Knoten weg
+        Knoten entfernen
       </button>
     </div>
   );

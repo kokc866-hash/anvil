@@ -43,6 +43,8 @@ import { connectionProbeSummary } from "@/lib/connection-capabilities";
 import { SettingsSection, Head, Vis, Row, Seg, Field, Toggle } from "./fields";
 
 export function AgentSection({ q }: { q: string }) {
+  const backgroundAgent = useIde((s) => s.backgroundAgent);
+  const backgroundWriteThrough = useIde((s) => s.backgroundWriteThrough);
   const t = useT();
   const llmProvider = useIde((s) => s.llmProvider);
   const llmAuthMode = useIde((s) => s.llmAuthMode);
@@ -95,7 +97,7 @@ export function AgentSection({ q }: { q: string }) {
   const aboOn = Boolean(aboKind);
   const thinkModes = thinkingModes(llmProvider, llmModel, aboKind);
   const activeThinking = effectiveThinking(llmProvider, llmModel, llmThinking, aboKind);
-  const thinkingLabels: Record<ThinkingMode, string> = { off: "Aus", auto: "Auto", minimal: "Minimal", low: "Low", medium: "Mid", high: "High", xhigh: "XHigh", max: "Max" };
+  const thinkingLabels: Record<ThinkingMode, string> = { off: "Aus", auto: "Auto", minimal: "Minimal", low: "Niedrig", medium: "Mittel", high: "Hoch", xhigh: "Sehr hoch", max: "Maximal" };
   const probeController = useRef<AbortController | null>(null);
   const loginController = useRef<AbortController | null>(null);
   const [subBusy, setSubBusy] = useState(false);
@@ -203,7 +205,7 @@ export function AgentSection({ q }: { q: string }) {
     <SettingsSection q={q}>
       <Head>Agent</Head>
       <p className="mb-2 text-xs text-muted">
-        {useIde.getState().locale === "en" ? "Choose the AI connection for your chat here. Ask explains and investigates; Agent can edit files and run tools. The separate local helper is optional." : "Hier wählst du die KI-Verbindung für deinen Chat. Fragen erklärt und untersucht; Agent kann Dateien bearbeiten und Werkzeuge ausführen. Der zusätzliche lokale Helfer ist optional."}
+        {useIde.getState().locale === "en" ? "Choose the AI connection for your chat here. Ask explains and investigates; Agent can edit files and run tools. The separate local helper is optional." : "Hier wählst du die KI-Verbindung für deinen Chat. Im Modus „Fragen“ erhältst du Erklärungen und Analysen. Im Modus „Agent“ kann die KI auch Dateien bearbeiten und Werkzeuge ausführen. Der zusätzliche lokale Helfer ist optional."}
       </p>
       <Vis q={q} label="Anbieter Provider Verbindung Connection Modell Model API URL Key Lokal Local Cloud Abo CLI Custom Profil Profile">
         <ProviderPick
@@ -261,11 +263,11 @@ export function AgentSection({ q }: { q: string }) {
         ) : null}
         {spec.id !== "grok" && !aboOn ? (
           <Field
-            label={spec.needsKey ? "API-Key" : "API-Key (optional)"}
+            label={spec.needsKey ? "API-Schlüssel" : "API-Schlüssel (optional)"}
             value={llmApiKey}
             onChange={setLlmApiKey}
             type="password"
-            placeholder={spec.needsKey ? "sk-…" : "meist leer"}
+            placeholder={spec.needsKey ? "sk-…" : "Bei Bedarf eintragen"}
           />
         ) : null}
         <ConnectionSummary />
@@ -287,7 +289,7 @@ export function AgentSection({ q }: { q: string }) {
         <div className="mb-2 mt-2 rounded-md border border-border px-2 py-2">
           <p className="text-xs text-muted">Profil</p>
           <p className="mb-1 text-[11px] text-subtle">
-            Anbieter, API/Abo, URL, Modell und Kontext speichern. Zugangsdaten bleiben separat.
+            Speichere Anbieter, Zugangsart, Serveradresse, Modell und Kontextgröße als Profil. Zugangsdaten werden separat gespeichert.
           </p>
           {llmProfiles.length ? (
             <ul className="mb-1 space-y-0.5">
@@ -315,7 +317,7 @@ export function AgentSection({ q }: { q: string }) {
           <div className="mt-1 flex gap-1">
             <input
               value={profileName}
-              placeholder="Name, z.B. Ollama LAN"
+              placeholder="Profilname, z. B. Ollama im Netzwerk"
               className="h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 text-sm text-fg"
               onChange={(e) => setProfileName(e.target.value)}
               onKeyDown={(e) => {
@@ -340,19 +342,19 @@ export function AgentSection({ q }: { q: string }) {
           {spec.kind === "local"
             ? "Für Ollama, LM Studio oder andere Modellserver die API-Adresse des jeweiligen Servers eintragen. Anvil stellt die Verbindung her."
             : spec.needsSub
-              ? "CLI-Anmeldungen werden lokal gespeichert. Dafür ist kein API-Key nötig."
-              : "API-Keys werden lokal gespeichert. Anfragen gehen an den gewählten Anbieter."}
+              ? "CLI-Anmeldungen werden lokal gespeichert. Dafür ist kein API-Schlüssel nötig."
+              : "API-Schlüssel werden lokal gespeichert. Anfragen gehen an den gewählten Anbieter."}
         </p>
       </Vis>
       <Vis q={q} label="Context Länge Fenster Tokens">
         <Row
-          label="Context-Länge"
+          label="Kontextgröße"
           hint={
             aboOn
-              ? "Budget für Anvils Anfragekontext. Das tatsächliche Modellfenster verwaltet die CLI."
+              ? "Begrenzt den Kontext, den Anvil für eine Anfrage zusammenstellt. Das tatsächliche Kontextfenster verwaltet die CLI."
               : llmContextAuto
-                ? "Cloud/API/Abo: Auto aus Katalog (Fenster des Modells). Lokal: num_ctx."
-                : "Fenster für das Modell. Cloud/API besser Auto."
+                ? "Für Cloud- und API-Modelle übernimmt Anvil die Kontextgröße aus dem Modellkatalog. Bei lokalen Modellen wird sie als num_ctx übergeben."
+                : "Legt die gewünschte Kontextgröße fest. Für Cloud- und API-Modelle wird die automatische Einstellung empfohlen."
           }
         >
           <div className="flex flex-col items-end gap-1">
@@ -393,7 +395,7 @@ export function AgentSection({ q }: { q: string }) {
                   id: String(n),
                   label: formatContext(n),
                 })),
-                { id: "custom", label: "Zahl" },
+                { id: "custom", label: "Eigener Wert" },
               ]}
             />
             {ctxCustom || !ctxChip ? (
@@ -409,7 +411,7 @@ export function AgentSection({ q }: { q: string }) {
                   setLlmContext(Number(e.target.value));
                 }}
                 className="h-8 w-28 rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none focus:ring-2 focus:ring-ring"
-                title="Tokens, max 2M"
+                title="Anzahl der Tokens, höchstens 2 Millionen"
               />
             ) : null}
           </div>
@@ -417,14 +419,14 @@ export function AgentSection({ q }: { q: string }) {
       </Vis>
       <Vis q={q} label="Thinking Reasoning Denken minimal low mid high xhigh max">
         <Row
-          label="Thinking"
+          label="Denkaufwand"
           hint={
             activeThinking !== llmThinking
-              ? `Gespeichert: ${thinkingLabels[llmThinking]}. Für dieses Modell nicht verfügbar; wirksam ist Auto.`
+              ? `Gespeichert ist „${thinkingLabels[llmThinking]}“. Dieses Modell unterstützt die Einstellung nicht. Deshalb gilt „Auto“.`
               : thinkModes.length === 1
                 ? "Für dieses Modell ist keine einstellbare Denkstufe bekannt. Es gilt die Modellvorgabe."
                 : isLocalThinking(llmProvider) && !aboOn
-                  ? "Auto erkennt Thinking am Modell; Low/Mid/High legen die Denkstufe fest."
+                  ? "„Auto“ richtet sich nach den Denkfähigkeiten des Modells. Mit einer festen Stufe bestimmst du den gewünschten Denkaufwand."
                   : "Auto verwendet die CLI- bzw. Modellvorgabe. Höhere Stufen können länger dauern und mehr Tokens verbrauchen."
           }
         >
@@ -440,7 +442,7 @@ export function AgentSection({ q }: { q: string }) {
           <Vis q={q} label="Temperatur max tokens Antwort Länge">
             <Slider
               label="Temperatur"
-              hint="Geht an Ollama/llama.cpp (options.temperature). 0 = bestimmt, 1+ = frei."
+              hint="Steuert bei Ollama und llama.cpp, wie stark Antworten variieren. Niedrige Werte liefern gleichmäßigere Antworten, hohe Werte mehr Abwechslung."
               min={0}
               max={2}
               step={0.05}
@@ -449,8 +451,8 @@ export function AgentSection({ q }: { q: string }) {
               format={(n) => n.toFixed(2)}
             />
             <Slider
-              label="Antwort-Länge"
-              hint="0 = Auto aus Context. Sonst max_tokens / num_predict an den Server."
+              label="Maximale Antwortlänge"
+              hint="Bei 0 bestimmt Anvil das Limit anhand der Kontextgröße. Andere Werte begrenzen die Antwort auf die angegebene Anzahl an Tokens."
               min={0}
               max={32768}
               step={256}
@@ -470,10 +472,16 @@ export function AgentSection({ q }: { q: string }) {
           <CapRow provider={llmProvider} model={llmModel} baseUrl={llmBaseUrl} />
         </Vis>
       ) : null}
-      <Vis q={q} label="Retry Versuche Abbruch lokal">
+      <Vis q={q} label="Retry Versuche Abbruch lokal Hintergrund Test Hintergrundbetrieb">
+        <Row label="Hintergrundbetrieb (Test)" hint="Agentenaufträge mit lokalen API- und CLI-Modellen laufen unabhängig vom Editorfenster. Dateien, Compiler, HTML-Vorschau, Engine-Aktionen und freigegebene Dienste bleiben nutzbar. Bildanhänge benötigen ein Modell mit Bildverständnis. Wenn du Anvil beendest, wird der Auftrag gestoppt.">
+          <Toggle on={backgroundAgent} onChange={(backgroundAgent) => useIde.setState({ backgroundAgent })} />
+        </Row>
+        {backgroundAgent && <Row label="Direkt im Projekt speichern" hint="Speichert Dateiänderungen bereits während des Auftrags im gewählten Projektordner. Vorherige Inhalte werden gesichert. Bei Konflikten hält der Auftrag an. Ist diese Option ausgeschaltet, kannst du die Entwürfe anschließend prüfen.">
+          <Toggle on={backgroundWriteThrough} onChange={(backgroundWriteThrough) => useIde.setState({ backgroundWriteThrough })} />
+        </Row>}
         <Slider
           label="Versuche"
-          hint="Wiederholungen bei geeigneten Verbindungsfehlern. 1 = keine Wiederholung; lokale Modellladevorgänge werden nicht wegen eines leeren Streams neu gestartet."
+          hint="Anzahl der Verbindungsversuche bei vorübergehenden Fehlern. Bei 1 gibt es keine Wiederholung. Ein lokales Modell wird nicht erneut geladen, nur weil es noch keine Antwortdaten sendet."
           min={1}
           max={8}
           step={1}
@@ -481,8 +489,8 @@ export function AgentSection({ q }: { q: string }) {
           onChange={setLlmRetries}
         />
         <Slider
-          label="Harter Stop"
-          hint="0 = kein Zeitlimit. Sonst maximales Zeitbudget der Modellanfrage in Minuten."
+          label="Zeitlimit pro Modellanfrage"
+          hint="Bricht eine Modellanfrage nach der angegebenen Anzahl an Minuten ab. Bei 0 gilt kein Zeitlimit."
           min={0}
           max={480}
           step={30}
@@ -493,8 +501,8 @@ export function AgentSection({ q }: { q: string }) {
       </Vis>
       <Vis q={q} label="Context compacting kompakt Verlauf">
         <Row
-          label="Compacting"
-          hint="Begrenzt den an das Modell gesendeten Kontext. Das gespeicherte Chatarchiv bleibt vollständig. Auto ab etwa 70 %."
+          label="Kontext zusammenfassen"
+          hint="Kürzt den an das Modell gesendeten Verlauf. Der gespeicherte Chat bleibt vollständig. „Auto“ greift ab etwa 70 % der verfügbaren Kontextgröße."
         >
           <Seg<CompactMode>
             value={llmCompact}
@@ -502,7 +510,7 @@ export function AgentSection({ q }: { q: string }) {
             options={[
               { id: "off", label: "Aus" },
               { id: "auto", label: "Auto" },
-              { id: "aggressive", label: "Aggressiv" },
+              { id: "aggressive", label: "Stärker" },
             ]}
           />
         </Row>
@@ -539,13 +547,13 @@ export function AgentSection({ q }: { q: string }) {
         </Row>
       </Vis>
       <Vis q={q} label="Run nach Agent automatisch">
-        <Row label="Nach der Runde Run" hint="Wenn die Run-Schleife aus ist, nach der Runde trotzdem ausführen">
+        <Row label="Nach dem Auftrag ausführen" hint="Führt das Projekt nach dem Agentenauftrag aus, auch wenn die automatische Ausführung nach Änderungen ausgeschaltet ist.">
           <Toggle on={autoRunAgent} onChange={setAutoRunAgent} />
         </Row>
       </Vis>
       <HarnessFields q={q} />
       <Vis q={q} label="Lernen Gedächtnis Skills">
-        <Row label="Lernen" hint="Feineinstellungen unter Gedächtnis">
+        <Row label="Gedächtnis verwenden" hint="Speichert Wissen für spätere Aufgaben. Weitere Einstellungen findest du unter „Gedächtnis“.">
           <Toggle on={learnOn} onChange={(v) => useLearn.getState().setOn(v)} />
         </Row>
       </Vis>
@@ -555,12 +563,12 @@ export function AgentSection({ q }: { q: string }) {
           <textarea
             value={agentRules}
             rows={5}
-            placeholder="Zusatz zu AGENTS.md und .anvil/rules.md im Workspace."
+            placeholder="Zusätzliche Anweisungen zu AGENTS.md und .anvil/rules.md im Projekt."
             className="mt-1 w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
             onChange={(e) => setAgentRules(e.target.value)}
           />
           <span className="mt-1 block text-[11px] text-subtle">
-            AGENTS.md und .anvil/rules.md gelten immer. Dieses Feld kommt extra dazu.
+            Die Regeln aus AGENTS.md und .anvil/rules.md gelten immer. Die Anweisungen in diesem Feld ergänzen sie.
           </span>
         </label>
       </Vis>
@@ -606,7 +614,7 @@ function HarnessFields({ q }: { q: string }) {
       }, suggestion);
       for (const [path, content] of Object.entries(writes)) writeFile(path, content);
       setSuggestion(undefined);
-      setNotice("Einstellungen ins Projekt übernommen. Vorhandene Tafel und zusätzliche Projektwerte bleiben erhalten.");
+      setNotice("Einstellungen in die Projektdateien übernommen. Die vorhandene Tafel und zusätzliche Projekteinstellungen bleiben erhalten.");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Projekteinstellungen konnten nicht gespeichert werden");
     }
@@ -614,7 +622,7 @@ function HarnessFields({ q }: { q: string }) {
 
   function loadProject() {
     if (!proj && !graph) {
-      setNotice("Keine .anvil/harness.json");
+      setNotice("Keine Projekteinstellungen in .anvil/harness.json gefunden.");
       return;
     }
     if (proj) {
@@ -629,7 +637,7 @@ function HarnessFields({ q }: { q: string }) {
       if (proj.graphSees != null) setSees(proj.graphSees);
     }
     setSuggestion(undefined);
-    setNotice("Aus Projekt geladen");
+    setNotice("Einstellungen aus dem Projekt geladen.");
   }
 
   function guess() {
@@ -642,38 +650,38 @@ function HarnessFields({ q }: { q: string }) {
     setAfter(g.harness.afterWrite ?? "run");
     setRounds(g.harness.maxRounds ?? 24);
     setSuggestion(g);
-    setNotice(`Vorschlag: ${g.harness.name ?? "app"}. Mit „Ins Projekt“ übernehmen; vorhandene Kanten bleiben erhalten.`);
+    setNotice(`Vorschlag für ${g.harness.name ?? "app"} erstellt. Mit „Ins Projekt übernehmen“ anwenden. Vorhandene Verbindungen auf der Tafel bleiben erhalten.`);
   }
 
   return (
     <SettingsSection q={q}>
       <Vis q={q} label="Harness Loop Run-Schleife nach write patch Tests Runde automatisch weiterarbeiten Rundenlimit Prüfintervall">
-        <Head>Harness-Loop</Head>
+        <Head>Automatische Ausführung und Prüfung</Head>
         <Row
-          label="An"
-          hint="Anvil-Vorgabe: Nach Write in derselben Runde ausführen. Fehler → Patch. Aus bleibt aus, auch mit Projektdatei."
+          label="Nach Änderungen ausführen"
+          hint="Führt das Projekt nach einer Dateiänderung in derselben Arbeitsrunde aus. Fehler werden dem Agenten zur Korrektur übergeben. Diese Einstellung hat Vorrang vor der Projektdatei."
         >
           <Toggle on={runLoop} onChange={setRunLoop} />
         </Row>
         <Row
-          label="Tests nach Runde"
-          hint="Wenn Testdateien da sind: nach der Agent-Runde automatisch laufen. Rot bleibt in der Spur."
+          label="Tests nach dem Auftrag"
+          hint="Führt vorhandene Testdateien nach dem Agentenauftrag automatisch aus. Fehlgeschlagene Tests bleiben im Ablaufprotokoll sichtbar."
         >
           <Toggle on={testLoop} onChange={setTestLoop} />
         </Row>
-        <Row label="Nach Write" hint="Was nach dem Schreiben verlangt wird.">
+        <Row label="Prüfung nach Änderungen" hint="Bestimmt, welche Prüfung nach einer Dateiänderung erforderlich ist.">
           <Seg<AfterWrite>
             value={afterWrite ?? "run"}
             onChange={setAfter}
             options={[
-              { id: "run", label: "Run" },
+              { id: "run", label: "Ausführen" },
               { id: "engine", label: "Engine" },
               { id: "preview", label: "Vorschau" },
-              { id: "none", label: "Nichts" },
+              { id: "none", label: "Keine" },
             ]}
           />
         </Row>
-        <Row label="Versuche" hint={`Patch und Run bei Fehler. Wirksam: ${effective.loopTries} · ${proj?.loopTries != null ? "Projekt" : "Anvil"}.`}>
+        <Row label="Korrekturversuche" hint={`Bei Fehlern kann der Agent Änderungen vornehmen und erneut ausführen. Aktuell gelten ${effective.loopTries} Versuche. Quelle: ${proj?.loopTries != null ? "Projekt" : "Anvil"}.`}>
           <Seg
             value={String(loopTries)}
             onChange={(v) => setLoopTries(Number(v))}
@@ -687,15 +695,15 @@ function HarnessFields({ q }: { q: string }) {
         </Row>
         <Row
           label={en ? "Continue automatically" : "Automatisch weiterarbeiten"}
-          hint={en ? "Continue the same task without a fixed round or tool budget while new successful actions occur. Stop and configured time limits remain active." : "Im selben Auftrag ohne festes Runden- oder Werkzeugbudget weiterarbeiten, solange neue erfolgreiche Arbeitsschritte vorliegen. Stop und eingestellte Zeitlimits bleiben wirksam."}
+          hint={en ? "Continue the same task without a fixed round or tool budget while new successful actions occur. Stop and configured time limits remain active." : "Der Agent arbeitet ohne festes Limit für Runden oder Werkzeugaufrufe weiter, solange neue Arbeitsschritte erfolgreich sind. Du kannst ihn jederzeit stoppen. Eingestellte Zeitlimits bleiben aktiv."}
         >
           <Toggle on={autoContinue} onChange={setAutoContinue} />
         </Row>
         <Row
           label={autoContinue ? (en ? "Rounds without progress" : "Runden ohne Fortschritt") : (en ? "Fixed round limit" : "Festes Rundenlimit")}
           hint={autoContinue
-            ? (en ? "Pause after this many model rounds without a new successful action. A round may use several tools. Repeated calls do not count as new progress." : "Erst nach so vielen Modellrunden ohne neuen erfolgreichen Arbeitsschritt unterbrechen. Eine Runde kann mehrere Werkzeuge verwenden. Wiederholte Aufrufe zählen nicht als neuer Fortschritt.")
-            : (en ? "Pause after this many model rounds. Send again to continue with the existing history." : "Nach dieser Anzahl Modellrunden hält der Auftrag an. Zum Fortsetzen erneut senden; der bisherige Verlauf bleibt erhalten.")}
+            ? (en ? "Pause after this many model rounds without a new successful action. A round may use several tools. Repeated calls do not count as new progress." : "Unterbricht den Auftrag nach dieser Anzahl an Modellrunden ohne neuen erfolgreichen Arbeitsschritt. Eine Runde kann mehrere Werkzeuge verwenden. Wiederholte Aufrufe zählen nicht als neuer Fortschritt.")
+            : (en ? "Pause after this many model rounds. Send again to continue with the existing history." : "Nach dieser Anzahl an Modellrunden hält der Auftrag an. Sende eine weitere Nachricht, um mit dem bisherigen Verlauf fortzufahren.")}
         >
           <Seg
             value={String(maxRounds ?? 24)}
@@ -711,13 +719,13 @@ function HarnessFields({ q }: { q: string }) {
       </Vis>
       <Vis q={q} label="Graph Schleife Canvas Frame see_run play">
         <Head>Graph</Head>
-        <Row label="An" hint="Nach Run: Graph-Kanten (Frame, Tests, Format, Engine, MCP, …) — Tafel hat die volle Tool-Liste.">
+        <Row label="Ablauf aktivieren" hint="Führt nach dem Programmstart die auf der Tafel verknüpften Schritte aus, etwa Bildaufnahme, Tests oder Formatierung. Auf der Tafel findest du alle verfügbaren Werkzeuge.">
           <Toggle on={graphLoop} onChange={setGraphLoop} />
         </Row>
-        <Row label="Engine" hint="Godot/Unity/Bevy: nach Write engine_run. Reines Cargo.toml zählt nicht.">
+        <Row label="Engine ausführen" hint="Führt erkannte Godot-, Unity- und Bevy-Projekte nach Dateiänderungen in der Engine aus. Eine Cargo.toml allein reicht nicht zur Erkennung eines Bevy-Projekts.">
           <Toggle on={engineLoop} onChange={setEngineLoop} />
         </Row>
-        <Row label="Frames" hint="Wie oft see_run / play in einer Runde.">
+        <Row label="Vorschauprüfungen" hint="Maximale Anzahl an Bildaufnahmen und Vorschauinteraktionen pro Arbeitsrunde.">
           <Seg
             value={String(graphSees ?? 4)}
             onChange={(v) => setSees(Number(v))}
@@ -732,9 +740,9 @@ function HarnessFields({ q }: { q: string }) {
       </Vis>
       <Vis q={q} label="Harness Tafel Raster einrasten grafisch">
         <Head>Tafel</Head>
-        <Row label="Öffnen" hint="Grafische Arbeitsfläche für Harness- und Graph-Kanten. Speichern schreibt .anvil/.">
+        <Row label="Abläufe bearbeiten" hint="Verknüpfe Arbeitsschritte auf einer grafischen Tafel. Die Abläufe werden im Projektordner .anvil gespeichert.">
           <Button className="h-8" onClick={() => useIde.getState().setHarnessBoardOpen(true)}>
-            Tafel
+            Tafel öffnen
           </Button>
         </Row>
         <BoardToggles />
@@ -743,39 +751,39 @@ function HarnessFields({ q }: { q: string }) {
         {proj ? (
           <details className="my-2 rounded-md border border-border px-2 py-2">
             <summary className="cursor-pointer text-xs text-muted">Wirksame Einstellungen im Projekt</summary>
-            <p className="py-2 text-xs text-subtle">Run-, Test-, Graph- und Engine-Schalter sowie Runden gelten aus Anvil. Automatisches Weiterarbeiten wird in Anvil eingestellt. Die Versuchszahl kann das Projekt vorgeben. „Laden“ übernimmt Projektwerte in die Anvil-Vorgaben.</p>
+            <p className="py-2 text-xs text-subtle">Anvil legt fest, ob Ausführung, Tests, Graph und Engine aktiv sind und wie viele Runden erlaubt sind. Auch das automatische Weiterarbeiten wird hier eingestellt. Die Anzahl der Korrekturversuche kann das Projekt vorgeben. Mit „Aus Projekt laden“ übernimmst du dessen Werte in die Anvil-Einstellungen.</p>
             <table className="w-full text-left text-xs">
               <thead><tr><th className="py-1">Einstellung</th><th>Wirksam</th><th>Quelle</th></tr></thead>
               <tbody>{[
-                ["Run-Schleife", effective.runLoop ? "An" : "Aus", "Anvil"],
+                ["Automatische Ausführung", effective.runLoop ? "An" : "Aus", "Anvil"],
                 ["Tests", effective.testLoop ? "An" : "Aus", "Anvil"],
                 ["Graph", effective.graphLoop ? "An" : "Aus", "Anvil"],
                 ["Engine", effective.engineLoop ? "An" : "Aus", "Anvil"],
-                ["Nach Write", effective.afterWrite ?? "none", "Anvil-Schalter"],
-                ["Versuche", effective.loopTries, proj.loopTries != null ? "Projekt" : "Anvil"],
+                ["Prüfung nach Änderungen", { run: "Ausführen", engine: "Engine", preview: "Vorschau", none: "Keine" }[effective.afterWrite ?? "none"], "Anvil-Einstellung"],
+                ["Korrekturversuche", effective.loopTries, proj.loopTries != null ? "Projekt" : "Anvil"],
                 ["Automatisch weiterarbeiten", autoContinue ? "An" : "Aus", "Anvil"],
                 [autoContinue ? "Prüfintervall (Runden)" : "Festes Rundenlimit", effective.maxRounds, "Anvil"],
-                ["Frames", effective.graphSees, "Anvil"],
+                ["Vorschauprüfungen", effective.graphSees, "Anvil"],
               ].map(([label, value, source]) => <tr key={label}><td className="py-1">{label}</td><td>{value}</td><td className="text-muted">{source}</td></tr>)}</tbody>
             </table>
           </details>
         ) : null}
-        {suggestion ? <p className="py-2 text-xs text-muted">Vorschlag: {suggestion.harness.name} · {suggestion.graph.edges?.length ?? 0} Kanten. „Ins Projekt“ ergänzt fehlende Kanten und übernimmt die angezeigten Vorgaben.</p> : null}
+        {suggestion ? <p className="py-2 text-xs text-muted">Vorschlag: {suggestion.harness.name} · {suggestion.graph.edges?.length ?? 0} Verbindungen. „Ins Projekt übernehmen“ ergänzt fehlende Verbindungen auf der Tafel und übernimmt die angezeigten Einstellungen.</p> : null}
         <p className="py-1 text-[11px] text-subtle">
           {proj
             ? `.anvil/harness.json · ${proj.name ?? "app"} · ${proj.afterWrite ?? "run"}`
-            : "Keine Projektdatei — Einstellungen gelten."}
+            : "Keine Projektdatei vorhanden. Es gelten die Anvil-Einstellungen."}
           {graph?.edges?.length ? ` · ${graph.edges.length} Graph-Kanten` : ""}
         </p>
         <div className="mb-2 flex flex-wrap gap-2">
           <Button className="h-8" onClick={saveProject}>
-            Ins Projekt
+            Ins Projekt übernehmen
           </Button>
           <Button className="h-8" variant="quiet" onClick={loadProject}>
-            Laden
+            Aus Projekt laden
           </Button>
           <Button className="h-8" variant="quiet" onClick={guess}>
-            Raten · Vorschlag
+            Vorschlag erstellen
           </Button>
         </div>
       </Vis>
@@ -790,10 +798,10 @@ function BoardToggles() {
   const setSnap = useIde((s) => s.setHarnessBoardSnap);
   return (
     <>
-      <Row label="Raster" hint="Punkte im Hintergrund der Tafel.">
+      <Row label="Raster anzeigen" hint="Zeigt ein Punktraster im Hintergrund der Tafel.">
         <Toggle on={grid} onChange={setGrid} />
       </Row>
-      <Row label="Einrasten" hint="Knoten an 24px-Raster.">
+      <Row label="Am Raster ausrichten" hint="Richtet die Elemente der Tafel an einem Raster mit 24 Pixeln Abstand aus.">
         <Toggle on={snap} onChange={setSnap} />
       </Row>
     </>
@@ -822,7 +830,7 @@ function McpFields() {
       <Row label={t("mcpStream")} hint={t("mcpStreamH")}>
         <Toggle on={mcpStream} onChange={setMcpStream} />
       </Row>
-      <p className="text-xs text-muted">MCP (HTTP JSON-RPC). Der Server muss CORS erlauben.</p>
+      <p className="text-xs text-muted">Verbinde zusätzliche Werkzeuge über einen MCP-Server. Für den Zugriff aus dem Browser muss der Server CORS erlauben.</p>
       {servers.map((s, i) => (
         <div key={s.id} className="mt-2 rounded-md border border-border p-2">
           <input
@@ -850,14 +858,14 @@ function McpFields() {
           />
           <div className="mt-1 flex gap-2">
             <label className="text-[11px] text-muted">
-              <input type="checkbox" checked={s.enabled} onChange={(e) => patch(i, { enabled: e.target.checked })} /> an
+              <input type="checkbox" checked={s.enabled} onChange={(e) => patch(i, { enabled: e.target.checked })} /> Aktiv
             </label>
             <button
               type="button"
               className="text-[11px] text-danger"
               onClick={() => setMcpServers(servers.filter((_, n) => n !== i))}
             >
-              Weg
+              Verbindung entfernen
             </button>
           </div>
         </div>
@@ -867,7 +875,7 @@ function McpFields() {
           className="h-8"
           onClick={() => setMcpServers([...servers, { id: newMcpId(), name: "MCP", url: "", enabled: true }])}
         >
-          Server
+          Server hinzufügen
         </Button>
         <Button
           variant="quiet"
@@ -875,15 +883,15 @@ function McpFields() {
           onClick={() => {
             void import("@/lib/mcp").then((m) =>
               m.mcpList(useIde.getState().mcpServers).then((list) => {
-                setNotice(list.length ? list.map((t) => `${t.server}.${t.name}`).join(", ") : "Keine Tools");
+                setNotice(list.length ? list.map((t) => `${t.server}.${t.name}`).join(", ") : "Keine Werkzeuge verfügbar.");
               }),
             );
           }}
         >
-          Tools prüfen
+          Werkzeuge prüfen
         </Button>
         <Button variant="quiet" className="h-8" onClick={() => useIde.getState().setSidebar("mcp")}>
-          Pane
+          MCP-Verbindungen öffnen
         </Button>
       </div>
     </div>
@@ -923,19 +931,19 @@ function ToolModeRow({ provider, model, baseUrl }: { provider: string; model: st
   const key = toolTargetKey(provider, model, baseUrl || providerOf(provider).baseUrl);
   const mode = toolCompatibility(modes[key]);
   const hints = de ? {
-    standard: "Bisherige Tool-Auswahl. Beim Update bleibt dieser Modus aktiv.",
-    compact: "Bis zu 8 passende Tools. Weitere gezielt nachladen. Bei eindeutigem Stillstand ein Textversuch für diesen Auftrag.",
-    text: "Bis zu 8 Tools als Text. Ein vollständiger JSON-Aufruf pro Antwort; keine nativen Function Calls.",
+    standard: "Verwendet die bisherige Auswahl an Werkzeugen. Bei einer Aktualisierung bleibt dieser Modus aktiv.",
+    compact: "Stellt bis zu 8 passende Werkzeuge bereit. Weitere kann der Agent gezielt nachladen. Bei eindeutigem Stillstand versucht Anvil einmal, die Aufrufe als Text zu übermitteln.",
+    text: "Beschreibt bis zu 8 Werkzeuge im Text. Das Modell antwortet mit einem vollständigen JSON-Aufruf statt mit einem nativen Funktionsaufruf.",
   } : {
     standard: "Existing tool selection. Updates keep this mode active.",
     compact: "Up to 8 relevant tools; select more as needed. One text fallback for this task on a clear stall.",
     text: "Up to 8 tools as text. One complete JSON call per answer; no native function calls.",
   };
-  return <div className="py-3" role="group" aria-label={de ? "Tool-Kompatibilität" : "Tool compatibility"}>
-    <p className="mb-2 text-sm text-fg">{de ? "Tool-Kompatibilität" : "Tool compatibility"}</p>
+  return <div className="py-3" role="group" aria-label={de ? "Werkzeugkompatibilität" : "Tool compatibility"}>
+    <p className="mb-2 text-sm text-fg">{de ? "Werkzeugkompatibilität" : "Tool compatibility"}</p>
     <div className="flex flex-wrap gap-1">
       {(["standard", "compact", "text"] as ToolCompatibility[]).map((value, i) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className={`rounded-md border border-border px-3 py-2 text-xs ${mode === value ? "bg-hover text-fg" : "bg-bg text-muted"}`}>{(de ? ["Bisherig", "Kompakt", "Text"] : ["Existing", "Compact", "Text"])[i]}</button>)}
     </div>
-    <p className="mt-2 text-xs text-muted">{hints[mode]} {de ? "Gilt für dieses Modell an dieser Serveradresse; ab dem nächsten Auftrag. Thinking bleibt wie eingestellt." : "Applies to this model at this server address, starting with the next task. Keeps your thinking setting."}</p>
+    <p className="mt-2 text-xs text-muted">{hints[mode]} {de ? "Die Einstellung gilt ab dem nächsten Auftrag für dieses Modell an dieser Serveradresse. Der gewählte Denkaufwand bleibt unverändert." : "Applies to this model at this server address, starting with the next task. Keeps your thinking setting."}</p>
   </div>;
 }

@@ -12,6 +12,7 @@ import { createLlmPipeServer } from "../electron/llm-pipe.mjs";
 
 const production = process.argv.includes("--production");
 const requests = [];
+let queueHold = null;
 const reply = (provider) => `${provider}-Antwort angekommen. Ich bin der Testserver und bestätige, dass die Chat-Anfrage mit dem gewählten Modell vollständig angekommen ist.`;
 const sse = (data) => `data: ${JSON.stringify(data)}\n\n`;
 const upstream = httpServer(async (req, res) => {
@@ -20,6 +21,7 @@ const upstream = httpServer(async (req, res) => {
   if (req.method === "POST") {
     const payload = JSON.parse(body);
     requests.push({ provider: "LAN", url: req.url, body: payload });
+    if (queueHold && payload.messages.at(-1)?.content?.includes("fixture-queue-first")) await queueHold;
     if (req.url !== "/api/chat") { res.writeHead(404); res.end("expected native Ollama chat"); return; }
     if (JSON.stringify(payload.messages).includes("fixture-http-error")) {
       res.writeHead(404, { "content-type": "application/json" }); res.end('{"error":"model not found"}'); return;
@@ -54,6 +56,10 @@ try {
           name: "stalled-helper-fixture",
           enforce: "pre",
           transform(code, id) {
+            if (id.endsWith("/src/components/ide/code-editor.tsx")) {
+              assert.ok(code.includes("void loadMonaco()"));
+              return code.replace("void loadMonaco()", "void (async () => { if ((globalThis as any).fixtureWaitEditor) await (globalThis as any).fixtureWaitEditor(); return loadMonaco(); })()");
+            }
             if (id.endsWith("/src/lib/model-context.ts")) {
               const declaration = "export async function applyCloudContext(): Promise<string | null> {";
               assert.ok(code.includes(declaration), "preparation fixture must hold the context lookup boundary");
@@ -73,7 +79,7 @@ try {
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--disable-gpu"],
   });
 
-  async function openChat(provider, mode = "agent") {
+  async function openChat(provider, mode = "agent", holdEditor = false) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -98,7 +104,11 @@ try {
         sse({ type: "response.completed", response: { output_text: reply("API"), output: [] } }),
       });
     });
-    await page.addInitScript(({ cfg, provider, mode }) => {
+    await page.addInitScript(({ cfg, provider, mode, holdEditor }) => {
+      if (holdEditor) {
+        const ready = new Promise(resolve => { window.fixtureReleaseEditor = resolve; });
+        window.fixtureWaitEditor = () => ready;
+      }
       localStorage.setItem("anvil-ide", JSON.stringify({ state: {
         setupDone: true, autoUpdate: false, llmProvider: provider,
         llmBaseUrl: provider === "ollama" ? cfg.base : "https://api.openai.com/v1",
@@ -121,7 +131,7 @@ try {
         companionEnsure: async () => ({ ok: true }),
         companionRelease: async () => ({ ok: true }),
       };
-    }, { cfg, provider, mode });
+    }, { cfg, provider, mode, holdEditor });
     const response = await page.goto("http://127.0.0.1:8189", { waitUntil: "domcontentloaded", timeout: 45_000 });
     assert.equal(response.status(), 200);
     await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
@@ -143,23 +153,83 @@ try {
     }
     await page.evaluate((provider) => {
       window.__anvilIde.getState().setLlmApiKey(provider === "ollama" ? "" : "fixture-key");
+      window.fixtureChanges = [];
+      window.__anvilIde.subscribe((s, p) => {
+        if (s.agentBusy !== p.agentBusy || s.chat !== p.chat || s.agentDraft !== p.agentDraft || s.workspaceEpoch !== p.workspaceEpoch) {
+          window.fixtureChanges.push({ busy: s.agentBusy, count: s.chat.length, draft: s.agentDraft, epoch: s.workspaceEpoch, notice: s.notice });
+          if (window.fixtureChanges.length > 40) window.fixtureChanges.shift();
+        }
+      });
     }, provider);
     return { page, errors };
   }
 
   async function send(page, prompt) {
     await page.locator("#anvil-chat").fill(prompt);
+    await page.waitForFunction(text => window.__anvilIde.getState().agentDraft === text, prompt).catch(async error => {
+      console.error("Draft input state", await page.evaluate(() => ({ value: document.getElementById("anvil-chat")?.value, draft: window.__anvilIde.getState().agentDraft, changes: window.fixtureChanges, focused: document.activeElement?.id })), prompt);
+      throw error;
+    });
+    // Let the controlled input render its updated submit handler before Enter.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
     await page.locator("#anvil-chat").press("Enter");
   }
   async function answered(page, provider) {
     try {
       await page.getByText(reply(provider), { exact: false }).waitFor({ timeout: 10_000 });
     } catch (error) {
-      console.error("Send state", await page.evaluate(() => ({ busy: window.__anvilIde.getState().agentBusy, chat: window.__anvilIde.getState().chat.map((m) => ({ role: m.role, content: m.content })), helper: window.fixtureBrain?.getState().busy })), requests.map((r) => ({ provider: r.provider, url: r.url, model: r.body.model })));
+      console.error("Send state", await page.evaluate(() => ({ busy: window.__anvilIde.getState().agentBusy, chat: window.__anvilIde.getState().chat.map((m) => ({ role: m.role, content: m.content })), helper: window.fixtureBrain?.getState().busy, changes: window.fixtureChanges, log: JSON.parse(localStorage.getItem("anvil-applog") || "[]") })), requests.map((r) => ({ provider: r.provider, url: r.url, model: r.body.model })));
       throw error;
     }
     await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy);
     if (!production) await page.waitForFunction(() => !window.fixtureBrain.getState().busy);
+  }
+
+  if (!production) {
+    const { page, errors } = await openChat("ollama", "ask", true);
+    await page.locator("#anvil-chat").fill("Keep this draft while the editor loads");
+    await page.evaluate(() => window.fixtureReleaseEditor());
+    await page.locator(".monaco-editor").waitFor();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "anvil-chat", "late editor initialization must not steal chat focus");
+    assert.equal(await page.locator("#anvil-chat").inputValue(), "Keep this draft while the editor loads");
+    assert.deepEqual(errors, []);
+    console.log("LATE_EDITOR_PRESERVES_CHAT_FOCUS_OK");
+    await page.close();
+  }
+
+  {
+    const { page, errors } = await openChat("ollama", "ask");
+    const before = requests.length;
+    // Zustand updates immediately; React may not yet have rendered the new
+    // draft when Enter follows a paste or another draft update in the same turn.
+    await page.evaluate(() => {
+      window.__anvilIde.getState().setAgentDraft("hi wer bist du fixture-immediate-enter");
+      document.getElementById("anvil-chat").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await answered(page, "LAN");
+    assert.equal(requests.length, before + 1);
+    assert.deepEqual(errors, []);
+    console.log("IMMEDIATE_DRAFT_ENTER_OK");
+    await page.close();
+  }
+
+  for (const mode of ['agent','ask']) {
+    const {page,errors}=await openChat('ollama',mode);
+    await page.evaluate(()=>window.__anvilIde.setState({llmContext:32768,llmContextAuto:false}));
+    const image='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRR0AAAAASUVORK5CYII=';
+    const before=requests.length;
+    await page.locator('input[type=file][accept="image/*"]').setInputFiles({name:'routing-test.png',mimeType:'image/png',buffer:Buffer.from(image,'base64')});
+    await page.getByRole('button',{name:'Bild 1 entfernen',exact:true}).waitFor();
+    await send(page,'was siehst du auf dem bild');
+    await answered(page,'LAN');
+    const sent=requests.slice(before);
+    assert.equal(sent.length,1,'Image caption must reach the selected model, not app help');
+    assert.ok(sent[0].body.messages.some(m=>m.role==='user'&&m.images?.includes(image)),'Original image must arrive at the Ollama boundary');
+    assert.deepEqual(errors,[]);
+    if(process.env.ANVIL_QA_SCREENSHOTS){await mkdir(process.env.ANVIL_QA_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.ANVIL_QA_SCREENSHOTS,`image-${production?'production':'dev'}-${mode}.png`)});}
+    console.log(`${production?'PRODUCTION':'DEV'}_IMAGE_${mode.toUpperCase()}_ROUTING_OK`);
+    await page.close();
   }
 
   if (!production) {
@@ -232,6 +302,8 @@ try {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       if (width === 390) await page.getByRole("navigation", { name: "Arbeitsbereich" }).getByRole("button", { name: "Agent", exact: true }).click();
+      // Resize/scroll intentionally dismisses tooltips; finish layout first.
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await status.focus();
       await page.getByRole("tooltip").filter({ hasText: label }).waitFor();
       const layout = await status.evaluate((el) => {
@@ -255,19 +327,42 @@ try {
   {
     const { page, errors } = await openChat("ollama");
     const before = requests.length;
+    let releaseQueue;
+    queueHold = new Promise(resolve => { releaseQueue = resolve; });
+    try {
     await page.evaluate(() => {
       const st = window.__anvilIde.getState();
       st.pushAgent("hi wer bist du fixture-queue-first");
       st.pushAgent("hi wer bist du fixture-queue-second");
     });
+    await page.waitForFunction(() => window.__anvilIde.getState().agentBusy && window.__anvilIde.getState().chat.some(m => m.role === "user"));
+    assert.deepEqual(await page.evaluate(() => window.__anvilIde.getState().chat.filter(m => m.role === "user").map(m => m.content)), ["hi wer bist du fixture-queue-first"]);
+    await page.evaluate(() => {
+      const st = window.__anvilIde.getState();
+      st.pushAgent("hi wer bist du fixture-queue-third");
+      st.pushAgent("hi wer bist du fixture-queue-fourth");
+    });
+    assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentQueue.length), 3);
+    releaseQueue();
     await page.waitForFunction(() => {
       const st = window.__anvilIde.getState();
-      return !st.agentBusy && !st.agentInbox && !st.agentQueue.length && st.chat.filter((m) => m.role === "assistant" && m.content.includes("LAN-Antwort angekommen")).length === 2;
-    }, undefined, { timeout: 20_000 });
-    assert.deepEqual(await page.evaluate(() => window.__anvilIde.getState().chat.filter((m) => m.role === "user").map((m) => m.content)), ["hi wer bist du fixture-queue-first", "hi wer bist du fixture-queue-second"]);
-    assert.equal(requests.length, before + 2, "each queued instruction must reach the model exactly once");
+      return !st.agentBusy && !st.agentInbox && !st.agentQueue.length && st.chat.filter((m) => m.role === "assistant" && m.content.includes("LAN-Antwort angekommen")).length === 4;
+    }, undefined, { timeout: 20_000 }).catch(async error => {
+      console.error("Queue completion state", await page.evaluate(() => {
+        const st = window.__anvilIde.getState();
+        return { busy: st.agentBusy, inbox: st.agentInbox, queue: st.agentQueue, job: st.agentJob?.status, chat: st.chat.map(m => ({ role: m.role, content: m.content })) };
+      }), requests.slice(before).map(r => r.body.messages.filter(m => m.role === "user").at(-1)?.content));
+      throw error;
+    });
+    const expected = ["first", "second", "third", "fourth"].map(n => `hi wer bist du fixture-queue-${n}`);
+    assert.deepEqual(await page.evaluate(() => window.__anvilIde.getState().chat.filter((m) => m.role === "user").map((m) => m.content)), expected);
+    assert.equal(requests.length, before + 4, "each queued instruction must reach the model exactly once");
+    for (const [i, request] of requests.slice(before).entries()) {
+      assert.ok(request.body.messages.filter(m => m.role === "user").at(-1).content.includes(expected[i]), "model requests preserve FIFO too");
+    }
     assert.deepEqual(errors, []);
     console.log(`${production ? "PRODUCTION" : "DEV"}_CHAT_FIFO_OK`);
+    } finally { releaseQueue(); queueHold = null; }
     await page.close();
   }
 
@@ -320,7 +415,10 @@ try {
   {
     const { page, errors } = await openChat("ollama", "agent");
     await send(page, "fixture-http-error");
-    await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy && window.__anvilIde.getState().chat.some((m) => m.role === "assistant" && m.content));
+    await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy && window.__anvilIde.getState().chat.some((m) => m.role === "assistant" && m.content)).catch(async error => {
+      console.error("HTTP error state", await page.evaluate(() => ({ busy: window.__anvilIde.getState().agentBusy, notice: window.__anvilIde.getState().notice, draft: window.__anvilIde.getState().agentDraft, chat: window.__anvilIde.getState().chat, helper: window.fixtureBrain?.getState(), log: JSON.parse(localStorage.getItem("anvil-applog") || "[]") })), errors);
+      throw error;
+    });
     const log = await page.evaluate(() => JSON.parse(localStorage.getItem("anvil-applog") || "[]"));
     assert.ok(log.some((row) => row.tag === "http" && row.msg.includes("HTTP 404")));
     assert.ok(log.some((row) => row.tag === "agent" && row.msg.includes("fehlgeschlagen")));

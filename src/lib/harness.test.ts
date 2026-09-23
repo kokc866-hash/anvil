@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { startHarness } from "./harness.ts";
+import { startHarness, harnessPrompt, stepHarness } from "./harness.ts";
 import { afterTool, applyHarnessTool, guessProjectHarness, mergeHarnessGraph, mergeOpts } from "./harness-project.ts";
 import { GRAPH_TOOLS, globScore, matchGlob, pickProjectEdge } from "./harness-graph.ts";
 import {
@@ -35,6 +35,36 @@ describe("harness loop", () => {
     h = afterTool(h, "write_file", { path: "src/a.py" }, o).state;
     const w = afterTool(h, "run_file", { path: "src/a.py", ok: false, stderr: "boom" }, o);
     assert.ok(w.inject);
+  });
+  it("does not invent a tool restriction after a negative test with automatic repairs off", () => {
+    const off = { runLoop: false, graphLoop: false, loopTries: 3, afterWrite: "none" as const, autoContinueRounds: true };
+    const w = afterTool(startHarness(off), "shell", { ok: false, command: "node cli.cjs", stderr: "Missing argument", code: 1 }, off);
+    assert.equal(w.stop, false);
+    assert.equal(Boolean(w.strict), false);
+    assert.deepEqual(w.allow, []);
+    assert.doesNotMatch(w.inject, /budget|Allowed:/i);
+    assert.match(w.inject, /expected|task/i);
+    const next = afterTool(w.state, "git_status", { ok: true }, off);
+    assert.equal(next.stop, false);
+    assert.equal(Boolean(next.strict), false);
+  });
+  it("exhausting automatic repair attempts does not revoke other offered tools", () => {
+    let h = startHarness(o);
+    h.used.runs = h.budget.runs;
+    const w = afterTool(h, "run_file", { ok: false, stderr: "boom" }, o);
+    assert.deepEqual(w.allow, []);
+    assert.equal(Boolean(w.strict), false);
+    assert.doesNotMatch(w.inject, /Allowed:/);
+  });
+  it("labels suggestions separately from an enforced budget restriction", () => {
+    const suggested = afterTool(startHarness(o), "write_file", { path: "main.py" }, o);
+    assert.match(suggested.inject, /Suggested/);
+    assert.doesNotMatch(suggested.inject, /Allowed:/);
+    const h = startHarness(o);
+    h.used.tools = h.budget.tools;
+    const limited = stepHarness(h, o);
+    assert.equal(limited.strict, true);
+    assert.match(harnessPrompt(limited), /Allowed:/);
   });
   it("see after graphical run", () => {
     const g = { ...o, afterWrite: "preview" as const };

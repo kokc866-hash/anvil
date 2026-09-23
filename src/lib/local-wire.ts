@@ -94,7 +94,7 @@ export function ndjsonLineToSse(line: string, state: StreamState = { nextTool: 0
     });
   }
   state.done = json.done === true;
-  const usage = state.done ? { prompt_tokens: json.prompt_eval_count ?? 0, completion_tokens: json.eval_count ?? 0 } : undefined;
+  const usage = state.done ? { prompt_tokens: json.prompt_eval_count, completion_tokens: json.eval_count } : undefined;
   const finish = state.done ? json.done_reason === "length" ? "length" : state.tools ? "tool_calls" : "stop" : undefined;
   // Non-streaming replies put their entire message in the same object as done.
   return `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }], usage })}\n\n${state.done ? "data: [DONE]\n\n" : ""}`;

@@ -6,7 +6,7 @@ import { applyModelText, markerEndCol, modelUriString } from "@/lib/monaco-model
 import { defsAt, wordAt } from "@/lib/lsp";
 import { gotoFile } from "@/lib/goto";
 import { emitPlugin } from "@/lib/plugins/events";
-import { debugContinue, debugStep, debugStop, startDebug } from "@/lib/debug-engine";
+import { debugContinue, debugStep, debugStop, startDebug, toggleDebugBreakpoint } from "@/lib/debug-engine";
 import { prefixAt, suggest, type Suggestion } from "@/lib/suggest";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -141,7 +141,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         });
         ed.addAction({
           id: "anvil.debug-step",
-          label: "Step",
+          label: "Einzelschritt",
           keybindings: [],
           run: () => debugStep(),
         });
@@ -151,7 +151,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
           keybindings: [],
           run: () => {
             const pos = ed.getPosition();
-            if (pos) useIde.getState().toggleBreakpoint(pathRef.current, pos.lineNumber);
+            if (pos) toggleDebugBreakpoint(pathRef.current, pos.lineNumber);
           },
         });
         subs.push(
@@ -161,7 +161,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             if (!line || !pos) return;
             const gutter = e.target.type === 2 || e.target.type === 3;
             if (gutter) {
-              useIde.getState().toggleBreakpoint(pathRef.current, line);
+              toggleDebugBreakpoint(pathRef.current, line);
               return;
             }
             if (!(e.event?.ctrlKey || e.event?.metaKey)) return;
@@ -286,7 +286,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         });
         ed.addAction({
           id: "anvil.agent",
-          label: "Agent / Ask Auswahl",
+          label: "Auswahl im Chat verwenden",
           keybindings: [],
           run: () => {
             const sel = ed.getSelection();
@@ -317,7 +317,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         });
         ed.addAction({
           id: "anvil.wssymbols",
-          label: "Symbol im Workspace",
+          label: "Symbol im Projekt suchen",
           keybindings: [],
           run: () => setPalette("symbols"),
         });
@@ -377,7 +377,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
         });
         ed.addAction({
           id: "anvil.fix-problems",
-          label: "Unterschlangen an den Agenten",
+          label: "Markierte Codeprobleme an den Agenten senden",
           contextMenuGroupId: "9_anvil",
           run: () => {
             const line = ed.getPosition()?.lineNumber;
@@ -499,7 +499,10 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
             refreshHints();
           }),
         );
-        ed.focus();
+        // Monaco loads asynchronously. Keep focus where the user has already
+        // started working (for example the chat or settings input).
+        const focused = document.activeElement;
+        if (!focused || focused === document.body || hostRef.current.contains(focused)) ed.focus();
         function onReveal(ev: Event) {
           const d = (ev as CustomEvent<{ path?: string; offset?: number; len?: number }>).detail;
           if (!d || d.path !== pathRef.current || typeof d.offset !== "number") return;

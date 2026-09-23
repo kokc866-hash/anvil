@@ -167,7 +167,7 @@ function checkedEngineResult(result, engine, action) {
 }
 
 /** Editor/play are managed jobs; checks remain bounded and report their actual exit. */
-export async function runEngineCommand(cwd, cmd, timeoutMs, { action = "", env = process.env, resolveBin, readyMs } = {}) {
+export async function runEngineCommand(cwd, cmd, timeoutMs, { action = "", env = process.env, resolveBin, readyMs, signal, keepAbort = false, onStart, onExit } = {}) {
   let folders;
   try {
     const parsed = parseEngineCommand(cmd, { env, resolveBin });
@@ -179,9 +179,9 @@ export async function runEngineCommand(cwd, cmd, timeoutMs, { action = "", env =
     let exited;
     const limit = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, 30 * 60 * 1000) : 120000;
     const result = await spawnRun(parsed.file, args, cwd, limit, env, {
-      detach: detached, show: detached, readyMs,
+      detach: detached, show: detached, readyMs, signal, keepAbort, onStart,
       stdoutFile: path.join(folders.dir, "stdout.log"), stderrFile: path.join(folders.dir, "stderr.log"),
-      onExit(exit) { exited = exit; endRun(folders.id); try { saveRunRecord(folders, pack(exit)); } catch { /* Phase logs remain available. */ } },
+      onExit(exit) { exited = exit; endRun(folders.id); try { saveRunRecord(folders, pack(exit)); } catch { /* Phase logs remain available. */ } onExit?.(pack(exit)); },
     });
     const record = pack(exited || result);
     if (!record.running) endRun(folders.id);

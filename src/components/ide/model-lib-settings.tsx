@@ -56,7 +56,7 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
       const run = Boolean(loaded && (loaded === m.id || loaded === m.alt));
       const inCache = Boolean(cached[m.id]);
       const ready = run || d.ready || inCache;
-      const mark = run ? "läuft" : d.ready ? "auf der Festplatte" : inCache ? "im Cache" : (disk[m.id] || disk[m.alt]) ? "teilweise" : "fehlt";
+      const mark = run ? "läuft" : d.ready ? "lokal gespeichert" : inCache ? "im Cache" : (disk[m.id] || disk[m.alt]) ? "teilweise" : "fehlt";
       next[m.id] = { ready, bytes: d.bytes, mark };
     }
     if (generation === refreshGeneration.current) setLocal(next);
@@ -68,14 +68,14 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
   }, [loadedId, cacheEpoch, q]);
 
   const usedPct = lastQuota.quota ? Math.min(100, Math.round((lastQuota.used / lastQuota.quota) * 100)) : 0;
-  const rank: Record<string, number> = { läuft: 0, "auf der Festplatte": 1, "im Cache": 2, teilweise: 3, fehlt: 4 };
+  const rank: Record<string, number> = { läuft: 0, "lokal gespeichert": 1, "im Cache": 2, teilweise: 3, fehlt: 4 };
 
   function modelRow(m: (typeof BRAIN_MODELS)[number]) {
     const st = local[m.id] || local[m.alt];
     const ready = Boolean(st?.ready);
     const pin = pinHelper.includes(m.id);
     const run = helperOn && (loadedId === m.id || loadedId === m.alt);
-    const mark = st?.mark || (ready ? "auf der Festplatte" : "fehlt");
+    const mark = st?.mark || (ready ? "lokal gespeichert" : "fehlt");
     return (
       <li key={m.id} className={`flex items-center gap-2 px-2 py-1.5 ${run ? "bg-hover" : ""}`}>
         <div className="min-w-0 flex-1">
@@ -83,7 +83,7 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
             {m.label}
             <span className="text-subtle"> · {m.size}</span>
             <span className={run ? "text-ok" : "text-subtle"}> · {mark}</span>
-            {pin ? <span className="text-subtle"> · pin</span> : null}
+            {pin ? <span className="text-subtle"> · angeheftet</span> : null}
           </p>
           <p className="truncate text-[10px] text-subtle">{st?.bytes ? fmtBytes(st.bytes) : m.hint}</p>
         </div>
@@ -92,7 +92,7 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
           className={`text-[10px] ${pin ? "text-fg" : "text-muted"}`}
           onClick={() => useModelLib.getState().togglePinHelper(m.id)}
         >
-          {pin ? "Pin an" : "Pin"}
+          {pin ? "Lösen" : "Anheften"}
         </button>
         <Button
           className="h-7 px-2 text-[11px]"
@@ -101,7 +101,7 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
             setBusy(m.id);
             const report = (p: { progress: number; text: string }) => { setPct(p.progress); setNote(p.text); };
             const job = ready ? updateBrainModel(m.id, report) : prefetchBrain(m.id, report);
-            setNote(ready ? "Aktualisiere Modelldateien…" : "Einmal laden, danach lokal.");
+            setNote(ready ? "Aktualisiere Modelldateien…" : "Modelldateien werden zur lokalen Nutzung heruntergeladen.");
             void job
               .then(() => refresh())
               .catch((err) => setNote(err instanceof Error ? err.message : "Download fehlgeschlagen"))
@@ -122,7 +122,7 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
                 .finally(() => setBusy(""));
             };
             if (useModelLib.getState().keepHelperCache) {
-              void confirmApp(`${m.label} wirklich entfernen?`, { danger: true, ok: "Weg" }).then((ok) => {
+              void confirmApp(`${m.label} wirklich entfernen?`, { danger: true, ok: "Entfernen" }).then((ok) => {
                 if (ok) go();
               });
               return;
@@ -130,7 +130,7 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
             go();
           }}
         >
-          Weg
+          Entfernen
         </Button>
       </li>
     );
@@ -138,21 +138,21 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
 
   return (
     <SettingsSection q={q} className="py-3">
-      <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Helfer lokal</h3>
+      <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Lokale Helfermodelle</h3>
       <p className="mb-3 text-xs text-muted">
-        Agent-Modelle bleiben beim gewählten Anbieter. Hier nur der Helfer: einmal aus dem Netz auf die Festplatte, danach startet er ohne HuggingFace.
-        {desk ? " Dateien liegen im Anvil-Ordner." : " Im Browser: OPFS-Cache (start.bat ist besser)."}
+        Hier verwaltest du die lokalen Helfermodelle. Nach dem einmaligen Download können sie ohne erneuten Abruf von Hugging Face starten. Dein Agent-Modell wird weiterhin über den gewählten Anbieter verwaltet.
+        {desk ? " Die Dateien werden im eingestellten Helferordner gespeichert." : " Im Browser werden die Modelle im lokalen Browserspeicher abgelegt."}
       </p>
       {dir ? <p className="mb-2 font-mono text-[10px] text-subtle break-all">{dir}</p> : null}
 
-      <Row label="Beim Start vorladen" hint="Angepinnte Modelle still auf die Festplatte laden, wenn sie fehlen.">
+      <Row label="Beim Start vorladen" hint="Lädt angeheftete Modelle beim Start im Hintergrund herunter, sofern sie noch nicht lokal gespeichert sind.">
         <Toggle on={prefetchOnStart} onChange={useModelLib.getState().setPrefetchOnStart} />
       </Row>
-      <Row label="Lokal behalten" hint="Alte Helfer-Gewichte bleiben beim Modellwechsel. Weg und Cache löschen fragen nach.">
+      <Row label="Lokal behalten" hint="Behält die Dateien bisheriger Helfermodelle beim Modellwechsel. Vor dem Entfernen oder Leeren des Zwischenspeichers fragt Anvil nach.">
         <Toggle on={keepHelperCache} onChange={useModelLib.getState().setKeepHelperCache} />
       </Row>
       {!desk ? (
-        <Row label="Cache" hint="Nur Browser. Anvil-Fenster schreibt echte Dateien.">
+        <Row label="Cache" hint="Legt den Speicher im Browser fest. Die Desktop-App verwendet Dateien im eingestellten Helferordner.">
           <select
             value={cacheBackend}
             className="h-8 rounded-md border border-border bg-bg px-2 text-sm text-fg"

@@ -132,6 +132,21 @@ jobs:
       - name: Long-run screenshot retention and renderer crash recovery
         run: node scripts/renderer-recovery.browser.mjs
         timeout-minutes: 3
+      - name: Optional background agent survives renderer crash
+        run: node scripts/background-agent.browser.mjs
+        timeout-minutes: 3
+      - name: Background file actions, native execution and separate preview
+        run: node scripts/background-stage2.browser.mjs
+        timeout-minutes: 3
+      - name: Background OAuth services, CLI transport and permission revocation
+        run: node scripts/background-stage3.browser.mjs
+        timeout-minutes: 3
+      - name: Background image upload, preview capture and recovery
+        run: node scripts/background-stage4.browser.mjs
+        timeout-minutes: 3
+      - name: Background full restart, explicit resume, Git and file restoration
+        run: node scripts/background-stage5.browser.mjs
+        timeout-minutes: 3
       - name: Service login, automatic reconnect and Neon compatibility
         run: node scripts/services.browser.mjs
         timeout-minutes: 5

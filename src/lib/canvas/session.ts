@@ -136,7 +136,7 @@ export async function canvasCommand(
       ? local.load(String(args.html || ""), args.restart === true, signal)
       : local.command(op, args, signal);
   const transport = bus();
-  if (!transport) throw new Error("Verbindung zum Run-Fenster fehlt.");
+  if (!transport) throw new Error("Es besteht keine Verbindung zum Ausgabefenster.");
   return new Promise((resolve, reject) => {
     const request = id();
     const finish = (error?: Error, result?: CanvasReply) => {
@@ -150,7 +150,7 @@ export async function canvasCommand(
       finish(new DOMException("Abgebrochen", "AbortError"));
     };
     const timer = setTimeout(
-      () => finish(new Error("Run-Fenster antwortet nicht. Fenster öffnen und erneut starten.")),
+      () => finish(new Error("Das Ausgabefenster antwortet nicht. Öffne es und starte die Ausführung erneut.")),
       15000,
     );
     remoteReplies.set(request, (d) => {
@@ -433,13 +433,13 @@ export function registerCanvasFrame(
         rejectPending(new Error("Canvas-Lauf wurde gestoppt."));
         el.onload = null;
         el.srcdoc =
-          '<!doctype html><html><body style="background:#0a0a0b;color:#aaa;font:14px system-ui">Gestoppt. Run startet neu.</body></html>';
+          '<!doctype html><html><body style="background:#0a0a0b;color:#aaa;font:14px system-ui">Die Ausführung wurde gestoppt. Mit „Ausführen“ kannst du sie erneut starten.</body></html>';
         ready = Promise.resolve(stopped);
         options.onState?.(stopped);
         return stopped;
       }
       if (stopped)
-        return { ...stopped, ok: false, error: "Canvas-Lauf wurde gestoppt. Mit Run neu starten." };
+        return { ...stopped, ok: false, error: "Die Canvas-Ausführung wurde gestoppt. Wähle „Ausführen“, um sie erneut zu starten." };
       if (op !== "keys-up" && op !== "dispose") await ready;
       if (signal?.aborted) throw new DOMException("Abgebrochen", "AbortError");
       if (typeof args.expectedSession === "string" && args.expectedSession !== boot?.session)

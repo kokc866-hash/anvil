@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityBar } from "./activity-bar";
+import { startBackgroundAgentMonitor } from "@/lib/background-agent";
 import { AgentSupportPane } from "./agent-support-pane";
 import { HelpGuide } from "./help-guide";
 import { useHelpTour } from "@/lib/help-guide";
@@ -137,7 +138,10 @@ export function Workspace() {
   useEffect(() => {
     const done = useIde.persist.rehydrate();
     let stopSync: (() => void) | undefined;
+    let stopBackground: (() => void) | undefined;
+    let disposed = false;
     void Promise.resolve(done).then(() => {
+      if (disposed) return;
       const files = { ...useIde.getState().files };
       for (const p of DEMO_PATHS) delete files[p];
       // Fresh workspaces already receive defaults in the store. Rehydration
@@ -160,7 +164,6 @@ export function Workspace() {
         agentBusy: false,
         agentStartedAt: 0,
         running: false,
-        agentQueue: [],
       });
       if (useIde.getState().llmProvider === "brain") useIde.getState().setLlmProvider("ollama");
       reloadPlugins(useIde.getState().files);
@@ -231,17 +234,18 @@ export function Workspace() {
             st.applyFiles(overlayDiskTree(pack.files, withoutStaleSeedFiles(cur.files, pack.files, cur.dirty), cur.dirty), pack.dirs, { keepDirty: true });
             void import("@/lib/disk-sync").then((d) => { if (cur.workspaceEpoch === useIde.getState().workspaceEpoch) d.noteDiskContents(pack.files); });
           } catch {
-            st.setNotice("Workspace-Ordner in Einstellungen → Speicher erneut erlauben");
+            st.setNotice("Erlaube unter Einstellungen → Speicher erneut den Zugriff auf den Projektordner.");
           }
         }
         await resumeRestore();
         void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
       });
       stopSync = startIdeSync();
+      stopBackground = startBackgroundAgentMonitor();
       void import("@/lib/model-context").then((m) => m.applyCloudContext());
       void import("@/lib/app-update").then((u) => u.bootUpdateCheck());
     });
-    return () => stopSync?.();
+    return () => { disposed = true; stopSync?.(); stopBackground?.(); };
   }, []);
 
   useEffect(() => {
@@ -819,7 +823,7 @@ export function Workspace() {
             type="button"
             className="ui-overlay absolute inset-y-0 z-20 bg-bg/50"
             style={{ left: ACTIVITY_W, right: rightChrome }}
-            aria-label="Sidebar schließen"
+            aria-label="Seitenleiste schließen"
             onClick={() => useIde.getState().setSidebar(null)}
           />
           <aside

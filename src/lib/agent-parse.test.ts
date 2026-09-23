@@ -34,6 +34,12 @@ test("fix prompt from Probleme-Leiste", () => {
   assert.ok(isFixPrompt("Behebe diese Probleme:\n- x"));
 });
 
+test("repeat-run action keeps repair routing with revised and older German wording", () => {
+  assert.ok(isFixPrompt("Führe main.py erneut aus und behebe auftretende Fehler."));
+  assert.ok(isFixPrompt("Führe main.py nochmal aus. Bei Fehler patchen."));
+  assert.equal(isFixPrompt("Erkläre main.py."), false);
+});
+
 test("incomplete announcement is detected", () => {
   assert.ok(looksIncomplete("Als nächstes schreibe ich die Datei."));
   assert.ok(looksIncomplete("I'll write the tests now."));

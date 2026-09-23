@@ -25,7 +25,7 @@ export function serverLaunch(root, isPackaged, port = 8080, mode = "development"
     const packed = packedServerPath(root);
     if (!existsSync(packed)) {
       return { error: isPackaged
-        ? "UI fehlt in der Installation. Bitte die aktuelle Setup-exe von GitHub Releases nehmen."
+        ? "Die Installation enthält keine Benutzeroberfläche. Installiere Anvil erneut mit der aktuellen Setup-EXE von GitHub Releases."
         : "Die gebaute Testversion fehlt. Bitte zuerst test.bat ausführen." };
     }
     return { kind: "packed", args: [packed], extraEnv: packedServerEnv(port) };
@@ -33,7 +33,7 @@ export function serverLaunch(root, isPackaged, port = 8080, mode = "development"
   const wrapper = join(root, "scripts", "with-app-env.mjs");
   const vite = viteBinPath(root);
   if (!existsSync(vite)) {
-    return { error: "Vite fehlt. Einmal install.bat / npm install." };
+    return { error: "Die Entwicklungsumgebung ist unvollständig: Vite fehlt. Führe install.bat oder npm install aus." };
   }
   if (!existsSync(wrapper)) {
     return { error: "Startskript fehlt: " + wrapper };

@@ -1,10 +1,10 @@
 # Canvas und HTML-Ausgabe
 
-Anvil stellt in der HTML-Ausgabe die globale API `Anvil` bereit. Vorschau, Run-Fenster und Agent verwenden denselben Projekt-Lader. Der Agent steuert die geöffnete Ausgabe; es gibt keine versteckte zweite Programmkopie.
+Anvil stellt in der HTML-Ausgabe die globale API `Anvil` bereit. Vorschau, Ausgabefenster und Agent verwenden denselben Projekt-Lader. Der Agent steuert die geöffnete Ausgabe; es gibt keine versteckte zweite Programmkopie.
 
 ## Starten und bedienen
 
-- **Run** startet das Dokument vollständig neu, auch bei unverändertem Code.
+- **Ausführen** startet das Dokument vollständig neu, auch bei unverändertem Code.
 - **Pause / Weiter** hält die Simulation einer Anvil-Canvas-Instanz an bzw. setzt sie fort.
 - **Stop** beendet das gesamte Ausgabedokument einschließlich eigener JavaScript-Schleifen.
 - Schließen entfernt die Ausgabe und ihre Ressourcen.

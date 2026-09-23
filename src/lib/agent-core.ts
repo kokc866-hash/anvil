@@ -1,4 +1,5 @@
 import { resolvedUsage, type ReportedUsage, type TokenUsage, type RequestTokens } from "./token-usage";
+import { verifyExpectedExit } from "../../electron/expected-exit.mjs";
 import { AgentEvidence, verifiedReply, type Verification } from "./agent-evidence.ts";
 import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { parseTextTool, validateToolCall, isToolStall, type ToolContract } from "./tool-compat";
@@ -6,7 +7,7 @@ import { toolCallFingerprint } from "./tool-call-fingerprint.ts";
 import type { ToolLearningBridge } from "./tool-learning";
 import { CANVAS_AGENT_GUIDE } from "./canvas/reference";
 import { compactMessages, COMPACT_MARK, type CompactMode } from "./compact.ts";
-import { throwIfAborted, isAbortLike, agentGen, AgentAbortError } from "./abort";
+import { throwIfAborted, isAbortLike, agentGen, AgentAbortError } from "./agent-abort";
 import { ANVIL_SURFACE, surfaceBlockWrite, toolsAllowed, type SurfaceMode } from "./surface";
 import { enginePrompt, primaryEngine } from "./engines";
 import { afterTool, applyHarnessTool, loadProjectGraph, loadProjectHarness, mergeOpts, projectHarnessPrompt } from "./harness-project";
@@ -55,7 +56,7 @@ export type AgentCommand =
   | { cmd: "git_push"; message: string }
   | { cmd: "git_status" }
   | { cmd: "git_commit"; message: string }
-  | { cmd: "shell"; command: string }
+  | { cmd: "shell"; command: string; expectedExitCode?: number }
   | { cmd: "debug"; action: string; args: Record<string, unknown> }
   | { cmd: "learn"; action: string; args: Record<string, unknown> }
   | { cmd: "mcp"; action: "list" | "call" | "read" | "output"; server?: string; name?: string; args?: unknown }
@@ -109,7 +110,7 @@ export function pickAgentTools(opts: ToolPick = {}): typeof AGENT_TOOLS {
 
 export { pinHistory, applyGitClone };
 
-export const AGENT_SYSTEM = `You are Anvil's main model. Change the workspace only through the given tools. Prose without a tool ends the job.
+export const AGENT_SYSTEM = `You are Anvil's main model. Change the workspace only through the given tools. While work remains, continue using tools. When the task is finished, give a concise final answer without tool calls; this ends the job. There is no separate report tool.
 Always reply in the user's language (German if they write German).
 
 Flow:
@@ -366,8 +367,11 @@ export function applyTool(
   if (name === "delete_file") {
     const path = norm(String(args.path ?? ""));
     if (secretPath(path)) return { result: { error: `secret: ${path}`, path } };
-    const ok = files.delete(path);
-    if (ok) deleted.push(path);
+    const targets=[...files.keys()].filter(p=>p===path||p.startsWith(path+'/'));
+    if(targets.some(secretPath))return {result:{error:`secret: ${path}`,path}};
+    const ok=targets.length>0||dirs.has(path);
+    for(const p of targets){files.delete(p);deleted.push(p);}
+    for(const p of [...dirs])if(p===path||p.startsWith(path+'/'))dirs.delete(p);
     return { result: { ok, path }, event: ok ? { op: "delete", path } : undefined };
   }
   if (name === "mkdir") {
@@ -455,7 +459,9 @@ export function applyTool(
   if (name === "shell") {
     const command = String(args.command ?? "").trim();
     if (!command) return { result: { error: "command required" } };
-    return { result: { running: command }, command: { cmd: "shell", command } };
+    const expected = args.expected_exit_code;
+    if (expected !== undefined && (typeof expected !== "number" || !Number.isInteger(expected) || expected < 0 || expected > 255)) return { result: { error: "expected_exit_code must be an integer from 0 to 255" } };
+    return { result: { running: command }, command: { cmd: "shell", command, expectedExitCode: expected as number | undefined } };
   }
   if (name === "fetch_url") return { result: { fetch: String(args.url ?? "") }, command: { cmd: "fetch", url: String(args.url ?? "") } };
   if (name.startsWith("debug_")) {
@@ -609,6 +615,7 @@ export async function runAgentLoop(
   },
   complete: (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => Promise<LlmChoice>,
   opts?: {
+    onNotice?: (kind: string, text: string) => void;
     verify?: (paths: string[]) => Promise<{ ok: boolean; detail: string }>;
     fetchUrl?: (url: string) => Promise<string>;
     onDelta?: (s: string, kind?: "text" | "think") => void;
@@ -622,7 +629,7 @@ export async function runAgentLoop(
     gitPush?: (message: string, files: Record<string, string>) => Promise<{ sha: string; repo: string }>;
     gitStatus?: () => Promise<unknown>;
     gitCommit?: (message: string) => Promise<unknown>;
-    shell?: (command: string, files: Record<string, string>) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+    shell?: (command: string, files: Record<string, string>, expectedExitCode?: number) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
     debug?: (action: string, args: Record<string, unknown>) => Promise<unknown>;
     learn?: (action: string, args: Record<string, unknown>) => Promise<unknown>;
     summarize?: (blob: string) => Promise<string>;
@@ -820,7 +827,7 @@ export async function runAgentLoop(
         messages.push({
           role: "user",
           content: say(
-            "Verbindung weg. Nicht von vorn. Nächstes Tool: write_file, append_file, edit_file oder read_file.",
+            "Die Verbindung wurde unterbrochen. Setze die bisherige Arbeit fort, ohne bereits erledigte Schritte zu wiederholen. Verwende als Nächstes write_file, append_file, edit_file oder read_file.",
             "Connection dropped. Do not start over. Next tool: write_file, append_file, edit_file, or read_file.",
           ),
         });
@@ -850,7 +857,7 @@ export async function runAgentLoop(
     if (!toolCalls.length) {
       const text = choice.content?.trim() || "";
       if (!toolContract && isToolTemplateEcho(text)) {
-        return packResult(say("Das Modell hat das Tool-Schema nachgeschrieben statt ein Tool aufzurufen. Bei Qwen + llama.cpp: Denken auf aus, nochmal senden.", "The model echoed the tool schema instead of calling a tool. For Qwen + llama.cpp: turn thinking off and send again."));
+        return packResult(say("Das Modell hat die Werkzeugbeschreibung ausgegeben, statt ein Werkzeug aufzurufen. Bei Qwen mit llama.cpp: Deaktiviere den Denkaufwand und sende die Nachricht erneut.", "The model echoed the tool schema instead of calling a tool. For Qwen + llama.cpp: turn thinking off and send again."));
       }
       const blocks = observeOnly || toolContract ? [] : extractFileBlocks(text);
       if (blocks.length) {
@@ -906,18 +913,18 @@ export async function runAgentLoop(
         const stalled = !askPickedNone(ask) && isToolStall(ask, completedTools, text, choice.finish_reason);
         if (stalled && (autoContinue || round + 1 < cap) && opts?.tryTextFallback?.()) {
           beforeTextFallback = new Set(completedChanges);
-          void import("./app-log").then((m) => m.appLog("cap", "Für diesen Auftrag einmal auf Text-Tools gewechselt; keine dauerhafte Einschränkung."));
+          opts?.onNotice?.("cap", "Für diesen Auftrag einmal auf Text-Tools gewechselt; keine dauerhafte Einschränkung.");
           messages.push({ role: "user", content: say(
             'Auftrag noch offen. Ab jetzt Text-Tools: ein JSON-Objekt mit name und arguments. Vorhandene Tool-Ergebnisse gelten weiter. Bereits ausgeführte Änderungen nicht wiederholen.',
             'Task still open. Use text tools: one JSON object with name and arguments. Keep previous tool results; never replay completed changes.',
           ) });
           continue;
         }
-        return packResult(text || say("Modell hat ohne Werkzeugaufruf aufgehört.", "Model stopped without a tool call."), !text || stalled ? { ok: false, error: "tool-stall" } : {});
+        return packResult(text || say("Das Modell hat die Antwort beendet, ohne ein Werkzeug aufzurufen.", "Model stopped without a tool call."), !text || stalled ? { ok: false, error: "tool-stall" } : {});
       }
       const must = open || looksStoppedEarly(choice) || looksLikeNoTools(text) || emptyHits === 1;
       if (emptyHits >= 2) {
-        return packResult(text || say("Modell hat ohne Tool aufgehört.", "Model stopped without a tool."));
+        return packResult(text || say("Das Modell hat die Antwort beendet, ohne ein Werkzeug aufzurufen.", "Model stopped without a tool."));
       }
       if (must && askPickedNone(ask)) {
         return packResult(text || say("Fertig.", "Done."));
@@ -1000,9 +1007,9 @@ export async function runAgentLoop(
       const blocked =
         opts?.toolLearning?.before(tc) ||
         checked?.error ||
-        (observeOnly && !observeTool(tc.function.name) && tc.function.name !== "select_tools" ? say("Ask-Modus: nur lesen.", "Ask mode: read only.") : null) ||
+        (observeOnly && !observeTool(tc.function.name) && tc.function.name !== "select_tools" ? say("Im Modus „Fragen“ sind nur Lesezugriffe erlaubt.", "Ask mode: read only.") : null) ||
         (observeOnly && mutateTool(tc.function.name)
-          ? say(`Ask-Modus: kein ${tc.function.name}. Nur lesen.`, `Ask mode: no ${tc.function.name}. Read only.`)
+          ? say(`Im Modus „Fragen“ ist ${tc.function.name} nicht verfügbar. Es sind nur Lesezugriffe erlaubt.`, `Ask mode: no ${tc.function.name}. Read only.`)
           : null) ||
         surfaceBlockWrite(data.surfaceId || ANVIL_SURFACE, data.surfaceMode || "exclusive", tc.function.name) ||
         (!toolsAllowed(data.surfaceId || ANVIL_SURFACE, data.surfaceMode || "exclusive", tc.function.name)
@@ -1066,7 +1073,15 @@ export async function runAgentLoop(
       let mcpImages: string[] = [];
       if (command) {
         try {
-          result = await runCommand(command, files, dirs, deleted, opts);
+          result = await runCommand(command, files, dirs, deleted, opts?.onWorkspace?{...opts,onWorkspace:async event=>{
+            await opts.onWorkspace!(event);
+            if(['write','delete','rename','mkdir'].includes(event.op))evidence.changed();
+          }}:opts);
+          if(result&&typeof result==='object'&&'workspaceChanged' in result){
+            const changedResult={...result as Record<string,unknown>};
+            if(changedResult.workspaceChanged===true&&!opts?.onWorkspace)evidence.changed();
+            delete changedResult.workspaceChanged;result=changedResult;
+          }
           if (command.cmd === "mcp" && result && typeof result === "object") {
             const copy = { ...result as Record<string, unknown> };
             mcpImages = Array.isArray(copy.mcpImages) ? copy.mcpImages.filter((i): i is string => typeof i === "string") : [];
@@ -1264,12 +1279,12 @@ export async function runAgentLoop(
     }
   }
 
-  void import("./intern").then((m) => m.note("agent", lastFail ? "Runden-Limit nach Fehler" : "Maximale Tool-Runden erreicht"));
+  opts?.onNotice?.("agent", lastFail ? "Rundenlimit nach einem Fehler erreicht" : "Maximale Anzahl an Arbeitsrunden erreicht");
   const clean = lastFail ? scrubRunError(lastFail) : "";
   return packResult(
     lastFail
-      ? say(`Unterbrochen: Rundenlimit ${cap}/${cap} erreicht. Letzter Fehler:\n${clean}\nBisherige Änderungen bleiben erhalten. Hier fortsetzen, nicht neu beginnen.`, `Paused: Round limit ${cap}/${cap} reached. Last error:\n${clean}\nExisting changes are preserved. Continue here, do not restart.`)
-      : say(`Unterbrochen: Rundenlimit ${cap}/${cap} erreicht. Auftrag noch offen. Automatisch weiterarbeiten unter Einstellungen → Agent aktivieren oder hier fortsetzen.`, `Paused: Round limit ${cap}/${cap} reached. Task still open. Enable automatic continuation under Settings → Agent or continue here.`),
+      ? say(`Der Auftrag wurde nach ${cap} Arbeitsrunden unterbrochen. Letzter Fehler:\n${clean}\nBisherige Änderungen bleiben erhalten. Sende eine weitere Nachricht, um den Auftrag fortzusetzen.`, `Paused: Round limit ${cap}/${cap} reached. Last error:\n${clean}\nExisting changes are preserved. Continue here, do not restart.`)
+      : say(`Die maximale Anzahl von ${cap} Arbeitsrunden wurde erreicht. Der Auftrag ist noch nicht abgeschlossen. Aktiviere „Automatisch weiterarbeiten“ unter Einstellungen → Agent oder sende eine weitere Nachricht, um fortzufahren.`, `Paused: Round limit ${cap}/${cap} reached. Task still open. Enable automatic continuation under Settings → Agent or continue here.`),
     { ok: false, error: lastFail ? clean : "Rundenlimit", stopReason: "round-limit" },
   );
 }
@@ -1300,7 +1315,7 @@ async function runCommand(
     gitPush?: (message: string, files: Record<string, string>) => Promise<{ sha: string; repo: string }>;
     gitStatus?: () => Promise<unknown>;
     gitCommit?: (message: string) => Promise<unknown>;
-    shell?: (command: string, files: Record<string, string>) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+    shell?: (command: string, files: Record<string, string>, expectedExitCode?: number) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
     debug?: (action: string, args: Record<string, unknown>) => Promise<unknown>;
     learn?: (action: string, args: Record<string, unknown>) => Promise<unknown>;
     mcp?: (action: "list" | "call" | "read" | "output", server?: string, name?: string, args?: unknown) => Promise<unknown>;
@@ -1320,9 +1335,11 @@ async function runCommand(
     if (cur == null) return { error: `not found: ${command.path}` };
     if (!opts?.formatFile) return { error: "format not available" };
     const content = await opts.formatFile(command.path, cur);
-    files.set(command.path, content);
-    if (opts.onWorkspace) await opts.onWorkspace({ op: "write", path: command.path, content });
-    return { ok: true, path: command.path };
+    if(content!==cur){
+      if (opts.onWorkspace) await opts.onWorkspace({ op: "write", path: command.path, content });
+      files.set(command.path, content);
+    }
+    return { ok: true, path: command.path,workspaceChanged:content!==cur };
   }
   if (command.cmd === "git_status") {
     if (!opts?.gitStatus) return { error: "git not available" };
@@ -1358,8 +1375,8 @@ async function runCommand(
   }
   if (command.cmd === "shell") {
     if (!opts?.shell) return { error: "shell not available" };
-    return await opts.shell(command.command, Object.fromEntries(files)).then((r) =>
-      r && typeof r === "object" ? { ...r, command: command.command } : r,
+    return await opts.shell(command.command, Object.fromEntries(files), command.expectedExitCode).then((r) =>
+      r && typeof r === "object" ? { ...verifyExpectedExit(r, command.expectedExitCode), command: command.command } : r,
     );
   }
   if (command.cmd === "debug") {
@@ -1368,7 +1385,27 @@ async function runCommand(
   }
   if (command.cmd === "learn") {
     if (!opts?.learn) return { error: "learn not available" };
-    return await opts.learn(command.action, command.args);
+    const learned=await opts.learn(command.action, command.args);
+    if(!learned||typeof learned!=='object')return learned;
+    const result={...learned as Record<string,unknown>};
+    const writes=result.workspaceWrites;
+    delete result.workspaceWrites;delete result.knowledgeEvents;
+    if(Array.isArray(writes)&&writes.length){
+      if(writes.length>8||!opts.onWorkspace)throw Error('Skill-Dateien können hier nicht gesichert werden.');
+      for(const write of writes){
+        const path=write?.path;
+        if(typeof path!=='string'||!path||norm(path)!==path||/[\\:\x00-\x1f]/.test(path)||path.split('/').some(p=>['.','..','__proto__','constructor','prototype'].includes(p))||secretPath(path)||typeof write.content!=='string'||write.content.length>200000)
+          throw Error('Ungültige Skill-Datei.');
+        if((files.get(path)??null)!==write.before)throw Error(`Skill-Datei inzwischen geändert: ${path}. Gespeichertes Wissen bleibt erhalten; Datei zuerst abgleichen.`);
+      }
+      for(const write of writes){
+        if(write.content===write.before)continue;
+        await opts.onWorkspace({op:'write',path:write.path,content:write.content});
+        files.set(write.path,write.content);for(const dir of parents(write.path))dirs.add(dir);
+        result.workspaceChanged=true;
+      }
+    }
+    return result;
   }
   if (command.cmd === "mcp") {
     if (!opts?.mcp) return { error: "Kein MCP-Server in Einstellungen." };

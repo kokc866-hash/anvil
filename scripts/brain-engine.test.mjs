@@ -263,6 +263,18 @@ test("helper lifecycle and integrations (no GPU, model download or external requ
       assert.equal(apps.getTabHint("same.ts"), "");
     }
   });
+  await t.test("helper hints require a real successful suggestion, never a diagnostic fallback", async () => {
+    await reset(); await e.unloadBrain();
+    useIde.setState({ lspProblems: [{ path: "same.ts", line: 1, message: "Diagnostic only", severity: "warning" }] });
+    assert.deepEqual(await apps.brainSuggestPrompts(), []);
+    assert.deepEqual(useBrain.getState().prompts, []);
+    for (const [reply, expected] of [['{"prompts":[]}', []], ['{"prompts":["Prüfe den Import in same.ts."]}', ["Prüfe den Import in same.ts."]]]) {
+      await reset();
+      e.fixtureEngine({ chat: { completions: { create: async () => result(reply) } } });
+      assert.deepEqual(await apps.brainSuggestPrompts(), expected);
+      assert.deepEqual(useBrain.getState().prompts, expected);
+    }
+  });
   await t.test("disabled memory and autonomy block helper work; explicit Ask keeps the question", async () => {
     await reset(); let calls = [];
     e.fixtureEngine({ chat: { completions: { create: async (payload) => { calls.push(payload); return result("A short answer"); } } } });

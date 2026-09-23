@@ -6,7 +6,7 @@ Unter **Einstellungen → Orientierung** findest du Aufgaben statt einer Liste t
 
 ## Zuschaltbare Hilfe
 
-Unter **Einstellungen → Orientierung → Erklärhilfen und Tour** lässt sich die ausführliche Hilfe einschalten. Bleibe mit der Maus auf einem der wichtigsten Bedienelemente oder wähle es mit Tab aus. Die Erklärung enthält eine Schaltfläche zum passenden Tour-Schritt. Mit **F1** wechselst du vom Bedienelement in die Hilfe, mit **Esc** schließt du sie. Die bisherigen kurzen Beschriftungen bleiben bei ausgeschalteter Erklärhilfe verfügbar.
+Unter **Einstellungen → Orientierung → Erklärhilfen und Tour** kannst du die ausführliche Hilfe einschalten. Halte den Mauszeiger über eines der wichtigsten Bedienelemente oder wähle es mit der Tab-Taste aus. Die Erklärung enthält eine Schaltfläche zum passenden Schritt der Tour. Mit **F1** wechselst du vom Bedienelement in die Hilfe, mit **Esc** schließt du sie. Die kurzen Beschriftungen bleiben auch bei ausgeschalteter Erklärhilfe verfügbar.
 
 Die Verzögerung ist auf 0,4, 0,9 oder 1,8 Sekunden einstellbar. Die zeigende Hand der Tour ist separat abschaltbar. Beide Einstellungen bleiben gespeichert und sind Bestandteil der Einstellungssicherung; die Tour startet nur auf deinen Wunsch.
 
@@ -20,7 +20,7 @@ Für den Chat wählst du unter **Agent** Anbieter, Anmeldung und Modell. Den zus
 
 ## Fragen oder Agent?
 
-- **Fragen:** erklären und untersuchen. Anvil sendet den Auftrag mit ausschließlich lesenden Projektwerkzeugen. Reparaturwörter wie „Behebe …“ schalten den Modus nicht mehr automatisch um. Auch Kurzbefehle im Chat werden in diesem Modus als Fragen behandelt. Die normalen Schaltflächen der App funktionieren weiterhin.
+- **Fragen:** erklärt und untersucht. Anvil sendet den Auftrag mit ausschließlich lesenden Projektwerkzeugen. Aufforderungen wie „Behebe …“ schalten den Modus nicht automatisch um. Auch Kurzbefehle im Chat werden in diesem Modus als Fragen behandelt. Die normalen Schaltflächen der App funktionieren weiterhin.
 - **Agent:** kann Dateien bearbeiten und verfügbare Werkzeuge ausführen. Ob Dateiänderungen automatisch übernommen werden, richtet sich weiterhin nach deiner Einstellung.
 
 Der Hinweis unter dem Modusschalter bleibt auch bei einem vorhandenen Gespräch sichtbar. Eine Modusänderung ersetzt keine bereits laufende Aufgabe; für eine neue Aufgabe gilt die beim Senden gewählte Einstellung.

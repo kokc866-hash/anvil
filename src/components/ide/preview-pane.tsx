@@ -42,7 +42,7 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
     <div className="flex h-full min-h-0 flex-col bg-surface">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
         <span className="min-w-0 flex-1 truncate text-xs text-muted">
-          {popout ? "Run" : "Vorschau"}
+          {popout ? "Ausführung" : "Vorschau"}
           {path ? ` · ${path}` : ""}
           {view?.kind === "iframe" ? ` · ${view.label}` : ""}
         </span>
@@ -66,7 +66,7 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
           }}
         >
           <Play className="size-3" />
-          Run
+          Ausführung
         </Button>
         {popout ? (
           <>
@@ -83,7 +83,7 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
               variant="quiet"
               className="h-7 w-7 p-0"
               title="Eigenes Fenster"
-              aria-label="Run-Fenster"
+              aria-label="Ausgabefenster"
               onClick={() => openRunWindow()}
             >
               <SquareArrowOutUpRight className="size-3.5" />
@@ -96,7 +96,7 @@ export function PreviewPane({ popout = false }: { popout?: boolean }) {
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {!path || !view ? (
-          <p className="p-3 text-sm text-muted">Keine Datei.</p>
+          <p className="p-3 text-sm text-muted">Keine Datei ausgewählt.</p>
         ) : view.kind === "md" ? (
           <div
             className="preview-md min-h-0 flex-1 overflow-auto px-4 py-3 text-sm leading-6 text-fg"
@@ -205,7 +205,7 @@ function GameFrame({ srcDoc, scope, popout }: { srcDoc: string; scope: string; p
         <Button variant="quiet" className="h-6 px-2 text-xs" disabled={!state || !["running", "paused"].includes(state.state)} onClick={() => control("pause", { paused: state?.state !== "paused" })}>
           {state?.state === "paused" ? <Play className="size-3" /> : <Pause className="size-3" />}{state?.state === "paused" ? "Weiter" : "Pause"}
         </Button>
-        <Button variant="quiet" className="h-6 px-2 text-xs" disabled={!state || ["stopped", "disposed"].includes(state.state)} onClick={() => control("stop")}><Square className="size-3" />Stop</Button>
+        <Button variant="quiet" className="h-6 px-2 text-xs" disabled={!state || ["stopped", "disposed"].includes(state.state)} onClick={() => control("stop")}><Square className="size-3" />Stoppen</Button>
       </div>
       {state?.error ? <pre role="alert" className="max-h-28 shrink-0 overflow-auto border-b border-border px-2 py-1 text-xs whitespace-pre-wrap text-danger">{state.error}</pre> : null}
       <iframe ref={ref} title="Vorschau" tabIndex={0} sandbox="allow-scripts allow-pointer-lock allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 bg-bg" />

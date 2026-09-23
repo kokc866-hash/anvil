@@ -74,13 +74,13 @@ export function StorageSection({ q }: { q: string }) {
         kind === "helper"
           ? `Helfer-Modelle: ${next.helper}`
           : kind === "logs"
-            ? `Logs: ${next.logs}`
+            ? `Protokollordner: ${next.logs}`
             : kind === "packages"
               ? `Pakete: ${next.packages}`
               : `App-Daten: ${next.data}`,
       );
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Ordner nicht gewählt");
+      setNotice(err instanceof Error ? err.message : "Kein Ordner ausgewählt.");
     }
   }
 
@@ -91,7 +91,7 @@ export function StorageSection({ q }: { q: string }) {
         "anvil-settings.json",
         JSON.stringify(exportSettingsPack(), null, 2),
       );
-      setNotice(`Einstellungen → ${p}`);
+      setNotice(`Einstellungen gespeichert: ${p}`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Sichern fehlgeschlagen");
     }
@@ -102,12 +102,12 @@ export function StorageSection({ q }: { q: string }) {
     try {
       const raw = await native.pathsRead("anvil-settings.json");
       if (!raw) {
-        setNotice("Keine anvil-settings.json in App-Daten");
+        setNotice("Im Anwendungsdatenordner wurde keine anvil-settings.json gefunden.");
         return;
       }
       applySettingsPack(JSON.parse(raw) as Record<string, unknown>);
       applyLang(useIde.getState().locale);
-      setNotice("Einstellungen aus App-Daten geladen");
+      setNotice("Einstellungen aus dem Anwendungsdatenordner geladen.");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Laden fehlgeschlagen");
     }
@@ -126,21 +126,21 @@ export function StorageSection({ q }: { q: string }) {
         const n = Object.keys(pack.files).length;
         setNotice(
           pack.skipped
-            ? `${n} Dateien, ${pack.skipped} übersprungen (${name})`
-            : `${n} Dateien aus ${name}`,
+            ? `${n} Dateien aus ${name} geladen; ${pack.skipped} Dateien übersprungen.`
+            : `${n} Dateien aus ${name} geladen.`,
         );
       } else {
         setNotice(`Speicherort: ${name}`);
       }
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Ordner nicht gewählt");
+      setNotice(err instanceof Error ? err.message : "Kein Ordner ausgewählt.");
     }
   }
 
   async function saveNow(slot: DiskSlot) {
     try {
       await saveSlot(slot, useIde.getState().files, useIde.getState().dirs);
-      setNotice(slot === "backup" ? "Backup geschrieben" : "Auf Platte gespeichert");
+      setNotice(slot === "backup" ? "Sicherungskopie erstellt." : "Im Projektordner gespeichert.");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Speichern fehlgeschlagen");
     }
@@ -150,14 +150,14 @@ export function StorageSection({ q }: { q: string }) {
     await clearLocation(slot);
     if (slot === "workspace") setDiskName("");
     else setBackupName("");
-    setNotice("Ordner getrennt");
+    setNotice("Ordnerverbindung getrennt. Die Dateien bleiben erhalten.");
   }
 
   return (
     <SettingsSection q={q}>
       <Head>Speicher</Head>
       <Vis q={q} label="Speicherort Browser Ordner">
-        <Row label="Arbeitskopie" hint="Browser bleibt immer. Ordner zusätzlich auf der Platte.">
+        <Row label="Arbeitskopie" hint="Anvil behält eine Arbeitskopie im lokalen Anwendungsspeicher. Mit „Ordner“ werden die Dateien zusätzlich in einem Projektordner gespeichert.">
           <Seg<StorageMode>
             value={storageMode}
             onChange={(v) => {
@@ -174,11 +174,11 @@ export function StorageSection({ q }: { q: string }) {
       </Vis>
       {!ok ? (
         <p className="py-2 text-xs text-muted text-pretty">
-          Ordnerwahl braucht Chrome oder Edge als eigene Seite — nicht in einem iframe.
+          Um einen Ordner auszuwählen, öffne Anvil direkt in Chrome oder Edge. In einer eingebetteten Ansicht ist die Ordnerauswahl nicht verfügbar.
         </p>
       ) : null}
       <Vis q={q} label="Workspace Ordner Projekt wählen laden">
-        <p className="pt-3 text-xs font-medium text-fg">Workspace</p>
+        <p className="pt-3 text-xs font-medium text-fg">Projektordner</p>
         <p className="text-xs text-muted">
           {diskName || locationName("workspace") || "Kein Ordner gewählt"}
         </p>
@@ -198,26 +198,26 @@ export function StorageSection({ q }: { q: string }) {
         </div>
       </Vis>
       <Vis q={q} label="Beim Start vom Ordner laden">
-        <Row label="Beim Start laden" hint="Workspace-Ordner nach dem Öffnen der App">
+        <Row label="Beim Start laden" hint="Lädt den gewählten Projektordner beim Start von Anvil.">
           <Toggle on={loadOnStart} onChange={setLoadOnStart} />
         </Row>
       </Vis>
       <Vis q={q} label="Automatisch auf Platte speichern">
-        <Row label="Automatisch speichern" hint="Kurz nach Änderungen in den Workspace-Ordner">
+        <Row label="Automatisch speichern" hint="Speichert Änderungen nach kurzer Verzögerung im Projektordner.">
           <Toggle on={autoSaveDisk} onChange={setAutoSaveDisk} />
         </Row>
       </Vis>
       <Vis q={q} label="Backup Ordner Kopie">
-        <p className="pt-3 text-xs font-medium text-fg">Backup</p>
+        <p className="pt-3 text-xs font-medium text-fg">Sicherungskopie</p>
         <p className="text-xs text-muted">
-          {backupName || locationName("backup") || "Kein Backup-Ordner"}
+          {backupName || locationName("backup") || "Kein Sicherungsordner ausgewählt"}
         </p>
         <div className="flex flex-wrap gap-1.5 py-2">
           <Button className="h-8" onClick={() => void choose("backup", false)}>
             Ordner wählen
           </Button>
           <Button className="h-8" onClick={() => void saveNow("backup")}>
-            Jetzt kopieren
+            Sicherung erstellen
           </Button>
           <Button className="h-8" onClick={() => void drop("backup")}>
             Trennen
@@ -226,17 +226,17 @@ export function StorageSection({ q }: { q: string }) {
       </Vis>
       {native?.pathsPick ? (
         <Vis q={q} label="Helfer Modelle App-Daten Logs Pfad Festplatte">
-          <p className="pt-4 text-xs font-medium text-fg">App auf diesem Rechner</p>
+          <p className="pt-4 text-xs font-medium text-fg">Anvil-Daten auf diesem Computer</p>
           <p className="mb-2 text-xs text-muted">
-            Jeder Bereich hat einen eigenen Ordner. Compiler und Sprachserver: Pakete. API-Keys
-            werden separat verwaltet; den Speicherstatus zeigt Einstellungen → Agent.
+            Jeder Bereich hat einen eigenen Ordner. Compiler und Sprachserver findest du unter „Pakete“.
+            API-Schlüssel werden separat verwaltet. Ihren Speicherstatus findest du unter Einstellungen → Agent.
           </p>
           {(
             [
               ["data", "Einstellungen / Sicherung", paths?.data],
               ["helper", "Helfer-Modelle", paths?.helper],
-              ["packages", "Pakete (Compiler, LSP)", paths?.packages],
-              ["logs", "Logs", paths?.logs],
+              ["packages", "Pakete (Compiler und Sprachserver)", paths?.packages],
+              ["logs", "Protokolle", paths?.logs],
             ] as const
           ).map(([kind, label, path]) => (
             <div key={kind} className="py-2">
@@ -248,16 +248,16 @@ export function StorageSection({ q }: { q: string }) {
             </div>
           ))}
           <Button className="mt-1 h-8" onClick={() => void dumpToData()}>
-            Einstellungen in App-Daten sichern
+            Einstellungen lokal sichern
           </Button>
           <Button className="mt-1 h-8" onClick={() => void loadFromData()}>
-            Aus App-Daten laden
+            Lokale Einstellungen laden
           </Button>
         </Vis>
       ) : (
         <p className="pt-3 text-xs text-muted">
-          Helfer-Modelle und Logs: Ordnerwahl nur im Anvil-Fenster (start.bat). Workspace und Backup
-          gehen hier.
+          Speicherorte für Helfer-Modelle und Protokolle kannst du in der Desktop-App auswählen.
+          Projekt- und Sicherungsordner lassen sich auch hier verwalten.
         </p>
       )}
     </SettingsSection>
@@ -278,8 +278,8 @@ function VaultFields() {
   return (
     <div className="py-2">
       <p className="mb-1 text-xs text-muted">
-        Tresor auf diesem Rechner. Die Schlüsselablage wird unter Agent angezeigt. Inhalte werden
-        beim Chat- und Zip-Export ausgelassen.
+        Der Tresor speichert Zugangsdaten auf diesem Computer. Den Speicherstatus findest du unter „Agent“.
+        Tresorinhalte werden nicht mit Chats oder ZIP-Dateien exportiert.
       </p>
       {rows.map((r, i) => (
         <div key={r.id} className="mb-1 flex gap-1">
@@ -305,7 +305,7 @@ function VaultFields() {
             className="text-[11px] text-danger"
             onClick={() => persist(rows.filter((_, n) => n !== i))}
           >
-            Weg
+            Löschen
           </button>
         </div>
       ))}
@@ -316,7 +316,7 @@ function VaultFields() {
           setNotice("Im Tresor gespeichert");
         }}
       >
-        Secret
+        Zugangsdaten hinzufügen
       </Button>
     </div>
   );
@@ -346,7 +346,7 @@ export function DataSection({ q }: { q: string }) {
             : await setupAppUpdate();
       if (r.canceled) return;
       if (!r.ok) {
-        const msg = r.error || "fehlgeschlagen";
+        const msg = r.error || "Aktualisierung fehlgeschlagen.";
         setUpd(msg);
         setNotice(msg);
         return;
@@ -359,7 +359,7 @@ export function DataSection({ q }: { q: string }) {
         setNotice(msg);
         return;
       }
-      const msg = r.message || r.dir || r.path || "ok";
+      const msg = r.message || r.dir || r.path || "Aktualisierung erfolgreich.";
       setUpd(msg);
       setNotice(msg);
     } finally {
@@ -394,7 +394,7 @@ export function DataSection({ q }: { q: string }) {
   async function googleToken() {
     const r = await loadAccountFromNative("google");
     if (!r.ok) throw new Error(r.error);
-    if (!r.token) throw new Error("Kein Google-Token");
+    if (!r.token) throw new Error("Keine Google-Anmeldung verfügbar. Melde dich erneut an.");
     return r.token;
   }
 
@@ -403,34 +403,34 @@ export function DataSection({ q }: { q: string }) {
     try {
       if (where === "gist") {
         const token = gistToken();
-        if (!token) throw new Error("GitHub anmelden oder Token eintragen");
+        if (!token) throw new Error("Melde dich bei GitHub an oder trage einen Zugangsschlüssel ein.");
         if (dir === "push") {
           const { id } = await pushGist(token, makePack(exportSettingsPack()));
-          setNotice(`Gist ${id.slice(0, 8)}`);
+          setNotice(`Einstellungen als GitHub-Gist gespeichert: ${id.slice(0, 8)}`);
         } else {
           const pack = await pullGist(token);
-          if (!pack) throw new Error("Kein Gist");
+          if (!pack) throw new Error("Keine gesicherten Einstellungen in GitHub Gist gefunden.");
           applySettingsPack(pack.settings);
           const loc = useIde.getState().locale;
           applyLang(loc === "en" || loc === "de" ? loc : "de");
-          setNotice("Gist geladen");
+          setNotice("Einstellungen aus GitHub Gist geladen.");
         }
         return;
       }
       const token = await googleToken();
       if (dir === "push") {
         await pushDrive(token, makePack(exportSettingsPack()));
-        setNotice("Drive gespeichert");
+        setNotice("Einstellungen in Google Drive gespeichert.");
       } else {
         const pack = await pullDrive(token);
-        if (!pack) throw new Error("Nichts in Drive");
+        if (!pack) throw new Error("Keine gesicherten Einstellungen in Google Drive gefunden.");
         applySettingsPack(pack.settings);
         const loc = useIde.getState().locale;
         applyLang(loc === "en" || loc === "de" ? loc : "de");
-        setNotice("Drive geladen");
+        setNotice("Einstellungen aus Google Drive geladen.");
       }
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Sync fehlgeschlagen");
+      setNotice(err instanceof Error ? err.message : "Synchronisierung fehlgeschlagen.");
     } finally {
       setBusy(false);
     }
@@ -526,7 +526,7 @@ export function DataSection({ q }: { q: string }) {
       </Vis>
       <Vis q={q} label="Tresor Vault Secrets Geheimnisse Zugangsdaten"><VaultFields /></Vis>
       <Vis q={q} label="Einstellungen exportieren importieren Settings export import">
-        <p className="py-2 text-xs text-muted">Sicherung mit Anbieterzuständen, API-/Abo-Modus, Profilen und Gedächtnisinhalten. API-Keys und CLI-Anmeldungen bleiben separat auf diesem Rechner.</p>
+        <p className="py-2 text-xs text-muted">Die Sicherung enthält Anbietereinstellungen, die gewählte Zugangsart, Profile und Gedächtnisinhalte. API-Schlüssel und CLI-Anmeldungen bleiben separat auf diesem Computer gespeichert.</p>
         <div className="flex flex-wrap gap-2 py-3">
           <Button className="h-8" onClick={exportSettings}>
             Exportieren
@@ -539,12 +539,12 @@ export function DataSection({ q }: { q: string }) {
       <Vis q={q} label="API-Key löschen">
         <div className="py-2">
           <Button className="h-8" onClick={() => setLlmApiKey("")}>
-            API-Key löschen
+            API-Schlüssel löschen
           </Button>
         </div>
       </Vis>
       <Vis q={q} label="Einstellungen zurücksetzen Settings reset defaults">
-        <p className="py-2 text-xs text-muted">Setzt alle Bedien- und Laufzeiteinstellungen einschließlich Helfer, Modelle und Layout auf Standard. Benannte Profile, MCP-Verbindungen, gelernte Tools, Zugangsdaten, Projektdateien und Gedächtnisinhalte bleiben erhalten. Einzelne Bereiche lassen sich links unten zurücksetzen.</p>
+        <p className="py-2 text-xs text-muted">Setzt alle Einstellungen zur Bedienung und Ausführung auf die Standardwerte zurück, einschließlich Helfer, Modelle und Layout. Gespeicherte Profile, MCP-Verbindungen, gelernte Werkzeugzuordnungen, Zugangsdaten, Projektdateien und Gedächtnisinhalte bleiben erhalten. Einzelne Bereiche kannst du links unten zurücksetzen.</p>
         <div className="py-2">
           <Button
             className="h-8"
@@ -572,7 +572,7 @@ export function DataSection({ q }: { q: string }) {
               });
             }}
           >
-            Workspace zurücksetzen
+            Projekt zurücksetzen
           </Button>
         </div>
       </Vis>

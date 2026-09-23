@@ -11,6 +11,7 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
   globalThis.window = Object.assign(new EventTarget(), {
     localStorage: globalThis.localStorage,
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timers.add(timer); return timer; }, clearTimeout,
+    setInterval: (fn, ms) => { const timer = setInterval(fn, ms); timers.add(timer); return timer; }, clearInterval,
     location: { origin: "http://127.0.0.1:9999", protocol: "http:", hostname: "127.0.0.1", pathname: "/" },
   });
   globalThis.document = Object.assign(new EventTarget(), { visibilityState: "visible", getElementById: () => null });
@@ -123,6 +124,48 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
     assert.deepEqual(user.images, [image]);
     assert.ok(JSON.stringify(globalThis.__productModelCalls.at(-1).messages).includes(image));
     assert.ok(request.callbacks.some(([kind, value]) => kind === "images" && value.length === 0));
+  });
+
+  await t.test("image questions reach the model even with app help enabled", async () => {
+    const jobs=useBrain.getState().jobs;
+    useBrain.setState({jobs:{...jobs,help:true}});
+    try {
+      for(const mode of ['agent','ask'])for(const draft of ['was siehst du auf dem bild','wo sind die Einstellungen','run']) {
+        reset({agentMode:mode});
+        const image='data:image/png;base64,AAAA',count=globalThis.__productModelCalls.length;
+        await sendChat(input(draft,[image]).value);
+        assert.equal(globalThis.__productModelCalls.length,count+1,`${mode}: ${draft}`);
+        assert.ok(JSON.stringify(globalThis.__productModelCalls.at(-1).messages).includes(image));
+        assert.doesNotMatch(useIde.getState().chat.at(-1).content,/Activity links/);
+      }
+      assert.equal((await anvilHandle('was siehst du auf dem bild')).hand,'model');
+      assert.equal((await anvilHandle('wie funktioniert Photosynthese')).hand,'model');
+      assert.equal((await anvilHandle('wo sind die Einstellungen')).hand,'app');
+    } finally {useBrain.setState({jobs});}
+  });
+
+  await t.test("foreground send reserves the agent before the queue can consume another entry", async () => {
+    reset({ backgroundAgent: false });
+    const pending = sendChat(input("Describe the fixture project", []).value);
+    try {
+      assert.equal(useIde.getState().agentBusy, true, "claim the foreground turn before yielding to background routing");
+      useIde.getState().pushAgent("Second queued request", false, "ask");
+      assert.equal(useIde.getState().agentInbox, null);
+      assert.deepEqual(useIde.getState().agentQueue, [{ text: "Second queued request", mode: "ask" }]);
+    } finally { await pending; }
+  });
+
+  await t.test("late health startup does not cancel a newly started queue request", async () => {
+    const { startHealth } = await server.ssrLoadModule("/src/lib/health.ts");
+    const { agentGen } = await server.ssrLoadModule("/src/lib/abort.ts");
+    reset({ backgroundAgent: false });
+    const pending = sendChat(input("Describe the fixture project", []).value);
+    const generation = agentGen();
+    try {
+      startHealth();
+      assert.equal(agentGen(), generation, "startup recovery must not replace a live request");
+      assert.equal(useIde.getState().agentBusy, true);
+    } finally { await pending; }
   });
 
   await t.test("Ask mode never becomes an editing request because of repair words or app shortcuts", async () => {

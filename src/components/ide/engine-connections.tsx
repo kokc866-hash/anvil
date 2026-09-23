@@ -83,7 +83,7 @@ export function EngineConnections() {
               draft.name = uniqueMcpName(st.mcpServers, draft.name, draft.id);
               st.setMcpServers([...st.mcpServers, draft]);
               setMessage(
-                "Deaktiviert unter MCP vorbereitet. Dort Einrichtung prüfen, bei Bedarf Zugangsschlüssel eintragen und erst dann aktivieren.",
+                "Die Verbindung wurde unter MCP angelegt und ist noch deaktiviert. Prüfe dort die Einrichtung, ergänze bei Bedarf einen Zugangsschlüssel und aktiviere die Verbindung anschließend.",
               );
             } catch (error) {
               setMessage(error instanceof Error ? error.message : String(error));

@@ -1,6 +1,6 @@
 # Anvil — Handbuch
 
-Ausführlich, mit Vorschau der Fenster. [Kurzfassung](01-kurz.md) · [Abläufe](03-workflow.md). Stand: 13.09.2026, Release 1.3.29. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
+Dieses Handbuch erklärt die Fenster, Einstellungen und wichtigsten Arbeitsabläufe. [Kurzfassung](01-kurz.md) · [Abläufe](03-workflow.md). Stand: 13.09.2026, Release 1.3.29. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
 
 ---
 
@@ -8,14 +8,14 @@ Ausführlich, mit Vorschau der Fenster. [Kurzfassung](01-kurz.md) · [Abläufe](
 
 Anvil ist eine lokale Entwicklungsumgebung in einem eigenen Programmfenster (Electron).
 
-- Workspace im Speicher, optional Ordner auf der Platte
-- Editor mit Vorschlägen, Suche, Debug
-- Agent (dein Modell: Ollama, LM Studio, OpenAI, …) schreibt und ändert Dateien
-- Run: Python/JS hier, HTML in einem zweiten Fenster, Go/Rust/Java in Anvil (Compiler lokal oder Netz)
-- Helfer: kleines lokales Modell für Kurzaufgaben, nie für den eigentlichen Code
-- Companion: kleines Programm **auf diesem PC** (kein Internet). Startet bei Run, stoppt wenn Run zu.
+- Projekte im Anwendungsspeicher oder in einem lokalen Ordner
+- Editor mit Codevorschlägen, Suche und Debugger
+- Agent zum Erstellen und Bearbeiten von Dateien mit deinem gewählten Modell, beispielsweise über Ollama, LM Studio oder OpenAI
+- Ausführung von Python und JavaScript sowie HTML-Vorschau in einem eigenen Fenster; weitere Sprachen über lokale oder optionale Online-Compiler
+- Optionaler Helfer: ein kleines lokales Modell für kurze unterstützende Aufgaben
+- Companion: ein Hintergrundprogramm auf deinem Computer, das Programme, Compiler und weitere Werkzeuge ausführt
 
-Anvil handelt (Dateien, Run, Git). Das Hauptmodell denkt. Der Helfer ist optional.
+Das Hauptmodell plant die Arbeit und fordert Werkzeuge an. Anvil führt diese Anforderungen aus, etwa Dateiänderungen, Programmläufe oder Git-Aktionen.
 
 ---
 
@@ -43,7 +43,7 @@ anvil\
   anleitungen\
 ```
 
-**start.bat** prüft Node, lädt beim ersten Mal `npm install` und Electron, startet dann das Fenster.
+**start.bat** prüft Node.js, installiert beim ersten Start die benötigten Pakete einschließlich Electron und öffnet anschließend Anvil.
 
 Falls `electron.exe` fehlt:
 
@@ -52,11 +52,11 @@ npm install-scripts approve electron
 node node_modules\electron\install.js
 ```
 
-Port 8080 belegt: **stop.bat**, dann neu starten. Nicht `http://localhost:8080` in PowerShell eintippen — das ist keine Eingabe, das ist die Adresse im Fenster.
+Wenn Port 8080 belegt ist, beende Anvil über **stop.bat** und starte es anschließend neu. `http://localhost:8080` ist eine Browseradresse, kein PowerShell-Befehl.
 
 ### Sprache
 
-Einstellungen → Editor → Sprache: Deutsch oder English. Sofort.
+Unter Einstellungen → Editor → Sprache wählst du Deutsch oder Englisch. Die Änderung gilt sofort.
 
 ---
 
@@ -67,8 +67,8 @@ Einstellungen → Editor → Sprache: Deutsch oder English. Sofort.
 │▓▓│  index.html ×      │ Spur     │  Agent              │
 │📁│┌──────────────────┐│ Runde ←→ │  ┌───────────────┐  │
 │📎││                  ││ Denken   │  │ Antwort       │  │
-│🔎││     Editor       ││ Tools    │  │               │  │
-│⎇ ││                  ││ Diff/Run │  └───────────────┘  │
+│🔎││     Editor       ││ Werkzeuge│  │               │  │
+│⎇ ││                  ││ Änderung│  └───────────────┘  │
 │🧠│└──────────────────┘│ To-do    │  [@main.py]         │
 │🧪├────────────────────┴──────────┤  ┌─────────┐  [➤]  │
 │▦ │  Konsole                      │  │ Agent…  │       │
@@ -85,63 +85,63 @@ Einstellungen → Editor → Sprache: Deutsch oder English. Sofort.
 |---|---|
 | Ordner | Dateien |
 | Bücher | Referenzen (`ref/`) |
-| Lupe | Suche + Vorschau, dann Ersetzen |
+| Lupe | Projekt durchsuchen, Treffer prüfen und Text ersetzen |
 | Ast | Git |
-| Hirn | Gedächtnis / Skills |
-| Kolben | Tests: entdeckt, Run, rot/grün, Klick auf Datei:Zeile |
+| Gehirn | Gedächtnis und Skills |
+| Kolben | Tests ausführen und Ergebnisse mit Verweis auf Datei und Zeile anzeigen |
 | Knoten | Tafel (Harness / Graph) |
-| Puzzle | Erweiterungen: Built-ins, `plugins/*.js`, Open-VSX/.vsix |
-| Stecker | MCP: fremde Fläche (Engine, Docs). Exclusive oder Brücke |
-| Fußspuren | Spur (Plan, Denken, Run, Diff) |
-| Blase | Agent ein/aus |
+| Puzzle | Mitgelieferte Erweiterungen, Projekt-Plugins und Open-VSX-/VSIX-Pakete |
+| Stecker | Externe Arbeitsflächen und Werkzeuge über MCP |
+| Fußspuren | Spur: Checkliste, Denkverlauf, Ausführungen und Dateiänderungen |
+| Sprechblase | Agent ein- oder ausblenden |
 | Terminal | Ausgabe |
 | Zahnrad | Einstellungen |
 
 ### Mitte
 
-Tabs, Editor. Spur rechts daneben, **nur bis zur Konsole** (nicht volle Höhe). Pfeile wechseln ältere Runden. HTML öffnet **nicht** hier, sondern ein eigenes Run-Fenster.
+In der Mitte liegen die Dateitabs und der Editor. Rechts daneben zeigt die Spur die Arbeitsschritte bis oberhalb der Konsole. Mit den Pfeilen wechselst du zwischen Runden. HTML-Seiten öffnen sich in einem eigenen Ausgabefenster.
 
 ### Rechts — Agent
 
-Volle Höhe an der rechten Wand. Chat, Diffs. Plan und Denken liegen in der **Spur**, nicht im Chat (außer Spur-im-Chat an).
+Der Chat nutzt die volle Höhe auf der rechten Seite. Checkliste und Denkverlauf erscheinen in der **Spur**. Mit **Spur auch im Chat** kannst du sie zusätzlich im Chat anzeigen lassen.
 
 ### Unten — Status
 
-Hauptmodell links, Helfer daneben, Zeile/Spalte, Einzug, Wrap.
+Die Statusleiste zeigt das Hauptmodell, den Helferstatus sowie Zeile, Spalte, Einzug und Zeilenumbruch des Editors.
 
 ### Anordnung
 
 Einstellungen → Layout:
 
-- **Auto** — bei schmalem Fenster Agent als Overlay
+- **Automatisch** — in schmalen Fenstern wird der Agent eingeblendet
 - **Nebeneinander** — Agent bleibt rechts
 - **Untereinander** — Agent unter dem Editor
 
-Presets: IDE · Code + Agent · Schreiben · Ausführen.
+Verfügbare Anordnungsvorlagen: IDE · Code + Agent · Schreiben · Ausführen.
 
-**Hardware anpassen** misst RAM, Kerne und die GPU des Rechners (nicht nur WebGPU). Setzt Animation, Live-Run, Agent-Schleifen. Helfer-Modell nur, wenn WebGPU da ist.
+**An Hardware anpassen** ermittelt Arbeitsspeicher, Prozessorkerne und Grafikleistung. Anvil passt daran Animationen und automatische Ausführungen an. Die WebGPU-Unterstützung wird für das Helfermodell berücksichtigt.
 
 ### Erweiterungen (Puzzle)
 
-Drei Quellen, ein Schalter:
+Drei Arten von Erweiterungen stehen zur Verfügung:
 
-- **Built-ins** — Format, Snippets, Lint, Web, ZIP, Debug, Helfer. Aus = Befehl weg.
-- **Workspace** — `plugins/*.js` mit `activate(anvil)`. Ohne `// @trust` in den ersten 8 Zeilen nur lesen. Mit `@trust` voll (schreiben, Agent, Netz) und startet **aus**, bis du den Schalter anmachst.
-- **VS Code / Markt** — Open VSX oder `.vsix`. Anvil nimmt Snippets, Sprachen, Kommentare und Keywords aus `tmLanguage`. Kein vscode-Modul, kein Language-Server. Pack lassen sich aus und entfernen.
+- **Grundfunktionen** — etwa Formatierung, Codevorlagen, Codeprüfung, Web, ZIP, Debugger und Helfer. Wenn du eine Funktion deaktivierst, stehen ihre Befehle nicht mehr zur Verfügung.
+- **Projekt-Plugins** — Dateien unter `plugins/*.js` mit `activate(anvil)`. Ohne `// @trust` in den ersten acht Zeilen haben sie nur Lesezugriff. Mit `@trust` können sie zusätzlich schreiben, den Agenten verwenden und auf das Netzwerk zugreifen. Solche Plugins sind zunächst deaktiviert und müssen bewusst eingeschaltet werden.
+- **Marktplatz und VSIX** — Pakete aus Open VSX oder `.vsix`-Dateien. Anvil übernimmt Codevorlagen, Sprachdefinitionen, Kommentarregeln und Schlüsselwörter aus `tmLanguage`. Der Programmcode der VS Code-Erweiterung und ihre Sprachserver werden nicht ausgeführt. Pakete lassen sich deaktivieren und entfernen.
 
-Neues Plugin: unten **Neues Plugin** → `plugins/mein-plugin.js`. Befehle stehen in Ctrl+Shift+P.
+Mit **Neues Plugin** erstellst du `plugins/mein-plugin.js`. Seine Befehle findest du in der Befehlspalette unter Strg+Umschalt+P.
 
 ### MCP (Stecker)
 
-Server im MCP-Bereich. Ab Anvil 1.3.20 sind native HTTP-/stdio-Verbindungen, OAuth und Ressourcen verfügbar; siehe [MCP-Anleitung](mcp.md).
+Im MCP-Bereich verwaltest du externe Server. Ab Anvil 1.3.20 sind native HTTP-/stdio-Verbindungen, OAuth und Ressourcen verfügbar; siehe [MCP-Anleitung](mcp.md).
 
-- **An/Aus** aktiviert den Server; **Tools laden** lädt seinen Katalog. **Hier arbeiten** macht ihn zur Arbeitsfläche.
-- **Eine Fläche** — Agent arbeitet über MCP-Tools, Ressourcen und Plan auf diesem Server.
-- **Brücke** — MCP und Anvil-Dateien in einer Runde.
-- Kontextzeile (`scene=overworld`) landet in Tool-Args, wenn das Tool den Key kennt.
-- Open VSX ist Erweiterungen, nicht MCP. Companion unter `/mcp` liefert Engine-Detect/Run und den Workspace-Pfad.
+- Aktiviere den Server und wähle **Werkzeuge laden**, um seinen Katalog abzurufen. **Hier arbeiten** legt ihn als Arbeitsfläche fest.
+- **Nur aktive Arbeitsfläche** — der Agent verwendet die MCP-Werkzeuge und Ressourcen dieses Servers.
+- **Brücke** — der Agent kann im selben Auftrag MCP-Werkzeuge und Anvil-Dateien verwenden.
+- Die Kontextzeile, beispielsweise `scene=overworld`, wird als Werkzeugargument übergeben, wenn das Werkzeug diesen Schlüssel unterstützt.
+- Open-VSX-Pakete findest du unter Erweiterungen. Companion bietet unter `/mcp` Werkzeuge zur Engine-Erkennung und -Ausführung sowie den Projektpfad an.
 
-Neues `@trust`-Plugin und MCP-Bearer liegen lokal (Tresor).
+Projekt-Plugins werden lokal gespeichert. MCP-Zugangsschlüssel werden im lokalen Tresor verwaltet.
 
 ---
 
@@ -158,36 +158,36 @@ Neues `@trust`-Plugin und MCP-Bearer liegen lokal (Tresor).
 └────────────────────────┘
 ```
 
-- Neue Datei / Ordner über die Knöpfe oder Rechtsklick
-- Drag-and-Drop aus dem Explorer in den Baum
-- Rechtsklick: umbenennen, duplizieren, löschen, Pfad, Zip
-- `ref/` ist der **Referenzkorb** — Specs, Bilder, Notizen, die der Agent bevorzugt sieht. Im Chat: `@ref`
+- Erstelle Dateien und Ordner über die Schaltflächen oder das Kontextmenü.
+- Ziehe Dateien aus dem Explorer in den Dateibaum, um sie hinzuzufügen.
+- Per Rechtsklick kannst du Dateien umbenennen, duplizieren, löschen, ihren Pfad kopieren oder sie als ZIP exportieren.
+- `ref/` ist der **Referenzkorb** für Anforderungen, Bilder und Notizen, die der Agent berücksichtigen soll. Im Chat kannst du ihn mit `@ref` erwähnen.
 
-Arbeitskopie: standardmäßig Browser-Speicher. Für echten Ordner: Einstellungen → Speicher → **Ordner vom Rechner öffnen** (oder Dateien-Leiste).
+Die Arbeitskopie liegt zunächst im Anwendungsspeicher. Mit **Lokalen Ordner öffnen** unter Einstellungen → Speicher oder in der Dateileiste verbindest du einen Ordner auf deinem Computer.
 
 ---
 
 ## 5. Editor
 
-Vorschläge wie am Handy: graue Leiste über der Zeile, **Tab** übernimmt. Aus: Einstellungen → Editor → Schreibvorschläge. Monaco lädt lokal (`/monaco/vs`), CDN nur als Fallback.
+Codevorschläge erscheinen in einer Leiste über der Zeile. Mit **Tab** übernimmst du einen Vorschlag. Unter Einstellungen → Editor → Schreibvorschläge kannst du diese Funktion deaktivieren. Der Editor Monaco wird lokal geladen (`/monaco/vs`); ein CDN dient nur als Ausweichlösung.
 
-| Taste | |
+| Tastenkürzel | Funktion |
 |---|---|
 | Ctrl+S | Speichern (optional formatieren; bei Formatfehler trotzdem speichern) |
 | Ctrl+F / Ctrl+H | Suchen / Ersetzen **in der Datei** (Anvil-Leiste, nicht Monaco-Widget) |
-| Ctrl+G | Zeile |
-| F12 / Ctrl+Klick | Definition — auch über `import` in andere Dateien. Klick in der Glyph-Leiste = Breakpoint |
+| Ctrl+G | Zu einer Zeile springen |
+| F12 / Ctrl+Klick | Definition öffnen, auch über `import` in einer anderen Datei. Ein Klick am linken Editorrand setzt einen Haltepunkt. |
 | Alt+F12 | Definition einsehen |
-| Strg+T | Symbol im ganzen Workspace |
-| Ctrl+K | Inline ändern (Auswahl beschreiben) |
-| Ctrl+L | Ask zur Auswahl — erklärt, schreibt nicht |
-| Ctrl+W | Tab schließen — fragt bei ungespeicherten Änderungen. „Andere schließen“ auch. |
-| F5 | Debug |
-| F10 | Schritt |
-| Shift+F5 | Debug aus |
+| Strg+T | Symbol im gesamten Projekt suchen |
+| Ctrl+K | Auswahl bearbeiten: gewünschte Änderung beschreiben |
+| Ctrl+L | Frage zur Auswahl stellen, ohne Dateien zu ändern |
+| Ctrl+W | Tab schließen. Ungespeicherte Änderungen müssen bestätigt werden, auch bei „Andere schließen“. |
+| F5 | Debugger starten |
+| F10 | Nächsten Debugschritt ausführen |
+| Shift+F5 | Debugger beenden |
 | Shift+Alt+F | Formatieren |
 
-Live-Run: Python/JS nach dem Tippen, Ergebnis unter dem Editor. Voriger Live-Run wird verworfen, Run-Knopf bleibt frei. HTML: Run-Fenster. Dateien per Drop (Editor oder Tab): Nachfrage. Große Dateien (>1,5 MB) nur als Textvorschau. Tab-Wechsel merkt Cursor und Scroll.
+**Beim Bearbeiten ausführen** startet Python oder JavaScript nach einer Eingabepause und zeigt das Ergebnis unter dem Editor. Eine noch laufende automatische Ausführung wird dabei ersetzt; die Schaltfläche **Ausführen** bleibt unabhängig nutzbar. HTML öffnet sich im Ausgabefenster. Wenn du Dateien auf den Editor oder einen Tab ziehst, fragt Anvil vor dem Hinzufügen nach. Große Dateien über 1,5 MB erscheinen nur als Textvorschau. Beim Tabwechsel bleiben Cursorposition und Bildlauf erhalten.
 
 ---
 
@@ -195,149 +195,153 @@ Live-Run: Python/JS nach dem Tippen, Ergebnis unter dem Editor. Voriger Live-Run
 
 ```
 ┌ Agent ─────────────────────────────┐
-│ Anvil handelt. Das Modell schreibt.│
+│ Dateien bearbeiten und prüfen     │
 │                                    │
 │ Hier die Antwort.                  │
-│ Spur daneben: Denken, Tools, Diff. │
+│ Spur: Denkverlauf und Werkzeuge    │
 │                                    │
 │ [@main.py]                         │
 │ ┌ Agent… @Datei @ref · Enter ┐ [➤]│
 │ └────────────────────────────┘     │
 │ [Kontext 16/33k ▓░░ 0%] [Sitzung 0]│
-│ [Ask | Agent]                      │
+│ [Fragen | Agent]                   │
 └────────────────────────────────────┘
 ```
 
 ### Modus
 
-- **Agent** — darf Dateien anlegen und ändern. Writes landen im Workspace. Aus: **Diffs automatisch** → Editor **Übernehmen / Verwerfen**. Spur **Zurück** stellt die ganze Runde wieder.
-- **Ask** — erklärt. Darf lesen/suchen, nicht schreiben. Umschalten in der Chat-Leiste oder Standard unter Einstellungen → Agent
+- **Agent** — darf Dateien erstellen und bearbeiten. Wenn **Änderungen automatisch übernehmen** ausgeschaltet ist, zeigt der Editor anschließend **Übernehmen** und **Verwerfen** an. Die Dateien wurden zu diesem Zeitpunkt bereits geändert. In der Spur kannst du die Dateiänderungen einer ganzen Runde rückgängig machen.
+- **Fragen** — erklärt und analysiert. Der Agent darf lesen und suchen, aber keine Projektdateien ändern. Du wechselst den Modus in der Chatleiste; den Standard legst du unter Einstellungen → Agent fest.
 
 ### Erwähnungen
 
-Im Eingabefeld `@` tippen: Dateien und `ref/` erscheinen. Enter wählt. Auswahl (Ctrl+L): im Ask-Modus erklären, im Agent-Modus mit Auftrag patchen.
+Tippe `@` im Eingabefeld, um eine Datei oder `ref/` auszuwählen. Enter übernimmt die Auswahl. Mit Strg+L stellst du eine Frage zum markierten Code. Im Agentenmodus kannst du stattdessen eine konkrete Änderung beauftragen.
 
-Bilder: Büroklammer oder Einfügen. Vision-fähiges Modell vorausgesetzt.
+Bilder kannst du über die Anhangsschaltfläche oder die Zwischenablage hinzufügen. Das gewählte Modell muss Bildinhalte verarbeiten können.
 
 ### Nach der Runde
 
-- Spur: Diff gegen Checkpoint, **Zurück vor diese Runde**
-- Editor: wenn Auto-Diffs aus, **Übernehmen** / **Verwerfen**
-- Run-Schleife an: Anvil führt aus, sieht Fehler/Frames, der Agent patched. `run_file` startet immer (auch wenn die Schleife aus ist) — Compile+Run bei C/C++. Winkelklammern in Quelltext (`#include <iostream>`) nicht als `u003c` speichern.
+- Die Spur zeigt Dateiänderungen gegenüber der Sicherung vor dieser Runde. **Diese Runde rückgängig machen** stellt diesen Stand wieder her.
+- Wenn Änderungen nicht automatisch übernommen werden, kannst du sie im Editor **Übernehmen** oder **Verwerfen**.
+- Bei aktiven automatischen Ausführungen startet Anvil den Code und gibt Fehler oder verfügbare Vorschauaufnahmen an den Agenten zurück. Dieser kann anschließend Korrekturen vornehmen. Das Werkzeug `run_file` kann auch bei ausgeschalteter Ausführungsschleife verwendet werden; bei C/C++ kompiliert und startet es das Programm. Winkelklammern in Quelltext wie `#include <iostream>` müssen als echte Zeichen erhalten bleiben.
 
-Ollama: `num_ctx` = Slider, `keep_alive` 30m. Kein separates Generate-Warmup (das blockiert den Chat). Bei VRAM/OOM halbiert Anvil `num_ctx` und sendet erneut.
+Bei Ollama legt die Einstellung für die Kontextlänge `num_ctx` fest. `keep_alive` beträgt 30 Minuten. Anvil sendet keine separate Aufwärmanfrage, die den Chat blockieren könnte. Bei einem Fehler wegen unzureichenden Grafikspeichers halbiert Anvil `num_ctx` und versucht die Anfrage erneut.
 
 Cloud-APIs werden über die native Modellleitung, den Companion oder den Server angesprochen. Abo-Verbindungen starten die installierte Codex-, Claude-Code- oder Copilot-CLI mit deren eigener Anmeldung. Anvil führt angeforderte Werkzeuge weiterhin selbst aus. Details und Einrichtung: [Verbindungen](05-verbindungen.md).
 
-Chip **aktiv**, solange die Runde läuft. Abbrechen: Quadrat neben dem Feld.
+Während einer laufenden Runde zeigt die Statusanzeige **aktiv**. Mit der quadratischen Schaltfläche neben dem Eingabefeld brichst du den Auftrag ab.
 
-**To-do** (Einstellungen → Agent): wer die Checkliste schreibt.
+Unter Einstellungen → Agent → **To-do** legst du fest, wer die Checkliste erstellt.
 
-| | |
+| Auswahl | Verhalten |
 |---|---|
-| **Auto** | Nummerierter Prompt bleibt. Sonst der Agent, solange kein Schritt läuft |
-| **Anvil** | Nur Anvil. `set_plan` tickt, ersetzt nicht |
-| **Helfer** | Nur der kleine Helfer |
-| **Agent** | Nur `set_plan` |
+| **Automatisch** | Übernimmt eine nummerierte Liste aus deiner Nachricht. Andernfalls erstellt der Agent die Checkliste, solange noch kein Schritt läuft. |
+| **Anvil** | Anvil erstellt die Checkliste. Der Agent kann mit `set_plan` den Fortschritt aktualisieren, aber die Liste nicht ersetzen. |
+| **Helfer** | Das Helfermodell erstellt die Checkliste. |
+| **Agent** | Der Agent erstellt und aktualisiert die Checkliste mit `set_plan`. |
 
-Neuer Chat / neuer Auftrag: altes Ask-Ziel (*Antwort auf: …*) gilt nicht weiter.
+Bei einem neuen Chat oder Auftrag wird ein vorheriger Bezug unter *Antwort auf: …* nicht übernommen.
 
-Wenn das Modell eine Entscheidung braucht, stellt es eine **Nachfrage** mit 2–5 Optionen in Chat und Spur. Der Job bleibt stehen, Companion bleibt. Option klicken oder Enter = weiter am gleichen Auftrag. Stop / **Job beenden** = Job tot.
+Wenn das Modell eine Entscheidung benötigt, erscheint eine **Nachfrage** mit zwei bis fünf Optionen in Chat und Spur. Der Auftrag wartet auf deine Antwort; Companion bleibt verfügbar. Wähle eine Option oder bestätige deine eigene Antwort mit Enter, um denselben Auftrag fortzusetzen. **Stoppen** oder **Auftrag beenden** beendet ihn.
 
-Wenn das Modell abbricht (lokal): Einstellungen → Agent → **Versuche** (Standard 3). Ohne Fortschritt: Hinweis nach 90 s. Harter Stop (Minuten) nur wenn gesetzt.
+Unter Einstellungen → Agent → **Versuche** legst du fest, wie oft wiederholbare Verbindungsfehler erneut versucht werden (Standard: drei Versuche). Nach 90 Sekunden ohne Fortschritt erscheint ein Hinweis. Ein festes Zeitlimit gilt nur, wenn du **Harter Stop** eingestellt hast.
 
 ---
 
-## 7. Run und Vorschau
+## 7. Ausführen und Vorschau
 
-Zwei getrennte Dinge:
+Anvil zeigt Textausgaben und grafische Vorschauen in getrennten Bereichen:
 
-| | Was | Wo |
+| Bereich | Inhalt | Position |
 |---|---|---|
-| **Konsole** | Text, Fehler, REPL | Unten, Seite, oder eigenes Fenster |
-| **Run-Fenster** | HTML / Spiel | Zweites Programmfenster, wie Anvil selbst |
+| **Konsole** | Textausgaben, Fehler und interaktive Befehle | Unten, seitlich oder in einem eigenen Fenster |
+| **Ausgabefenster** | HTML-Seiten und Spiele | Eigenes Programmfenster |
 
 ```
-┌ Run ──────────────┐     ┌ Konsole ─────────────┐
+┌ Ausgabe ──────────┐     ┌ Konsole ─────────────┐
 │                   │     │ ok  python main.py   │
 │   (die Seite)     │     │ 42                   │
 │                   │     │ >                    │
 └───────────────────┘     └──────────────────────┘
 ```
 
-HTML immer im Run-Fenster (Standard). Aus: Einstellungen → Ausgabe → **Run im Fenster**. Beliebiges HTML (auch vom Agenten) läuft, solange **HTML ausführen** an ist — dort auch ausstellbar. Das Run-Fenster teilt die Session mit dem Editor (sonst „Keine Datei.“). Isolation sitzt im iframe, nicht in einer extra Electron-Session. Titel **Run · datei.html** — nicht „Keine Datei“, wenn HTML im Workspace liegt. Anvil schickt `runPath` ins Kindfenster.
+HTML-Seiten öffnen sich standardmäßig im Ausgabefenster. Unter Einstellungen → Ausgabe → **In eigenem Fenster ausführen** kannst du das ändern. **HTML ausführen** erlaubt HTML-Vorschauen auch für vom Agenten erstellte Inhalte. Wenn du die Option ausschaltest, werden nur Text und Protokoll angezeigt.
 
-Konsole docken: unten oder Seite, oder Knopf **Eigenes Fenster**.
+Das Ausgabefenster verwendet dieselbe Sitzung wie der Editor. Die Vorschau selbst läuft in einem isolierten iframe. Anvil übergibt den Dateipfad über `runPath`, damit das Fenster die richtige Projektdatei öffnet und ihren Namen im Titel anzeigt.
 
-Python/JS laufen hier. Go, Rust, Java, C, C++, C#, PHP, Ruby: **Run in Anvil**. Compiler zuerst auf diesem PC (Companion, startet automatisch bei Run), sonst im Netz. Companion ist **keine Website** — Einstellungen → **Companion**.
+Die Konsole kannst du unten oder seitlich andocken. Mit **Eigenes Fenster** öffnest du sie separat.
 
-Eingabe (Tastatur, Maus, Gamepad) für HTML-Spiele: Einstellungen → Eingabe. Nach Änderung **Play** / Run neu, sonst gilt die alte Belegung.
+Python und JavaScript lassen sich direkt in Anvil ausführen. Für Go, Rust, Java, C, C++, C#, PHP und Ruby verwendet Anvil die über Companion verfügbaren Compiler oder Laufzeiten. Lokale Werkzeuge haben Vorrang; ein Online-Compiler wird nur bei aktivierter Ausweichlösung verwendet. Die Verbindung und Werkzeuge verwaltest du unter Einstellungen → **Companion**.
+
+Unter Einstellungen → Eingabe legst du Tastatur-, Maus- und Gamepad-Steuerung für HTML-Spiele fest. Starte die Vorschau nach einer Änderung erneut, damit die neue Belegung wirksam wird.
 
 ---
 
 ## 8. Helfer
 
-Kleines Modell **in Anvil**, nicht Ollama. Nur Kurzaufgaben: Intent, Titel, Commit-Zeile, unsichere Heuristik.
+Der Helfer ist ein kleines Modell, das direkt **in Anvil** läuft. Es unterstützt kurze Aufgaben wie die Erkennung einer Absicht, Chat-Titel, Commit-Nachrichten oder die Prüfung unsicherer regelbasierter Ergebnisse.
 
 Einstellungen → **Helfer**
 
-1. Helfer an
-2. Modell wählen (klein, z. B. Qwen 0.5B / 1.5B Klasse)
-3. **Laden** — erster Download groß, danach Cache
-4. Statusleiste: `Helfer · Name · bereit`
+1. Aktiviere den Helfer.
+2. Wähle ein kleines Modell, beispielsweise aus der Qwen-0.5B- oder -1.5B-Klasse.
+3. Wähle **Laden**. Beim ersten Mal werden die Modelldateien heruntergeladen, später aus dem lokalen Zwischenspeicher geladen.
+4. Warte auf die Statusanzeige `Helfer · Name · bereit`.
 
-**Testen** prüft, ob er antwortet. GPU High-Performance / Worker: nach dem nächsten Laden.
+Mit **Testen** prüfst du, ob der Helfer antwortet. Änderungen am GPU-Leistungsmodus oder an der Worker-Ausführung gelten nach dem nächsten Laden des Modells.
 
-Der Helfer schreibt **keine** Dateien, startet **kein** Run, setzt **keine** Breakpoints und ruft **nicht** das Hauptmodell. Autonomie = nur Hinweise in der Leiste. Jobs (Intent, Titel, Commit-Zeile, Hilfe) einzeln in den Einstellungen. Standard: die meisten Jobs aus.
+Der Helfer übernimmt keine selbstständige Projektarbeit: Er startet keine Programme, setzt keine Haltepunkte und ruft nicht das Hauptmodell auf. Automatische Helferaufgaben liefern Hinweise in der Oberfläche. Aufgaben wie Absichtserkennung, Titel, Commit-Nachricht und Hilfe lassen sich einzeln einstellen; die meisten sind standardmäßig ausgeschaltet.
 
-Modelle-Katalog: Einstellungen → Modelle. Pins vorladen, Cache OPFS/IndexedDB, „auf die Platte“ in der Desktop-App.
+Den Modellkatalog findest du unter Einstellungen → Modelle. Dort kannst du angeheftete Modelle vorladen und den Zwischenspeicher verwalten. Je nach Betriebsart werden Modelldaten im Browserspeicher (OPFS/IndexedDB) oder lokal über die Desktop-App gespeichert.
 
 ---
 
 ## 9. Einstellungen (alle Kategorien)
 
-Zahnrad oder Suche oben in den Einstellungen.
+Öffne die Einstellungen über das Zahnrad. Mit dem Suchfeld oben findest du einzelne Optionen.
 
 | Kategorie | Inhalt |
 |---|---|
-| **Agent** | Anbieter, URL, Modell, Key, Profil, Context, Thinking, Versuche, Compacting, Ask/Agent, To-do (Auto/Anvil/Helfer/Agent), Diffs, Run, Harness, Regeln, MCP |
-| **Companion** | Anlassen, Adresse, Port, Token, Prüfen, Koppeln, Compiler-Liste, MCP |
-| **Helfer** | An, Profil, Autonomie, Laden, GPU, Context, Jobs |
-| **Modelle** | Pins, Cache, Vorladen, Löschen |
-| **Gedächtnis** | Lernen an, Prompt, Fakten, Skills, Destillieren |
-| **Intern** | Fehlerbuch, Auto-heilen, Soft-/Hard-Reload, Werksreset |
-| **Editor** | Sprache, Thema, Schrift, Einzug, Vorschläge, Live-Run |
-| **Layout** | Presets, Anordnung, Statusleiste, Animation (Voll / Reduziert / Aus) |
-| **Ausgabe** | Konsole docken, beim Run öffnen, Run im Fenster, HTML ausführen |
-| **Speicher** | Browser oder Ordner, Auto-Save, Backup |
-| **Eingabe** | Tasten/Pad für HTML-Run |
-| **Tasten** | Übersicht und umbelegen |
-| **Daten** | Update (GitHub ZIP/Setup), Konto (Gist/Drive), Tresor, Export/Import, Reset |
+| **Agent** | Anbieter, Adresse, Modell, API-Schlüssel, Profile, Kontextlänge, Denkaufwand, Wiederholungsversuche, Kontextzusammenfassung, Arbeitsmodus, Checkliste, Dateiänderungen, Ausführung, Regeln und MCP |
+| **Companion** | Hintergrundbetrieb, Adresse, Port, Zugangsschlüssel, Verbindungsprüfung, Kopplung, Compiler und MCP |
+| **Helfer** | Aktivierung, Profile, automatische Aufgaben, Modell laden, GPU und Kontext |
+| **Modelle** | Modelle anheften, vorladen und aus dem Zwischenspeicher löschen |
+| **Gedächtnis** | Lernen, Anweisungen, Fakten, Skills und Zusammenfassungen |
+| **Intern** | Fehlerprotokoll, automatische Fehlerbehebung, Oberfläche neu aufbauen, Seite neu laden und Werkseinstellungen |
+| **Editor** | Sprache, Farbschema, Schrift, Einzug, Vorschläge und Ausführung beim Bearbeiten |
+| **Layout** | Anordnungsvorlagen, Fensteranordnung, Statusleiste und Animationen |
+| **Ausgabe** | Konsole andocken, beim Ausführen öffnen, eigenes Fenster und HTML-Vorschau |
+| **Speicher** | Anwendungsspeicher oder lokaler Ordner, automatisches Speichern und Sicherungen |
+| **Eingabe** | Tastatur- und Gamepad-Steuerung für HTML-Vorschauen |
+| **Tastenkürzel** | Tastenkürzel anzeigen und ändern |
+| **Daten** | Updates, Konten, Tresor, Export, Import und Zurücksetzen |
 
-Jeder Anbieter merkt sich URL, Modell, Context und Key. **Profil speichern** für benannte Stände (z. B. „Ollama LAN“, „OpenRouter“).
+Für jeden Anbieter bleiben Adresse, Modell, Kontext und Zugangsdaten gespeichert. Mit **Profil speichern** verwaltest du mehrere Konfigurationen unter einem Namen, beispielsweise „Ollama LAN“ oder „OpenRouter“.
 
-Cloud-Keys bleiben lokal (Tresor/Secrets). Ollama/LM Studio/LAN gehen direkt aus dem Fenster — CORS auf dem Modell-Rechner.
+Cloud-Zugangsschlüssel werden lokal gespeichert. Beim direkten Browserzugriff auf Ollama, LM Studio oder einen Netzwerkserver müssen die CORS-Freigaben des Modellservers passen.
 
 ---
 
 ## 10. Companion
 
-Kein Internet. Kleines Node-Programm **auf diesem PC**. Electron startet es bei **Run** und beendet es, wenn Run zu ist (außer **Anlassen**). Standard-Port **7845**. Anderer Port: Umgebung `ANVIL_COMPANION_PORT` (Server **und** Electron). LAN nur mit `ANVIL_COMPANION_HOST=0.0.0.0` plus Token. Pair (`/v1/pair`) nur localhost.
+Companion ist ein kleines Node-Programm, das standardmäßig auf deinem Computer läuft. Die Desktop-App startet es bei Bedarf. Mit **Im Hintergrund geöffnet lassen** bleibt es bis zum Schließen von Anvil aktiv.
+
+Der Standardport ist **7845**. Für einen anderen Port setzt du `ANVIL_COMPANION_PORT` sowohl beim Server als auch bei Electron. Netzwerkzugriff erfordert `ANVIL_COMPANION_HOST=0.0.0.0` und einen Zugangsschlüssel. Die Kopplung über `/v1/pair` ist nur lokal möglich.
 
 Einstellungen → **Companion**
 
-| | |
+| Einstellung oder Anzeige | Bedeutung |
 |---|---|
-| **Anlassen** aus | nur während Run (Standard) |
-| **Anlassen** an | bleibt, bis Anvil zu ist |
-| Prüfen / Koppeln | Token aus `~\.anvil-companion-token` |
-| Grün in der Liste | `go` / `rustc` / … im PATH |
+| **Im Hintergrund geöffnet lassen** aus | Companion läuft nur während der Ausführung (Standard). |
+| **Im Hintergrund geöffnet lassen** an | Companion bleibt bis zum Schließen von Anvil aktiv. |
+| Prüfen / Koppeln | Die Verbindung verwendet den Zugangsschlüssel aus `~\.anvil-companion-token`. |
+| Grüne Anzeige in der Compilerliste | Ein Compiler wie `go` oder `rustc` wurde über PATH gefunden. |
 
-Browser ohne Electron: `companion\start.bat` oder `node companion\server.mjs`. Fenster offen lassen.
+Wenn du Anvil im Browser verwendest, starte Companion über `companion\start.bat` oder `node companion\server.mjs`. Lass das zugehörige Fenster geöffnet.
 
-Patch für Anvil selbst: `grok.anvil-patch` neben `grok.mjs`, dann `node grok.mjs`, danach stop.bat / start.bat.
+Um einen Patch für Anvil selbst anzuwenden, lege `grok.anvil-patch` neben `grok.mjs` und führe `node grok.mjs` aus. Starte Anvil anschließend über stop.bat und start.bat neu.
 
-Companion räumt alte `anvil-run-*` unter `%TEMP%` auf (Windows). Volle Temp-Platte: Anvil beenden, dann start.bat.
+Companion entfernt unter Windows alte Ausführungsordner mit dem Namen `anvil-run-*` aus `%TEMP%`. Wenn diese temporären Dateien viel Speicher belegen, beende Anvil und starte es erneut über start.bat.
 
 ---
 
@@ -354,26 +358,26 @@ Linke Leiste → Tafel.
 └────────────────────────────────────────────┘
 ```
 
-Kacheln sind Schritte. Leitungen: von einem **Ausgang** (rechts an der Kachel) zum **Eingang** (links). Ziehen, nicht die Kachelmitte.
+Jede Kachel stellt einen Arbeitsschritt dar. Um zwei Schritte zu verbinden, ziehe eine Leitung vom **Ausgang** rechts an einer Kachel zum **Eingang** links an der nächsten Kachel. Ziehe dafür am Anschluss, nicht an der Kachelmitte.
 
-- **Run-Schleife** — Write → Run → bei Fehler Patch (Text/Compile). Ein Loop, ein Schreib-Thread.
-- **Graph** — nur Sichtprüfung: nach HTML-Run ein Frame. Kein zweites Auto-Run, kein Pflicht-Play.
-- Aus ist aus: Projektdatei und Tafel dürfen die Schalter nicht überschreiben.
-- Einstellungen → Agent: An, Nach Write, Versuche, Runden, Frames
+- **Automatische Ausführungen** — nach dem Schreiben wird der Code ausgeführt. Bei Fehlern kann der Agent ihn korrigieren. Die Arbeit erfolgt in einer gemeinsamen Schleife.
+- **Graph** — ergänzt die Sichtprüfung mit einer Aufnahme nach einer HTML-Ausführung. Er startet keine zweite Ausführungsschleife und verlangt keine zusätzliche Interaktion.
+- Ausgeschaltete Funktionen bleiben ausgeschaltet. Weder Projektdateien noch die Tafel dürfen diese Einstellungen überschreiben.
+- Unter Einstellungen → Agent konfigurierst du die Aktivierung, Ausführung nach Dateiänderungen, Wiederholungsversuche, Runden und Bildaufnahmen.
 
-**Ins Projekt** und Tafel **Speichern** schreiben `.anvil/harness.json`, `graph.json` und `board.json`. Der Agent darf die Tafel lesen und bauen; `board_write` lässt sie offen. `Cargo.toml` allein ist keine Engine (nur Godot/Unity/Bevy).
+**Ins Projekt** und **Speichern** legen die Tafelkonfiguration in `.anvil/harness.json`, `graph.json` und `board.json` ab. Der Agent darf die Tafel lesen und bearbeiten; nach `board_write` bleibt sie geöffnet. Eine `Cargo.toml` allein kennzeichnet noch kein Engine-Projekt. Die Erkennung berücksichtigt Godot, Unity und Bevy.
 
-Layout zurück setzt auf den **verdrahteten** Standard (Write → Run → Fail → Patch), nicht auf leere Fläche.
+Das Zurücksetzen des Layouts stellt den verbundenen Standardablauf wieder her: Schreiben → Ausführen → Fehler prüfen → Korrigieren.
 
 ---
 
-## 12. Git, Tests, Debug
+## 12. Git, Tests und Debugger
 
-**Git** in der Leiste: Status, Diff, Commit, Push. Secrets und Tresor-Dateien gehören nicht in den Commit.
+Unter **Git** findest du Status, Dateiänderungen, Commits und Push. Zugangsdaten und Tresordateien gehören nicht in einen Commit.
 
-**Tests**: letzte Ausgabe als Liste, rot/grün, Klick auf Datei:Zeile. `pytest`, `npm test` oder Testdateien ausführen.
+Der Bereich **Tests** zeigt die Ergebnisse der letzten Ausführung. Grün steht für bestandene, Rot für fehlgeschlagene Tests. Ein Klick öffnet die zugehörige Datei und Zeile. Starte Tests beispielsweise mit `pytest`, `npm test` oder einer Testdatei.
 
-**Debug**: F5 auf der Datei. Schritte F10. JS im Debugger-Sandbox, Python analog soweit der Runner reicht.
+Mit **F5** startest du den Debugger für die geöffnete Datei. **F10** führt den nächsten Schritt aus. JavaScript läuft in einer Debugger-Sandbox; die verfügbaren Python-Funktionen hängen von der unterstützten Laufzeit ab.
 
 ---
 
@@ -381,37 +385,37 @@ Layout zurück setzt auf den **verdrahteten** Standard (Write → Run → Fail �
 
 Der Agent liest immer, wenn vorhanden:
 
-- `AGENTS.md` im Workspace
+- `AGENTS.md` im Projekt
 - `.anvil/rules.md`
-- plus das Feld **Regeln** in den Einstellungen
+- zusätzlich das Feld **Regeln** in den Einstellungen
 
-`ref/` extra: Specs, Screenshots, APIs. Chat `@ref` oder `@ref/datei.md`. Index-Zeile pro Datei, sobald der Korb wächst.
+Im Ordner `ref/` kannst du Anforderungen, Screenshots und API-Dokumentationen ablegen. Erwähne im Chat `@ref` oder eine einzelne Datei wie `@ref/datei.md`. Bei größeren Sammlungen verwendet Anvil eine Übersicht mit einem Eintrag je Datei.
 
 ---
 
 ## 14. Typische Störungen
 
-| Symptom | Tun |
+| Problem | Mögliche Lösung |
 |---|---|
-| Port 8080 belegt | stop.bat |
-| Einstellungen weg nach anderem Fenster | Immer über start.bat / Electron, nicht wild im Browser |
+| Port 8080 ist belegt | Beende Anvil mit stop.bat und starte es erneut. |
+| Einstellungen fehlen in einem anderen Fenster | Starte Anvil über denselben Weg, beispielsweise start.bat oder die Desktop-App. Ein anderer Browser kann einen eigenen Datenspeicher verwenden. |
 | Ollama „lokale URL“ | URL mit `/v1`, etwa `http://IP:11434/v1`, dann Modellliste laden. Desktop nutzt die native Modellleitung; direkter Browserzugriff benötigt passende CORS-Freigaben. |
-| Modell bricht ab | Versuche 3–5, keep-alive am Server, kleineres Modell |
-| Chat-Feld tot | Anfragephase oben im Chat beachten. Nach drei Minuten erscheint ein Hinweis zum manuellen Stoppen. Harter Stop nur wenn unter Agent gesetzt. Esc oder Stop beendet die Anfrage. |
-| HTML links, Konsole rechts, nichts zu sehen | Run im Fenster an, Vorschau im Editor aus |
-| Graph-Phasen im Chat obwohl Graph aus | Graph-Schalter in Einstellungen **und** Tafel; Chat zeigt Phasen nur wenn an |
-| Helfer nicht in der Leiste | Helfer an + Laden, nicht nur Katalog gewählt |
-| Companion „Website“ | Ist lokal. 127.0.0.1 = dieser PC. Einstellungen → Companion |
-| Temp voll (`anvil-run-*`) | Companion neu starten. Räumt `%TEMP%\anvil-run-*` / `anvil-fmt-*` / `anvil-dbg-*` selbst. GUI-Runs spätestens nach einer Stunde. |
-| Go/Rust startet nicht | Run in Anvil. Companion startet mit. Compiler fehlt → Netz |
+| Modellanfragen brechen ab | Prüfe die Wiederholungsversuche, die keep-alive-Einstellung des Modellservers und den verfügbaren Speicher. Ein kleineres Modell kann helfen. |
+| Chat reagiert nicht | Prüfe die Anfragephase oben im Chat. Nach drei Minuten erscheint ein Hinweis zum manuellen Abbrechen. Ein festes Zeitlimit gilt nur bei eingestelltem „Harter Stop“. Esc oder die Abbruchschaltfläche beendet die Anfrage. |
+| HTML-Vorschau ist nicht sichtbar | Aktiviere „In eigenem Fenster ausführen“ und deaktiviere gegebenenfalls die Vorschau im Editor. |
+| Graph-Phasen erscheinen trotz ausgeschaltetem Graphen | Prüfe den Graph-Schalter in den Einstellungen und auf der Tafel. Die Phasen sollten nur bei aktivierter Funktion erscheinen. |
+| Helfer fehlt in der Statusleiste | Aktiviere den Helfer und lade das Modell. Die Auswahl im Katalog allein lädt es noch nicht. |
+| Companion-Adresse ist unklar | Companion läuft standardmäßig lokal. 127.0.0.1 bezeichnet deinen Computer. Die Verbindung findest du unter Einstellungen → Companion. |
+| Temporäre Ausführungsdateien belegen viel Speicher | Starte Companion neu. Es bereinigt `%TEMP%\anvil-run-*`, `anvil-fmt-*` und `anvil-dbg-*`; grafische Ausführungen spätestens nach einer Stunde. |
+| Go oder Rust startet nicht | Prüfe unter Companion, ob der benötigte Compiler verfügbar ist. Ein Online-Compiler kann als ausdrücklich aktivierte Ausweichlösung dienen. |
 
 ---
 
-## 15. Daten und Reset
+## 15. Daten und Zurücksetzen
 
-- **Nur Einstellungen zurücksetzen** — Workspace bleibt
-- **Workspace zurücksetzen** — Dateien und Chat
-- **Werksreset** (Intern) — alles inkl. Speicher, mit Nachfrage
-- Export/Import unter Daten: JSON der IDE-Einstellungen, ohne Secrets
-- **Konto:** GitHub-Gist oder Google Drive (App-Daten) lädt dieselben Einstellungen auf einem anderen Rechner. Keine Keys.
-- **Update:** Daten → prüfen / ZIP in Ordner / Setup. ZIP ist kein Portable-Exe.
+- **Nur Einstellungen zurücksetzen** setzt die Konfiguration zurück; das Projekt bleibt erhalten.
+- **Projekt zurücksetzen** betrifft Dateien und Chat.
+- **Auf Werkseinstellungen zurücksetzen** unter Intern löscht nach einer Nachfrage die Einstellungen und gespeicherten Daten.
+- Unter Daten kannst du die Anvil-Einstellungen als JSON exportieren oder importieren. Zugangsdaten werden nicht exportiert.
+- **Konto:** Über GitHub-Gist oder Google Drive kannst du Einstellungen auf einen anderen Computer übertragen. API-Schlüssel werden nicht mit übertragen.
+- **Updates:** Unter Daten suchst du nach neuen Versionen und lädst die ZIP-Datei oder den Installer herunter. Die portable ZIP-Datei muss vollständig entpackt werden, bevor du die enthaltene `Anvil.exe` startest.

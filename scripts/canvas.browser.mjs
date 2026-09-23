@@ -269,13 +269,13 @@ try {
       { count: 0, local: "3", session: "session" },
     );
     check("restart resets JavaScript and preserves separate project stores");
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.getByRole("button", { name: "Stoppen", exact: true }).click();
     check(
       "Stop terminates the entire document",
       await page
         .locator('iframe[title="Vorschau"]')
         .contentFrame()
-        .getByText("Gestoppt. Run startet neu.")
+        .getByText("Die Ausführung wurde gestoppt. Mit „Ausführen“ kannst du sie erneut starten.")
         .isVisible(),
     );
     check("a stopped document rejects play", !(await play(["ok"])).ok);
@@ -379,7 +379,7 @@ try {
   await fixture(files);
   await run();
   const popupEvent = page.waitForEvent("popup");
-  await page.getByRole("button", { name: "Run-Fenster", exact: true }).last().click();
+  await page.getByRole("button", { name: "Ausgabefenster", exact: true }).last().click();
   const popup = await popupEvent;
   await popup.waitForFunction(() => !!window.__anvilIde?.getState().files["index.html"]);
   await popup.locator('iframe[title="Vorschau"]').waitFor();

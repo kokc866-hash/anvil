@@ -195,7 +195,7 @@ async function runHeal(heal: HealId, fault?: InternFault): Promise<string> {
   }
   if (heal === "soft-restart") {
     useIntern.getState().restart("soft");
-    return "Weicher Neustart";
+    return "Oberfläche neu gestartet";
   }
   if (heal === "hard-reload") {
     location.reload();
@@ -214,7 +214,7 @@ async function runHeal(heal: HealId, fault?: InternFault): Promise<string> {
     };
     const pack = filesFromBoard(defaultBoard(s), s);
     for (const [p, c] of Object.entries(pack)) st.writeFile(p, c);
-    st.setNotice("Tafel auf Standard");
+    st.setNotice("Tafel auf die Standardkonfiguration zurückgesetzt");
     return "Tafel zurückgesetzt";
   }
   if (heal === "preview-reload") {
@@ -232,7 +232,7 @@ async function runHeal(heal: HealId, fault?: InternFault): Promise<string> {
     const msg = `Fix this intern error:\n${fault?.kind ?? "js"}: ${fault?.msg ?? ""}\nFind the cause and patch it in the workspace.`;
     useIde.getState().pushAgent(msg);
     useIde.getState().setNotice("Auftrag an den Agenten");
-    return "An den Agenten gegeben";
+    return "Auftrag an den Agenten gesendet";
   }
   return "ok";
 }
@@ -275,11 +275,11 @@ async function factoryWipe() {
 }
 
 export const HEAL_LABEL: Record<HealId, string> = {
-  "board-reset": "Tafel-Standard",
+  "board-reset": "Tafel zurücksetzen",
   "agent-abort": "Agent stoppen",
-  "soft-restart": "Oberfläche neu",
-  "hard-reload": "Seite neu",
-  "preview-reload": "Vorschau neu",
-  "agent-task": "An Agent",
+  "soft-restart": "Oberfläche neu starten",
+  "hard-reload": "Seite neu laden",
+  "preview-reload": "Vorschau neu laden",
+  "agent-task": "An den Agenten senden",
   none: "—",
 };

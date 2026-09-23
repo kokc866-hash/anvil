@@ -1,4 +1,4 @@
-import { abortAgent, agentAborted, agentBeatN, beginAgent, stopAgent } from "./abort";
+import { abortAgent, agentAborted, agentBeatN, agentGen, beginAgent, stopAgent } from "./abort";
 import { note } from "./intern";
 import { useIde } from "@/store/ide";
 
@@ -66,22 +66,24 @@ function tick(): void {
     const min = Math.round(kill / 60_000);
     note("agent", `Agent ${min} Min ohne Fortschritt`);
     void import("./app-log").then((m) => m.appLog("hang", `${min} min ohne Fortschritt`));
-    stopAgent(`Kein Fortschritt seit ${min} Minuten — abgebrochen. Nochmal senden.`);
-    st.setNotice(`Agent ${min} Min ohne Fortschritt — abgebrochen.`);
+    stopAgent(`Der Auftrag wurde nach ${min} Minuten ohne erkennbaren Fortschritt abgebrochen. Sende eine weitere Nachricht, um fortzufahren.`);
+    st.setNotice(`Der Agentenauftrag wurde nach ${min} Minuten ohne erkennbaren Fortschritt abgebrochen.`);
     busySince = 0;
     noted = false;
     return;
   }
   if (wait >= STALL_NOTE_MS && !noted) {
     noted = true;
-    st.setNotice("Agent wartet auf das Modell. Stop beendet den Auftrag.");
+    st.setNotice("Der Agent wartet auf die Modellantwort. Mit „Stoppen“ kannst du den Auftrag beenden.");
   }
 }
 
 export function startHealth(): void {
   if (typeof window === "undefined" || started) return;
   started = true;
-  recoverSession();
+  // This module loads lazily. Only recover persisted work before a request has
+  // started in this renderer; late startup must not abort a fresh queue entry.
+  if (agentGen() === 0) recoverSession();
   timer = window.setInterval(tick, 4000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;

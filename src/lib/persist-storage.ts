@@ -237,7 +237,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
                 void import("./intern").then((m) =>
                   m.note(
                     "persist",
-                    `${dropped} Dateien passen nicht in die Browser-Sicherung. ${onDisk ? "Speicherstatus des Ordners beachten." : "Einen Ordner auf der Platte nutzen."}`,
+                    `${dropped} Dateien passen nicht in die Browser-Sicherung. ${onDisk ? "Prüfe, ob die Dateien im Projektordner gespeichert sind." : "Wähle einen lokalen Projektordner, um die Dateien dort zu speichern."}`,
                   ),
                 );
               }

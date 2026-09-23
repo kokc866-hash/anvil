@@ -22,6 +22,7 @@ import { AgentPulse } from "./agent-pulse";
 import { finishedHarness } from "@/lib/chat-finalize";
 import { checkpointRestorePlan } from "@/lib/restore-plan";
 import { requestCheckpointRestore } from "@/lib/restore-request";
+import { useBackgroundAgent, backgroundRunning, restoreBackgroundFiles, applyBackgroundDrafts } from '@/lib/background-agent';
 
 export function ThinkBlock({
   text,
@@ -219,7 +220,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
   const hasRound = Boolean(m.changes?.length || m.checkpointId);
   const hasRun = Boolean(run?.path || run?.running || run?.stdout || run?.stderr);
   const labelOf = (name: string) => stepLabel(name, locale);
-  const harness = live ? m.harness : finishedHarness(m.harness, m.plan, /^Stop(?:ped)?\b/.test(m.harness || ""), locale);
+  const harness = m.backgroundContinued ? (locale==='en'?'Continued in the next task':'Im nächsten Auftrag fortgesetzt') : m.backgroundWaiting ? (locale==='en'?'Waiting for your answer':'Wartet auf deine Antwort') : live ? m.harness : finishedHarness(m.harness, m.plan, /^Stop(?:ped)?\b/.test(m.harness || ""), locale,m.incompleteReason);
   if (!steps.length && !hasRun && !frames.length && !m.lastTests && !hasRound && !m.harness && !live) {
     if (fill) return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-bg px-2.5 py-2" />;
     return <HelperLaneBits />;
@@ -351,6 +352,8 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
   const [ask, setAsk] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const ck = useIde((s) => s.checkpoints.find((c) => c.id === m.checkpointId) ?? null);
+  const currentJob=useBackgroundAgent(s=>s.job);
+  const background=currentJob?.id===m.backgroundJobId?currentJob:null;
   const now = useIde((s) => s.files);
   const dirs = useIde((s) => s.dirs);
   const en = useIde((s) => s.locale === "en");
@@ -358,12 +361,12 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
   const changes = m.changes ?? [];
   const plus = changes.reduce((n, c) => n + (c.add || 0), 0);
   const minus = changes.reduce((n, c) => n + (c.del || 0), 0);
-  const hasSnap = Boolean(ck);
+  const hasSnap = Boolean(ck||background&&!backgroundRunning(background)&&!background.restored&&Object.values(background.drafts).some(d=>d.applied));
 
   async function restore() {
-    if (!m.checkpointId) return;
+    if (!m.checkpointId&&!background) return;
     setRestoring(true);
-    try { if (await useIde.getState().restoreCheckpoint(m.checkpointId)) setAsk(false); }
+    try { if(background){await restoreBackgroundFiles();setAsk(false);}else if (m.checkpointId&&await useIde.getState().restoreCheckpoint(m.checkpointId)) setAsk(false); }
     finally { setRestoring(false); }
   }
 
@@ -415,10 +418,11 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
         {restorePlan.conflicts.map((p) => <p key={p} className="text-danger">{p}</p>)}
         {!restorePlan.files.length && !restorePlan.mkdir.length && !restorePlan.rmdir.length && !restorePlan.conflicts.length ? <p>{en ? "Already restored; no files will change." : "Bereits zurückgenommen; keine Dateien werden geändert."}</p> : null}
       </div> : null}
+      {ask&&background&&<p className="my-2 text-[11px] text-muted">{en?'Restore this task’s saved files, including removing newly created files. Later edits are protected. External actions and Git commits remain.':'Gespeicherte Dateien dieses Auftrags zurücksetzen; neu erstellte Dateien werden entfernt. Spätere Bearbeitungen sind geschützt. Externe Aktionen und Git-Commits bleiben bestehen.'}</p>}
       {changes.slice(0, 32).map((c) => {
         const shown = open === c.path;
-        const before = ck?.files[c.path] ?? "";
-        const after = c.kind === "del" ? "" : (ck?.endFiles?.[c.path] ?? now[c.path] ?? "");
+        const before = background?.drafts[c.path]?.before ?? ck?.files[c.path] ?? "";
+        const after = c.kind === "del" ? "" : (background?.drafts[c.path]?.after ?? ck?.endFiles?.[c.path] ?? now[c.path] ?? "");
         return (
           <div key={c.path} className="mt-0.5">
             <button
@@ -443,12 +447,12 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
                 {c.kind === "del" ? (
                   <p className="text-[10px] text-danger">{t("trailDeleted")}</p>
                 ) : (
-                  <MiniDiff before={before} after={after} />
+                  m.backgroundJobId?<MiniDiff before="" after="" rows={m.backgroundDiffs?.[c.path]||[]}/>:<MiniDiff before={before} after={after} />
                 )}
                 <button
                   type="button"
                   className="mt-0.5 text-[10px] text-muted hover:text-fg"
-                  onClick={() => useIde.getState().openRoundDiff(c.path, m.checkpointId)}
+                  onClick={() => background?(background.drafts[c.path]?.applied?useIde.getState().openFile(c.path):void applyBackgroundDrafts()):m.backgroundJobId?useIde.getState().openFile(c.path):useIde.getState().openRoundDiff(c.path, m.checkpointId)}
                 >
                   {t("inEditor")}
                 </button>
@@ -461,8 +465,8 @@ function RoundFiles({ m, live }: { m: ChatMsg; live: boolean }) {
   );
 }
 
-function MiniDiff({ before, after }: { before: string; after: string }) {
-  const rows = diffPreview(before, after, 2, 80);
+function MiniDiff({ before, after,rows:storedRows }: { before: string; after: string;rows?:import('@/lib/diff').DiffRow[] }) {
+  const rows = storedRows??diffPreview(before, after, 2, 80);
   if (!rows.length) return <p className="text-[10px] text-subtle">—</p>;
   return (
     <pre className="max-h-40 overflow-auto font-mono text-[10px] leading-4">

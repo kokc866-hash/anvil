@@ -274,7 +274,7 @@ export function EditorPane() {
       const next = stripFence(raw);
       if (ticket !== inlineTicket.current) return;
       const cur = snap.content ?? "";
-      if (!applyDocument(snap, cur.slice(0, inline.start) + next + cur.slice(inline.end))) { useIde.getState().setNotice("Datei inzwischen geändert; Inline-Edit nicht übernommen."); }
+      if (!applyDocument(snap, cur.slice(0, inline.start) + next + cur.slice(inline.end))) { useIde.getState().setNotice("Die Datei wurde inzwischen geändert. Der Änderungsvorschlag wurde deshalb nicht übernommen."); }
       (inlineTicket.current++, setInline(null));
     } catch (err) {
       if (ticket !== inlineTicket.current) return;
@@ -346,7 +346,7 @@ export function EditorPane() {
             onClick={() => {
               void import("@/lib/disk").then(async (d) => {
                 if (!d.diskSupported()) {
-                  useIde.getState().setNotice("Ordnerwahl nur in Chrome/Edge/Electron.");
+                  useIde.getState().setNotice("Die Ordnerauswahl ist in Chrome, Edge und der Anvil-Desktop-App verfügbar.");
                   return;
                 }
                 try {
@@ -359,7 +359,7 @@ export function EditorPane() {
                   const n = Object.keys(pack.files).length;
                   st.setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
                 } catch (err) {
-                  useIde.getState().setNotice(err instanceof Error ? err.message : "Ordner fehlgeschlagen");
+                  useIde.getState().setNotice(err instanceof Error ? err.message : "Der Ordner konnte nicht geöffnet werden.");
                 }
               });
             }}
@@ -466,7 +466,7 @@ export function EditorPane() {
                   void confirmApp(t("dropFiles").replace("{n}", String(files.length)), { ok: t("dropOk") }).then((ok) => {
                     if (!ok) return;
                     void importDropped(files, "").then((n) => {
-                      if (n) useIde.getState().setNotice(`${n} Dateien`);
+                      if (n) useIde.getState().setNotice(`${n} Dateien hinzugefügt`);
                     });
                   });
                   return;
@@ -539,9 +539,11 @@ export function EditorPane() {
                   )}
                   title="Offene Dateien"
                   aria-expanded={tabFly?.id === "all"}
-                  onClick={(e) =>
-                    setTabFly((v) => (v?.id === "all" ? null : { id: "all", el: e.currentTarget }))
-                  }
+                  onClick={(e) => {
+                    // React clears currentTarget after dispatch; the updater may run later.
+                    const el = e.currentTarget;
+                    setTabFly((v) => (v?.id === "all" ? null : { id: "all", el }));
+                  }}
                 >
                   {openPaths.length}
                   <ChevronDown className={cn("size-3 shrink-0", tabFly?.id === "all" && "rotate-180")} />
@@ -560,9 +562,10 @@ export function EditorPane() {
                   )}
                   title={`${g.paths.length} ${g.k}`}
                   aria-expanded={tabFly?.id === g.k}
-                  onClick={(e) =>
-                    setTabFly((v) => (v?.id === g.k ? null : { id: g.k, el: e.currentTarget }))
-                  }
+                  onClick={(e) => {
+                    const el = e.currentTarget;
+                    setTabFly((v) => (v?.id === g.k ? null : { id: g.k, el }));
+                  }}
                 >
                   {g.k}
                   <span className="tabular-nums">{g.paths.length}</span>
@@ -592,7 +595,7 @@ export function EditorPane() {
           <Button
             className="h-8 w-8 p-0"
             title={t("runWindow")}
-            aria-label="Run-Fenster"
+            aria-label="Ausgabefenster"
             kbd={kRunWin}
             onClick={() => {
               if (/\.html?$/i.test(activePath || "")) openRunWindow();
@@ -622,7 +625,7 @@ export function EditorPane() {
               <Button className="h-8 w-8 p-0" disabled={!debug.paused} onClick={() => debugStep()} title="Schritt" kbd={kStep}>
                 <StepForward className="size-3.5" />
               </Button>
-              <Button className="h-8 w-8 p-0" variant="danger" onClick={() => debugStop()} title="Stop" kbd={kDbgStop}>
+              <Button className="h-8 w-8 p-0" variant="danger" onClick={() => debugStop()} title="Stoppen" kbd={kDbgStop}>
                 <Square className="size-3.5" />
               </Button>
             </>
@@ -829,7 +832,7 @@ export function EditorPane() {
               void confirmApp(t("dropFiles").replace("{n}", String(files.length)), { ok: t("dropOk") }).then((ok) => {
                 if (!ok) return;
                 void importDropped(files, dir).then((n) => {
-                  if (n) useIde.getState().setNotice(`${n} nach ${dir || "/"}`);
+                  if (n) useIde.getState().setNotice(`${n} Dateien nach ${dir || "/"} eingefügt`);
                 });
               });
               return;
@@ -890,10 +893,10 @@ export function EditorPane() {
               label: "Andere schließen",
               onClick: () => void askCloseOthers(tabMenu.path),
             },
-            { label: "Im Explorer", onClick: () => useIde.getState().revealPath(tabMenu.path) },
+            { label: "In der Dateiliste anzeigen", onClick: () => useIde.getState().revealPath(tabMenu.path) },
             { label: "Pfad kopieren", onClick: () => void navigator.clipboard.writeText(tabMenu.path) },
             {
-              label: "Nach ref/",
+              label: "In Referenzordner kopieren",
               onClick: () => {
                 const st = useIde.getState();
                 const dest = copyIntoRef(st.files, tabMenu.path);
@@ -906,15 +909,15 @@ export function EditorPane() {
               },
             },
             {
-              label: "Agent: erklären",
+              label: "Vom Agenten erklären lassen",
               onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(tabMenu.path, "explain")),
             },
             {
-              label: "Agent: Tests",
+              label: "Tests vom Agenten erstellen lassen",
               onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(tabMenu.path, "tests")),
             },
             {
-              label: "Agent: Review",
+              label: "Code vom Agenten prüfen lassen",
               onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(tabMenu.path, "review")),
             },
           ]}

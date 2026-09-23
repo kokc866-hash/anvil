@@ -29,6 +29,7 @@ ipcRenderer.on("secrets-changed", (_event, state) => {
 
 contextBridge.exposeInMainWorld("anvilCompanionToken", companionToken);
 contextBridge.exposeInMainWorld("anvilNative", {
+  agentJob: (action, payload) => ipcRenderer.invoke("agent-job", action, payload),
   acpProbe: (request) => ipcRenderer.invoke("acp-probe", request),
   acpCancel: () => ipcRenderer.invoke("acp-cancel"),
   interactionCheckRun: (payload) => ipcRenderer.invoke("interaction-check-run", payload),

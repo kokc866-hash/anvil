@@ -238,6 +238,8 @@ export const useIde = create<IdeState>()(
       harnessAfterWrite: "run",
       harnessMaxRounds: 24,
       harnessAutoContinue: true,
+      backgroundAgent: false,
+      backgroundWriteThrough: false,
       graphSees: 4,
       liveRun: true,
       liveEditor: true,
@@ -1327,6 +1329,7 @@ export const useIde = create<IdeState>()(
         const cur = get().sessionTokens;
         set({
           sessionTokens: {
+            ...cur,
             prompt: (tokenCount(cur.prompt) ?? 0) + (tokenCount(prompt) ?? 0),
             completion: (tokenCount(cur.completion) ?? 0) + (tokenCount(completion) ?? 0),
             estimated: (cur.estimated ?? (cur.prompt + cur.completion > 0)) || estimated || tokenCount(prompt) === undefined || tokenCount(completion) === undefined,
@@ -1596,6 +1599,8 @@ export const useIde = create<IdeState>()(
           autoUpdate: p.autoUpdate !== false,
           planWho: normalizePlanWho(p.planWho),
           engineLoop: p.engineLoop === true,
+          backgroundAgent: p.backgroundAgent === true,
+          backgroundWriteThrough: p.backgroundWriteThrough === true,
           locale: p.locale === "en" || p.locale === "de" ? p.locale : current.locale,
           helpPreferences: (() => {
             const v = p.helpPreferences as Partial<IdeState["helpPreferences"]> | undefined;

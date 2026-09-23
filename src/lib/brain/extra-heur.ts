@@ -9,7 +9,7 @@ export function heuristicTabHint(path: string, src: string): string {
 
 export function heuristicStopNote(steps: { name: string; detail?: string; status: string }[]): string {
   const done = steps.filter((s) => s.status === "ok").slice(-6);
-  if (!done.length) return "Nichts geschrieben. Nochmal senden setzt hier an.";
+  if (!done.length) return "Es wurde noch kein Arbeitsschritt erfolgreich abgeschlossen. Sende eine weitere Nachricht, um fortzufahren.";
   return done
     .map((s) => `- ${s.name}${s.detail ? ` ${s.detail.slice(0, 48)}` : ""}`)
     .slice(0, 3)

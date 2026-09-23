@@ -59,7 +59,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: ["grok-4.5"],
     needsKey: false,
     needsUrl: false,
-    hint: "Eingebaut, wenn die App ihn bereitstellt. Sonst Ollama oder OpenAI.",
+    hint: "Nur verfügbar, wenn diese Anvil-Version einen integrierten Modellzugang bereitstellt. Wähle andernfalls eine andere Verbindung.",
   },
   {
     id: "brain",
@@ -71,7 +71,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: [],
     needsKey: false,
     needsUrl: false,
-    hint: "Kein Agent. Nur Kurzbefehle. Hauptmodell unter Agent wählen.",
+    hint: "Der Helfer übernimmt kurze Hilfsaufgaben. Das Modell für Chat und Agent wählst du unter Agent.",
   },
   {
     id: "ollama",
@@ -83,7 +83,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: ["llama3.1", "llama3.2", "qwen2.5-coder", "codellama", "mistral"],
     needsKey: false,
     needsUrl: true,
-    hint: "Standard ist dieser PC (127.0.0.1). Anderer Rechner im Netz: URL http://IP:11434/v1 eintragen.",
+    hint: "Verbindet sich standardmäßig mit Ollama auf diesem Rechner. Für einen anderen Rechner trägst du dessen Serveradresse ein.",
   },
   {
     id: "lmstudio",
@@ -95,7 +95,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: [],
     needsKey: false,
     needsUrl: true,
-    hint: "Local Server starten, CORS im Server-Tab einschalten.",
+    hint: "Starte den lokalen Server in LM Studio und aktiviere CORS in den Servereinstellungen.",
   },
   {
     id: "llamacpp",
@@ -131,7 +131,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: [],
     needsKey: false,
     needsUrl: true,
-    hint: "LocalAI Drop-in für OpenAI.",
+    hint: "Verbindet sich mit der OpenAI-kompatiblen Schnittstelle von LocalAI.",
   },
   {
     id: "jan",
@@ -229,7 +229,7 @@ export const PROVIDERS: ProviderSpec[] = [
     needsKey: true,
     needsUrl: false,
     needsSub: "claude",
-    hint: "Cloud: Anthropic API-Key. Abo: installierte Claude Code CLI mit claude auth login.",
+    hint: "Nutze einen Anthropic-API-Schlüssel oder die Anmeldung der installierten Claude Code CLI. Für das Abo: claude auth login.",
   },
   {
     id: "google",
@@ -241,7 +241,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
     needsKey: true,
     needsUrl: false,
-    hint: "API-Key von aistudio.google.com. Gemini-CLI-Abo geht in Anvil nicht.",
+    hint: "Benötigt einen API-Schlüssel von aistudio.google.com. Die Anmeldung über die Gemini CLI wird in Anvil nicht unterstützt.",
   },
   {
     id: "groq",
@@ -253,7 +253,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "qwen-qwq-32b"],
     needsKey: true,
     needsUrl: false,
-    hint: "Schnelle Cloud-Inferenz. Key von console.groq.com",
+    hint: "Verarbeitet Anfragen bei Groq. Benötigt einen API-Schlüssel von console.groq.com.",
   },
   {
     id: "together",
@@ -313,7 +313,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: ["openrouter/auto", "openai/gpt-6-astra", "anthropic/claude-sonnet-5", "google/gemini-2.5-flash"],
     needsKey: true,
     needsUrl: false,
-    hint: "Ein Key, viele Modelle. openrouter.ai",
+    hint: "Mit einem API-Schlüssel von openrouter.ai stehen Modelle verschiedener Anbieter zur Auswahl.",
   },
   {
     id: "xai",
@@ -410,7 +410,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: [],
     needsKey: true,
     needsUrl: true,
-    hint: "Resource-URL plus Deployment-Name als Modell.",
+    hint: "Trage die URL deiner Azure-Ressource ein. Verwende den Namen der Modellbereitstellung als Modellname.",
   },
   {
     id: "custom",
@@ -422,7 +422,7 @@ export const PROVIDERS: ProviderSpec[] = [
     models: [],
     needsKey: false,
     needsUrl: true,
-    hint: "Beliebige OpenAI-kompatible /v1/chat/completions API.",
+    hint: "Verbindet sich mit einer OpenAI-kompatiblen Schnittstelle für /v1/chat/completions.",
   },
 ];
 

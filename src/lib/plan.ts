@@ -94,7 +94,56 @@ function serviceStep(text: string, operation: string, explicit = false): boolean
   return explicit || /mcp|fremd|fläche|surface|dienst|service|verbindung|connection|werkzeug|tool/i.test(text);
 }
 
+const knowledgeReads = new Set(["memory_list", "skill_list", "skill_read"]);
+const knowledgeEdits = new Set(["memory_add", "memory_forget", "skill_write", "skill_patch"]);
+const knowledgeTools = new Set([...knowledgeReads, ...knowledgeEdits, "skill_run", "skill_outcome"]);
+
+function knowledgeRequirements(text: string): string[] | undefined {
+  const explicit = [...text.matchAll(/\b(memory|skill)_([a-z]+(?:\/[a-z]+)*)\b/gi)]
+    .flatMap(match => match[2].toLowerCase().split("/").map(action => `${match[1].toLowerCase()}_${action}`));
+  if (explicit.length) return [...new Set(explicit)];
+  const required: string[] = [];
+  const add = (name: string, pattern: RegExp) => { if (pattern.test(text)) required.push(name); };
+  if (/gedächtnis|erinnerung|\bmemor(?:y|ies)\b/i.test(text)) {
+    add("memory_list", /\bles|auflist|anzeig|abruf|\bread|\blist|\bview|\bsearch|such/i);
+    add("memory_add", /speicher|hinzufüg|anleg|erstell|notier|schreib|\badd\b|\bcreate|\bstore|\bsave|\bwrite/i);
+    add("memory_forget", /vergess|lösch|entfern|\bforget|\bdelete|\bremove/i);
+  }
+  if (/\bskills?\b|fertigkeit/i.test(text)) {
+    add("skill_list", /auflist|\blist|verfügbar|\bavailable/i);
+    add("skill_read", /\bles|\bread|ansehen|abruf/i);
+    add("skill_write", /schreib|erstell|anleg|speicher|\bwrite|\bcreate/i);
+    add("skill_patch", /änder|überarbeit|ergänz|aktualis|verbesser|anpass|\bedit|\bpatch|\bupdate/i);
+    add("skill_run", /nutz|verwend|ausführ|anwend|\brun|\buse|\bapply/i);
+    add("skill_outcome", /bewert|erfolg|ergebnis|\boutcome|\bresult|\bevaluat|\breport/i);
+  }
+  return required.length ? [...new Set(required)] : undefined;
+}
+
+/** undefined: not a knowledge step. Explicit compound steps need every named action.
+ * Using a skill returns instructions; it never proves a program run or a test. */
+export function knowledgeStepMatches(step: PlanStep, names: string[]): boolean | undefined {
+  const required = knowledgeRequirements(step.text);
+  if (!required) return undefined;
+  return required.every(name => knowledgeTools.has(name) && names.includes(name)
+    && (!step.kind || (step.kind === "service" && !knowledgeReads.has(name))
+      || (step.kind === "read" && knowledgeReads.has(name))
+      || (step.kind === "edit" && knowledgeEdits.has(name))));
+}
+
 function apply(name: string, next: PlanStep[], status: PlanStep["status"], args: ToolArgs = {}, result?: unknown) {
+  if (knowledgeTools.has(name)) {
+    mark(next, s => knowledgeStepMatches(s, [name]) === true, status);
+    return;
+  }
+  if (/^git_/.test(name)) {
+    const action=name.slice(4);
+    mark(next,s=>{
+      if(action==='status')return /(?:git.*status|status.*git|versions?stand)/i.test(s.text)&&!/commit|push|clone/i.test(s.text);
+      return new RegExp(action,'i').test(s.text);
+    },status);
+    return;
+  }
   if (/^engine_(detect|status)$/.test(name)) {
     // A model may classify discovery as a check. Only the explicit discovery
     // step is evidenced here, never the later engine validation or launch.
@@ -106,12 +155,12 @@ function apply(name: string, next: PlanStep[], status: PlanStep["status"], args:
     : /^(write_file|edit_file|append_file|delete_file|rename|mkdir|format_file)$/.test(name) ? "edit"
     : name === "mcp_call" ? "service"
     : name === "engine_run" ? (/check|test/.test(String(args.action ?? "check")) ? "check" : /play|editor/.test(String(args.action)) ? "run" : undefined)
-    : name === "shell" && parseTestCommand(String(args.command ?? "")) ? "check"
+    : name === "shell" ? (parseTestCommand(String(args.command ?? "")) ? "check" : "run")
     : /^(see_run|tests)$/.test(name) ? "check"
     : /^(run_file|play|open_preview)$/.test(name) ? "run" : undefined;
   if (next.some(s => s.kind)) {
     if (kind && !(kind === "check" && pending && status === "ok"))
-      mark(next, s => s.kind === kind && (kind !== "service" || serviceStep(s.text, String(args.name ?? ""), true)), status);
+      mark(next, s => s.kind === kind && knowledgeRequirements(s.text) === undefined && (kind !== "service" || serviceStep(s.text, String(args.name ?? ""), true)), status);
     return;
   }
   if (name === "mcp_call") {
@@ -121,7 +170,6 @@ function apply(name: string, next: PlanStep[], status: PlanStep["status"], args:
   }
   else if (/^mcp_(list|read)/.test(name)) mark(next, (s) => /katalog|catalog|werkzeuge.*(auflist|such)|list.*tools/i.test(s.text), status);
   else if (/git_/.test(name)) mark(next, (s) => /git|commit|push/i.test(s.text), status);
-  else if (/skill_/.test(name)) mark(next, (s) => /skill|hilfe|help/i.test(s.text), status);
   else if (/write|edit|append|delete|rename|mkdir|format/.test(name))
     mark(next, (s) => !readStep(s.text) && !runStep(s.text) && !checkStep(s.text) && (editAction(s.text) || /layout|farb|ui|interakt|style|css|html/i.test(s.text)), status);
   else if (name === "engine_run") {

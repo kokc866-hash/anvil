@@ -1,5 +1,6 @@
 /** Reine Parser/Heuristiken — ohne Store, testbar unter node --test. */
-import { load, dump, FAILSAFE_SCHEMA } from "js-yaml";
+import { load, FAILSAFE_SCHEMA } from "js-yaml";
+import {serializeKnowledgeSkill} from '../../electron/knowledge-skill.mjs';
 
 export type LearnKind = "user" | "project" | "lesson";
 export type SkillKind = "guide" | "plugin";
@@ -115,8 +116,5 @@ export function parseSkillMd(
 
 /** Keep unfamiliar metadata (license, compatibility, allowed-tools, etc.) on export. */
 export function serializeSkillMd(skill: { name: string; when: string; body: string; kind: SkillKind; scope: LearnScope; frontmatter?: string }): string {
-  const existing = load(skill.frontmatter || "{}", { schema: FAILSAFE_SCHEMA });
-  const extras = existing && typeof existing === "object" && !Array.isArray(existing) ? Object.fromEntries(Object.entries(existing).filter(([key]) => !["name", "description", "when", "kind", "scope"].includes(key))) : {};
-  const head = dump({ name: skill.name, description: skill.when || skill.name, when: skill.when || skill.name, kind: skill.kind, scope: skill.scope, ...extras }, { schema: FAILSAFE_SCHEMA, lineWidth: -1 });
-  return `---\n${head}---\n${skill.body}\n`;
+  return serializeKnowledgeSkill(skill);
 }

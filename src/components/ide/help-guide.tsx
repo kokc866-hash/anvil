@@ -138,7 +138,7 @@ export function HelpGuide() {
       </div>
       <h3 id="anvil-help-title" className="mt-2 text-sm font-medium">{en ? entry.en : entry.de}</h3>
       <p id="anvil-help-body" className="mt-2 text-xs leading-relaxed text-muted">{en ? entry.bodyEn : entry.bodyDe}</p>
-      {!active ? <p className="mt-2 text-[10px] text-muted">{text("F1: Hilfe bedienen · Esc: schließen", "F1: focus help · Esc: close")}</p> : null}
+      {!active ? <p className="mt-2 text-[10px] text-muted">{text("F1: Fokus auf die Hilfe · Esc: schließen", "F1: focus help · Esc: close")}</p> : null}
       {active && !rect ? <p className="mt-2 text-xs text-muted">{text("Dieser Bereich ist im aktuellen Layout ausgeblendet.", "This area is hidden in the current layout.")}</p> : null}
       <div className="mt-4 flex flex-wrap gap-2">
         {active ? <>

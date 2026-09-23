@@ -229,7 +229,7 @@ export function FileTree() {
           return;
         }
         if (!diskSupported()) {
-          setNotice("Ordner öffnen braucht Chrome/Edge oder das Anvil-Fenster.");
+          setNotice("Zum Öffnen eines Ordners benötigst du Chrome, Edge oder die Anvil-Desktop-App.");
           return;
         }
         const pack = await pickFolder();
@@ -239,7 +239,7 @@ export function FileTree() {
         if (first) openFile(first);
         const n = Object.keys(pack.files).length;
         setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
-      })().catch((err) => setNotice(err instanceof Error ? err.message : "Ordner nicht geöffnet"));
+      })().catch((err) => setNotice(err instanceof Error ? err.message : "Der Ordner konnte nicht geöffnet werden."));
     }
     function onSave() { void import("@/lib/save").then((s) => s.saveNow({ all: true })); }
 
@@ -304,7 +304,7 @@ export function FileTree() {
           { label: "Umbenennen", onClick: () => { setRenaming(menu.path); setRenameTo(menu.path); } },
           { label: "Duplizieren", onClick: () => duplicateFile(menu.path) },
           { label: "Pfad kopieren", onClick: () => { void navigator.clipboard.writeText(menu.path); setNotice("Pfad kopiert"); } },
-          { label: "Nach ref/", onClick: () => {
+          { label: "In Referenzordner kopieren", onClick: () => {
             void import("@/lib/ref").then((r) => {
               const st = useIde.getState();
               const dest = r.copyIntoRef(st.files, menu.path);
@@ -318,10 +318,10 @@ export function FileTree() {
             });
           } },
           { sep: true, label: "" },
-          { label: "Agent: erklären", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "explain")) },
-          { label: "Agent: Tests", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "tests")) },
-          { label: "Agent: Review", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "review")) },
-          { label: "Agent: beheben", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "fix")) },
+          { label: "Vom Agenten erklären lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "explain")) },
+          { label: "Tests vom Agenten erstellen lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "tests")) },
+          { label: "Code vom Agenten prüfen lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "review")) },
+          { label: "Fehler vom Agenten beheben lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askFile(menu.path, "fix")) },
           { sep: true, label: "" },
           { label: "Löschen", danger: true, onClick: () => { void confirmApp(`„${menu.path}“ löschen?`, { danger: true, ok: "Löschen" }).then((ok) => { if (ok) deleteFile(menu.path); }); } },
         ]
@@ -364,7 +364,7 @@ export function FileTree() {
             className="h-7 px-2 text-[11px]"
             onClick={() => window.dispatchEvent(new Event("anvil-open-disk"))}
           >
-            <FolderOpen className="size-3.5" /> {canOpenOsWorkspace() ? "Desktop-Ordner" : t("open")}
+            <FolderOpen className="size-3.5" /> {canOpenOsWorkspace() ? t("openFolder") : t("open")}
           </Button>
           <Button variant="quiet" className="h-7 px-2 text-[11px]" onClick={() => window.dispatchEvent(new Event("anvil-save-disk"))}>
             <Save className="size-3.5" /> Speichern
@@ -491,7 +491,7 @@ export function FileTree() {
       >
         {items.length === 0 && !creating ? (
           <div className="px-3 py-4 text-sm text-muted">
-            <p>Noch leer.</p>
+            <p>Das Projekt enthält noch keine Dateien.</p>
             <button type="button" className="mt-2 text-fg hover:underline" onClick={() => beginCreate("file")}>
               Datei anlegen
             </button>

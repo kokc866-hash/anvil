@@ -53,6 +53,8 @@ export const ideSettingsSchema = z.object({
   harnessAfterWrite: z.enum(["run", "engine", "preview", "none"]),
   harnessMaxRounds: count(8, 48), graphSees: count(0, 8),
   harnessAutoContinue: z.boolean(),
+  backgroundAgent: z.boolean().default(false),
+  backgroundWriteThrough: z.boolean().default(false),
   harnessBoardGrid: bool, harnessBoardSnap: bool,
   showStatusBar: bool, openOutputOnRun: bool, runInWindow: bool, runHtml: bool, autoUpdate: bool,
   panels: z.object({ files: bool, code: bool, agent: bool, trail: bool, output: bool })

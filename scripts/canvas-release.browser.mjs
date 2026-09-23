@@ -125,12 +125,12 @@ try {
   await page.getByRole("button", { name: "Weiter", exact: true }).click();
   await guest.waitForFunction(() => window.g.paused === false);
   assert.equal(await guest.evaluate(() => window.g.paused), false);
-  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await page.getByRole("button", { name: "Stoppen", exact: true }).click();
   assert.ok(
     await page
       .locator('iframe[title="Vorschau"]')
       .contentFrame()
-      .getByText("Gestoppt. Run startet neu.")
+      .getByText("Die Ausführung wurde gestoppt. Mit „Ausführen“ kannst du sie erneut starten.")
       .isVisible(),
   );
   assert.deepEqual(errors, []);

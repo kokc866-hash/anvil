@@ -33,10 +33,10 @@ const labels = {
   de: {
     preparing: "Anfrage wird vorbereitet",
     catalog: "Werkzeugliste wird geladen",
-    waiting: "Modell wird angefragt · warte auf Antwort",
+    waiting: "Warte auf die Modellantwort",
     thinking: "Modell denkt",
     answering: "Antwort wird erzeugt",
-    tool: "Werkzeug läuft",
+    tool: "Werkzeug wird ausgeführt",
     done: "Abgeschlossen",
     stopped: "Gestoppt",
     error: "Anfrage fehlgeschlagen",

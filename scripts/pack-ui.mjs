@@ -14,6 +14,10 @@ if (!existsSync(entry)) {
   console.error("UI-Build fehlt. Zuerst: ANVIL_ELECTRON_BUILD=1 npm run build");
   process.exit(1);
 }
+if (!['worker.mjs', 'service-contract.mjs', 'preview-runtime.mjs', 'debug-trace.mjs'].every(name => existsSync(join(root, 'agent-build', name)))) {
+  console.error("Agent-Hintergrundprozess fehlt. Zuerst npm run build ausführen.");
+  process.exit(1);
+}
 rmSync(dest, { recursive: true, force: true });
 cpSync(src, dest, { recursive: true });
 const monaco = join(dest, "public", "monaco", "vs", "loader.js");

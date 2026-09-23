@@ -5,9 +5,13 @@ import { canDebug, collectRemoteTrace, stackOf, type TraceEvent } from "./debug-
 import { companionDebug } from "./companion";
 import { holdCompanion, releaseCompanion } from "./companion-life";
 import { emitPlugin } from "./plugins/events";
+import { backgroundDebugCommand } from './background-debug';
 import { useIde, type DebugFrame } from "@/store/ide";
 
 export type DebugCmd = "continue" | "step" | "stop" | "eval";
+export function toggleDebugBreakpoint(path:string,line:number,on?:boolean){
+  if(!backgroundDebugCommand('breakpoint',{path,line,...(on===undefined?{}:{on})}))useIde.getState().toggleBreakpoint(path,line,on);
+}
 
 type Waiter = {
   resolve: (cmd: DebugCmd) => void;
@@ -64,6 +68,7 @@ function applyPause(info: {
 }
 
 export function debugContinue() {
+  if(backgroundDebugCommand('continue'))return;
   mode = "run";
   useIde.getState().setDebug({ paused: false, reason: "" });
   if (kind === "replay") {
@@ -75,6 +80,7 @@ export function debugContinue() {
 }
 
 export function debugStep() {
+  if(backgroundDebugCommand('step'))return;
   mode = "step";
   useIde.getState().setDebug({ paused: false, reason: "" });
   if (kind === "replay") {
@@ -86,6 +92,7 @@ export function debugStep() {
 }
 
 export function debugStop() {
+  if(backgroundDebugCommand('stop'))return;
   mode = "stop";
   if (kind === "replay") {
     replay?.finish?.();
@@ -151,6 +158,8 @@ export function debugSnapshot() {
 }
 
 export async function debugEval(expr: string): Promise<string> {
+  const remote=backgroundDebugCommand('eval',{expr});
+  if(remote){const result=await remote;return result.error||result.value||result.eval||result.lastEval||'';}
   const trimmed = expr.trim();
   if (!trimmed) return "";
   if (jsSession) {
@@ -331,7 +340,7 @@ const JS_KW = new Set([
 
 async function runJsDebug(code: string, path: string): Promise<{ stdout: string; stderr: string }> {
   if (/^\s*(?:import|export)\b/m.test(code)) {
-    return { stdout: "Moduldatei — Debugger übersprungen. Run öffnet die HTML-Vorschau.", stderr: "" };
+    return { stdout: "Diese Datei ist ein Modul und wurde nicht im Debugger gestartet. Mit „Ausführen“ öffnest du die HTML-Vorschau.", stderr: "" };
   }
   const logs: string[] = [];
   const src = instrumentJs(code, path);
@@ -631,6 +640,8 @@ async function runNativePyDebug(path: string, cwd: string): Promise<{ stdout: st
 }
 
 export async function startDebug(path: string, files: Record<string, string>, opts?: { pauseOnEntry?: boolean }) {
+  if(useIde.getState().debug.backgroundJobId&&useIde.getState().debug.active){useIde.getState().setNotice('Zuerst die laufende Hintergrund-Debugsitzung stoppen.');return {ok:false,error:'Hintergrund-Debugsitzung aktiv.'};}
+  useIde.getState().setDebug({backgroundJobId:undefined});
   if (started) debugStop();
   mode = opts?.pauseOnEntry === false ? "run" : "step";
   entryPause = opts?.pauseOnEntry !== false;
@@ -702,6 +713,7 @@ export async function startDebug(path: string, files: Record<string, string>, op
 }
 
 export async function agentDebug(action: string, args: Record<string, unknown>): Promise<unknown> {
+  if(action!=='start'){const remote=backgroundDebugCommand(action,args);if(remote)return remote;}
   const st = useIde.getState();
   if (action === "start") {
     const path = String(args.path ?? st.activePath ?? "");

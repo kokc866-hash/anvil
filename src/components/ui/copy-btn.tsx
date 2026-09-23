@@ -3,6 +3,7 @@ import { Check, Copy } from "lucide-react";
 import { Button } from "./button";
 import { cn } from "@/lib/cn";
 import { useT } from "@/lib/i18n";
+import { selectedTextWithin } from '@/lib/copy-selection';
 
 export function CopyBtn({
   getText,
@@ -20,8 +21,9 @@ export function CopyBtn({
       variant="quiet"
       className={cn("h-7 w-7 p-0", className)}
       tip={ok ? t("copied") : tip || t("copy")}
-      onClick={() => {
-        void navigator.clipboard.writeText(getText()).then(() => {
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        void navigator.clipboard.writeText(selectedTextWithin(e.currentTarget.closest('[data-copy-scope]')) || getText()).then(() => {
           setOk(true);
           window.setTimeout(() => setOk(false), 900);
         });
@@ -39,8 +41,9 @@ export function CopyMini({ text, children }: { text: string; children?: ReactNod
     <button
       type="button"
       className="h-6 rounded-sm px-2 text-[11px] text-muted hover:bg-hover hover:text-fg"
-      onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => {
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        void navigator.clipboard.writeText(selectedTextWithin(e.currentTarget.closest('[data-copy-scope]')) || text).then(() => {
           setOk(true);
           window.setTimeout(() => setOk(false), 900);
         });

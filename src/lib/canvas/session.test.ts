@@ -81,7 +81,7 @@ test("same code is reused for observation, while Run creates a new session and r
     );
     assert.equal(f.sent.filter((d) => d.op === "keys").length, 0);
     await owner.command("stop");
-    assert.match(f.el.srcdoc, /Gestoppt/);
+    assert.match(f.el.srcdoc, /Die Ausführung wurde gestoppt/);
     assert.equal((await owner.load(html)).state, "stopped");
     assert.equal((await owner.load(html, true)).ok, true);
   } finally {
@@ -124,7 +124,7 @@ test("abort during startup terminates the document and rejects the original load
     await new Promise((r) => setTimeout(r, 0));
     abort.abort();
     await rejection;
-    assert.match(f.el.srcdoc, /Gestoppt/);
+    assert.match(f.el.srcdoc, /Die Ausführung wurde gestoppt/);
     assert.equal((await owner.command("ready")).state, "stopped");
   } finally {
     owner.dispose();

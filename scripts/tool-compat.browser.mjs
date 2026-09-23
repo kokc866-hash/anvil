@@ -189,7 +189,7 @@ try {
   }, cfg);
   assert.equal(settings.other, undefined); assert.equal(settings.profile.toolMode, "text"); assert.equal(settings.restored, "text"); assert.match(JSON.stringify(settings.pack), /llmToolModes/);
   await page.evaluate(() => window.__anvilIde.getState().setSettingsOpen(true));
-  const modeRow = page.getByRole("group", { name: "Tool-Kompatibilität" });
+  const modeRow = page.getByRole("group", { name: "Werkzeugkompatibilität" });
   await modeRow.getByRole("button", { name: "Kompakt", exact: true }).click();
   assert.equal(await modeRow.getByRole("button", { name: "Kompakt", exact: true }).getAttribute("aria-pressed"), "true");
   await page.evaluate(() => window.__anvilIde.getState().setLlmBaseUrl("http://"));

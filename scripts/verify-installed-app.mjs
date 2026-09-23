@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { _electron } from 'playwright';
+import { verifyBackgroundPackage } from './background-package-check.mjs';
 
 const [installer, executable = 'Anvil.exe'] = process.argv.slice(2);
 assert.equal(process.platform, 'win32');
@@ -64,6 +65,7 @@ async function close() { await app.close(); app = null; page = null; }
 try {
   assert.equal(await command(installer, ['/S', `/D=${target}`]), 0, 'Fresh install');
   await launch(); result.checks.push('fresh installed UI, own data directory, external Node absent from PATH');
+  result.checks.push(await verifyBackgroundPackage(page,fixture));
   await page.evaluate(({ project, before, after }) => {
     const store = window.__anvilIde;
     store.setState({ files: { 'index.html': before }, dirs: [], dirty: {}, editBases: {}, activePath: 'index.html', openPaths: ['index.html'], workspaceCwd: project, diskName: 'project', pendingDiffs: [], autoSaveDisk: false, formatOnSave: false });
@@ -75,7 +77,7 @@ try {
   assert.equal(await command(uninstall, ['/S', `_?=${target}`]), 2, 'Uninstall must refuse a running app');
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith('http://127.0.0.1:'))?.close());
   await page.getByText('Ungespeicherte Änderungen', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Abbrechen', exact: true }).click();
+  await page.getByRole('dialog',{name:'Ungespeicherte Änderungen'}).getByRole('button', { name: 'Abbrechen', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files['index.html']), after);
   result.checks.push('running update/uninstall refused; canceled close retains unsaved editor buffer');
   await page.keyboard.press('Control+s');

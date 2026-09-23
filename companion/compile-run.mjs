@@ -6,6 +6,7 @@ import { createRunFolder, runEnvironment, saveRunRecord } from "./run-storage.mj
 import { spawnRun, quoteCommand } from "./run-process.mjs";
 import { terminalStep } from "./run-terminal.mjs";
 import { beginRun, endRun } from "./run-jobs.mjs";
+import { fileBytes } from "../scripts/file-content.mjs";
 
 function safeRel(value) {
   const rel = String(value || "").replaceAll("\\", "/");
@@ -36,14 +37,14 @@ export async function compileLang(body, { resolveCwd = (cwd) => cwd, signal } = 
     const exe = () => path.join(outDir, folders.name + (win ? ".exe" : ""));
     const env = runEnvironment(folders, toolEnv());
     const entryFiles = files.filter((f) => safeRel(f.path) === entry);
-    const gui = !body.asTest && looksGui(entryFiles);
-    const interactive = !body.asTest && !gui && looksTerminal(entryFiles);
+    const gui = !body.asTest && !body.headless && looksGui(entryFiles);
+    const interactive = !body.asTest && !body.headless && !gui && looksTerminal(entryFiles);
     const abs = (rel) => path.join(workDir, rel);
     for (const f of files) {
       const rel = safeRel(f.path);
       const full = abs(rel);
       mkdirSync(path.dirname(full), { recursive: true });
-      writeFileSync(full, String(f.content ?? ""), "utf8");
+      writeFileSync(full, body.headless ? fileBytes(String(f.content ?? "")) : String(f.content ?? ""), "utf8");
     }
     const need = (bin) => {
       const p = resolveBin(bin);

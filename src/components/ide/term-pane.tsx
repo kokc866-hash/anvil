@@ -77,7 +77,7 @@ export function TermPane() {
             const r = await termRead(id, base);
             if (r.data) t.write(r.data.replace(/\n/g, "\r\n"));
             if (!r.alive && id) {
-              t.write("\r\n[Shell zu]\r\n");
+              t.write("\r\n[Shell beendet]\r\n");
               return;
             }
             poll = window.setTimeout(tick, 80);
@@ -87,8 +87,8 @@ export function TermPane() {
         }
       }
       setMode("local");
-      setHint("JS — Companion startet mit Run, oder Anlassen in den Einstellungen");
-      t.write("Anvil REPL. JavaScript, Enter sendet.\r\n> ");
+      setHint("JavaScript-Konsole. Für ein Terminal aktiviere den Companion in den Einstellungen.");
+      t.write("Anvil-Konsole für JavaScript. Mit Enter ausführen.\r\n> ");
       t.onData((d) => {
         if (d === "\r") {
           const line = localLine;

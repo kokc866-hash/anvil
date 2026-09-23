@@ -1,4 +1,6 @@
 import { ChatHistory } from "./chat-history";
+import { BackgroundAgentPane } from "./background-agent-pane";
+import { useBackgroundAgent } from '@/lib/background-agent';
 import { chatMenu, chatSel, type ChatMenu } from "./chat-menu";
 import { ContextBar } from "./chat-context";
 import { AgentTodo } from "./chat-trail";
@@ -176,20 +178,30 @@ export function ChatPane() {
   }, [mention, fileKeys]);
 
   const agentInbox = useIde((s) => s.agentInbox);
+  const backgroundJob = useBackgroundAgent(s=>s.job);
+  const backgroundAvailable = useBackgroundAgent(s=>s.available);
+  const queueSending = useRef(false);
+  const [queueWake,setQueueWake]=useState(0);
 
   useEffect(() => {
     // Read the current busy flag: another effect may already have started work
     // since this render. Inbox and queue must share one consumer.
     const st = useIde.getState();
-    if (st.agentBusy || st.agentJob?.status === "ask") return;
+    if (queueSending.current || st.agentBusy || st.agentJob?.status === "ask") return;
     const entry = st.agentInbox || st.agentQueue[0];
     if (!entry) return;
     const request = queuedChatRequest(entry);
+    if(request?.mode==='agent'&&st.backgroundAgent&&(!backgroundAvailable||backgroundJob&&!backgroundJob.dismissed))return;
     const queued = !st.agentInbox;
-    useIde.setState(st.agentInbox ? { agentInbox: null } : { agentQueue: st.agentQueue.slice(1) });
-    if (request) void send(request.text, { queued, mode: request.mode });
+    let consumed=false;
+    const accepted=()=>{consumed=true;useIde.setState(current=>st.agentInbox
+      ? current.agentInbox===entry?{agentInbox:null}:{}
+      : current.agentQueue[0]===entry?{agentQueue:current.agentQueue.slice(1)}:{});};
+    if(!request){accepted();return;}
+    queueSending.current=true;
+    void send(request.text,{queued,mode:request.mode,onAccepted:accepted}).finally(()=>{queueSending.current=false;if(consumed)setQueueWake(n=>n+1);});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentBusy, agentInbox, agentQueue.length, agentJob?.status]);
+  }, [agentBusy, agentInbox, agentQueue.length, agentJob?.status, backgroundAvailable, backgroundJob?.id, backgroundJob?.dismissed,queueWake]);
 
   function stop() {
     stopAgent("Gestoppt");
@@ -217,11 +229,14 @@ export function ChatPane() {
     setImages(prev => [...prev, ...urls].slice(0, 4));
   }
 
-  async function send(preset?: string, opts?: { queued?: boolean; choiceId?: string; mode?: AgentMode }) {
+  async function send(preset?: string, opts?: { queued?: boolean; choiceId?: string; mode?: AgentMode; onAccepted?:()=>void }) {
     const st = useIde.getState();
-    const error = imageAttachmentError({ provider: st.llmProvider, authMode: st.llmAuthMode, baseUrl: st.llmBaseUrl, model: st.llmModel }, images.length, st.locale);
+    const queued=Boolean(opts?.onAccepted),sendImages=queued?[]:images;
+    const error = imageAttachmentError({ provider: st.llmProvider, authMode: st.llmAuthMode, baseUrl: st.llmBaseUrl, model: st.llmModel }, sendImages.length, st.locale);
     if (error) { st.setNotice(error); return; }
-    return sendChat({ preset, draft, images, title, setTitle, setDraft, setImages, setMention }, opts);
+    // Enter can follow a paste/store update before React renders a new handler.
+    // Read the current draft so that a fast submit never sends stale/empty text.
+    return sendChat({ preset, draft: queued?'':st.agentDraft, images:sendImages, title, setTitle, setDraft:queued?()=>{}:setDraft, setImages:queued?()=>{}:setImages, setMention:queued?()=>{}:setMention }, opts);
   }
 
   function onDraft(v: string) {
@@ -439,7 +454,7 @@ export function ChatPane() {
                 className="px-1 text-left text-[11px] text-muted hover:text-fg"
                 onClick={() => togglePanel("trail")}
               >
-                Tool läuft · Spur öffnen
+                Werkzeug wird ausgeführt · Spur öffnen
               </button>
             ) : null}
             <LongRequestHint onStop={stop} />
@@ -478,7 +493,7 @@ export function ChatPane() {
         {pendingAsk && agentJob?.status !== "ask" ? (
           <div className="mb-1.5 flex items-start justify-between gap-2 rounded-md border border-border bg-bg px-2 py-1">
             <p className="min-w-0 font-mono text-[11px] text-muted">
-              Ask · {pendingAsk.path} · {pendingAsk.text.slice(0, 80)}
+              Frage · {pendingAsk.path} · {pendingAsk.text.slice(0, 80)}
             </p>
             <button type="button" className="text-subtle hover:text-fg" onClick={() => useIde.getState().setPendingAsk(null)}>
               ×
@@ -514,6 +529,7 @@ export function ChatPane() {
             ))}
           </div>
         ) : null}
+        <BackgroundAgentPane />
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -592,7 +608,7 @@ export function ChatPane() {
                   const t = e.currentTarget;
                   chatSel.a = t.selectionStart;
                   chatSel.b = t.selectionEnd;
-                  setMenu({ kind: "pane", x: e.clientX, y: e.clientY });
+                  setMenu({ kind: "pane", x: e.clientX, y: e.clientY, selection: t.value.slice(t.selectionStart, t.selectionEnd) });
                 }}
                 onChange={(e) => onDraft(e.target.value)}
                 onPaste={(e) => {
@@ -623,7 +639,7 @@ export function ChatPane() {
                   type="button"
                   variant="danger"
                   className="h-11 w-11 p-0"
-                  onClick={stop}
+                  onClick={e=>{e.preventDefault();stop();}}
                   aria-label={t("stop")}
                   title={t("stop")}
                   tipSide="left"
@@ -647,10 +663,10 @@ export function ChatPane() {
             </div>
           </div>
         </form>
-        <div className="mt-1 flex items-center justify-between gap-2 px-1">
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 px-1">
+          <FollowupChips />
           <HelperPrompts where="chat" />
         </div>
-        <FollowupChips />
         <ContextBar />
       </div>
     </div>
@@ -661,7 +677,7 @@ function FollowupChips() {
   const items = useBrain((s) => s.followups);
   if (!items.length) return null;
   return (
-    <div className="mt-1 flex flex-wrap gap-1 px-1">
+    <>
       {items.map((p) => (
         <button
           key={p}
@@ -673,6 +689,6 @@ function FollowupChips() {
           {p.length > 42 ? `${p.slice(0, 40)}…` : p}
         </button>
       ))}
-    </div>
+    </>
   );
 }

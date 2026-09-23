@@ -70,14 +70,29 @@ function writeCredential(key, value) {
   return task;
 }
 
-export async function stopMcpConnections() {
+export async function stopMcpConnections({ includeBackground = true } = {}) {
+  const selected=[...owners.entries()].filter(([,owner])=>includeBackground || !owner.background);
   await Promise.allSettled(
-    [...owners.values()].map(async ({ host, jobs }) => {
+    selected.map(async ([, { host, jobs }]) => {
       for (const job of jobs.values()) job.controller.abort();
       await host.stop();
     }),
   );
-  owners.clear();
+  for(const [id] of selected)owners.delete(id);
+}
+
+export function createBackgroundMcpHost() {
+  const owner={host:new McpHost({version:app.getVersion(),oauth}),jobs:new Map(),background:true};
+  owners.set(Symbol('background-agent'),owner);
+  return {
+    async request(config,method,params,options={}) {
+      const id=randomUUID(),controller=new AbortController();
+      owner.jobs.set(id,{controller,server:config.id});
+      try{return await owner.host.request(config,method,params,{...options,signal:options.signal?AbortSignal.any([options.signal,controller.signal]):controller.signal});}
+      finally{owner.jobs.delete(id);}
+    },
+    stop(){for(const job of owner.jobs.values())job.controller.abort();return owner.host.stop();},
+  };
 }
 
 export function bindMcpIpc(isTrusted) {

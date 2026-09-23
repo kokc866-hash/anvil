@@ -7,7 +7,7 @@ export function AppErrorComponent({ error }: ErrorComponentProps) {
       <span className="text-danger" aria-hidden="true">
         <TriangleAlert className="size-8" strokeWidth={2} />
       </span>
-      <h1 className="text-lg font-medium">Anvil ist stehen geblieben</h1>
+      <h1 className="text-lg font-medium">Die Oberfläche konnte nicht angezeigt werden</h1>
       <p className="max-w-md text-sm break-words text-muted">{error.message || "Unerwarteter Fehler."}</p>
       <div className="mt-2 flex flex-wrap justify-center gap-2">
         <button
@@ -17,7 +17,7 @@ export function AppErrorComponent({ error }: ErrorComponentProps) {
             void import("./intern").then((m) => m.useIntern.getState().restart("soft"));
           }}
         >
-          Oberfläche neu
+          Oberfläche neu starten
         </button>
         <button
           type="button"

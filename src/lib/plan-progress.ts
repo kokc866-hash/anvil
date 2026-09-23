@@ -1,5 +1,5 @@
 import type { PlanStep } from "@/store/ide";
-import { applySetPlan, planFromTool } from "./plan.ts";
+import { applySetPlan, planFromTool, knowledgeStepMatches } from "./plan.ts";
 import { isTestFile } from "./test-parse.ts";
 
 type Args = Record<string, unknown>;
@@ -65,18 +65,21 @@ export class PlanProgress {
           if (!rows.length || rows.some(e => !e || failed(e.result) || this.contradicted(e)
             || (e.result.running === true && !(kind === "run" && e.result.ok === true && (e.name === "run_file" || (e.name === "engine_run" && /^(editor|play)$/.test(String(e.args.action))))))))
             return { error: `Step ${i + 1}: ${!refs.length ? "No evidence IDs supplied." : "A supplied evidence ID is missing, failed, contradicted or still running."} Completion requires existing successful evidence IDs, without newer contradictory results. Running checks are not completed checks.` };
-          const matched = rows.some(e => {
+          const candidate: PlanStep = { ...next[i], kind: kind as PlanStep["kind"], status: "todo" };
+          let staleMatch = false;
+          const knowledgeMatch = knowledgeStepMatches(candidate, rows.map(e => e!.name));
+          const matched = knowledgeMatch ?? rows.some(e => {
             if (!e) return false;
-            if ((kind === "check" || kind === "run") && e.revision !== this.revision) return false;
             // Executing a recognized test entry is a check, even when launched
             // through run_file instead of a shell/test command.
-            if (kind === "check" && e.name === "run_file" && e.result.ok === true && isTestFile(String(e.args.path || ""))) return true;
             // An actual captured interaction can evidence visual checking, a key press alone cannot.
-            if (kind === "check" && e.name === "play" && (e.result.image || e.result.frame)) return true;
-            const candidate: PlanStep = { ...next[i], kind: kind as PlanStep["kind"], status: "todo" };
-            return planFromTool(e.name, [candidate], false, e.args, e.result)?.[0]?.status === "ok";
+            const matches = (kind === "check" && e.name === "run_file" && e.result.ok === true && isTestFile(String(e.args.path || "")))
+              || (kind === "check" && e.name === "play" && Boolean(e.result.image || e.result.frame))
+              || planFromTool(e.name, [candidate], false, e.args, e.result)?.[0]?.status === "ok";
+            if (matches && (kind === "check" || kind === "run") && e.revision !== this.revision) { staleMatch = true; return false; }
+            return matches;
           });
-          if (!matched) return { error: `Step ${i + 1} (${kind}): evidence does not match this step (or its run/check predates the latest change). Report steps close with the final answer.` };
+          if (!matched) return { error: `Step ${i + 1} (${kind}): ${kind === "report" ? "Report steps close with the final answer." : staleMatch ? "The matching run/check predates the latest change; verify the current files." : `Evidence from ${rows.map(e => e!.name).join(", ")} does not match the required actions in this step. Supply successful evidence for each named action; do not repeat completed work.`}` };
         }
         next[i] = { ...next[i], kind: kind as PlanStep["kind"], status: u.status as PlanStep["status"] };
       }
@@ -100,7 +103,7 @@ export class PlanProgress {
     const first = new Map<string, Evidence>();
     for (const e of this.evidence) if (!first.has(e.name) && !failed(e.result) && !this.contradicted(e)) first.set(e.name, e);
     const visible = [...new Set([...first.values()].slice(0, 25).concat(this.evidence.slice(-60)))];
-    const evidence = visible.map(e => `${e.id}: ${e.name} ${String(e.args.path || e.args.command || e.args.name || e.args.action || "").slice(0, 160)} — ${failed(e.result) || this.contradicted(e) ? "failed/incomplete/superseded" : e.result.running ? "running" : "success"}${e.revision !== this.revision ? " (before latest change)" : ""}`);
+    const evidence = visible.map(e => `${e.id}: ${e.name} ${String(e.args.path || e.args.command || e.args.name || e.args.action || "").slice(0, 160)} — ${failed(e.result) || this.contradicted(e) ? "failed/incomplete/superseded" : e.result.running ? "running" : "success"}${e.revision !== this.revision ? " (before latest change; age blocks only run/check steps)" : ""}`);
     return `Current visible checklist (authoritative; keep its steps):\n${rows.join("\n")}\nUpdate individual steps with set_plan updates: step (1-based), kind, status, evidence (actual IDs listed below), reason (what the result establishes). Evidence IDs appear as plan_evidence_id in JSON results or as Plan evidence ID before text results; they are not API tool-call IDs. Never invent IDs or infer all tasks complete from one run. For unfinished/blocked steps use todo/err and explain why. Do not repeat completed edits just to fix the checklist.\nEvidence IDs from this request:\n${evidence.join("\n") || "None yet. Do not mark a step ok without evidence."}`;
   }
 }

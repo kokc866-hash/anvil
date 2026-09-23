@@ -3,7 +3,7 @@ import { useIde } from "@/store/ide";
 import { saveNow } from "@/lib/save";
 import { INTERACTION_CHECKS_PATH, INTERACTION_RESULTS_PATH, interactionNative, interactionResultCurrent, interactionRevision, interactionSnapshot, parseInteractionScenarios, validateInteractionScenario, type InteractionAction, type InteractionResult, type InteractionScenario, type InteractionStep } from "@/lib/interaction-checks";
 
-const labels: Record<InteractionAction, string> = { click: "Anklicken", fill: "Ausfüllen", reload: "Neu laden", visible: "Sichtbar prüfen", text: "Text prüfen", value: "Feldwert prüfen", count: "Anzahl prüfen" };
+const labels: Record<InteractionAction, string> = { click: "Anklicken", fill: "Ausfüllen", reload: "Neu laden", visible: "Sichtbarkeit prüfen", text: "Text prüfen", value: "Feldwert prüfen", count: "Anzahl prüfen" };
 const field = "min-w-0 rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg";
 const button = "rounded border border-border px-2 py-1.5 text-xs hover:bg-hover disabled:opacity-40";
 
@@ -71,7 +71,7 @@ export function InteractionChecks() {
       const next = [...parsed.scenarios.filter(s => s.id !== draft.id), draft];
       if (next.length > 40) throw new Error("Höchstens 40 Prüfungen pro Projekt.");
       const savedOk = await persist(next);
-      setNotice(savedOk ? "Prüfung im Projekt gespeichert." : "Speichern noch offen. Hinweis in Anvil beachten.");
+      setNotice(savedOk ? "Prüfung im Projekt gespeichert." : "Die Prüfung wurde noch nicht gespeichert. Beachte den Hinweis in Anvil.");
       return savedOk;
     } catch (error) { setNotice(String((error as Error).message)); return false; }
   }
@@ -93,11 +93,11 @@ export function InteractionChecks() {
     finally { preparingRef.current = false; setPreparing(false); }
     if (!savedOk || useIde.getState().workspaceEpoch !== startEpoch) return;
     const snapshot = interactionSnapshot(useIde.getState().files), scenario = structuredClone(draft);
-    const id = crypto.randomUUID(); runningRef.current = id; setRunning(id); setNotice("Prüfung läuft in getrenntem, leerem Prüfspeicher …");
+    const id = crypto.randomUUID(); runningRef.current = id; setRunning(id); setNotice("Die Prüfung läuft mit einem eigenen, zunächst leeren Speicher …");
     try {
       const [sourceHash, scenarioHash] = await Promise.all([interactionRevision(snapshot), interactionRevision(scenario)]);
       if (useIde.getState().workspaceEpoch !== startEpoch) return;
-      setLiveResult({ id, scenarioId: scenario.id, revision: sourceHash, scenarioRevision: scenarioHash, startedAt: new Date().toISOString(), durationMs: 0, steps: [], status: "open", message: "Prüfung läuft — Ergebnis offen." });
+      setLiveResult({ id, scenarioId: scenario.id, revision: sourceHash, scenarioRevision: scenarioHash, startedAt: new Date().toISOString(), durationMs: 0, steps: [], status: "open", message: "Prüfung läuft – noch kein Ergebnis." });
       const completed = await native.interactionCheckRun({ id, files: snapshot, scenario, revision: sourceHash, scenarioRevision: scenarioHash });
       if (useIde.getState().workspaceEpoch !== startEpoch) return;
       setLiveResult(completed);
@@ -115,7 +115,7 @@ export function InteractionChecks() {
   }
   return <section className="space-y-3 border-t border-border p-3 text-fg" aria-label="Bedienprüfungen">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-medium">Bedienprüfungen</h3><button className={button} disabled={busy || !!parsed.error} onClick={create}>Neue Prüfung</button></div>
-    <p className="text-xs text-muted">Gespeicherte Schritte für HTML-Projekte. Jeder Lauf beginnt mit leerem Prüfspeicher. Neuladen innerhalb einer Prüfung behält ihn; dein normales Run bleibt getrennt. Externe Dienste und Binärdateien sind nicht enthalten.</p>
+    <p className="text-xs text-muted">Speichere Bedienabläufe für HTML-Projekte und prüfe sie automatisch. Jede Prüfung beginnt mit einem leeren, getrennten Speicher. Beim Neuladen während derselben Prüfung bleibt dieser erhalten. Deine normale Ausführung ist davon unabhängig. Externe Dienste und Binärdateien werden nicht geprüft.</p>
     {parsed.error && <p role="alert" className="text-xs text-red-400">{parsed.error} <button className="underline" onClick={() => useIde.getState().openFile(INTERACTION_CHECKS_PATH)}>Prüfdatei öffnen</button></p>}
     {!!parsed.scenarios.length && <select aria-label="Gespeicherte Bedienprüfung" className={`${field} w-full`} value={selected} disabled={busy} onChange={event => { setSelected(event.target.value); setDraft(parsed.scenarios.find(s => s.id === event.target.value) ?? null); setLiveResult(null); setNotice(""); }}><option value="">Prüfung wählen</option>{parsed.scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
     {!draft && !parsed.error && <p className="text-xs text-muted">Zum Beispiel: Feld ausfüllen → Hinzufügen anklicken → neu laden → Text prüfen.</p>}
@@ -131,6 +131,6 @@ export function InteractionChecks() {
       <div className="flex flex-wrap gap-2"><button className={button} disabled={busy || draft.steps.length >= 40} onClick={() => setDraft({ ...draft, steps: [...draft.steps, { action: "text", selector: "", value: "" }] })}>Schritt hinzufügen</button><button className={button} disabled={busy} onClick={() => void save()}>Speichern{edited ? " *" : ""}</button><button className={button} disabled={busy || !entries.includes(draft.entry)} onClick={() => void run()}>Prüfung starten</button>{running && <button className={button} onClick={() => { setNotice("Abbruch angefordert …"); void native?.interactionCheckCancel?.(running); }}>Abbrechen</button>}<button className={button} disabled={busy} onClick={() => void remove()}>Prüfung entfernen</button></div>
     </>}
     {notice && <p role="status" className="text-xs text-muted">{notice}</p>}
-    {result && <div className="space-y-2 rounded border border-border p-2 text-xs"><strong>{running ? "Prüfung läuft — Ergebnis offen" : !current ? "Veraltet — Projekt oder Prüfung verändert" : result.status === "passed" ? "Bestanden" : result.status === "failed" ? "Fehlgeschlagen" : "Offen"}</strong><p className="text-muted">{new Date(result.startedAt).toLocaleString()} · Stand {result.revision.slice(0, 10)} · {(result.durationMs / 1000).toFixed(1)} s</p><p>{result.message}</p><ol className="space-y-1">{result.steps.map(step => <li key={step.index}>{step.index + 1}. {step.status === "passed" ? "✓" : step.status === "failed" ? "×" : "…"} {step.message}</li>)}</ol></div>}
+    {result && <div className="space-y-2 rounded border border-border p-2 text-xs"><strong>{running ? "Prüfung läuft – noch kein Ergebnis" : !current ? "Veraltet — Projekt oder Prüfung verändert" : result.status === "passed" ? "Bestanden" : result.status === "failed" ? "Fehlgeschlagen" : "Offen"}</strong><p className="text-muted">{new Date(result.startedAt).toLocaleString()} · Stand {result.revision.slice(0, 10)} · {(result.durationMs / 1000).toFixed(1)} s</p><p>{result.message}</p><ol className="space-y-1">{result.steps.map(step => <li key={step.index}>{step.index + 1}. {step.status === "passed" ? "✓" : step.status === "failed" ? "×" : "…"} {step.message}</li>)}</ol></div>}
   </section>;
 }

@@ -428,7 +428,7 @@ export function McpPane() {
               className="h-7 px-2 text-[11px] text-danger"
               onClick={() => job.current?.abort()}
             >
-              Stop
+              Stoppen
             </Button>
           ) : null}
           <Button
@@ -481,7 +481,7 @@ export function McpPane() {
               const server = createGithubReadPackage();
               server.name = uniqueMcpName(currentServers, server.name, server.id);
               setServers([...currentServers, server]);
-              notice("Lesepaket hinzugefügt. Token eintragen, aktivieren und Leseprobe starten.");
+              notice("Das Lesepaket wurde hinzugefügt. Trage deinen Token ein, aktiviere die Verbindung und starte anschließend die Leseprobe.");
             }}
           >
             {servers.some((s) => s.id === GITHUB_READ_PACKAGE.id)
@@ -572,7 +572,7 @@ export function McpPane() {
               {!s.enabled
                 ? "Deaktiviert"
                 : ready.has(s.id)
-                  ? `Katalog geladen · ${tools.filter((tool) => tool.serverId === s.id).length} Tools · ${resources.filter((r) => r.serverId === s.id).length} Ressourcen`
+                  ? `Katalog geladen · ${tools.filter((tool) => tool.serverId === s.id).length} Werkzeuge · ${resources.filter((r) => r.serverId === s.id).length} Ressourcen`
                   : "Katalog noch nicht verfügbar"}
             </p>
             <ServerFields
@@ -694,10 +694,10 @@ export function McpPane() {
             {t("mcpTools")} · {tools.length}
           </p>
           <input
-            aria-label="MCP-Tools suchen"
+            aria-label="MCP-Werkzeuge suchen"
             className={field}
             value={query}
-            placeholder="Tool oder Server suchen"
+            placeholder="Werkzeug oder Server suchen"
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
@@ -745,7 +745,7 @@ export function McpPane() {
               {pickedTool.server} · {pickedTool.name}
             </p>
             <details className="mt-1 text-[10px] text-muted">
-              <summary>Argumentschema</summary>
+              <summary>Schema der Eingaben</summary>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap">
                 {JSON.stringify(pickedTool.inputSchema, null, 2)}
               </pre>
@@ -763,7 +763,7 @@ export function McpPane() {
               className="mt-1 h-7 px-2 text-[11px]"
               disabled={Boolean(busy)}
               onClick={() =>
-                perform("Tool", async (signal) => {
+                perform("Werkzeug", async (signal) => {
                   const args: unknown = JSON.parse(argsText),
                     started = Date.now();
                   const sid = pickedTool.serverId || pickedTool.server;

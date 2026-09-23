@@ -9,7 +9,7 @@ test("packaged without ui-build is a clear error", () => {
   const dir = mkdtempSync(join(tmpdir(), "anvil-ui-"));
   const r = serverLaunch(dir, true, 8080);
   assert.equal(r.kind, undefined);
-  assert.match(r.error, /UI fehlt/);
+  assert.match(r.error, /keine Benutzeroberfläche/);
   rmSync(dir, { recursive: true, force: true });
 });
 

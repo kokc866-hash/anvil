@@ -42,7 +42,7 @@ try {
   });
   await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
   await page.evaluate(() => window.__anvilIde.setState({ setupDone: true, autoUpdate: false, sidebar: 'ext', locale: 'de', mcpServers: [] }));
-  await page.getByRole('button', { name: 'Markt', exact: true }).click();
+  await page.getByRole('button', { name: 'Marktplatz', exact: true }).click();
   await page.getByText('Result snippets', { exact: false }).waitFor();
   await pause(1500);
   assert.equal(requests.length, 1, 'market must not request again after displaying its own results');
@@ -63,9 +63,9 @@ try {
   held.get('slow-tab')();
   await pause(400);
   const beforeReturn = requests.length;
-  await page.getByRole('button', { name: 'Markt', exact: true }).click();
+  await page.getByRole('button', { name: 'Marktplatz', exact: true }).click();
   await search.fill('failure');
-  await page.getByText('Markt: HTTP 503', { exact: true }).waitFor();
+  await page.getByText('Marktplatz: HTTP 503', { exact: true }).waitFor();
   await pause(900);
   assert.equal(requests.length, beforeReturn + 1, 'failed search remains stable without retry loop');
   await search.fill('final');

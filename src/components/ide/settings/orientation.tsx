@@ -9,7 +9,7 @@ export function OrientationSection({ navigate }: { navigate: (category: Settings
   const actions: [SettingsCategory, string, string][] = [
     ["agent", text("Mit KI arbeiten", "Work with AI"), text("Anbieter, Anmeldung und Modell für deinen Chat wählen.", "Choose the provider, sign-in and model for your chat.")],
     ["companion", text("Code oder ein Spiel ausführen", "Run code or a game"), text("Lokale Programme, Sprachen und Unity, Unreal oder Godot einrichten.", "Set up local programs, languages and Unity, Unreal or Godot.")],
-    ["storage", text("Dateien und Speicherorte", "Files and storage locations"), text("Nachsehen, wo Anvil speichert und wann Änderungen auf die Festplatte gelangen.", "See where Anvil saves and when changes reach your disk.")],
+    ["storage", text("Dateien und Speicherorte", "Files and storage locations"), text("Lege fest, wo Anvil deine Dateien speichert und wann Änderungen gespeichert werden.", "See where Anvil saves and when changes reach your disk.")],
     ["layout", text("Arbeitsfläche anpassen", "Adjust your workspace"), text("Editor, Chat und Ausgabe passend zu deiner Arbeit anordnen.", "Arrange the editor, chat and output for your work.")],
   ];
   return <section className="@container py-4 text-sm" aria-label={text("Orientierung in Anvil", "Getting around Anvil")}>
@@ -21,11 +21,11 @@ export function OrientationSection({ navigate }: { navigate: (category: Settings
         <span className="block font-medium">{label}</span><span className="mt-1 block text-xs leading-relaxed text-muted">{hint}</span>
       </button>)}
     </div>
-    <h4 className="mt-6 font-medium">{text("Dein erster Ablauf", "Your first workflow")}</h4>
+    <h4 className="mt-6 font-medium">{text("Deine ersten Schritte", "Your first workflow")}</h4>
     <ol className="mt-2 list-decimal space-y-2 pl-5 text-xs leading-relaxed text-muted">
       <li>{text("Projektordner öffnen oder beim Einstieg das Beispiel ohne KI starten.", "Open a project folder or run the no-AI example from the introduction.")}</li>
       <li>{text("Im Chat „Fragen“ wählen, um etwas zu verstehen. „Agent“ wählen, um Änderungen ausführen zu lassen.", "Choose Ask in chat to understand something. Choose Agent to have changes carried out.")}</li>
-      <li>{text("Dateiänderungen und Prüfungen in der „Spur“ ansehen. Mit „Run“ ausführen und das Ergebnis selbst ausprobieren.", "Inspect file changes and checks in Trail. Use Run and try the result yourself.")}</li>
+      <li>{text("Sieh dir Dateiänderungen und Prüfungen in der „Spur“ an. Starte das Projekt mit „Ausführen“ und probiere das Ergebnis selbst aus.", "Inspect file changes and checks in Trail. Use Run and try the result yourself.")}</li>
       <li>{text("Änderungen prüfen und speichern. Ein gestartetes Programm ist noch kein bestandener Test.", "Review and save your changes. A program starting does not mean its tests passed.")}</li>
     </ol>
     <button type="button" disabled={busy} onClick={() => {

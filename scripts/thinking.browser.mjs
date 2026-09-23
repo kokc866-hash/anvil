@@ -57,8 +57,8 @@ try {
     store.getState().setLlmMaxOut(4096);
   });
   await page.getByRole("navigation", { name: "Einstellungsbereiche" }).getByRole("button", { name: "Agent", exact: true }).click();
-  const group = page.getByRole("group", { name: "Thinking", exact: true });
-  await group.getByRole("button", { name: "Max", exact: true }).click();
+  const group = page.getByRole("group", { name: "Denkaufwand", exact: true });
+  await group.getByRole("button", { name: "Maximal", exact: true }).click();
   assert.equal(await page.getByRole("slider", { name: "Temperatur", exact: true }).count(), 0);
   await page.getByText("Temperatur und Antwortlimit werden von der CLI gesteuert.", { exact: true }).waitFor();
   await group.scrollIntoViewIfNeeded();
@@ -80,7 +80,7 @@ try {
     const s = window.__anvilIde.getState();
     s.setLlmProvider("anthropic", "abo"); s.setLlmModel("claude-fable-5");
   });
-  await group.getByRole("button", { name: "XHigh", exact: true }).click();
+  await group.getByRole("button", { name: "Sehr hoch", exact: true }).click();
   assert.equal(await group.getByRole("button", { name: "Aus", exact: true }).count(), 0);
   await page.screenshot({ path: path.join(output, "claude-thinking.png") });
   await page.evaluate(() => {
@@ -93,10 +93,10 @@ try {
     const s = window.__anvilIde.getState();
     s.setLlmProvider("ollama", "key"); s.setLlmModel("qwen3");
   });
-  assert.deepEqual(await group.getByRole("button").allTextContents(), ["Aus", "Auto", "Low", "Mid", "High"]);
+  assert.deepEqual(await group.getByRole("button").allTextContents(), ["Aus", "Auto", "Niedrig", "Mittel", "Hoch"]);
   assert.deepEqual(await page.evaluate(() => ({ temp: window.__anvilIde.getState().llmTemperature, out: window.__anvilIde.getState().llmMaxOut })), { temp: result.temp, out: result.out });
   await page.evaluate(() => window.__anvilIde.getState().setLlmProvider("codex", "abo"));
-  assert.equal(await group.getByRole("button", { name: "Max", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await group.getByRole("button", { name: "Maximal", exact: true }).getAttribute("aria-pressed"), "true");
   assert.deepEqual(errors, []);
   await writeFile(path.join(output, "result.json"), JSON.stringify({ ok: true, cli: requests.map(({ kind, model, thinking }) => ({ kind, model, thinking })), preserved: result, errors }, null, 2));
   console.log("Thinking UI, saved connection choice, unchanged local controls and renderer → preload → CLI request: passed. No model inference.");

@@ -143,8 +143,8 @@ export function ExtensionsPane() {
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
         {tab !== "services" && tab !== "api" && tab !== "market" ? <p className="mb-3 px-1 text-xs leading-relaxed text-muted">
           {tab === "tasks"
-            ? (en ? "Task packages give the agent instructions for specific work. External accounts connect under Services." : "Aufgabenpakete geben dem Agenten Anleitungen für bestimmte Arbeiten. Externe Konten verbindest du unter Dienste.")
-            : (en ? "Plugins extend Anvil's features. To connect accounts such as Notion or Linear, choose Services above." : "Plugins erweitern Anvils Funktionen. Für Konten wie Notion oder Linear wähle oben Dienste.")}
+            ? (en ? "Task packages give the agent instructions for specific work. External accounts connect under Services." : "Aufgabenpakete geben dem Agenten Anleitungen für bestimmte Arbeiten. Externe Konten verbindest du unter „Dienste“.")
+            : (en ? "Plugins extend Anvil's features. To connect accounts such as Notion or Linear, choose Services above." : "Plugins erweitern Anvils Funktionen. Um Konten wie Notion oder Linear zu verbinden, wähle oben „Dienste“.")}
         </p> : null}
         {tab === "services" ? <ServicesPane /> : tab === "tasks" ? <TaskPackages /> : tab === "api" ? (
           <><AcpPreview /><pre className="whitespace-pre-wrap px-1 font-mono text-[11px] leading-5 text-muted">{PLUGIN_API_DOC}</pre></>

@@ -54,6 +54,12 @@ export class AgentEvidence {
       ? `${String(result.engineId || args.engine || result.engine || "engine").toLowerCase()}:${result.projectRoot ?? args.projectRoot ?? ""}:${args.cmd || args.action || "check"}`
       : String(args.path ?? args.command ?? args.project ?? name);
     const pending = name === "engine_run" && result.ok === true && !result.error && !result.isError && (result.running === true || args.action === "editor");
+    // An asserted negative case proves its exit path, not the current build.
+    // Keep failures visible; don't let a passing negative case certify a project.
+    if (name === "shell" && typeof args.expected_exit_code === "number" && args.expected_exit_code > 0 && result.expectedExitCode === args.expected_exit_code && result.code === args.expected_exit_code && result.exitExpectationMatched === true && result.ok === true && !result.error && !result.isError && !result.aborted && !result.timedOut) {
+      this.runs.delete(`${name}:${target}`);
+      return;
+    }
     this.runs.set(`${name}:${target}`, { revision: this.revision, pending, ok: result.ok === true && !result.error && !result.isError, detail: `${target}: ${pending ? "Engine gestartet; keine abgeschlossene Prüfung." : String(result.error || result.stderr || (result.ok === true ? "Run erfolgreich" : "Run nicht erfolgreich bestätigt")).slice(0, 1000)}` });
   }
   status(): Verification {

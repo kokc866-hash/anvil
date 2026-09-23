@@ -382,6 +382,10 @@ function clientTools(opts: {
   const mcpScope = new Set((mcpStart.mcpServers || []).filter((s) => mcpStart.surfaceMode === "bridge" || !mcpStart.activeSurfaceId || mcpStart.activeSurfaceId === ANVIL_SURFACE || s.id === mcpStart.activeSurfaceId).map((s) => s.id));
   const mcpCurrent = () => { mcpSignal.throwIfAborted(); if (agentGen() !== mcpGeneration) throw new AgentAbortError("Anfrage ersetzt"); };
   const tools = {
+    onNotice: (kind: string, text: string) => {
+      if (kind === "agent") void import("./intern").then((m) => m.note("agent", text));
+      else void import("./app-log").then((m) => m.appLog(kind, text));
+    },
     verify: async (paths: string[]) => {
       const { refreshProblems } = await import("./problems");
       const result = await refreshProblems();

@@ -75,6 +75,9 @@ export type McpCallLog = {
 export type McpView = { text: string; image?: string; images?: string[]; at: number };
 
 export type DebugState = {
+  mode?: 'live' | 'replay';
+  runCompleted?: boolean;
+  backgroundJobId?: string;
   active: boolean;
   paused: boolean;
   path: string | null;
@@ -119,6 +122,14 @@ export type Checkpoint = {
 export type ChatVoice = "agent" | "helper";
 
 export type ChatMsg = {
+  backgroundJobId?:string;
+  backgroundFinalized?:boolean;
+  backgroundEvents?:string[];
+  backgroundDraftStamp?:string;
+  backgroundWaiting?:boolean;
+  backgroundContinued?:boolean;
+  backgroundDiffs?:Record<string,import('../lib/diff').DiffRow[]>;
+  incompleteReason?:string;
   id: string;
   role: ChatRole;
   voice?: ChatVoice;
@@ -232,6 +243,8 @@ export type IdeState = {
   harnessAfterWrite: AfterWrite;
   harnessMaxRounds: number;
   harnessAutoContinue: boolean;
+  backgroundAgent: boolean;
+  backgroundWriteThrough: boolean;
   graphSees: number;
   liveRun: boolean;
   liveEditor: boolean;
@@ -259,7 +272,7 @@ export type IdeState = {
   llmProfiles: LlmProfile[];
   llmToolModes: Record<string, ToolCompatibility>;
   llmToolLearning: ToolLearningState;
-  sessionTokens: { prompt: number; completion: number; estimated?: boolean };
+  sessionTokens: { prompt: number; completion: number; estimated?: boolean; background?: { id: string; prompt: number; completion: number; requestKey: string } };
   lastRequestTokens: RequestTokens | null;
   sessionJournal: SessionJournal;
   memoryWorkspace: string;

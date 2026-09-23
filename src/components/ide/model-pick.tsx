@@ -120,7 +120,7 @@ export function ModelPick({
               ? `${live.length} vom Server${catalog.length ? ` · ${catalog.length} Katalog` : ""} · tippen filtert`
               : catalog.length
                 ? `${catalog.length} im Katalog · tippen filtert`
-                : "ID eintippen oder Verbindung prüfen"}
+                : "Modell-ID eingeben oder Verbindung prüfen"}
       </p>
       {open ? (
         <ul className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-surface shadow-lg">

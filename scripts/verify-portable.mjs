@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { _electron } from 'playwright';
+import { verifyBackgroundPackage } from './background-package-check.mjs';
 
 const [archive, executable = 'Anvil.exe'] = process.argv.slice(2);
 assert.equal(process.platform, 'win32');
@@ -36,6 +37,7 @@ async function launch() {
 }
 try {
   await launch(); result.checks.push('real ZIP extraction, portable launch without external Node, profile beside executable');
+  result.checks.push(await verifyBackgroundPackage(page,fixture));
   await page.evaluate(() => window.__anvilIde.setState({ autoUpdate: false, setupDone: true, locale: 'en' }));
   await page.screenshot({ path: path.join(fixture, 'portable-app.png') });
   await app.close(); app = null; page = null;

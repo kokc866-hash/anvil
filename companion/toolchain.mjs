@@ -58,8 +58,14 @@ function dirOf(kind) {
 export function toolchainBin(bin) {
   const spec = TOOLS[bin];
   if (!spec) return null;
-  const names = WIN ? spec.bins.flatMap((b) => [b + ".exe", b]) : spec.bins;
-  return walkFind(dirOf(spec.kind), names);
+  // A package may contain both commands; directory order must not decide
+  // whether rustc becomes cargo or javac becomes java. They are not aliases.
+  const names = ['rustc','cargo','javac','java'].includes(bin) ? [bin] : spec.bins;
+  for(const name of names){
+    const hit=walkFind(dirOf(spec.kind),[name]);
+    if(hit)return hit;
+  }
+  return null;
 }
 
 export function listToolchains() {

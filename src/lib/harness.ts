@@ -168,9 +168,13 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
   }
 
   if (!last.ok && (last.kind === "run" || last.kind === "engine" || last.kind === "test")) {
+    if (!opts.runLoop && !opts.engineLoop) {
+      const next = { ...state, phase: "act" as const, reason: "inspect run result" };
+      return { state: next, allow: [], hint: "Check the result against the task: a nonzero exit may be an expected negative test. Continue with the offered tools; automatic repair is off.", stop: false };
+    }
     if (patchesLeft <= 0 || runsLeft <= 0) {
-      const next = { ...state, phase: "act" as const, reason: "run budget — continue without loop" };
-      return { state: next, allow: ["read_file", "edit_file", "append_file", "write_file", "grep", "mcp_call"], hint: next.reason, stop: false };
+      const next = { ...state, phase: "act" as const, reason: "automatic repair attempts used" };
+      return { state: next, allow: [], hint: "Automatic repair attempts used. Inspect the result and continue remaining work with the offered tools. This does not revoke Shell, Git or file tools; respect their actual availability and permissions.", stop: false };
     }
     const next = { ...state, phase: "patch" as const, reason: "error — patch and run again" };
     return {
@@ -247,7 +251,9 @@ export function abortHarness(state: HarnessState): HarnessState {
 export function harnessPrompt(tick: HarnessTick): string {
   if (tick.stop) return `Harness: stop. ${tick.hint}`.trim();
   if (!tick.hint) return "";
-  const allow = tick.allow.length ? ` Allowed: ${tick.allow.join(", ")}.` : "";
+  const allow = tick.allow.length ? tick.strict
+    ? ` Allowed: ${tick.allow.join(", ")}.`
+    : ` Suggested next tools: ${tick.allow.join(", ")}. Other offered tools remain available.` : "";
   return `Harness (${tick.state.phase}): ${tick.hint}${allow}`;
 }
 

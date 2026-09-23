@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {createServer} from 'vite';
+import path from 'node:path';
+
+test('background file adoption follows actual writes once and protects local edits',async t=>{
+ const values=new Map();
+ globalThis.localStorage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
+ globalThis.window=Object.assign(new EventTarget(),{localStorage,setTimeout,clearTimeout});
+ globalThis.document=Object.assign(new EventTarget(),{documentElement:{lang:'de'}});
+ const server=await createServer({configFile:false,root:process.cwd(),resolve:{alias:{'@':path.resolve('src')}},server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
+ let stop;
+ t.after(async()=>{stop?.();try{const {flushPersistence}=await server.ssrLoadModule('/src/lib/persist-storage.ts');await flushPersistence().catch(()=>{});}finally{await server.close();delete globalThis.window;delete globalThis.document;delete globalThis.localStorage;}});
+ const {useIde}=await server.ssrLoadModule('/src/store/ide.ts');
+ const {useIntern}=await server.ssrLoadModule('/src/lib/intern.ts');useIntern.getState().setPrefs({on:false,autoHeal:false});
+ const {startBackgroundAgentMonitor,useBackgroundAgent}=await server.ssrLoadModule('/src/lib/background-agent.ts');
+ const opened=[],open=useIde.getState().openFile;
+ useIde.setState({files:{'notes.txt':'user'},dirs:[],openPaths:['notes.txt'],activePath:'notes.txt',workspaceCwd:'',memoryWorkspace:'fixture-follow',dirty:{},pendingDiffs:[],autoSaveDisk:false,autoPreview:false,chat:[],openFile:p=>{opened.push(p);open(p);}});
+ let revision=0;
+ const base={id:'job-follow',project:'fixture-follow',status:'running',prompt:'Create files',startedAt:1,text:'',thinking:'',steps:[],plan:[],harness:'',error:'',dismissed:false,drafts:{}};
+ const deliver=async changes=>{
+  const job={...base,...changes,revision:++revision};
+  window.anvilNative={agentJob:async action=>action==='status'?{available:true,state:job}:{unchanged:true}};
+  stop=startBackgroundAgentMonitor();
+  try{for(let i=0;i<30&&useBackgroundAgent.getState().job?.revision!==revision;i++)await new Promise(r=>setImmediate(r));assert.equal(useBackgroundAgent.getState().job?.revision,revision);}
+  finally{stop();stop=null;}
+ };
+ const draft=(before,after)=>({before,after,applied:true});
+ await deliver({drafts:{'created.cjs':draft(null,'first')}});
+ assert.equal(useIde.getState().activePath,'created.cjs');
+ assert.ok(useIde.getState().openPaths.includes('created.cjs'));
+ assert.equal(useIde.getState().files['created.cjs'],'first');
+ open('notes.txt');
+ await deliver({drafts:{'created.cjs':draft(null,'first')},thinking:'more status'});
+ assert.equal(useIde.getState().activePath,'notes.txt','status polling must not steal the selected tab');
+ useIde.getState().closeFile('created.cjs');
+ await deliver({drafts:{'created.cjs':draft(null,'first')}});
+ assert.equal(useIde.getState().openPaths.includes('created.cjs'),false,'closed tab stays closed without a new edit');
+ await deliver({drafts:{'created.cjs':draft(null,'second')}});
+ assert.equal(useIde.getState().activePath,'created.cjs');
+ useIde.setState({files:{...useIde.getState().files,'disk-first.cjs':'already loaded'}});
+ await deliver({drafts:{'disk-first.cjs':draft(null,'already loaded')}});
+ assert.equal(useIde.getState().activePath,'disk-first.cjs','disk watcher may have loaded the content before the job snapshot');
+ open('notes.txt');
+ useIde.setState({dirty:{'notes.txt':true}});
+ await deliver({drafts:{'notes.txt':draft('user','agent')}});
+ assert.equal(useIde.getState().files['notes.txt'],'user');
+ assert.equal(useIde.getState().activePath,'notes.txt');
+ useIde.setState({dirty:{},pendingDiffs:[{path:'notes.txt',before:'user',after:'local review'}]});
+ await deliver({drafts:{'notes.txt':draft('user','agent')}});
+ assert.equal(useIde.getState().files['notes.txt'],'user');
+ useIde.setState({pendingDiffs:[]});
+ const count=opened.length;
+ await deliver({drafts:{'draft-only.cjs':{before:null,after:'unreviewed',applied:false}}});
+ await deliver({project:'other-project',drafts:{'foreign.cjs':draft(null,'foreign')}});
+ await deliver({drafts:{'notes.txt':draft('user','user')}});
+ await deliver({restored:true,drafts:{'restored.cjs':draft(null,'restored')}});
+ await deliver({drafts:{'created.cjs':draft('second',null)}});
+ assert.equal(opened.length,count,'drafts, foreign files, no-op writes, restores and deletions do not steal focus');
+ assert.equal('created.cjs' in useIde.getState().files,false);
+ assert.deepEqual(opened,['created.cjs','created.cjs','disk-first.cjs']);
+});

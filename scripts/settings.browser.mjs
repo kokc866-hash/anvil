@@ -5,7 +5,7 @@ import { chromium } from "playwright";
 const production = process.argv.includes("--production");
 const base = production ? "http://127.0.0.1:8081" : "http://127.0.0.1:8080";
 const kind = production ? "production" : "desktop";
-const root = "/workspace/screenshots/anvil-settings";
+const root = process.env.ANVIL_SCREENSHOT_DIR || "artifacts/german-copy/settings";
 await mkdir(root, { recursive: true });
 for (let i = 0; i < 80; i++) {
   try { if ((await fetch(base, { signal: AbortSignal.timeout(1000) })).ok) break; } catch { /* startup */ }
@@ -42,7 +42,7 @@ try {
   await page.evaluate(() => window.__anvilIde.getState().setSettingsOpen(true));
   const search = page.getByRole("textbox", { name: "Einstellungen durchsuchen", exact: true });
   await search.waitFor();
-  await page.getByRole("button", { name: "Ins Projekt", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Ins Projekt übernehmen", exact: true }).waitFor();
   // The workspace schedules a compiler-health ping after its 600ms lint
   // debounce and a further 1600ms delay. Settle that independent startup
   // request before measuring searches, rather than racing a fixed timeout.
@@ -63,8 +63,8 @@ try {
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().fontSize), 16);
   assert.equal(await font.getByRole("button", { name: "16", exact: true }).getAttribute("aria-pressed"), "true");
   await page.screenshot({ path: `${root}/${kind}-search.png` });
-  await search.fill("GPU warm");
-  await page.getByRole("switch", { name: "GPU warm halten", exact: true }).waitFor();
+  await search.fill("GPU einsatzbereit");
+  await page.getByRole("switch", { name: "GPU einsatzbereit halten", exact: true }).waitFor();
   assert.equal(await page.getByText("Keine passenden Einstellungen gefunden.", { exact: true }).isVisible(), false);
   assert.equal(requests.length, beforeSearch, `Typing in search must not start server/model scans: ${requests.join(", ")}`);
   await page.getByRole("navigation", { name: "Einstellungsbereiche" }).getByRole("button", { name: "Editor", exact: true }).click();
@@ -89,15 +89,15 @@ try {
   });
   await page.getByText("Wirksame Einstellungen im Projekt", { exact: true }).click();
   const effective = page.getByRole("table");
-  assert.match(await effective.getByRole("row").filter({ hasText: "Run-Schleife" }).innerText(), /Aus.*Anvil/);
-  assert.match(await effective.getByRole("row").filter({ hasText: "Versuche" }).innerText(), /5.*Projekt/);
+  assert.match(await effective.getByRole("row").filter({ hasText: "Automatische Ausführung" }).innerText(), /Aus.*Anvil/);
+  assert.match(await effective.getByRole("row").filter({ hasText: "Korrekturversuche" }).innerText(), /5.*Projekt/);
   const beforeProject = await page.evaluate(() => window.__anvilIde.getState().files);
-  await page.getByRole("button", { name: "Ins Projekt", exact: true }).click();
+  await page.getByRole("button", { name: "Ins Projekt übernehmen", exact: true }).click();
   const saved = await page.evaluate(() => window.__anvilIde.getState().files);
   assert.equal(saved[".anvil/board.json"], beforeProject[".anvil/board.json"]);
   assert.equal(saved[".anvil/graph.json"], beforeProject[".anvil/graph.json"]);
   assert.equal(JSON.parse(saved[".anvil/harness.json"]).maxTools, 11);
-  await page.getByRole("button", { name: "Raten · Vorschlag", exact: true }).click();
+  await page.getByRole("button", { name: "Vorschlag erstellen", exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.__anvilIde.getState().files), saved, "Raten prepares a suggestion without writing files");
   await page.screenshot({ path: `${root}/${kind}-project.png` });
   await page.getByRole("navigation", { name: "Einstellungsbereiche" }).getByRole("button", { name: "Daten", exact: true }).click();

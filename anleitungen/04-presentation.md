@@ -1,6 +1,6 @@
 # Anvil — Kurzpräsentation
 
-5 Minuten. Für Demo oder den ersten Blick. Stand: Release 1.3.29; aktuelle Möglichkeiten und Grenzen stehen in [Verbindungen](05-verbindungen.md) und [Editor](editor.md).
+Diese Einführung dauert etwa fünf Minuten. Sie beschreibt den Funktionsstand von Release 1.3.29. Weitere Möglichkeiten und Grenzen erklären die Anleitungen zu [Verbindungen](05-verbindungen.md) und [Editor](editor.md).
 
 ---
 
@@ -8,77 +8,73 @@
 
 **Anvil** ist eine lokale Entwicklungsumgebung in einem eigenen Fenster.
 
-Dateien. Editor. Agent. Run.
-
-Eigenes Fenster. Modell lokal **oder** in der Cloud. Du wählst.
+Sie verbindet Dateiverwaltung, Editor, KI-Agent und Programmausführung. Du kannst ein lokales Modell oder einen Cloud-Anbieter verwenden.
 
 ---
 
-## 2. Der Satz
+## 2. Die Komponenten
 
-> Anvil handelt. Das Hauptmodell denkt. Der Helfer ist optional.
+Anvil führt die Werkzeuge aus; das gewählte Hauptmodell bearbeitet deine Aufträge. Ein zusätzliches Helfermodell ist optional.
 
-| Wer | Tut |
+| Komponente | Aufgabe |
 |---|---|
-| **Anvil** | Dateien, Run, Git, Fenster, Debug |
-| **Agent** | Denkt, schreibt Code — lokal oder Cloud |
-| **Helfer** | Klein, lokal, schnell — Titel, Kurzbefehl, kein Code |
+| **Anvil** | Verwaltet Dateien, Git, Programmausführung, Vorschau und Debugger. |
+| **Agent** | Bearbeitet deine Aufträge mit dem gewählten Hauptmodell und den freigegebenen Werkzeugen. |
+| **Helfer** | Unterstützt kurze Aufgaben, etwa Titel und Kurzbefehle, mit einem optionalen lokalen Modell. |
 
-Zwei Gehirne, eine App. Das große Modell baut. Das kleine hält den Takt.
+Der Agent funktioniert auch ohne aktivierten Helfer.
 
 ---
 
-## 3. Die Geschichte
+## 3. Eine erste Aufgabe
 
-Schreib ein Stück Software.
+So erstellst und prüfst du eine kleine Anwendung:
 
-1. Du sagst es im Chat.
+1. Beschreibe im Chat, welche Anwendung du erstellen möchtest.
 2. Der Agent legt Dateien an.
-3. Du siehst Diffs, übernimmst.
-4. **Run** — HTML in einem eigenen Fenster, Python in der Konsole.
-5. Etwas hakt. Der Agent sieht den Fehler — oder den Frame — und patched.
+3. Prüfe die Änderungsvorschläge und übernimm sie.
+4. **Ausführen** — HTML in einem eigenen Fenster, Python in der Konsole.
+5. Prüfe das Ergebnis. Du kannst Fehler melden oder eine weitere Änderung beschreiben. Eine Vorschauaufnahme unterstützt visuelle Aufgaben, sofern die Modellverbindung Bilder verarbeitet.
 
-Das ist der Kreis. Alles andere ist Beiwerk.
+Wiederhole diese Schritte, bis das Ergebnis den Anforderungen entspricht.
 
 ---
 
-## 4. Was man merkt
+## 4. Weitere Funktionen
 
-- **Eigenes Fenster** — Setup-exe oder start.bat, fertig.
-- **Lokal oder Cloud** — Ollama / LM Studio im LAN, oder OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, OpenRouter, xAI, Azure, … Key in den Einstellungen, Profil speichern.
-- **Run-Schleife** — schreiben, ausführen, Fehler sehen, nachlegen. Ohne Ritual.
-- **Companion** — kein Internet. Startet bei Run auf diesem PC, Go/Rust bleiben in Anvil.
-- **Graph** — Frames zurück an den Agenten, wenn es ums Bild geht.
-- **Referenzen** — Specs und Screenshots in `ref/`, nicht den ganzen Workspace durchsuchen.
+- **Eigenes Fenster** — Die fertige Anwendung wird über `Anvil.exe` gestartet, die Entwicklungsfassung über `start.bat`.
+- **Lokal oder Cloud** — Anvil unterstützt unter anderem Ollama, LM Studio, OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, OpenRouter, xAI und Azure. Verbindungen lassen sich als Profile speichern; erforderliche Zugangsschlüssel werden getrennt verwaltet.
+- **Automatische Ausführung** — Der Agent kann Änderungen ausführen, Ergebnisse prüfen und Fehler korrigieren.
+- **Companion** — Ein Hilfsdienst auf deinem Rechner verbindet unter anderem lokale Compiler und Laufzeitprogramme mit Anvil.
+- **Graph** — Legt Abläufe fest und kann Vorschauaufnahmen zur Prüfung an den Agenten zurückgeben.
+- **Referenzen** — Spezifikationen, Bilder und Notizen im Ordner `ref/` liefern gezielten Kontext für die Aufgabe.
 - **Runde zurücknehmen** — Dateiänderungen einer Agentenrunde vor der Bestätigung ansehen und zurücksetzen; externe Aktionen bleiben getrennt.
 - **Deutsch / English** — Umschalter in den Einstellungen.
 
 ---
 
-## 5. Was es nicht ist
+## 5. Grenzen
 
-Keine Spiele-Engine. Mini-HTML ja, große Games woanders.
+Anvil enthält keine eigene Spiele-Engine. HTML-Anwendungen lassen sich direkt in der Vorschau ausführen. Engine-Projekte benötigen die jeweiligen Programme und ihre Anbindungen.
 
-Kein zweites Cursor-Klon-Gefühl: die Spur ist sichtbar — Plan, Diff, Frame, Kontext-Chips.
+Die Spur zeigt Arbeitsschritte, Änderungen, Prüfergebnisse und gegebenenfalls Vorschauaufnahmen. Eine Modellantwort allein ist kein Nachweis, dass das erstellte Programm fehlerfrei funktioniert.
 
-Kein Pflicht-Helfer. Ohne ihn läuft der Agent trotzdem.
+Das Helfermodell ist für die Agentenarbeit nicht erforderlich.
 
 ---
 
-## 6. Start in 30 Sekunden
+## 6. Starten
 
-1. [Releases](https://github.com/kokc866-hash/anvil/releases) Setup, oder Node.js LTS und Ordner entpacken, **start.bat**.
-2. **start.bat**.
-3. Einstellungen → Agent → Anbieter (Ollama **oder** OpenAI, Anthropic, …), URL/Key, Modell, prüfen.
+1. Installiere die Setup-EXE aus den [GitHub Releases](https://github.com/kokc866-hash/anvil/releases) oder entpacke die portable ZIP vollständig und starte `Anvil.exe`.
+2. Für die Entwicklung aus dem Quellcode benötigst du stattdessen Node.js LTS und **start.bat**.
+3. Wähle unter Einstellungen → Agent den Anbieter, die Verbindungsadresse und das Modell. Ergänze bei Bedarf den Zugangsschlüssel und prüfe die Verbindung.
 4. Chat: *Bau eine To-do-Liste in index.html.*
-5. Übernehmen. Run.
+5. Prüfe die Änderungen, übernimm sie und wähle **Ausführen**.
 
-Stop: **stop.bat**.
+Die Entwicklungsinstanz lässt sich mit **stop.bat** beenden.
 
 ---
 
 ## 7. Abschluss
 
-Anvil ist die Werkbank. Das Modell ist der Kopf. Du bleibst im Kreis: sagen, bauen, sehen, nachlegen.
-
-Lokal. Sichtbar. Ohne Theater.
+Du beschreibst die Aufgabe, prüfst die vorgeschlagenen Änderungen und testest das Ergebnis. Anvil hält die zugehörigen Dateien, Arbeitsschritte und Ausgaben zusammen.

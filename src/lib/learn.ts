@@ -93,6 +93,7 @@ type LearnState = {
   forgotten: string[];
   forgottenFacts: string[];
   eventCount: number;
+  backgroundKnowledgeEvents: string[];
   assignLegacy: (id: string) => void;
   activeSkills: string[];
   setOn: (v: boolean) => void;
@@ -172,6 +173,7 @@ export const useLearn = create<LearnState>()(
       forgotten: [],
       forgottenFacts: [],
       eventCount: 0,
+      backgroundKnowledgeEvents: [],
       activeSkills: [],
       setOn: (on) => { invalidateMemory(); set({ on }); },
       setPref: (k, v) => { invalidateMemory(); set({ prefs: { ...get().prefs, [k]: v } }); },
@@ -329,6 +331,7 @@ export const useLearn = create<LearnState>()(
         forgotten: s.forgotten ?? [],
         forgottenFacts: s.forgottenFacts,
         eventCount: s.eventCount,
+        backgroundKnowledgeEvents: s.backgroundKnowledgeEvents,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<LearnState>;
@@ -473,7 +476,7 @@ export function adaptIde() {
   }
 }
 
-function persistSkillFile(skill: LearnSkill) {
+export function persistSkillFile(skill: LearnSkill) {
   const path = skill.file && /^\.anvil\/skills\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.md$/i.test(skill.file) ? skill.file : `.anvil/skills/${skill.id}.md`;
   const src = serializeSkillMd(skill);
   try {

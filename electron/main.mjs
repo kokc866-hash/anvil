@@ -13,6 +13,7 @@ import { bindHwIpc } from "./hw.mjs";
 import { bindAccountIpc } from "./account-auth.mjs";
 import { bindMcpIpc, stopMcpConnections } from "./mcp-ipc.mjs";
 import { bindCliIpc, stopCliJobs } from "./cli-ipc.mjs";
+import { bindAgentJobIpc } from "./agent-job-ipc.mjs";
 import { bindAcpIpc, stopAcpJobs } from "./acp-ipc.mjs";
 import { registerInteractionChecks } from "./interaction-checks.mjs";
 import { bindRecoveryIpc } from "./recovery.mjs";
@@ -106,6 +107,7 @@ function companionPort() {
   return Number.isFinite(n) && n > 0 && n < 65536 ? Math.round(n) : 7845;
 }
 let win = null;
+let agentJobs = null;
 let splash = null;
 let helperSrv = null;
 let pipeSrv = null;
@@ -431,7 +433,8 @@ async function createWindow() {
       watchdog?.event(event, details);
       try { appendFileSync(logFile(), `${new Date().toISOString()} ${event} ${JSON.stringify(details)}\n`); } catch { /* logging must not prevent recovery */ }
     },
-    stopJobs() { stopCliJobs(); stopAcpJobs(); return stopMcpConnections(); },
+    backgroundActive: () => agentJobs?.busy() === true,
+    stopJobs() { stopCliJobs(); stopAcpJobs(); return stopMcpConnections({ includeBackground: false }); },
     resetClose() { closeReady = false; waiting = false; ticket++; quitRequested = false; },
     restore: () => editorWindow.loadURL(APP_URL),
     close() { closingApproved = true; app.quit(); },
@@ -454,6 +457,8 @@ async function createWindow() {
     ipcMain.removeListener("editor-close-ready", readyToClose);
     ipcMain.removeListener("editor-close-result", finishClose);
     win = null;
+    // A stage-2 preview must not keep a windowless Anvil and its native jobs alive.
+    if (agentJobs?.state?.execution) quitRequested = true;
     // Resume a requested app quit after the save handshake, including other windows.
     if (quitRequested) queueMicrotask(() => app.quit());
   });
@@ -515,6 +520,7 @@ if (!gotLock) {
     bindHwIpc();
     bindAccountIpc();
     bindCliIpc(isAppUrl);
+    agentJobs = bindAgentJobIpc({ root: ROOT, dataHome: app.getPath("userData"), isTrusted: isAppUrl, editor: () => win });
   bindAcpIpc(isAppUrl, app.getPath("userData"));
   registerInteractionChecks({ ipcMain, BrowserWindow, session, assertTrustedSender(event) {
     if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isAppUrl(event.senderFrame.url)) throw new Error("Bedienprüfungen nur im Anvil-Hauptfenster verfügbar.");
@@ -543,7 +549,7 @@ if (!gotLock) {
     showSplash();
     const up = await portOpen(PORT);
     if (up && desktopMode === "production") {
-      throw new Error("Der Anvil-Anschluss ist noch belegt. Bitte die bisherige Anvil-Version vollständig schließen und den Teststart erneut öffnen.");
+      throw new Error("Der von Anvil benötigte Netzwerkport ist noch belegt. Schließe die bisherige Anvil-Instanz vollständig und starte die Testversion erneut.");
     }
     if (!up) {
       server = startServer();
@@ -573,13 +579,14 @@ app.on("window-all-closed", () => {
 let mcpShutdown = false, mcpShutdownDone = false;
 app.on("before-quit", (event) => {
   if (win && !closingApproved) { event.preventDefault(); quitRequested = true; win.close(); return; }
+  const backgroundShutdown = agentJobs?.close();
   if (!mcpShutdownDone) {
     event.preventDefault();
     if (!mcpShutdown) {
       mcpShutdown = true;
       const finish = () => { if (!mcpShutdownDone) { mcpShutdownDone = true; app.quit(); } };
       const deadline = setTimeout(finish, 6000);
-      void stopMcpConnections().finally(() => { clearTimeout(deadline); finish(); });
+      void Promise.allSettled([stopMcpConnections(), backgroundShutdown]).finally(() => { clearTimeout(deadline); finish(); });
     }
     return;
   }

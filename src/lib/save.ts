@@ -19,7 +19,7 @@ export function saveNow(request: SaveRequest = {}): Promise<boolean> {
 async function saveCurrent(request: SaveRequest, path: string | null, target: ReturnType<typeof captureDiskTarget>): Promise<boolean> {
   const sameTarget = () => {
     const s = useIde.getState();
-    if (s.pathOperation?.from === "") { s.setNotice("Rücknahme zuerst abschließen lassen."); return false; }
+    if (s.pathOperation?.from === "") { s.setNotice("Warte, bis die Wiederherstellung abgeschlossen ist."); return false; }
     return s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && s.companionUrl === target.base && diskWorkspaceHandle() === target.handle;
   };
   if (!sameTarget()) return false;
@@ -27,11 +27,11 @@ async function saveCurrent(request: SaveRequest, path: string | null, target: Re
   try {
     const initial = useIde.getState();
     if (initial.checkpoints.some((c) => c.projectRestore && c.disk?.root === target.cwd)) {
-      initial.setNotice("Unterbrochene Projektrücknahme zuerst über dieselbe Runde abschließen. Alte Editorstände werden nicht auf die Platte geschrieben."); return false;
+      initial.setNotice("Setze die unterbrochene Wiederherstellung über dieselbe Runde fort. Bis sie abgeschlossen ist, werden ältere Editorinhalte nicht gespeichert."); return false;
     }
     const paths = request.all ? Object.keys(initial.dirty).filter((p) => initial.dirty[p] && p in initial.files) : path && path in initial.files ? [path] : [];
     if (paths.some((p) => initial.pendingDiffs.some((d) => d.path === p && d.source !== "round"))) {
-      initial.setNotice("Änderungsvorschläge zuerst übernehmen oder zurücknehmen."); return false;
+      initial.setNotice("Übernimm oder verwirf zuerst die offenen Änderungsvorschläge."); return false;
     }
     if (initial.formatOnSave && request.format !== false) for (const p of paths) {
       const before = useIde.getState().files[p];
@@ -39,7 +39,7 @@ async function saveCurrent(request: SaveRequest, path: string | null, target: Re
         const next = await formatCode(p, before);
         if (!sameTarget()) return false;
         if (useIde.getState().files[p] === before && next !== before) useIde.getState().setContent(p, next);
-      } catch { note = "Format fehlgeschlagen — ursprünglichen Text gespeichert"; }
+      } catch { note = "Die Formatierung ist fehlgeschlagen. Der ursprüngliche Text wurde gespeichert."; }
     }
     if (!sameTarget()) return false;
     const st = useIde.getState(), files = st.files;
@@ -69,7 +69,7 @@ export async function closeTabs(paths: string[]): Promise<void> {
     const { saveChoice } = await import("./confirm");
     const choice = await saveChoice(dirty.join("\n"));
     if (choice === "cancel" || before.workspaceEpoch !== useIde.getState().workspaceEpoch) return;
-    if (dirty.some((p) => before.files[p] !== useIde.getState().files[p])) { useIde.getState().setNotice("Dateien inzwischen geändert. Schließen erneut wählen."); return; }
+    if (dirty.some((p) => before.files[p] !== useIde.getState().files[p])) { useIde.getState().setNotice("Die Dateien wurden inzwischen geändert. Wähle erneut „Schließen“, um den aktuellen Stand zu prüfen."); return; }
     if (choice === "save") { for (const p of dirty) if (!(await saveNow({ path: p }))) return; }
     else for (const p of dirty) await useIde.getState().discardFile(p);
     if (dirty.some((p) => useIde.getState().dirty[p])) return;
@@ -79,7 +79,7 @@ export async function closeTabs(paths: string[]): Promise<void> {
 
 export async function prepareWorkspaceSwitch(): Promise<boolean> {
   const before = useIde.getState();
-  if (before.pathOperation?.from === "") { before.setNotice("Rücknahme zuerst abschließen lassen."); return false; }
+  if (before.pathOperation?.from === "") { before.setNotice("Warte, bis die Wiederherstellung abgeschlossen ist."); return false; }
   const paths = Object.keys(before.dirty).filter((p) => before.dirty[p]);
   if (paths.length) {
     const { saveChoice } = await import("./confirm");
@@ -116,12 +116,12 @@ export function prepareAppClose(): Promise<boolean> {
 async function closeCurrentApp(): Promise<boolean> {
   const { saveChoice, closeFailureChoice, confirmApp } = await import("./confirm");
   const before = useIde.getState();
-  if (before.pathOperation?.from === "") { before.setNotice("Rücknahme zuerst abschließen lassen."); return false; }
+  if (before.pathOperation?.from === "") { before.setNotice("Warte, bis die Wiederherstellung abgeschlossen ist."); return false; }
   const dirty = Object.keys(before.dirty).filter((p) => before.dirty[p]);
   const choice = dirty.length ? await saveChoice(`${dirty.length} Datei(en) vor dem Beenden speichern?`) : "save";
   if (choice === "cancel" || before.workspaceEpoch !== useIde.getState().workspaceEpoch) return false;
   if (choice === "discard" && dirty.some((p) => before.files[p] !== useIde.getState().files[p])) {
-    useIde.getState().setNotice("Dateien inzwischen geändert. Beenden erneut wählen."); return false;
+    useIde.getState().setNotice("Die Dateien wurden inzwischen geändert. Wähle erneut „Beenden“, um den aktuellen Stand zu prüfen."); return false;
   }
   const { stopAgent } = await import("./abort");
   if (useIde.getState().agentBusy) stopAgent("Anvil wird geschlossen");
@@ -145,8 +145,8 @@ async function closeCurrentApp(): Promise<boolean> {
       try {
         const result = await native.saveRecovery({ files: snapshot.files, dirs: snapshot.dirs });
         if (!result.path) continue;
-        if (snapshot.files !== useIde.getState().files || snapshot.workspaceEpoch !== useIde.getState().workspaceEpoch) { useIde.getState().setNotice("Projekt inzwischen geändert. Neue Änderungen erneut sichern."); continue; }
-        if (await confirmApp(`Projektdateien vollständig gesichert unter ${result.path}. Noch fehlgeschlagene Einstellungen oder Schlüssel wurden damit nicht gesichert. Anvil jetzt beenden?`, { title: "Projektsicherung erstellt", ok: "Beenden", cancel: "Offen lassen" })) return true;
+        if (snapshot.files !== useIde.getState().files || snapshot.workspaceEpoch !== useIde.getState().workspaceEpoch) { useIde.getState().setNotice("Das Projekt wurde inzwischen geändert. Sichere auch die neuen Änderungen, bevor du Anvil beendest."); continue; }
+        if (await confirmApp(`Projektdateien vollständig gesichert unter ${result.path}. Einstellungen oder Zugangsschlüssel, deren Sicherung zuvor fehlgeschlagen ist, sind darin nicht enthalten. Anvil jetzt beenden?`, { title: "Projektsicherung erstellt", ok: "Beenden", cancel: "Offen lassen" })) return true;
         return false;
       } catch (error) { useIde.getState().setNotice(saveError(error)); await confirmApp(saveError(error), { title: "Sicherung fehlgeschlagen", ok: "Zurück", cancel: "" }); }
     }

@@ -21,13 +21,13 @@ export function TaskPackages() {
   const [message, setMessage] = useState("");
   const [runtime, setRuntime] = useState<{ base: string; info: CompanionInfo }>();
   const base = useIde(s => s.companionUrl);
-  const readiness = projectReadiness({ files, saved: Boolean(cwd || diskWorkspaceHandle()), model, bins: runtime?.base === base ? runtime.info.bins : undefined, runtimeError: runtime?.base === base && !runtime.info.ok ? runtime.info.error || "Companion nicht erreichbar. Unter Einstellungen → Companion prüfen." : undefined });
+  const readiness = projectReadiness({ files, saved: Boolean(cwd || diskWorkspaceHandle()), model, bins: runtime?.base === base ? runtime.info.bins : undefined, runtimeError: runtime?.base === base && !runtime.info.ok ? runtime.info.error || "Der Companion ist nicht erreichbar. Prüfe die Verbindung unter Einstellungen → Companion." : undefined });
   const packages = Object.keys(files).filter(path => /^\.anvil\/skills\/[a-z0-9-]+\/SKILL\.md$/i.test(path));
 
   async function install(make: () => { files: Record<string, string>; main: string }, epoch: number) {
-    if (useIde.getState().workspaceEpoch !== epoch) throw new Error("Projekt inzwischen gewechselt. Import erneut wählen.");
+    if (useIde.getState().workspaceEpoch !== epoch) throw new Error("Das Projekt wurde inzwischen gewechselt. Starte den Import erneut.");
     const st = useIde.getState();
-    if (st.agentBusy || st.pathOperation) throw new Error("Laufende Projektänderung zuerst abschließen lassen.");
+    if (st.agentBusy || st.pathOperation) throw new Error("Warte, bis die laufende Projektänderung abgeschlossen ist.");
     const pack = make();
     for (const [path, content] of Object.entries(pack.files)) st.writeFile(path, content, { quiet: true });
     hydrateLearnFromFiles(useIde.getState().files, Object.keys(pack.files));
@@ -37,7 +37,7 @@ export function TaskPackages() {
       if (useIde.getState().workspaceEpoch !== epoch) { saved = false; break; }
       if (!(await saveNow({ path, format: false }))) { saved = false; break; }
     }
-    setMessage(saved ? "Paket ergänzt und gespeichert. Anleitungen und Dateien sind bereit; kein Skript oder Modell wurde ausgeführt." : "Paket im Projekt ergänzt. Speichern noch offen; den Hinweis unten in Anvil prüfen.");
+    setMessage(saved ? "Paket ergänzt und gespeichert. Anleitungen und Dateien sind bereit; kein Skript oder Modell wurde ausgeführt." : "Das Paket wurde im Projekt ergänzt, aber noch nicht gespeichert. Beachte den Hinweis unten in Anvil.");
   }
 
   async function addWeb() {
@@ -70,20 +70,20 @@ export function TaskPackages() {
     const root = manifest.slice(0, -"SKILL.md".length);
     if (!(await confirmApp(`${Object.keys(entries).length} Dateien dieses Skill-Pakets aus dem Projekt entfernen? Eigene Änderungen in diesem Paket werden ebenfalls entfernt.`, { title: "Skill-Paket entfernen", ok: "Entfernen", cancel: "Behalten" }))) return;
     const st = useIde.getState();
-    if (st.workspaceEpoch !== before.workspaceEpoch || st.agentBusy || st.pathOperation || Object.keys(skillPackageFiles(st.files, manifest)).length !== Object.keys(entries).length || Object.entries(entries).some(([path, text]) => st.files[root + path] !== text)) { setMessage("Projekt inzwischen geändert. Entfernen erneut wählen."); return; }
+    if (st.workspaceEpoch !== before.workspaceEpoch || st.agentBusy || st.pathOperation || Object.keys(skillPackageFiles(st.files, manifest)).length !== Object.keys(entries).length || Object.entries(entries).some(([path, text]) => st.files[root + path] !== text)) { setMessage("Das Projekt wurde inzwischen geändert. Prüfe den aktuellen Stand und wähle erneut „Entfernen“."); return; }
     const skill = useLearn.getState().skills.find(item => item.file === manifest && (item.scope === "user" || item.ws === workspaceId()));
     if (skill) useLearn.getState().forgetSkill(skill.id);
     st.deleteDir(root.slice(0, -1));
     try { await flushDiskSync(); setMessage("Skill-Paket entfernt. Andere Projektdateien bleiben erhalten."); }
-    catch (error) { setMessage(`Skill deaktiviert; Entfernen vom Datenträger noch offen: ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { setMessage(`Der Skill wurde deaktiviert, seine Dateien konnten aber noch nicht gelöscht werden: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   return <section className="space-y-3 border-b border-border p-3" data-testid="task-packages">
     <h3 className="text-sm font-semibold">Aufgabenpakete & Skills</h3>
-    <p className="text-xs text-muted">Kleine Webanwendung: Vorlage, Arbeitsanleitung und Abnahme. Benötigt keine Downloads und keinen Modellzugang.</p>
+    <p className="text-xs text-muted">Vorlage für eine kleine Webanwendung mit Arbeitsanleitung und Prüfkriterien. Zum Hinzufügen sind keine Downloads und kein Modellzugang erforderlich.</p>
     <div className="flex flex-wrap gap-2"><Button className="h-auto max-w-full whitespace-normal" variant="primary" disabled={busy || agentBusy} onClick={() => void addWeb()}>Web-Aufgabenpaket ergänzen</Button><Button className="h-auto max-w-full whitespace-normal" variant="ghost" disabled={busy || agentBusy} onClick={() => input.current?.click()}>Skill-Ordner importieren</Button></div>
     <input ref={input} type="file" multiple className="hidden" aria-label="Skill-Ordner importieren" {...{ webkitdirectory: "" }} onChange={event => { const selected = Array.from(event.target.files || []); if (selected.length) void importFolder(selected); }} />
-    <p className="text-[11px] text-muted">Ein Ordner mit SKILL.md und zugehörigen Dateien. Skripte werden beim Import nur abgelegt. Fremde Anleitungen vor der Nutzung prüfen. Bestehende Pakete werden nicht überschrieben.</p>
+    <p className="text-[11px] text-muted">Ein Ordner mit SKILL.md und zugehörigen Dateien. Skripte werden beim Import gespeichert und nicht ausgeführt. Prüfe fremde Anleitungen vor der Nutzung. Bestehende Pakete werden nicht überschrieben.</p>
     {packages.map(path => <div key={path} className="flex flex-wrap items-center gap-2 rounded border border-border p-2 text-xs"><span className="min-w-0 flex-1 break-all">{path.split("/")[2]}</span><Button variant="ghost" onClick={() => { try { const bytes = skillPackageZip(skillPackageFiles(files, path)); downloadBlob(new Blob([bytes as BlobPart], { type: "application/zip" }), `${path.split("/")[2]}.zip`); } catch (error) { setMessage(String(error)); } }}>Exportieren</Button><Button variant="ghost" disabled={busy || agentBusy} onClick={() => void remove(path).catch(error => setMessage(String(error)))}>Entfernen</Button></div>)}
     <details className="rounded border border-border p-2" open><summary className="cursor-pointer text-xs font-medium">Projekt startklar?</summary><ul className="mt-2 space-y-2 text-xs">{readiness.map(row => <li key={row.id}><span className={row.status === "missing" ? "text-red-400" : "font-medium"}>{row.label}: {row.status === "ready" ? "vorhanden" : row.status === "missing" ? "fehlt" : row.status === "optional" ? "optional" : "offen"}</span><p className="text-muted">{row.detail}</p></li>)}</ul><Button className="mt-2" variant="ghost" disabled={busy} onClick={async () => { setBusy(true); try { const info = await companionPing(base); setRuntime({ base, info }); } catch (error) { setRuntime({ base, info: { ok: false, error: String(error) } }); } finally { setBusy(false); } }}>Voraussetzungen prüfen</Button><p className="mt-1 text-[11px] text-muted">Prüft vorhandene Laufzeiten über den eingestellten Companion. Keine Installation, kein Modellaufruf.</p></details>
     {message && <p role="status" className="break-words text-xs">{message}</p>}

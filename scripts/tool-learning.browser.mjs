@@ -53,7 +53,7 @@ try {
   await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
   const learning = () => page.evaluate((key) => window.__anvilIde.getState().llmToolLearning[key], cfg.key);
   const settings = (open) => page.evaluate((open) => window.__anvilIde.getState().setSettingsOpen(open), open);
-  const row = page.getByRole("group", { name: "Gelernte Tool-Aufrufe", exact: true });
+  const row = page.getByRole("group", { name: "Gelernte Werkzeugaufrufe", exact: true });
   async function send(responses, task = "Lies README.md und erkläre den Inhalt kurz.") {
     await settings(false); replies = [...responses]; const start = requests.length;
     await page.evaluate(() => window.__anvilIde.setState({ chat: [], attached: [] }));
@@ -79,7 +79,7 @@ try {
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["learned.txt"]), undefined);
   assert.equal((await learning()).rules.find((r) => r.shape.name === "save").successes, 0);
   await settings(true);
-  await row.getByRole("button", { name: "Lernen & anwenden", exact: true }).click();
+  await row.getByRole("button", { name: "Lernen und anwenden", exact: true }).click();
   await send([save("private-canary")], "Speichere learned.txt.");
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["learned.txt"]), undefined);
   await page.getByText(/Tool-Zuordnung für „save“/).waitFor();
@@ -103,7 +103,7 @@ try {
     await row.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(process.env.ANVIL_QA_SCREENSHOTS, `tool-learning-${production ? "production" : "dev"}.png`) });
     await page.setViewportSize({ width: 390, height: 844 });
-    await row.getByRole("button", { name: "Lernen & anwenden", exact: true }).scrollIntoViewIfNeeded();
+    await row.getByRole("button", { name: "Lernen und anwenden", exact: true }).scrollIntoViewIfNeeded();
     assert.equal(await row.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, "learning controls fit mobile width");
     await page.screenshot({ path: path.join(process.env.ANVIL_QA_SCREENSHOTS, `tool-learning-${production ? "production" : "dev"}-mobile.png`) });
     await page.setViewportSize({ width: 1440, height: 1000 });

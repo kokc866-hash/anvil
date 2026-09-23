@@ -56,6 +56,7 @@ import {
 } from "@/lib/brain";
 
 import { learnPrompt, markSkills, reflectUtterance, skillOutcome, useLearn } from "@/lib/learn";
+import { taskHandoff } from "@/lib/task-handoff";
 import {
   beginJournal,
   extractJournal,
@@ -77,6 +78,7 @@ import { attachmentHints } from "@/lib/attachment-hints";
 import { selectFileKeys } from "@/lib/workspace-index";
 import { requestPhase, useRequestState } from "@/lib/request-state";
 import { beginProjectCheckpoint, sealProjectCheckpoint } from "./project-checkpoints";
+import { trySendBackground } from "./background-agent";
 
 export async function applyWorkspace(ev: WorkspaceEvent) {
   const s = useIde.getState();
@@ -85,7 +87,10 @@ export async function applyWorkspace(ev: WorkspaceEvent) {
     else s.patchFiles({ [ev.path]: ev.content }, { quiet: true });
     const current = useIde.getState();
     if (s.files[ev.path] !== ev.content && current.files[ev.path] === ev.content) current.openFile(ev.path);
-  } else if (ev.op === "delete") s.deleteFile(ev.path);
+  } else if (ev.op === "delete") {
+    if(s.dirs.includes(ev.path)||Object.keys(s.files).some(p=>p.startsWith(ev.path+'/')))s.deleteDir(ev.path);
+    else s.deleteFile(ev.path);
+  }
   else if (ev.op === "mkdir") s.createFolder(ev.path);
   else if (ev.op === "rename") await s.relocatePath(ev.from, ev.to);
   else if (ev.op === "commit") s.commit(ev.message);
@@ -118,8 +123,12 @@ type SendInput = {
 };
 export async function sendChat(
   { preset, draft, images, title, setTitle, setDraft, setImages, setMention }: SendInput,
-  opts?: { queued?: boolean; choiceId?: string; mode?: "ask" | "agent" },
+  opts?: { queued?: boolean; choiceId?: string; mode?: "ask" | "agent"; onAccepted?: () => void },
 ) {
+  // Foreground routing must not yield before it claims agentBusy. Otherwise
+  // the queue consumer can remove and start the next request first.
+  const background = trySendBackground({ preset, draft, images, setDraft, setImages, setMention, onAccepted: opts?.onAccepted }, opts?.mode);
+  if (typeof background === "boolean" ? background : await background) return;
   const initial = useIde.getState();
   const connectionError = imageAttachmentError({ provider: initial.llmProvider, authMode: initial.llmAuthMode, baseUrl: initial.llmBaseUrl, model: initial.llmModel }, images.length, initial.locale);
   if (connectionError) { initial.setNotice(connectionError); return; }
@@ -187,6 +196,7 @@ export async function sendChat(
   let roundStopLabel: string | undefined;
   let diskCheckpointId: string | undefined;
   setAgentBusy(true);
+  opts?.onAccepted?.();
   await import("@/lib/model-context").then((m) => m.applyCloudContext()).catch(() => null);
   if (my !== agentGen()) return;
   appLog(
@@ -210,7 +220,7 @@ export async function sendChat(
       .catch(() => undefined);
   reflectUtterance(work, "ask");
   try {
-    const routed = observeRequest ? { hand: "model" as const } : await anvilHandle(work);
+    const routed = observeRequest ? { hand: "model" as const } : await anvilHandle(work, { hasImages: pics.length > 0 });
     if (my !== agentGen()) return;
     if (routed.hand === "app" && routed.reply) {
       finalizeAssistant(routed.reply);
@@ -279,6 +289,7 @@ export async function sendChat(
         helperNotes,
         refs.text,
         pinBlock,
+        taskHandoff(s.chat),
         context ? `Angehängte Dateien:\n${context}` : "",
       ]
         .filter(Boolean)
@@ -311,6 +322,7 @@ export async function sendChat(
 
     if (observeRequest) {
       const helperAsk =
+        pics.length === 0 && refs.images.length === 0 &&
         !asking &&
         s.agentMode === "ask" &&
         !forceAsk &&
@@ -745,7 +757,7 @@ export async function sendChat(
     if (my !== agentGen()) {
       const last = useIde.getState().chat.at(-1);
       if (last && last.id === asstId && last.role === "assistant" && !(last.content || "").trim()) {
-        finalizeAssistant("Unterbrochen — nochmal senden setzt hier an.");
+        finalizeAssistant("Der Auftrag wurde unterbrochen. Sende eine weitere Nachricht, um ihn fortzusetzen.");
       }
       return;
     }

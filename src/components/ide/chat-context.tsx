@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { useIde } from "@/store/ide";
 
 import { useT } from "@/lib/i18n";
+import { useBackgroundAgent,backgroundRunning,backgroundProject } from '@/lib/background-agent';
 
 function Chip({ children, title, tone }: { children: ReactNode; title?: string; tone?: "ok" | "warn" | "live" }) {
   return (
@@ -30,25 +31,31 @@ export function ContextBar() {
   const locale = useIde((s) => s.locale);
   const llmContext = useIde((s) => s.llmContext);
   const sessionTokens = useIde((s) => s.sessionTokens);
-  const llmThinking = useIde((s) => s.llmThinking);
-  const llmCompact = useIde((s) => s.llmCompact);
-  const runLoop = useIde((s) => s.runLoop);
-  const graphLoop = useIde((s) => s.graphLoop);
-  const llmRetries = useIde((s) => s.llmRetries);
+  const configuredThinking = useIde((s) => s.llmThinking);
+  const configuredCompact = useIde((s) => s.llmCompact);
+  const configuredRun = useIde((s) => s.runLoop);
+  const configuredGraph = useIde((s) => s.graphLoop);
+  const configuredRetries = useIde((s) => s.llmRetries);
+  const job=useBackgroundAgent(s=>s.job);
+  const effective=job&&backgroundRunning(job)&&job.project===backgroundProject()?job.effectiveSettings:undefined;
+  const llmThinking=effective?.thinking??configuredThinking,llmCompact=effective?.compact??configuredCompact;
+  const runLoop=effective?.runLoop??configuredRun,graphLoop=effective?.graphLoop??configuredGraph,llmRetries=effective?.retries??configuredRetries;
   const agentQueue = useIde((s) => s.agentQueue.length);
   const ctxUsed = request?.prompt ?? 0;
   const contextLimit = request?.limit ?? llmContext;
   const pct = Math.min(100, Math.round((ctxUsed / Math.max(1, contextLimit)) * 100));
   const session = sessionTokens.prompt + sessionTokens.completion;
-  const think = llmThinking === "auto" ? "auto" : llmThinking === "medium" ? "mid" : llmThinking;
+  const think = locale === "de"
+    ? ({ off: "Aus", auto: "Automatisch", minimal: "Minimal", low: "Niedrig", medium: "Mittel", high: "Hoch", xhigh: "Sehr hoch", max: "Maximal" } as Record<string, string>)[llmThinking] ?? llmThinking
+    : llmThinking === "auto" ? "auto" : llmThinking === "medium" ? "mid" : llmThinking;
   const items: { id: string; title?: string; tone?: "ok" | "warn" | "live"; node: ReactNode }[] = [
     {
       id: "ctx",
-      title: locale === "de" ? "Eingabe der letzten Modellanfrage einschließlich System und Werkzeugen. ≈ = geschätzt; keine aktuelle Tokenizer-Messung." : "Input of the last model request including system and tools. ≈ = estimated; not a live tokenizer measurement.",
+      title: locale === "de" ? "Umfang der letzten vorbereiteten Modellanfrage einschließlich Anweisungen und Werkzeugbeschreibungen. Für Folgeaufgaben wird der Kontext neu zusammengestellt: Chatverlauf und eine kompakte Übergabe der bisherigen Arbeit ersetzen große Werkzeugausgaben. Ein kleinerer Wert bedeutet nicht, dass der Chat gelöscht wurde. ≈ kennzeichnet eine Schätzung." : "Size of the latest prepared model request including instructions and tools. Follow-up tasks rebuild context from chat history and a compact handoff instead of full tool output. A smaller value does not mean the chat was deleted. ≈ means estimated.",
       tone: pct > 85 ? "warn" : undefined,
       node: (
         <>
-          <span>{t("context")}</span>
+          <span>{locale === "de" ? "Aktueller Modellkontext" : "Current model context"}</span>
           <span>
             {request ? `${request.estimated ? "≈" : ""}${formatTokens(ctxUsed)}` : "—"}/{formatContext(contextLimit)}
           </span>
@@ -67,7 +74,7 @@ export function ContextBar() {
     items.push({
       id: "session",
       title: locale === "de"
-        ? `Chat-Anfragen dieser Sitzung: Eingabe ${formatTokens(sessionTokens.prompt)}, Ausgabe ${formatTokens(sessionTokens.completion)}. Wiederholte Eingaben werden pro Anfrage gezählt. ≈ enthält Schätzungen; abgebrochene Antworten ohne Nutzungsdaten können fehlen. Automatische Helferjobs sind nicht enthalten.`
+        ? `Chat-Anfragen dieser Sitzung: Eingabe ${formatTokens(sessionTokens.prompt)}, Ausgabe ${formatTokens(sessionTokens.completion)}. Wiederholte Eingaben werden pro Anfrage gezählt. ≈ enthält Schätzungen; abgebrochene Antworten ohne Nutzungsdaten können fehlen. Automatische Helferaufgaben sind nicht enthalten.`
         : `Chat requests this session: input ${formatTokens(sessionTokens.prompt)}, output ${formatTokens(sessionTokens.completion)}. Repeated input counts per request. ≈ includes estimates; interrupted responses without usage may be missing. Automatic helper jobs are excluded.`,
       node: (
         <>
@@ -91,7 +98,7 @@ export function ContextBar() {
   if (llmCompact === "aggressive") {
     items.push({ id: "compact", title: t("compact"), node: <>{t("compact")} max</> });
   }
-  if (runLoop) items.push({ id: "run", title: t("runLoop"), node: "Run" });
+  if (runLoop) items.push({ id: "run", title: t("runLoop"), node: locale === "de" ? "Ausführen" : "Run" });
   if (graphLoop) items.push({ id: "graph", title: t("graph"), node: "Graph" });
   if (llmRetries > 1) items.push({ id: "retry", title: t("retries", { n: llmRetries }), node: `×${llmRetries}` });
   if (agentQueue) items.push({ id: "queue", title: t("queued", { n: agentQueue }), node: t("queued", { n: agentQueue }) });

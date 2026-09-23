@@ -424,7 +424,7 @@ function ServiceConnection({ server }: { server: McpServer }) {
             <div>
               <h4 className="font-medium text-fg">Werkzeuge für Anvil auswählen</h4>
               <p className="mt-1 text-muted">
-                {selected.size} freigegeben. Neue Werkzeuge bleiben ausgeschaltet. Je nach Auswahl
+                {selected.size} Werkzeuge freigegeben. Neue Werkzeuge bleiben deaktiviert. Je nach Auswahl
                 kann der Dienst Daten lesen oder ändern.
               </p>
             </div>
@@ -482,7 +482,7 @@ function ServiceConnection({ server }: { server: McpServer }) {
                 state.setSurfaceMode("bridge");
                 state.setActiveSurface(ANVIL_SURFACE);
                 setMessage(
-                  "Brücke aktiv. Der Agent kann die freigegebenen Werkzeuge zusammen mit Anvils Werkzeugen verwenden.",
+                  "Die Brücke ist aktiv. Der Agent kann die freigegebenen Werkzeuge zusammen mit Anvils Werkzeugen verwenden.",
                 );
               }}
             >
@@ -490,7 +490,7 @@ function ServiceConnection({ server }: { server: McpServer }) {
             </Button>
             <p className="text-[10px] text-muted">
               {mode === "bridge" && active === ANVIL_SURFACE
-                ? "Anvils Brücke ist aktiv. Welche Aktion ausgeführt wird, entscheidet dein Auftrag an den Agenten."
+                ? "Anvils Brücke ist aktiv. Der Agent verwendet die freigegebenen Werkzeuge passend zu deinem Auftrag."
                 : "Aktiviert Anvils Brücke für die freigegebenen Dienste. Die Auswahl allein führt keine Aktion aus."}
             </p>
           </div>

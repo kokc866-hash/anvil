@@ -2,6 +2,7 @@ import { useState } from "react";
 import { debugContinue, debugEval, debugStep, debugStop } from "@/lib/debug-engine";
 import { Button } from "@/components/ui/button";
 import { useIde } from "@/store/ide";
+import { backgroundDebugCommand } from '@/lib/background-debug';
 
 export function DebugPane() {
   const debug = useIde((s) => s.debug);
@@ -25,10 +26,10 @@ export function DebugPane() {
           Weiter
         </Button>
         <Button className="h-7 text-[11px]" disabled={!debug.paused} onClick={() => debugStep()}>
-          Step
+          Einzelschritt
         </Button>
         <Button className="h-7 text-[11px]" variant="danger" disabled={!debug.active} onClick={() => debugStop()}>
-          Stop
+          Stoppen
         </Button>
         <Button
           className="h-7 text-[11px]"
@@ -42,7 +43,9 @@ export function DebugPane() {
         </span>
       </div>
 
-      <p className="mb-1 font-medium tracking-wide text-subtle uppercase">Stack</p>
+      {debug.backgroundJobId&&debug.mode==='replay'&&<p className="mb-2 text-muted">{debug.runCompleted?'Aufgezeichneter Programmlauf: Das Programm wurde bereits ausgeführt. „Weiter“ und „Einzelschritt“ zeigen die gespeicherten Schritte. Ausdrücke werden nur anhand aufgezeichneter Werte ausgewertet.':'Programmlauf wird aufgezeichnet. Danach lassen sich die gespeicherten Schritte ansehen.'}</p>}
+
+      <p className="mb-1 font-medium tracking-wide text-subtle uppercase">Aufrufliste</p>
       {debug.stack.length === 0 ? (
         <p className="mb-2 text-muted">—</p>
       ) : (
@@ -61,7 +64,7 @@ export function DebugPane() {
         </ul>
       )}
 
-      <p className="mb-1 font-medium tracking-wide text-subtle uppercase">Locals</p>
+      <p className="mb-1 font-medium tracking-wide text-subtle uppercase">Lokale Variablen</p>
       {Object.keys(debug.locals).length === 0 ? (
         <p className="mb-2 text-muted">—</p>
       ) : (
@@ -75,12 +78,12 @@ export function DebugPane() {
         </ul>
       )}
 
-      <p className="mb-1 font-medium tracking-wide text-subtle uppercase">Watch</p>
+      <p className="mb-1 font-medium tracking-wide text-subtle uppercase">Beobachtete Ausdrücke</p>
       <form
         className="mb-1 flex gap-1"
         onSubmit={(e) => {
           e.preventDefault();
-          addWatch(watch);
+          if(!backgroundDebugCommand('watch',{expr:watch}))addWatch(watch);
           setWatch("");
         }}
       >
@@ -99,7 +102,7 @@ export function DebugPane() {
           <li key={w} className="flex items-center gap-2 px-1 py-0.5">
             <span className="text-fg">{w}</span>
             <span className="min-w-0 flex-1 truncate text-muted">{debug.watchValues[w] ?? "—"}</span>
-            <button type="button" className="text-subtle hover:text-fg" onClick={() => removeWatch(w)}>
+            <button type="button" className="text-subtle hover:text-fg" onClick={() => {if(!backgroundDebugCommand('watch',{expr:w,remove:true}))removeWatch(w);}}>
               ×
             </button>
           </li>
@@ -116,13 +119,13 @@ export function DebugPane() {
       >
         <input
           value={expr}
-          placeholder={debug.paused ? "x + 1" : "Pause für Eval"}
+          placeholder={debug.paused ? "x + 1" : "Zum Auswerten pausieren"}
           disabled={!debug.paused}
           className="h-7 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 font-mono text-fg outline-none disabled:opacity-50"
           onChange={(e) => setExpr(e.target.value)}
         />
         <Button className="h-7 text-[11px]" type="submit" disabled={!debug.paused}>
-          Eval
+          Auswerten
         </Button>
       </form>
       {debug.lastEval ? <pre className="mt-1 whitespace-pre-wrap font-mono text-muted">{debug.lastEval}</pre> : null}

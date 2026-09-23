@@ -46,5 +46,5 @@ export async function formatDocument(path = useIde.getState().activePath): Promi
     const next = await formatCode(path, snap.content);
     const applied = applyDocument(snap, next);
     useIde.getState().setNotice(applied ? "Formatiert" : "Datei inzwischen geändert; Formatierung nicht übernommen.");
-  } catch (e) { useIde.getState().setNotice(e instanceof Error ? e.message : "Format fehlgeschlagen"); }
+  } catch (e) { useIde.getState().setNotice(e instanceof Error ? e.message : "Die Formatierung ist fehlgeschlagen."); }
 }

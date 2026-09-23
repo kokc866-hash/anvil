@@ -72,8 +72,8 @@ export function InputSection({ q }: { q: string }) {
     <SettingsSection q={q}>
       <Head>Eingabe</Head>
       <p className="py-2 text-xs text-muted text-pretty">
-        Belegt Tastatur und Controller für die Spiel-Engine. Danach Play, damit das Spiel die neue Belegung lädt.
-        {cap ? (cap.kind === "key" ? " Jetzt eine Taste drücken …" : " Jetzt eine Pad-Taste drücken …") : ""}
+        Lege die Tastatur- und Controllerbelegung für die Spiel-Engine fest. Starte das Spiel anschließend erneut, damit es die neue Belegung übernimmt.
+        {cap ? (cap.kind === "key" ? " Drücke jetzt eine Taste auf der Tastatur …" : " Drücke jetzt eine Taste auf dem Controller …") : ""}
       </p>
       {INPUT_ACTIONS.filter((a) => !q || `${ACTION_LABELS[a]} ${a}`.toLowerCase().includes(q)).map((action) => (
         <div key={action} className="border-b border-border py-2">
@@ -106,25 +106,25 @@ export function InputSection({ q }: { q: string }) {
               variant={cap?.action === action && cap.kind === "key" ? "primary" : "quiet"}
               onClick={() => setCap({ action, kind: "key" })}
             >
-              Taste
+              Taste zuweisen
             </Button>
             <Button
               className="h-7 px-2 text-[11px]"
               variant={cap?.action === action && cap.kind === "pad" ? "primary" : "quiet"}
               onClick={() => setCap({ action, kind: "pad" })}
             >
-              Pad
+              Controller zuweisen
             </Button>
           </div>
         </div>
       ))}
       <Vis q={q} label="Stick analog Deadzone">
-        <Row label="Analog-Stick" hint="Stick als Richtung">
+        <Row label="Analogstick verwenden" hint="Verwendet den Analogstick zur Richtungssteuerung.">
           <Toggle on={inputMap.stick} onChange={(v) => setInputMap({ ...inputMap, stick: v })} />
         </Row>
         <Slider
-          label="Deadzone"
-          hint="Stick ignoriert kleine Ausschläge"
+          label="Totzone"
+          hint="Ignoriert kleine Bewegungen des Analogsticks um die Mittelstellung."
           min={0.05}
           max={0.8}
           step={0.01}
@@ -141,7 +141,7 @@ export function InputSection({ q }: { q: string }) {
             setCap(null);
           }}
         >
-          Standardbelegung
+          Belegung zurücksetzen
         </Button>
       </div>
     </SettingsSection>

@@ -397,7 +397,7 @@ export function toolDetail(name: string, args: Record<string, unknown>, result?:
     if (args.reset) return "Standard";
     if (args.tool) return String(args.tool);
     if (args.from && args.to) return `${args.from} → ${args.to}`;
-    if (args.remove) return `weg ${args.remove}`;
+    if (args.remove) return `Entfernen: ${args.remove}`;
     return "Tafel";
   }
   if (result && typeof result === "object" && result && "tries_left" in result) {

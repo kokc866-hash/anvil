@@ -118,7 +118,7 @@ export async function readSseChat(
                 resolve({ done: true });
                 return;
               }
-              reject(new StreamStallError("Kein Token — Verbindung weg. Nochmal senden."));
+              reject(new StreamStallError("Es sind keine weiteren Antwortdaten eingegangen. Die Verbindung wurde unterbrochen. Du kannst die Nachricht erneut senden."));
             }, wait)
           : 0;
       reader
@@ -294,7 +294,7 @@ export async function readSseResponses(
                 resolve({ done: true });
                 return;
               }
-              reject(new StreamStallError("Kein Token — Verbindung weg. Nochmal senden."));
+              reject(new StreamStallError("Es sind keine weiteren Antwortdaten eingegangen. Die Verbindung wurde unterbrochen. Du kannst die Nachricht erneut senden."));
             }, wait)
           : 0;
       reader
@@ -399,7 +399,7 @@ export async function readSseAnthropic(
                 resolve({ done: true });
                 return;
               }
-              reject(new StreamStallError("Kein Token — Verbindung weg. Nochmal senden."));
+              reject(new StreamStallError("Es sind keine weiteren Antwortdaten eingegangen. Die Verbindung wurde unterbrochen. Du kannst die Nachricht erneut senden."));
             }, wait)
           : 0;
       reader

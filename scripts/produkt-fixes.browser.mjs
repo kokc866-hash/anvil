@@ -74,7 +74,7 @@ try {
   await page.getByRole("button", { name: "Custom", exact: true }).waitFor();
   assert.equal(await page.locator("details").filter({ has: page.getByText("Technische Details", { exact: true }) }).getAttribute("open"), null);
   await page.screenshot({ path: path.join(output, `${built ? "built" : "dev"}-einrichtung.png`) });
-  await page.getByRole("button", { name: "Ordner vom Rechner öffnen", exact: true }).click();
+  await page.getByRole("button", { name: "Lokalen Ordner öffnen", exact: true }).click();
   await page.waitForFunction(directory => window.__anvilIde.getState().workspaceCwd.replaceAll("\\", "/").toLowerCase() === directory.replaceAll("\\", "/").toLowerCase() && window.__anvilIde.getState().files["index.html"], project, { timeout: 45000 });
   assert.equal(await app.evaluate(() => globalThis.folderPicks), 1);
   await page.getByRole("button", { name: "Fertig, loslegen", exact: true }).click();

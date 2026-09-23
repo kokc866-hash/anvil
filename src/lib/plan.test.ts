@@ -167,6 +167,18 @@ describe("plan", () => {
     ];
     assert.equal(applySetPlan(cur, ["Neu", "Plan", "Hier"]), null);
   });
+  it("classifies a script run and separates Git status from a real commit", () => {
+    let plan: PlanStep[] = [{text:'Node ausführen',kind:'run',status:'todo'},{text:'Git-Status prüfen',kind:'read',status:'todo'},{text:'Commit erstellen',kind:'service',status:'todo'}];
+    plan=planFromTool('shell',plan,false,{command:'node verified.cjs'},{ok:true})!;
+    assert.equal(plan[0].status,'ok');
+    plan=planFromTool('git_status',plan,false,{}, {ok:true})!;
+    assert.equal(plan[1].status,'ok');assert.equal(plan[2].status,'todo');
+    plan=planFromTool('git_commit',plan,true,{}, {ok:false})!;
+    assert.equal(plan[2].status,'err');
+    plan=planStart('git_commit',plan)!;
+    plan=planFromTool('git_commit',plan,false,{}, {ok:true})!;
+    assert.equal(plan[2].status,'ok');
+  });
   it("planWho auto/anvil/helper/agent", () => {
     assert.equal(normalizePlanWho("nope"), "auto");
     assert.equal(planSeedNow("anvil"), true);

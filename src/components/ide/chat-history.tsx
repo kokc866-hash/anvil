@@ -8,6 +8,7 @@ import { parseBlocks } from "@/lib/chat-content";
 import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { hasTrailMsg } from "@/lib/trail-filter";
 import { CopyMini } from "@/components/ui/copy-btn";
+import { selectedTextWithin } from '@/lib/copy-selection';
 import { AgentPulse } from "./agent-pulse";
 import { RequestStatus } from "./request-status";
 import { ThinkBlock, Trail } from "./chat-trail";
@@ -43,11 +44,12 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
     <div
       key={m.id}
       data-chat-msg
+      data-copy-scope
       className={cn("group relative min-w-0 max-w-[92%] break-words", m.role === "user" ? "self-end" : "self-start")}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setMenu({ kind: "msg", x: e.clientX, y: e.clientY, id: m.id });
+        setMenu({ kind: "msg", x: e.clientX, y: e.clientY, id: m.id, selection: selectedTextWithin(e.currentTarget) });
       }}
     >
       {m.role !== "user" ? (
@@ -142,6 +144,7 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
                   path: part.path,
                   lang: part.lang,
                   text: part.text,
+                  selection: selectedTextWithin(e.currentTarget),
                 });
               }}
             >

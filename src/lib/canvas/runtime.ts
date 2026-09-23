@@ -600,7 +600,7 @@ export function installCanvasRuntime(win: Window & typeof globalThis, inputs: Ca
     }
     function lost(event: Event) {
       event.preventDefault();
-      fail(new Error("WebGL-Kontext verloren. Nach Wiederherstellung Run neu starten."));
+      fail(new Error("Die WebGL-Verbindung wurde unterbrochen. Starte die Ausführung nach der Wiederherstellung erneut."));
     }
     function restored() {
       try {

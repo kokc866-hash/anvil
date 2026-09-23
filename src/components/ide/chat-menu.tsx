@@ -14,9 +14,9 @@ import { type CtxItem } from "./ctx-menu";
 import { parseBlocks } from "@/lib/chat-content";
 import { requestCheckpointRestore } from "@/lib/restore-request";
 export type ChatMenu =
-  | { kind: "msg"; x: number; y: number; id: string }
-  | { kind: "pane"; x: number; y: number }
-  | { kind: "code"; x: number; y: number; path: string; lang: string; text: string };
+  | { kind: "msg"; x: number; y: number; id: string; selection?: string }
+  | { kind: "pane"; x: number; y: number; selection?: string }
+  | { kind: "code"; x: number; y: number; path: string; lang: string; text: string; selection?: string };
 
 function trailText(m: ChatMsg): string {
   const steps = (m.steps ?? []).map((s) => `${s.status} ${s.name} ${s.detail}`.trim()).join("\n");
@@ -34,7 +34,7 @@ function applyCodeBlocks(text: string): number {
     st.writeFile(path, p.text);
     n += 1;
   }
-  st.setNotice(n ? `${n} Dateien` : t("roundNone"));
+  st.setNotice(n ? `${n} Dateien übernommen` : t("roundNone"));
   return n;
 }
 
@@ -43,7 +43,7 @@ function saveRef(name: string, content: string, mode: "write" | "append" = "writ
   const rel = safeRefName(name);
   const path = `${REF_DIR}/${rel}`;
   if (isSecretPath(path)) {
-    st.setNotice("Geheimnis bleibt außerhalb von ref/");
+    st.setNotice("Dateien mit Zugangsdaten können nicht im Referenzordner ref/ gespeichert werden.");
     return;
   }
   const body = content.endsWith("\n") ? content : `${content}\n`;
@@ -84,7 +84,7 @@ function blobDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result || ""));
-    r.onerror = () => reject(new Error("lesen"));
+    r.onerror = () => reject(new Error("Der Inhalt konnte nicht gelesen werden."));
     r.readAsDataURL(blob);
   });
 }
@@ -126,9 +126,9 @@ async function pasteIntoChat(addImages: (urls: string[]) => void) {
     const { text, images } = await readChatClipboard();
     if (images.length) addImages(images);
     if (text) insertDraft(text);
-    if (!text && !images.length) st.setNotice("Ablage leer");
+    if (!text && !images.length) st.setNotice("Die Zwischenablage ist leer.");
   } catch {
-    st.setNotice("Ablage nicht lesbar");
+    st.setNotice("Die Zwischenablage konnte nicht gelesen werden.");
   }
 }
 
@@ -136,6 +136,7 @@ export function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) =
   const st = useIde.getState();
   if (menu.kind === "pane") {
     const items: CtxItem[] = [
+      ...(menu.selection ? [{label:t('copy'),onClick:()=>void navigator.clipboard.writeText(menu.selection!)}] : []),
       {
         label: t("newChat"),
         onClick: () => st.clearChat(),
@@ -164,7 +165,7 @@ export function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) =
       path ||
       uniqueDest(st.files, "", /\bpy/.test(menu.lang) ? "snippet.py" : /\bts/.test(menu.lang) ? "snippet.ts" : "snippet.js");
     return [
-      { label: t("copy"), onClick: () => void navigator.clipboard.writeText(menu.text) },
+      { label: t("copy"), onClick: () => void navigator.clipboard.writeText(menu.selection || menu.text) },
       {
         label: path || t("chatSaveAs"),
         onClick: () => {
@@ -216,7 +217,7 @@ export function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) =
   const m = st.chat.find((x) => x.id === menu.id);
   if (!m) return [];
   const items: CtxItem[] = [
-    { label: t("copy"), onClick: () => void navigator.clipboard.writeText(m.content) },
+    { label: t("copy"), onClick: () => void navigator.clipboard.writeText(menu.selection || m.content) },
     { label: t("chatCopyMd"), onClick: () => void navigator.clipboard.writeText(`## ${m.role}\n\n${m.content}`) },
   ];
   if (m.thinking) {

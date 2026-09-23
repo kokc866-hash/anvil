@@ -72,6 +72,7 @@ export const AGENT_TOOLS = [
   }, ["url"]),
   tool("shell", "Run a limited command: python <file>, node <file>, npm test, pytest [-q] [-k name], python -m pytest, go test, cargo test, dotnet test.", {
     command: { type: "string" },
+    expected_exit_code: { type: "integer", description: "Optional explicit expected process exit code (0..255) for a requested negative test. Requires a runner returning an actual exit code. Never use to hide an unexpected failure; prefer assertions in a test script when unsupported." },
   }, ["command"]),
   tool("fetch_url", "Fetch a public https page as text. Not localhost.", { url: { type: "string" } }, ["url"]),
   tool("debug_start", "Start debugger on a Python/JS/TS file. Pauses on entry or breakpoints.", {

@@ -47,7 +47,7 @@ try {
   const keep = page.getByRole("switch", { name: "GPU warm halten", exact: true });
   await keep.click(); assert.equal(await keep.getAttribute("aria-checked"), "true");
   await page.screenshot({ path: `${root}/${kind}-helper.png` });
-  await page.getByRole("switch", { name: "Helfer an", exact: true }).click();
+  await page.getByRole("switch", { name: "Helfer verwenden", exact: true }).click();
   assert.equal(await load.isEnabled(), false);
   // A native model library must retain a partial install as removable, and
   // deleting a family must include its fp32 alternative without touching pins.
@@ -63,9 +63,9 @@ try {
   await nav.getByRole("button", { name: "Modelle", exact: true }).click();
   const row = page.getByRole("listitem").filter({ hasText: "SmolLM2 360M" });
   await row.getByText(/teilweise/).waitFor();
-  assert.equal(await row.getByRole("button", { name: "Weg", exact: true }).isEnabled(), true);
+  assert.equal(await row.getByRole("button", { name: "Entfernen", exact: true }).isEnabled(), true);
   await page.getByRole("switch", { name: "Lokal behalten", exact: true }).click();
-  await row.getByRole("button", { name: "Weg", exact: true }).click();
+  await row.getByRole("button", { name: "Entfernen", exact: true }).click();
   await page.waitForFunction(() => window.helperDeleted.length === 2);
   assert.deepEqual(await page.evaluate(() => window.helperDeleted), ["SmolLM2-360M-Instruct-q4f16_1-MLC", "SmolLM2-360M-Instruct-q4f32_1-MLC"]);
   await row.getByText(/· fehlt/).waitFor();

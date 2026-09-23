@@ -26,7 +26,7 @@ describe("abort", () => {
     beginAgent();
     const err = new Error("signal is aborted without reason");
     assert.equal(isAbortLike(err), true);
-    assert.match(explainAbort(err), /Abgebrochen/);
+    assert.match(explainAbort(err), /Die Anfrage wurde abgebrochen/);
   });
   it("keeps the reason from abortAgent", () => {
     beginAgent();
@@ -48,7 +48,7 @@ describe("abort", () => {
     const signal = withAgentTimeout(0);
     const pending = raceAbort(new Promise<never>(() => {}), 100);
     assert.equal(getEventListeners(signal, "abort").length, 1);
-    const rejected = assert.rejects(pending, /Keine Antwort/);
+    const rejected = assert.rejects(pending, /keine Antwort eingegangen/);
     t.mock.timers.tick(100);
     await rejected;
     assert.equal(getEventListeners(signal, "abort").length, 0);

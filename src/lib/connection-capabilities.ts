@@ -28,7 +28,7 @@ export function imageAttachmentError(config: ConnectionConfig, count: number, lo
   if (!count || connectionCapabilities(config).images !== "unsupported") return "";
   return locale === "en"
     ? "This Anvil connection does not transmit images. Keep your draft and choose an API connection with an image-capable model, or remove the images."
-    : "Diese Anvil-Verbindung überträgt keine Bilder. Entwurf behalten und eine API-Verbindung mit bildfähigem Modell wählen oder die Bilder entfernen.";
+    : "Diese Verbindung überträgt keine Bilder. Dein Entwurf bleibt erhalten. Wähle eine API-Verbindung mit einem bildfähigen Modell oder entferne die Bildanhänge.";
 }
 
 /** Keep stored images visible after changing providers; only adapt outgoing history. */
@@ -48,7 +48,7 @@ export function connectionProbeSummary(kind: "catalog" | "cli", details: { count
     ? `Model list reachable (${details.count ?? 0}). Model response and tools have not been tested.`
     : `Modellliste erreichbar (${details.count ?? 0}). Modellantwort und Werkzeuge sind noch nicht geprüft.`;
   if (details.installed === false) return en ? "CLI not installed." : "CLI nicht installiert.";
-  if (details.authenticated === false) return en ? "CLI available. Sign-in is missing; model not tested." : "CLI vorhanden. Anmeldung fehlt; Modell nicht geprüft.";
+  if (details.authenticated === false) return en ? "CLI available. Sign-in is missing; model not tested." : "Die CLI ist verfügbar. Du bist noch nicht angemeldet; das Modell wurde noch nicht geprüft.";
   return en
     ? `CLI available. ${details.authenticated ? "Sign-in detected." : "Sign-in not confirmed."} Model response and tools have not been tested.`
     : `CLI vorhanden. ${details.authenticated ? "Anmeldung erkannt." : "Anmeldung nicht bestätigt."} Modellantwort und Werkzeuge sind noch nicht geprüft.`;

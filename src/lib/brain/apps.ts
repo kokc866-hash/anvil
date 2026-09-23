@@ -204,16 +204,14 @@ export function heuristicPrompts(): string[] {
 
 export async function brainSuggestPrompts(): Promise<string[]> {
   const valid = captureBrainCommit("prompts");
-  const heur = heuristicPrompts();
   const st = useBrain.getState();
   if (!valid()) {
     st.setPrompts([]);
     return [];
   }
   if (!brainReady()) {
-    st.setPrompts(heur);
-    st.logJob("prompts", "heur", 0);
-    return heur;
+    st.setPrompts([]);
+    return [];
   }
   try {
     const ide = useIde.getState();
@@ -237,14 +235,13 @@ export async function brainSuggestPrompts(): Promise<string[]> {
       .map((s) => String(s).trim())
       .filter((s) => s.length >= 8 && s.length <= 120)
       .slice(0, 3);
-    const next = list.length ? list : heur;
     if (!valid()) return [];
-    st.setPrompts(next);
-    return next;
+    st.setPrompts(list);
+    return list;
   } catch {
     if (!valid()) return [];
-    st.setPrompts(heur);
-    return heur;
+    st.setPrompts([]);
+    return [];
   }
 }
 
@@ -574,7 +571,7 @@ export async function brainStopNote(steps: { name: string; detail?: string; stat
 }
 
 export async function brainPlanText(ask: string): Promise<string[]> {
-  const fallback = ["Verstehen", "Ändern", "Run", "Prüfen"];
+  const fallback = ["Verstehen", "Ändern", "Ausführen", "Prüfen"];
   if (!job("planText") || !brainReady() || ask.trim().length < 12) {
     useBrain.getState().logJob("planText", "heur", 0);
     return fallback;

@@ -119,7 +119,7 @@ export async function restoreLocations(): Promise<Record<DiskSlot, string>> {
 }
 
 export async function pickLocation(slot: DiskSlot): Promise<string> {
-  if (!diskSupported()) throw new Error("Ordnerwahl braucht Chrome oder Edge.");
+  if (!diskSupported()) throw new Error("Zum Auswählen eines lokalen Ordners benötigst du Chrome oder Edge.");
   const handle = await picker();
   if (slot === "workspace" && !(await import("./save").then((s) => s.prepareWorkspaceSwitch()))) throw new Error("Projektwechsel abgebrochen");
   const initial = useIde.getState();
@@ -177,7 +177,7 @@ export async function pickFolder(): Promise<DiskPack> {
 
 export async function saveSlot(slot: DiskSlot, files: Record<string, string>, dirs: string[] = []): Promise<void> {
   const handle = slots[slot];
-  if (!handle) throw new Error(slot === "backup" ? "Kein Backup-Ordner." : "Kein Workspace-Ordner.");
+  if (!handle) throw new Error(slot === "backup" ? "Es ist kein Sicherungsordner ausgewählt." : "Es ist kein Projektordner ausgewählt.");
   if (!(await ensurePerm(handle, "readwrite"))) throw new Error("Keine Schreibrechte.");
   for (const d of dirs) {
     let dir = handle;
@@ -206,7 +206,7 @@ export async function saveFolder(files: Record<string, string>, dirs: string[] =
 
 async function workspaceHandle(handle = diskWorkspaceHandle()): Promise<DirHandle | null> {
   if (!handle) return null;
-  if (!(await ensurePerm(handle, "readwrite"))) throw new Error("Keine Schreibrechte für den Workspace-Ordner.");
+  if (!(await ensurePerm(handle, "readwrite"))) throw new Error("Anvil hat keine Schreibberechtigung für den Projektordner.");
   return handle;
 }
 
@@ -249,7 +249,7 @@ export async function mkdirDisk(path: string, target = diskWorkspaceHandle()): P
 
 export async function moveDiskPath(from: string, to: string, target: FileSystemDirectoryHandle): Promise<void> {
   const src = await dirFor(from, false, target), dest = await dirFor(to, true, target);
-  if (!src || !dest) throw new Error("Workspace fehlt.");
+  if (!src || !dest) throw new Error("Der Projektordner ist nicht verfügbar.");
   const child = async (dir: DirHandle, name: string): Promise<FileSystemHandle | null> => {
     try { return await dir.getFileHandle(name); } catch (e) { if ((e as DOMException).name !== "TypeMismatchError" && (e as DOMException).name !== "NotFoundError") throw e; }
     try { return await dir.getDirectoryHandle(name); } catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; }

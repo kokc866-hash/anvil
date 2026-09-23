@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { localChatUrl, sanitizeLocalPayload, ndjsonLineToSse, wrapOllamaResponse } from "./local-wire.ts";
+import { withRequestTokens, type RequestTokens, type ReportedUsage } from './token-usage.ts';
+
+test('missing Ollama token counts retain an estimate instead of reporting exact zero', () => {
+  const line=ndjsonLineToSse(JSON.stringify({done:true,message:{content:'Done'}}));
+  const wire=JSON.parse(line.split('\n')[0].slice(6));
+  assert.equal(wire.usage.prompt_tokens,undefined);
+  const choice=withRequestTokens<{usage?:ReportedUsage;requestTokens?:RequestTokens}>({usage:{prompt:wire.usage.prompt_tokens,completion:wire.usage.completion_tokens}}, {messages:[{role:'user',content:'A non-empty follow-up request'}]},32768);
+  assert.ok(choice.requestTokens!.prompt>0);assert.equal(choice.requestTokens!.estimated,true);
+});
 
 test("only the Ollama provider switches to native chat, including custom ports/prefixes", () => {
   assert.equal(localChatUrl("ollama", "http://192.168.178.41:11434/v1"), "http://192.168.178.41:11434/api/chat");

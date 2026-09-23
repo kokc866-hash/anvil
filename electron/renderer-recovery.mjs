@@ -1,5 +1,5 @@
 /** Recovery runs in the main process, even when the editor renderer is gone. */
-export function bindRendererRecovery({ window, dialog, log, stopJobs, resetClose, restore, close }) {
+export function bindRendererRecovery({ window, dialog, log, stopJobs, resetClose, restore, close, backgroundActive = () => false }) {
   const contents = window.webContents;
   let handling = false;
   const gone = (_event, details) => {
@@ -18,7 +18,9 @@ export function bindRendererRecovery({ window, dialog, log, stopJobs, resetClose
         const answer = await dialog.showMessageBox(window, {
           type: "error", title: "Anvil – Oberfläche unterbrochen",
           message: memory ? "Der Oberfläche ist der Arbeitsspeicher ausgegangen." : "Die Oberfläche wurde unerwartet beendet.",
-          detail: "Der Agentenauftrag wurde unterbrochen. Du kannst den zuletzt gespeicherten Stand wieder öffnen. Noch nicht gespeicherte Änderungen können fehlen. Externe Aktionen werden nicht automatisch wiederholt.\n\nDer Absturzgrund steht in anvil-desktop.log.",
+          detail: backgroundActive()
+            ? "Der Hintergrundauftrag läuft weiter. Nach der Wiederherstellung verbindet sich die Oberfläche wieder mit seinem aktuellen Stand. Schließen beendet Anvil und stoppt auch den Hintergrundauftrag.\n\nDer Absturzgrund steht in anvil-desktop.log."
+            : "Der Agentenauftrag wurde unterbrochen. Du kannst den zuletzt gespeicherten Stand wieder öffnen. Noch nicht gespeicherte Änderungen können fehlen. Externe Aktionen werden nicht automatisch wiederholt.\n\nDer Absturzgrund steht in anvil-desktop.log.",
           buttons: ["Oberfläche wiederherstellen", "Schließen"], defaultId: 0, cancelId: 1, noLink: true,
         });
         if (window.isDestroyed()) return;

@@ -6,7 +6,7 @@ Stand: 13. September 2026, Release 1.3.29. Die unten beschriebenen erweiterten P
 
 „Neue Datei“ verwendet einen freien Namen, etwa `neu-2.py`, wenn der Name schon belegt ist. Auch gleichnamige Ordner und Unterschiede nur in Groß-/Kleinschreibung werden berücksichtigt. Ein verspäteter Helfer-Namensvorschlag verändert keinen später geöffneten Anlegedialog.
 
-Der Live-Editor zeigt eintreffenden Modelltext als ausdrücklich gekennzeichnete Vorschau. Erst ein vollständig geprüfter Tool-Aufruf verändert Projektdateien. Beispiele in Antworten und unvollständige Argumente schreiben keine Dateien. Beim Ende des Schreib-Streams klappt der Entwurf automatisch zu; der nächste Schreibvorgang öffnet ihn wieder. Manuelles Aufklappen bleibt möglich. Nach der Dateiübernahme kann ein verzögerter Entwurf nicht erneut erscheinen.
+Der Live-Editor zeigt eintreffenden Modelltext als ausdrücklich gekennzeichnete Vorschau. Erst ein vollständig geprüfter Werkzeugaufruf verändert Projektdateien. Beispiele in Antworten und unvollständige Argumente schreiben keine Dateien. Beim Ende des Schreib-Streams klappt der Entwurf automatisch zu; der nächste Schreibvorgang öffnet ihn wieder. Manuelles Aufklappen bleibt möglich. Nach der Dateiübernahme kann ein verzögerter Entwurf nicht erneut erscheinen.
 
 Beim Schreiben folgt der Editor der bearbeiteten Datei: vorhandene Dateien öffnen sich bereits beim Beginn des Live-Entwurfs, neue Dateien nach der Übernahme. Ihr Entwurf ist vorher separat sichtbar. Lesen, MCP-Ausgaben und das Starten einer Vorschau wechseln die aktive Editor-Datei nicht.
 
@@ -49,13 +49,13 @@ Der Sicherungspunkt erfasst die tatsächlichen Dateien im Projektordner, einschl
 
 Die Sicherungsinhalte liegen unter `project-checkpoints` im Anvil-Datenordner. Identische Inhalte werden gemeinsam gespeichert, statt pro Runde erneut kopiert. Es gibt derzeit keine automatische Bereinigung alter Sicherungsinhalte. Siehe [Datenablage](datenablage.md).
 
-Vor der Rücknahme werden benötigte Editorinhalte aus der unveränderten Sicherung geladen und geprüft, einschließlich bytegetreuer Binärdaten. Für diesen Editor-Abgleich gelten 32 MiB je Datei und 256 MiB insgesamt; nicht im Editor geladene Assets werden direkt auf der Platte wiederhergestellt. Wird eine Rücknahme unterbrochen, bleiben ihr Plan und die Schreibsperre erhalten. Dieselbe Runde erneut zurücknehmen, um den Abgleich abzuschließen; alte Editorpuffer werden bis dahin nicht automatisch gespeichert.
+Vor der Rücknahme werden benötigte Editorinhalte aus der unveränderten Sicherung geladen und geprüft, einschließlich bytegetreuer Binärdaten. Für diesen Editor-Abgleich gelten 32 MiB je Datei und 256 MiB insgesamt; nicht im Editor geladene Assets werden direkt im lokalen Dateisystem wiederhergestellt. Wird eine Rücknahme unterbrochen, bleiben ihr Plan und die Schreibsperre erhalten. Dieselbe Runde erneut zurücknehmen, um den Abgleich abzuschließen; alte Editorpuffer werden bis dahin nicht automatisch gespeichert.
 
 ## Fenster und Spur
 
 Auf schmalen Fenstern sind Dateien, Editor, Agent, Spur und Ausgabe einzeln über eine Bereichsleiste erreichbar. Desktop-Breiten und gespeicherte Panel-Einstellungen bleiben erhalten.
 
-Das externe Run-Fenster passt sich nach dem Laden einmalig an die grafische Ausgabe an. Bei Anvil-Canvas zählt die logische Spielgröße statt der durch Bildschirm-Skalierung vergrößerten Pixelauflösung. Bedienleisten und Fensterrahmen kommen hinzu; die Größe bleibt innerhalb der Arbeitsfläche des aktuellen Monitors. Die Mindestgröße beträgt 480 × 360. Anschließend bleibt manuelles Vergrößern und Verkleinern erhalten. Ausgaben ohne messbare grafische Fläche verwenden weiterhin die normale Startgröße.
+Das externe Ausgabefenster passt sich nach dem Laden einmalig an die grafische Ausgabe an. Bei Anvil-Canvas zählt die logische Spielgröße statt der durch Bildschirm-Skalierung vergrößerten Pixelauflösung. Bedienleisten und Fensterrahmen kommen hinzu; die Größe bleibt innerhalb der Arbeitsfläche des aktuellen Monitors. Die Mindestgröße beträgt 480 × 360. Anschließend bleibt manuelles Vergrößern und Verkleinern erhalten. Ausgaben ohne messbare grafische Fläche verwenden weiterhin die normale Startgröße.
 
 Die Spur unter „Denken“ folgt neuen Schritten und Ergebnissen automatisch. Manuelles Hochscrollen pausiert das Nachführen; unten wird es wieder aktiv.
 

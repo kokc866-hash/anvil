@@ -85,7 +85,7 @@ export function CommandPalette() {
         { id: "newfile", label: t("newFile"), run: () => { setSidebar("files"); window.dispatchEvent(new CustomEvent("anvil-new-file", { detail: "file" })); } },
         { id: "starter", label: t("starter"), run: () => window.dispatchEvent(new Event("anvil-starter")) },
         { id: "newfolder", label: t("newFolder"), run: () => { setSidebar("files"); window.dispatchEvent(new CustomEvent("anvil-new-file", { detail: "dir" })); } },
-        { id: "refresh-disk", label: "Dateien von Platte abgleichen", run: () => { void import("@/lib/external-files").then((m) => m.refreshExternalFiles()); } },
+        { id: "refresh-disk", label: "Dateien mit dem Projektordner abgleichen", run: () => { void import("@/lib/external-files").then((m) => m.refreshExternalFiles()); } },
         { id: "opendisk", label: t("cmdOpenDisk"), run: () => window.dispatchEvent(new Event("anvil-open-disk")) },
         { id: "savedisk", label: t("save"), run: () => { void import("@/lib/save").then((s) => s.saveNow()); } },
         { id: "tests", label: t("runAllTests"), run: () => { setSidebar("tests"); void import("@/lib/run-tests").then((m) => m.runAllTests()); } },
@@ -153,7 +153,7 @@ export function CommandPalette() {
               const { parsePatch, commitPatch } = await import("@/lib/patch");
               const plan = parsePatch(text, useIde.getState().files);
               if (!Object.keys(plan.write).length && !plan.del.length) {
-                useIde.getState().setNotice(plan.errors[0] || "Patch leer");
+                useIde.getState().setNotice(plan.errors[0] || "Die Patch-Datei enthält keine Änderungen.");
                 return;
               }
               await commitPatch(plan);

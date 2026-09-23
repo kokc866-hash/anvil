@@ -2,16 +2,16 @@
 
 **Deine KI-Werkbank für eigene Projekte.** Dateien bearbeiten, mit einem gewählten Modell weiterentwickeln und das Ergebnis direkt ausführen.
 
-Anvil verbindet Editor, KI-Agent, Änderungsverlauf und Run in einer Windows-Anwendung. Du kannst vorhandene Projekte öffnen oder eine kleine Anwendung neu erstellen. Modelle laufen je nach Verbindung auf deinem Rechner, im lokalen Netz oder bei einem Anbieter.
+Anvil verbindet Editor, KI-Agent, Änderungsverlauf und Programmausführung in einer Windows-Anwendung. Du kannst vorhandene Projekte öffnen oder eine kleine Anwendung neu erstellen. Modelle laufen je nach Verbindung auf deinem Rechner, im lokalen Netz oder bei einem Anbieter.
 
 ## Anvil benutzen
 
 Windows-Release: [Anvil 1.3.29](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.29). Verwende das Windows-Setup oder entpacke das ZIP vollständig in einen beschreibbaren Ordner und starte `Anvil.exe`. Diese Pakete enthalten die Oberfläche und ihre Laufzeit; eine separate Node.js-Installation ist nicht nötig.
 
-1. **Projekt öffnen:** Wähle in der Ersteinrichtung einen Ordner. Später findest du die Ordnerwahl im Dateibereich unter **Mehr → Desktop-Ordner**.
+1. **Projekt öffnen:** Wähle in der Ersteinrichtung einen Ordner. Später findest du die Ordnerwahl im Dateibereich unter **Mehr → Lokalen Ordner öffnen**.
 2. **KI wählen:** Öffne **Einstellungen → Agent**. Wähle einen vorhandenen Modellserver, einen unterstützten CLI-Zugang oder einen API-Anbieter. Die jeweiligen Zugänge und Laufzeiten werden separat benötigt.
 3. **Eine Aufgabe geben:** Zum Beispiel: „Erkläre zuerst den Aufbau dieses Projekts und seinen Startweg.“ Für Änderungen verwende den Modus **Agent**; **Fragen** dient zum Erklären.
-4. **Ergebnis prüfen:** Lies die Änderungen, führe die Anwendung über **Run** aus und probiere die veränderte Funktion selbst aus. Eine offene Prüfung ist kein bestandener Test.
+4. **Ergebnis prüfen:** Lies die Änderungen, starte die Anwendung über **Ausführen** und probiere die veränderte Funktion selbst aus. Eine noch ausstehende Prüfung gilt nicht als bestandener Test.
 5. **Speichern:** `Strg+S` speichert die aktive Datei, `Strg+Alt+S` alle geänderten Dateien. Nach dem Neustart kannst du am Projekt weiterarbeiten.
 
 Zum Kennenlernen wähle in der Ersteinrichtung **Beispiel ohne KI starten**. Anvil öffnet ein eigenständiges HTML-Beispiel mit einem bedienbaren Zähler. Vorhandene Dateien bleiben erhalten. Links über den Einstellungen öffnet das Checklisten-Symbol **Geführte Aufgaben**: Projekt verstehen, Änderung umsetzen, Fehler beheben und Änderung prüfen. Die Auswahl bereitet einen bearbeitbaren Auftrag vor; gesendet wird erst durch dich.
@@ -20,7 +20,7 @@ Zum Kennenlernen wähle in der Ersteinrichtung **Beispiel ohne KI starten**. Anv
 
 - **Modellserver:** Der gewählte Server verarbeitet die Modellanfragen. Ein Server im LAN läuft nicht unbedingt auf diesem Rechner.
 - **CLI-Zugang:** Anvil verwendet die vorhandene Anmeldung von Codex, Claude Code oder GitHub Copilot. Release 1.3.29 unterstützt Bildübertragung und eintreffende Teilantworten; das gewählte Modell muss Bilder verstehen. [Möglichkeiten und Grenzen](anleitungen/05-verbindungen.md).
-- **API-Zugang:** Verwendet deinen Anbieter und dessen Abrechnung. Bildunterstützung und Thinking hängen von Modell und Anvil-Adapter ab.
+- **API-Zugang:** Verwendet deinen Anbieter und dessen Abrechnung. Ob Bilder unterstützt werden und der Denkaufwand einstellbar ist, hängt vom Modell und der Anvil-Anbindung ab.
 - **Projektdateien:** Bleiben im gewählten Projektordner. Das Anvil-Profil liegt standardmäßig in `data` neben Anvil; ausdrücklich konfigurierte Speicherorte können abweichen. Externe CLIs und Werkzeuge haben gegebenenfalls eigene Datenordner.
 
 ## Aktueller Stand
@@ -50,7 +50,8 @@ Nach Änderungen am Anvil-Quellcode die Entwicklungs-App bei Bedarf vollständig
 - [Kurzanleitung](anleitungen/01-kurz.md)
 - [Alle Anleitungen](anleitungen/README.md)
 - [Datenablage](anleitungen/datenablage.md)
-- [Thinking und Modellgrenzen](anleitungen/thinking.md)
+- [Denkaufwand und Modellgrenzen](anleitungen/thinking.md)
+- [Zuschaltbarer Hintergrundbetrieb (neuer Testmodus)](anleitungen/hintergrundbetrieb.md)
 - [Praxistest und nachgeprüfte Reparaturen](anleitungen/praxistest-tageswerk.md)
 - [Arbeiten bis zur Produktreife](anleitungen/produktreife.md)
 - [Neue Abläufe, Hilfe und bekannte Grenzen](anleitungen/produktabschluss.md)

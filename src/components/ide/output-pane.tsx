@@ -99,7 +99,7 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div data-copy-scope className="flex h-full min-h-0 flex-col bg-surface">
       <div className="bar-scroll flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
         <button
           type="button"
@@ -140,11 +140,11 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
           <HelperPrompts where="output" />
         </span>
         {last?.stage?.kind === "window" ? (
-          <span className="shrink-0 text-[10px] text-ok">Bühne · Fenster</span>
+          <span className="shrink-0 text-[10px] text-ok">Ausführung · Fenster</span>
         ) : last?.stage?.kind === "log" ? (
-          <span className="shrink-0 text-[10px] text-muted">Bühne · Log</span>
+          <span className="shrink-0 text-[10px] text-muted">Ausführung · Protokoll</span>
         ) : last?.html || last?.stage?.kind === "html" ? (
-          <span className="shrink-0 text-[10px] text-muted">Bühne · HTML</span>
+          <span className="shrink-0 text-[10px] text-muted">Ausführung · HTML</span>
         ) : null}
         {popout ? null : (
           <>

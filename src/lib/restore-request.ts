@@ -13,9 +13,9 @@ export async function requestCheckpointRestore(id: string): Promise<boolean> {
   try { disk = await previewProjectRestore(id); }
   catch (error) { state.setNotice(error instanceof Error ? error.message : String(error)); return false; }
   if (disk?.conflicts.length) { state.setNotice(disk.conflicts.join("; ")); return false; }
-  const rows = [...new Set([...plan.files.map((f) => `${f.after === null ? (en ? "Delete" : "Löschen") : (en ? "Restore" : "Wiederherstellen")}: ${f.path}`), ...(disk?.files ?? []).map((f) => `${f.action === "delete" ? (en ? "Delete" : "Löschen") : (en ? "Restore" : "Wiederherstellen")}: ${f.path}`), ...[...plan.mkdir, ...disk?.mkdir ?? []].map((p) => `+ ${p}/`), ...[...plan.rmdir, ...disk?.rmdir ?? []].map((p) => `${en ? "Remove only if empty" : "Nur leer entfernen"}: ${p}/`)])];
+  const rows = [...new Set([...plan.files.map((f) => `${f.after === null ? (en ? "Delete" : "Löschen") : (en ? "Restore" : "Wiederherstellen")}: ${f.path}`), ...(disk?.files ?? []).map((f) => `${f.action === "delete" ? (en ? "Delete" : "Löschen") : (en ? "Restore" : "Wiederherstellen")}: ${f.path}`), ...[...plan.mkdir, ...disk?.mkdir ?? []].map((p) => `+ ${p}/`), ...[...plan.rmdir, ...disk?.rmdir ?? []].map((p) => `${en ? "Remove only if empty" : "Nur entfernen, wenn leer"}: ${p}/`)])];
   const scope = disk
-    ? (en ? "Includes project files and binary assets on disk. " : "Erfasst Projektdateien und Binärdateien auf der Platte. ")
+    ? (en ? "Includes project files and binary assets on disk. " : "Umfasst die lokal gespeicherten Projektdateien einschließlich Binärdateien. ")
     : (en ? "Only loaded project files were captured for this round. " : "Für diese Runde sind nur geladene Projektdateien gesichert. ");
   const limits = en ? "External service actions and running databases are not reversed.\n\n" : "Externe Dienstaktionen und laufende Datenbanken werden nicht zurückgenommen.\n\n";
   const exclusions = disk?.excluded.length ? `\n\n${en ? "Excluded" : "Ausgenommen"}:\n${disk.excluded.join("\n")}` : "";

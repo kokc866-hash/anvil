@@ -351,7 +351,7 @@ export async function pullLsp(id) {
     if (!go) {
       return {
         ok: false,
-        error: "Go SDK fehlt für gopls. Zuerst Go holen (Companion, Compiler), dann gopls nochmal Holen.",
+        error: "Für gopls wird das Go SDK benötigt. Installiere zuerst Go unter Einstellungen → Companion → Compiler und installiere anschließend gopls erneut.",
         servers: listLsp(),
       };
     }
@@ -570,7 +570,7 @@ export async function checkLsp(id) {
   if (!spec) return { ok: false, id, error: "Unbekanntes Paket." };
   const target = spec.via ? LSP_CATALOG.find((p) => p.id === spec.via) || spec : spec;
   if (spec.go && !findGo()) {
-    return { ok: false, id, error: "Go SDK fehlt.", hint: "Zuerst Go holen (Companion, Compiler), dann gopls Holen." };
+    return { ok: false, id, error: "Go SDK fehlt.", hint: "Installiere zuerst Go unter Einstellungen → Companion → Compiler und anschließend gopls." };
   }
   const bin = lspBin(spec.bin) || lspBin(target.bin);
   const entry = spec.npm ? jsEntry(spec) : spec.via && target.npm ? jsEntry({ ...target, bin: spec.bin, entry: spec.entry }) : null;
@@ -578,8 +578,8 @@ export async function checkLsp(id) {
     return {
       ok: false,
       id,
-      error: "Nicht geholt.",
-      hint: target.go ? "Zuerst Go holen (Companion, Compiler), dann gopls Holen." : "npm muss im PATH sein, dann Holen.",
+      error: "Der Sprachserver ist nicht installiert oder wurde nicht gefunden.",
+      hint: target.go ? "Installiere zuerst Go unter Einstellungen → Companion → Compiler und anschließend gopls." : "npm muss über den Suchpfad des Betriebssystems (PATH) erreichbar sein. Starte die Installation anschließend erneut.",
     };
   }
   const args = spec.kind === "cli" ? ["--version"] : spec.args || ["--stdio"];

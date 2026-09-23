@@ -65,7 +65,7 @@ export function contextDebug(): string {
 export function contextProblems(): string {
   const st = useIde.getState();
   const hits = st.lspProblems;
-  if (!hits.length) return "Keine Unterschlangen.";
+  if (!hits.length) return "Es liegen keine Codeprobleme vor.";
   return problemsPrompt(hits, st.files);
 }
 

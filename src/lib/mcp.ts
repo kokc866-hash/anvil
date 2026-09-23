@@ -166,6 +166,21 @@ function credentials(s: McpServer): Record<string, string> {
 function fingerprint(s: McpServer) {
   return `${serversFingerprint([s])}|${JSON.stringify([s.context, s.timeoutMs, s.service, s.allowedTools, s.allowResources, credentials(s), loadSecrets().keys[`mcp-env:${s.id}`]])}`;
 }
+/** Capture the same credentials and grants as foreground MCP without opening a connection. */
+export function backgroundMcpServers(bindCredentials=false) {
+  const st=useIde.getState();
+  return st.mcpServers.filter(s=>mcpConfigured(s)&&(st.surfaceMode==='bridge'||!st.activeSurfaceId||st.activeSurfaceId==='anvil'||s.id===st.activeSurfaceId)).map(s=>{
+    validateService(s); assertMcpPackageRequest(s,'initialize',{});
+    if(s.auth!=='oauth'){
+      const keys=loadSecrets().keys,token=keys[`mcp:${s.id}`]||(!mcpPackage(s)&&keys[`mcp:${s.name}`]);
+      if(token&&keys[`mcp-target:${s.id}`]&&keys[`mcp-target:${s.id}`]!==s.url.trim())throw new Error('MCP-Adresse geändert. Zugangsdaten für die neue Adresse erneut bestätigen.');
+      if(bindCredentials&&token&&!keys[`mcp-target:${s.id}`])saveSecrets({keys:{[`mcp-target:${s.id}`]:s.url.trim()}});
+    }
+    const envText=loadSecrets().keys[`mcp-env:${s.id}`];
+    const env=s.transport==='stdio'&&envText?.trim()?JSON.parse(envText):undefined;
+    return {...s,headers:credentials(s),env};
+  });
+}
 function entryFor(s: McpServer): Entry {
   const fp = fingerprint(s);
   let entry = entries.get(s.id);

@@ -177,7 +177,7 @@ try {
   await page.getByLabel("Tatsächliches Verhalten", { exact: true }).fill("Eine Fehlermeldung erscheint");
   await page.getByLabel("Schritte zum Nachstellen", { exact: true }).fill("1. Projekt öffnen\n2. Speichern");
   await page.getByRole("button", { name: "Bericht vorbereiten", exact: true }).click();
-  const report = await page.getByLabel("Fehlerbericht Vorschau", { exact: true }).inputValue();
+  const report = await page.getByLabel("Vorschau des Fehlerberichts", { exact: true }).inputValue();
   assert.match(report, /Erwartet: Datei speichern/); assert.ok(!report.includes("keep my project")); assert.ok(!report.includes("my-project.txt")); assert.ok(!report.includes("127.0.0.1"));
   await page.screenshot({ path: path.join(output, "support.png") });
   await page.getByRole("button", { name: "Bericht kopieren", exact: true }).click();

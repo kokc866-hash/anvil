@@ -1,15 +1,15 @@
 # Verbindungen
 
-Unter **Einstellungen → Agent** den Verbindungstyp wählen.
+Unter **Einstellungen → Agent** wählst du, wie Anvil auf dein KI-Modell zugreift.
 
 Dokumentationsstand: 13. September 2026, Release 1.3.29. Die beschriebenen CLI-Erweiterungen gehören zu diesem Stand.
 
 | Typ | Zugang | Einrichtung |
 | --- | --- | --- |
-| Lokal | HTTP zum eigenen Modellserver | Anbieter, API-URL und Modell; API-Key bei Bedarf |
-| Cloud | Anbieter-API | API-Key des Anbieters; bei Azure zusätzlich Resource-URL und Deployment |
-| Abo | Installierte Anbieter-CLI | CLI installieren, **Anmelden** wählen und CLI-Konto autorisieren |
-| Custom | OpenAI-kompatibler eigener Endpunkt | API-URL, Modell und optionaler API-Key |
+| Lokal | Verbindung zu deinem Modellserver | Anbieter, API-Adresse und Modell; bei Bedarf ein API-Schlüssel |
+| Cloud | API eines Anbieters | API-Schlüssel; bei Azure zusätzlich Ressourcenadresse und Bereitstellung (Deployment) |
+| Abo | Installiertes Befehlszeilenprogramm des Anbieters (CLI) | CLI installieren, **Anmelden** wählen und den Kontozugriff bestätigen |
+| Benutzerdefiniert | Eigener OpenAI-kompatibler Endpunkt | API-Adresse, Modell und optional ein API-Schlüssel |
 
 ## Abo über CLI
 
@@ -21,11 +21,11 @@ Dokumentationsstand: 13. September 2026, Release 1.3.29. Die beschriebenen CLI-E
 
 Eine aktuelle CLI muss auf dem Rechner installiert sein, auf dem Anvil Desktop läuft. Nach einer Installation Anvil neu starten, damit der neue Suchpfad verfügbar ist. Die Schaltfläche **Anmelden** startet die jeweilige CLI-Anmeldung. Ausgaben mit Anmeldelinks oder Gerätecodes erscheinen im Einstellungsbereich. Eine laufende Anmeldung lässt sich abbrechen.
 
-Anvil übergibt Gespräch und Werkzeugkatalog an die CLI. Werkzeuganforderungen kommen zurück an Anvil und laufen durch dessen vorhandenen Agentenablauf. Das CLI-Programm verwaltet Zugangsdaten und Token-Erneuerung. Anvil importiert keine Modell-OAuth-Tokens in den Browser und wechselt bei Abo-Fehlern nicht auf einen API-Key. API-Zugangsdaten aus der Umgebung werden dem CLI-Prozess nicht übergeben.
+Anvil übergibt das Gespräch und den Werkzeugkatalog an die CLI. Fordert das Modell ein Werkzeug an, wird dieser Aufruf von Anvil geprüft und ausgeführt. Die CLI verwaltet ihre Zugangsdaten und erneuert die Anmeldung bei Bedarf. Anvil übernimmt diese OAuth-Zugangsschlüssel nicht in den Browserspeicher und wechselt bei einem Abo-Fehler nicht automatisch zu einem API-Schlüssel. API-Zugangsdaten aus den Umgebungsvariablen werden dem CLI-Prozess nicht übergeben.
 
-**CLI-Status laden** zeigt Installation und den von Codex bzw. Claude gemeldeten Kontotyp. Copilot bietet hierfür keinen entsprechenden nichtinteraktiven Statusbefehl: Anvil zeigt die erkannte CLI-Version; die eigentliche Berechtigung wird beim Senden durch Copilot geprüft. Ein Statuscheck verbraucht keine Modellanfrage.
+**CLI-Status laden** zeigt, ob die CLI installiert ist und welchen Kontotyp Codex oder Claude melden. Copilot bietet keinen entsprechenden Statusbefehl für den automatisierten Abruf. Deshalb zeigt Anvil hier die erkannte CLI-Version; Copilot prüft die Zugriffsberechtigung erst beim Senden. Die Statusprüfung selbst stellt keine Modellanfrage.
 
-**Neu in Release 1.3.29:** Alle drei CLI-Verbindungen können angehängte Bilder übertragen und eintreffenden Antworttext während der Anfrage anzeigen. Eine API-Verbindung ist dafür nicht grundsätzlich erforderlich. Das gewählte Modell muss Bilder verstehen können; die Fähigkeit des Transports ist keine Zusage für jedes Modell.
+**Neu in Release 1.3.29:** Alle drei CLI-Verbindungen können angehängte Bilder übertragen und die Antwort bereits während ihrer Erstellung anzeigen. Dafür ist nicht grundsätzlich eine API-Verbindung erforderlich. Das gewählte Modell muss Bildinhalte verarbeiten können; die Bildübertragung allein garantiert dies nicht.
 
 | CLI | Bildübertragung | Antwortanzeige |
 | --- | --- | --- |
@@ -33,9 +33,11 @@ Anvil übergibt Gespräch und Werkzeugkatalog an die CLI. Werkzeuganforderungen 
 | Claude Code | Bildinhalte im strukturierten Eingabeformat | Teilantworten aus dem strukturierten Ausgabestrom |
 | GitHub Copilot | Bildinhalte mit der CLI-Anfrage | Eintreffende Textteile aus dem strukturierten Ausgabestrom |
 
-Unterstützt werden mitgelieferte PNG-, JPEG-, WebP- und GIF-Bilddaten: höchstens acht Bilder, 5 MiB je Bild und 20 MiB insgesamt je CLI-Anfrage. Das gilt auch für Bilder aus Run/Play und MCP-Ergebnissen; ihre Zuordnung zum Gespräch bleibt erhalten. Externe Bildadressen werden nicht stillschweigend heruntergeladen. Unzulässige Formate oder zu große Eingaben führen zu einer verständlichen Meldung. Ein in Anvil angezeigtes Bild beweist weiterhin nicht, dass ein bestimmtes Modell es inhaltlich geprüft hat.
+Unterstützt werden angehängte Bilder in den Formaten PNG, JPEG, WebP und GIF: höchstens acht Bilder, 5 MiB je Bild und 20 MiB insgesamt je CLI-Anfrage. Das gilt auch für Aufnahmen aus der Vorschau und für Bilder aus MCP-Ergebnissen. Ihre Zuordnung zum Gespräch bleibt erhalten. Bilder von externen Adressen werden nicht automatisch heruntergeladen. Nicht unterstützte Formate oder zu große Anhänge werden mit einer entsprechenden Meldung abgewiesen. Dass Anvil ein Bild anzeigt, bestätigt noch nicht, dass das Modell dessen Inhalt geprüft hat.
 
-Thinking lässt sich in Anvil anhand der unterstützten CLI- und Modellstufen wählen; **Auto** verwendet die Vorgabe. [Thinking im Detail](thinking.md). Temperatur und Antwortlimit bleiben beim jeweiligen CLI-Verhalten. Anvils Kontextbudget gilt für das übergebene Gespräch. Das eingestellte harte Zeitlimit und **Stop** beenden laufende CLI-Prozesse. Die CLI führt Anvils Projektwerkzeuge nicht eigenständig aus: Nur vollständig geprüfte Werkzeuganforderungen laufen durch Anvils Agentenablauf. Eintreffender unvollständiger Text verändert noch keine Datei.
+Den **Denkaufwand** kannst du entsprechend den von CLI und Modell unterstützten Stufen einstellen. **Automatisch** verwendet deren Vorgabe. Weitere Informationen findest du unter [Denkaufwand](thinking.md). Temperatur und Antwortlimit werden von der jeweiligen CLI gesteuert. Anvils Kontextbudget begrenzt das übergebene Gespräch.
+
+Das eingestellte harte Zeitlimit und **Stoppen** beenden laufende CLI-Prozesse. Projektwerkzeuge werden weiterhin von Anvil ausgeführt, nachdem die vollständige Werkzeuganforderung geprüft wurde. Eintreffende Textteile allein verändern keine Datei.
 
 Für die beschriebenen Bild- und Teilantwortfunktionen ist Anvil 1.3.29 erforderlich. Der ältere Adapter in 1.3.26 überträgt nur Text und übernimmt die Antwort nach Abschluss.
 
@@ -43,17 +45,17 @@ Offizielle Referenzen: [Codex CLI](https://developers.openai.com/codex/cli/refer
 
 ## Cloud und eigene Endpunkte
 
-Custom erwartet eine OpenAI-kompatible Chat-Completions-API. Beispiele:
+Die Verbindungsart **Benutzerdefiniert** erwartet eine OpenAI-kompatible Chat-Completions-API. Beispiele:
 
 - `http://127.0.0.1:1234` wird zu `http://127.0.0.1:1234/v1`.
 - `https://model.example/inference` behält den angegebenen API-Pfad.
 - Bei `https://model.example/api/v2/chat/completions` wird der gemeinsame Basis-Pfad `https://model.example/api/v2` verwendet.
 
-Die API-URL enthält keine Zugangsdaten, Query-Parameter oder Fragmente. Ein optionaler API-Key wird als Bearer-Token gesendet. Ohne Key wird kein künstlicher Bearer-Token ergänzt. Native Modellleitung und Companion unterstützen LAN, Tailscale-Adressen, private IPv6-Adressen und explizit konfigurierte Custom-Domains. Browserbetrieb ohne Desktop/Companion setzt passende CORS-Freigaben des Modellservers voraus.
+Die API-Adresse darf keine Zugangsdaten, Abfrageparameter oder URL-Fragmente enthalten. Ein optionaler API-Schlüssel wird als Bearer-Token gesendet. Ohne Schlüssel wird kein Platzhalter ergänzt. Die direkte Verbindung der Desktop-App und Companion unterstützen LAN, Tailscale-Adressen, private IPv6-Adressen und ausdrücklich konfigurierte eigene Domains. Beim Browserbetrieb ohne Desktop-App oder Companion muss der Modellserver passende CORS-Freigaben bereitstellen.
 
-Anvil wählt vor der Anfrage einen Transport. Ein HTTP-Fehler des Anbieters wird weitergegeben; eine bereits gesendete Anfrage wird nicht zusätzlich über einen anderen Proxy abgespielt. Header für Azure und Anthropic bleiben erhalten. Beim Abbrechen eines Streams wird auch die vorgelagerte Verbindung geschlossen.
+Anvil legt den Verbindungsweg vor dem Senden fest. Ein HTTP-Fehler des Anbieters wird angezeigt; dieselbe Anfrage wird nicht zusätzlich über einen anderen Proxy wiederholt. Erforderliche Anfrage-Header für Azure und Anthropic bleiben erhalten. Wenn du eine laufende Antwort stoppst, wird auch die Verbindung zum Anbieter geschlossen.
 
-**Modellliste laden** meldet HTTP-Fehler, ungültige Antworten und leere Listen. **Modellliste geladen · N Modelle** bedeutet, dass der Server seine Liste geliefert hat. Ob das gewählte Modell eine Antwort erzeugt, zeigt erst eine Chat-Anfrage. Der Chat nennt Vorbereitung, Modellanfrage, Denken, Antwort und laufende Werkzeuge als getrennte Phasen. Ein mitgelieferter Modellkatalog ist eine Auswahlhilfe, kein Verbindungsnachweis. Ein selbst gewähltes Modell wird durch eine Modellabfrage nicht ersetzt. Azure prüft den Resource-Zugang über die [Models-List-API](https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21); das Deployment wird bei der Modellanfrage geprüft.
+**Modellliste laden** meldet HTTP-Fehler, ungültige Antworten und leere Listen. **Modellliste geladen · N Modelle** bestätigt, dass der Server seine Liste geliefert hat. Ob das gewählte Modell antwortet, zeigt erst eine Chat-Anfrage. Der Chat zeigt Vorbereitung, Modellanfrage, Denkphase, Antwort und Werkzeugausführung als getrennte Phasen an. Ein mitgelieferter Modellkatalog hilft bei der Auswahl, bestätigt aber keine Verbindung. Ein selbst gewähltes Modell wird durch das Laden der Liste nicht ersetzt. Bei Azure wird der Ressourcenzugriff über die [Models-List-API](https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21) geprüft; die gewählte Bereitstellung erst bei der Modellanfrage.
 
 Azure-Responses-Anfragen verwenden den [v1-Endpunkt ohne datierten Versionsparameter](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
 
@@ -61,19 +63,19 @@ GitHub Models wurde am 30. Juli 2026 eingestellt. Copilot wird deshalb ausschlie
 
 ## Gespeicherte Einstellungen
 
-API und Abo erhalten getrennte Einstellungsplätze. Beim Wechsel zwischen Ollama, LM Studio und anderen lokalen Anbietern bleibt jeder Anbieter bei seiner eigenen gespeicherten URL bzw. seinem Standardport.
+Anvil speichert API- und Abo-Einstellungen getrennt. Beim Wechsel zwischen Ollama, LM Studio und anderen lokalen Anbietern behält jeder Anbieter seine gespeicherte Adresse beziehungsweise seinen Standardport.
 
-Profile speichern Verbindungstyp, Anbieter, URL, Modell, Kontext und Modellparameter. Zugangsdaten bleiben separat. Alte Profile ohne Verbindungstyp werden als API-Profil behandelt; Codex und Copilot werden als CLI-Abo behandelt. Alte Copilot-Endpunkte werden bei der Migration nicht mehr als HTTP-Ziel verwendet. Alte Abo-Tokenkopien werden aus Anvils Browser-Speicher entfernt; die Anmeldedaten der installierten CLIs bleiben bei den CLIs.
+Profile speichern Verbindungstyp, Anbieter, Adresse, Modell, Kontext und Modellparameter. Zugangsdaten werden getrennt verwaltet. Ältere Profile ohne Verbindungstyp gelten als API-Profile; Codex und Copilot werden als CLI-Abos behandelt. Bei der Übernahme älterer Einstellungen werden frühere Copilot-Endpunkte nicht mehr als HTTP-Ziel verwendet. Alte Kopien von Abo-Zugangsschlüsseln werden aus Anvils Browserspeicher entfernt. Die Anmeldedaten der installierten CLIs bleiben dort erhalten.
 
-Anvil Desktop speichert API-Schlüssel, GitHub-Token, Companion-Token und Tresoreinträge verschlüsselt über die Betriebssystem-Funktionen von Electron. Die bisherige Browser-Kopie wird erst nach bestätigter verschlüsselter Speicherung entfernt. Ist der Betriebssystem-Schlüsselspeicher nicht verfügbar, zeigt Anvil das unter dem API-Key an; neue Schlüssel bleiben dann nur für die Sitzung im Arbeitsspeicher. Eine vorhandene, nicht entschlüsselbare Datei wird erhalten. Im Browserbetrieb bleibt die separate Browser-Ablage bestehen. Details zur Migration und ihren Grenzen stehen unter [Optimierungen](06-optimierungen.md).
+Anvil Desktop speichert API-Schlüssel, GitHub- und Companion-Zugangsschlüssel sowie Tresoreinträge verschlüsselt mithilfe der Betriebssystemfunktionen von Electron. Eine bisherige Kopie im Browserspeicher wird erst entfernt, wenn die verschlüsselte Speicherung bestätigt wurde. Ist der Schlüsselspeicher des Betriebssystems nicht verfügbar, erscheint ein Hinweis unter dem Feld für den API-Schlüssel. Neue Schlüssel bleiben dann nur für die aktuelle Sitzung im Arbeitsspeicher. Vorhandene Dateien bleiben erhalten, auch wenn sie nicht entschlüsselt werden können. Im Browserbetrieb wird weiterhin der separate Browserspeicher verwendet. Details zur Übernahme älterer Daten und ihren Grenzen stehen unter [Optimierungen](06-optimierungen.md).
 
 ## Entwicklung und Prüfung
 
 Die Regressionstests liegen bei `electron/cli-runner.test.mjs`, `electron/llm-pipe.test.mjs`, `src/lib/connection.test.ts` und `scripts/connection-state.test.mjs`. Sie prüfen echte Unterprozesse und HTTP-Streams mit lokalen Testservern sowie die tatsächlichen Einstellungsfunktionen. Sie benötigen keine persönlichen Zugangsdaten und erzeugen keine kostenpflichtigen Modellanfragen.
 
-Die neue CLI-Erweiterung wird zusätzlich durch `scripts/cli-stream.test.mjs`, `scripts/cli-client.test.mjs` und `scripts/cli-run-frame.test.mjs` geprüft: getrennte Bilddaten, Ausgabe vor Abschluss, keine Werkzeugargumente im sichtbaren Antwortstrom, Abbruch, spätere Ereignisse, unbekannte Werkzeuge und eine widersprüchliche Endantwort. Claude Code und Copilot wurden für diesen Ausbau anhand ihrer offiziellen Schnittstellen und mit isolierten Protokoll-Fixtures geprüft. Eine echte Anmeldung und Modellanfrage dieser beiden Anbieter wurde dabei nicht durchgeführt.
+Die neue CLI-Erweiterung wird zusätzlich durch `scripts/cli-stream.test.mjs`, `scripts/cli-client.test.mjs` und `scripts/cli-run-frame.test.mjs` geprüft. Die Tests decken getrennte Bilddaten, sichtbare Teilantworten, ausgeblendete Werkzeugargumente, Abbruch, verspätete Ereignisse, unbekannte Werkzeuge und widersprüchliche Endantworten ab. Claude Code und Copilot wurden anhand ihrer offiziellen Schnittstellen mit isolierten Testdaten für den Nachrichtenaustausch geprüft. Eine echte Anmeldung und Modellanfrage bei diesen beiden Anbietern wurde dabei nicht durchgeführt.
 
-Ein separater echter Codex-Aufruf mit `gpt-5.6-terra` und Thinking Low erkannte die dominante Farbe eines neu erzeugten roten Testbildes korrekt. Die erste dekodierte Textausgabe traf nach 3.400 ms ein, der Aufruf endete nach 3.647 ms; gestreamter Text und Endantwort stimmten überein, ohne Werkzeugaufruf. Nachweis: `artifacts/cli-live-smoke-result.json`. Das belegt Bildübertragung und Teilantworten für diesen Aufruf, keine allgemeine Laufzeit- oder Qualitätszusage für alle Modelle.
+Ein separater echter Codex-Aufruf mit `gpt-5.6-terra` und niedrigem Denkaufwand erkannte die dominante Farbe eines neu erzeugten roten Testbildes korrekt. Die erste dekodierte Textausgabe traf nach 3.400 ms ein, der Aufruf endete nach 3.647 ms. Teilantworten und Endantwort stimmten überein; es wurde kein Werkzeug aufgerufen. Nachweis: `artifacts/cli-live-smoke-result.json`. Das bestätigt Bildübertragung und Teilantworten für diesen einzelnen Aufruf. Daraus lässt sich keine allgemeine Zusage zur Geschwindigkeit oder Qualität anderer Modelle ableiten.
 
 ```sh
 npm run test:connections
@@ -81,4 +83,4 @@ npm run typecheck
 npm run build
 ```
 
-Ein erfolgreicher Test mit simulierten CLI-Antworten bestätigt den Adaptervertrag. Anmeldung, Abo-Berechtigung und die konkrete installierte CLI-Version müssen zusätzlich auf dem Zielrechner funktionieren.
+Erfolgreiche Tests mit simulierten CLI-Antworten bestätigen, dass Anvil diese Antworten wie vorgesehen verarbeitet. Anmeldung, Abo-Berechtigung und die tatsächlich installierte CLI-Version müssen zusätzlich auf dem Zielrechner funktionieren.

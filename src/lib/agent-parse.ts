@@ -289,7 +289,7 @@ function argsFromCall(name: string, inner: string): string {
 }
 
 export function isFixPrompt(text: string): boolean {
-  return /^(behebe diese probleme|intern-fehler beheben|arbeitsbaum hat |führe .+ nochmal)/i.test(text.trim());
+  return /^(behebe diese probleme|intern-fehler beheben|arbeitsbaum hat |führe .+ (?:nochmal|erneut))/i.test(text.trim());
 }
 
 export function unescapeJsonFrag(s: string): string {

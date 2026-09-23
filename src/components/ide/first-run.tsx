@@ -119,8 +119,8 @@ export function FirstRun() {
     }
     st.setSetupDone(true);
     st.setNotice(hasDraft
-      ? (en ? "Example added. Try the button in Run. Your existing chat draft is unchanged." : "Beispiel ergänzt. Teste den Knopf im Run-Fenster. Dein vorhandener Chat-Entwurf bleibt erhalten.")
-      : (en ? "Example added. Try the button in Run. Your first change is ready as an editable chat draft." : "Beispiel ergänzt. Teste den Knopf im Run-Fenster. Deine erste Änderung liegt als bearbeitbarer Chat-Entwurf bereit."));
+      ? (en ? "Example added. Try the button in Run. Your existing chat draft is unchanged." : "Beispiel ergänzt. Teste die Schaltfläche im Ausgabefenster. Dein vorhandener Chat-Entwurf bleibt erhalten.")
+      : (en ? "Example added. Try the button in Run. Your first change is ready as an editable chat draft." : "Beispiel ergänzt. Teste die Schaltfläche im Ausgabefenster. Deine erste Änderung liegt als bearbeitbarer Chat-Entwurf bereit."));
     try { await runFromEditor(path); } finally { setBusy(false); }
   }
 
@@ -277,7 +277,7 @@ export function FirstRun() {
           </li>
           <li>
             <span className="text-fg">4. {en ? "Run, check and save" : "Ausführen, prüfen und speichern"}</span>
-            <p className="mt-1 text-muted">{en ? "Choose Run, test the changed behavior and save. Trail shows what was checked and lets you undo changes." : "Wähle Run (Ausführen), teste das geänderte Verhalten und speichere. Die Spur zeigt, was geprüft wurde, und lässt dich Änderungen zurücknehmen."}</p>
+            <p className="mt-1 text-muted">{en ? "Choose Run, test the changed behavior and save. Trail shows what was checked and lets you undo changes." : "Wähle „Ausführen“, teste das geänderte Verhalten und speichere. Die Spur zeigt, was geprüft wurde, und lässt dich Änderungen zurücknehmen."}</p>
           </li>
           <li>
             <details><summary className="cursor-pointer text-muted">{en ? "Optional: local tools and other languages" : "Optional: lokale Werkzeuge und weitere Sprachen"}</summary>

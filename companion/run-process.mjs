@@ -30,7 +30,7 @@ export function spawnRun(file, args, cwd, timeoutMs, env, opts = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
     let child, stdout = "", stderr = "", settled = false, timedOut = false, aborted = false;
-    let timer, grace, killTimer;
+    let timer, grace, killTimer, drainTimer;
     const append = (kind, text) => {
       if (kind === "stdout") stdout = (stdout + text).slice(-120000);
       else stderr = (stderr + text).slice(-120000);
@@ -70,14 +70,19 @@ export function spawnRun(file, args, cwd, timeoutMs, env, opts = {}) {
     // Headless runs cannot answer prompts; close stdin instead of leaving them hanging forever.
     child.stdin?.end();
     opts.signal?.addEventListener("abort", cancel, { once: true });
-    const cleanup = () => { clearTimeout(timer); clearTimeout(grace); clearTimeout(killTimer); opts.signal?.removeEventListener("abort", cancel); };
+    const cleanup = () => { clearTimeout(timer); clearTimeout(grace); clearTimeout(killTimer); clearTimeout(drainTimer); opts.signal?.removeEventListener("abort", cancel); };
     let exited = false;
     const exitedWith = (r) => { if (exited) return; exited = true; cleanup(); opts.onExit?.(r); finish(r); };
     child.once("error", (error) => exitedWith(result(null, null, `Start fehlgeschlagen (${error.code || "Prozess"}): ${error.message}`)));
     child.once("close", (code, signal) => exitedWith(result(code, signal)));
+    // Some engine helpers inherit stdout and keep it open after the editor has
+    // exited. Their pipe lifetime must not keep the completed job alive forever.
+    child.once('exit',(code,signal)=>{
+      drainTimer=setTimeout(()=>{child.stdout?.destroy();child.stderr?.destroy();exitedWith(result(code,signal));},1000);
+    });
     if (opts.detach) {
       grace = setTimeout(() => {
-        opts.signal?.removeEventListener("abort", cancel);
+        if (!opts.keepAbort) opts.signal?.removeEventListener("abort", cancel);
         finish(result(0, null, "", true));
       }, opts.readyMs ?? 2500);
     } else {

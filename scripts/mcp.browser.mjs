@@ -176,7 +176,7 @@ try {
     window.__anvilIde.getState().setSidebar("mcp");
     window.__anvilIde.getState().setSidebarWidth(440);
   });
-  await page.getByText("Katalog geladen · 2 Tools · 2 Ressourcen", { exact: true }).waitFor();
+  await page.getByText("Katalog geladen · 2 Werkzeuge · 2 Ressourcen", { exact: true }).waitFor();
   await page.getByRole("button", { name: /Dokumentation · search/ }).click();
   const args = page.getByRole("textbox", { name: "MCP-Toolargumente", exact: true });
   await args.fill('{"q":"test","n":"wrong"}');
@@ -205,7 +205,7 @@ try {
     await page.getByRole("button", { name: "Aufrufen", exact: true }).isDisabled(),
     true,
   );
-  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await page.getByRole("button", { name: "Stoppen", exact: true }).click();
   await page.waitForFunction(() => Boolean(window.fixtureCanceled) && !window.fixturePending);
   await page.getByRole("checkbox", { name: "Dokumentation aktiviert", exact: true }).uncheck();
   await page.getByText("Deaktiviert", { exact: true }).waitFor();

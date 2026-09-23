@@ -59,17 +59,17 @@ export function MemoryPane() {
         </Button>
       </div>
       <p className="border-b border-border px-3 py-2 text-[11px] text-muted">
-        {ws} · {p.topLang || "—"} · Run {p.run} · Debug {p.debug} · +{p.accept}/−{p.reject} · Undo {p.undo}
+        {ws} · {p.topLang || "—"} · Ausführungen {p.run} · Debugger {p.debug} · +{p.accept}/−{p.reject} · Rücknahmen {p.undo}
       </p>
       <div className="flex flex-wrap gap-1 border-b border-border px-2 py-1">
         {(
           [
-            ["person", "Person"],
+            ["person", "Persönlich"],
             ["project", "Projekt"],
             ["session", "Sitzung"],
             ["skills", "Skills"],
-            ["neg", "Nicht"],
-            ["log", "Log"],
+            ["neg", "Vermeiden"],
+            ["log", "Protokoll"],
             ["legacy", "Nicht zugeordnet"],
           ] as const
         ).map(([t, label]) => (
@@ -108,7 +108,7 @@ export function MemoryPane() {
             ))
           : tab === "session"
             ? isJournalEmpty(journal)
-              ? <p className="text-muted">Die Sitzung füllt sich, sobald der Agent arbeitet. Überlebt Compacting und Neustart — auch bei mittleren Projekten.</p>
+              ? <p className="text-muted">Während der Agent arbeitet, speichert Anvil hier den Sitzungsverlauf. Er bleibt auch nach einer Kontextzusammenfassung oder einem Neustart erhalten.</p>
               : (
                 <div className="rounded-md border border-border px-2 py-1.5">
                   <p className="mb-1 text-[10px] text-subtle">{journal.turns} Runden · {journal.files.length} Dateien</p>
@@ -162,7 +162,7 @@ export function MemoryPane() {
                     {e.d ? ` · ${e.d}` : ""}
                   </p>
                 ))}
-        {tab === "person" && person.length === 0 ? <p className="text-muted">Noch keine Personen-Fakten.</p> : null}
+        {tab === "person" && person.length === 0 ? <p className="text-muted">Noch keine persönlichen Informationen gespeichert.</p> : null}
         {tab === "project" && proj.length === 0 ? <p className="text-muted">Noch keine Projekt-Fakten für {ws}.</p> : null}
         {tab === "skills" && shownSkills.length === 0 ? <p className="text-muted">Keine Skills für {ws}.</p> : null}
         {tab === "neg" && shownNegs.length === 0 ? <p className="text-muted">Keine abgelehnten Muster.</p> : null}

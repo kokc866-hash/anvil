@@ -1,4 +1,4 @@
-# Gelernte Tool-Aufrufe
+# Gelernte Werkzeugaufrufe
 
 Anvil erkennt bestimmte abweichende Aufrufformen eines Modells, ordnet deren Felder einem vorhandenen Werkzeug zu und merkt sich erfolgreiche Zuordnungen. Beispiel:
 
@@ -16,7 +16,7 @@ Die Übersetzung läuft unmittelbar vor der vorhandenen Tool-Ausführung. Sie tr
 
 ## Einschalten und verwalten
 
-Unter **Einstellungen → Agent → Gelernte Tool-Aufrufe** gilt die Auswahl für den aktuellen Anbieter, die konkrete Serveradresse, das Protokoll und das Modell.
+Unter **Einstellungen → Agent → Gelernte Werkzeugaufrufe** gilt die Auswahl für den aktuellen Anbieter, die konkrete Serveradresse, das Protokoll und das Modell.
 
 | Modus | Verhalten |
 |---|---|

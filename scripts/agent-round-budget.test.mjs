@@ -43,7 +43,7 @@ test('agent round boundaries continue useful work and never claim completion on 
       assert.equal(calls, 8);
       assert.equal(result.ok, false);
       assert.equal(result.stopReason, 'round-limit');
-      assert.match(result.reply, /8\/8/);
+      assert.match(result.reply, /8 Arbeitsrunden/);
     });
     await t.test('automatic mode stops repeated reads without progress', async () => {
       beginAgent(); let calls = 0;

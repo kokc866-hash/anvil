@@ -50,7 +50,7 @@ export function prepareRestoreDisk(plan: RestorePlan, target = captureDiskTarget
 export async function syncRestore(plan: RestoreDiskPlan, target = captureDiskTarget()): Promise<string[]> {
   let removedDirs = plan.rmdir;
   await queue.run(async () => {
-    if (target.cwd && target.handle) throw new Error("Zwei Workspace-Ziele aktiv. Ordner erneut öffnen.");
+    if (target.cwd && target.handle) throw new Error("Es sind zwei Speicherziele für das Projekt aktiv. Öffne den gewünschten Projektordner erneut.");
     if (target.cwd) removedDirs = await withCompanion(() => companionRestore(plan, target.cwd, target.base || undefined), target.base, target.cwd);
     else if (target.handle) removedDirs = await restoreDiskPlan(plan, target.handle);
     for (const f of plan.files) noteDiskFile(f.path, f.after, target);
@@ -62,7 +62,7 @@ async function write(path: string, content: string, target: DiskTarget, baseCont
   const key = targetKey(target) + path;
   const expected = knownDisk.has(key) ? knownDisk.get(key) : baseContent;
   try {
-    if (target.cwd && target.handle) throw new Error("Zwei Workspace-Ziele aktiv. Ordner erneut öffnen.");
+    if (target.cwd && target.handle) throw new Error("Es sind zwei Speicherziele für das Projekt aktiv. Öffne den gewünschten Projektordner erneut.");
     const jobs: Promise<unknown>[] = [writeDiskFile(path, content, target.handle, expected)];
     if (target.cwd)
       jobs.push(
@@ -101,7 +101,7 @@ export async function syncMove(from: string, to: string, target = captureDiskTar
   await queue.flush();
   await queue.run(async () => {
     // A workspace has one authoritative destination. Dual destinations require explicit migration.
-    if (target.cwd && target.handle) throw new Error("Zwei Workspace-Ziele aktiv. Ordner erneut öffnen.");
+    if (target.cwd && target.handle) throw new Error("Es sind zwei Speicherziele für das Projekt aktiv. Öffne den gewünschten Projektordner erneut.");
     if (target.cwd) await withCompanion(() => companionMoveFile(from, to, target.cwd, target.base || undefined), target.base, target.cwd);
     else if (target.handle) await moveDiskPath(from, to, target.handle);
     const prefix = targetKey(target);

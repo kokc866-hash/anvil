@@ -106,7 +106,7 @@ export function SettingsPane() {
           {!query && cat !== "help" && cat !== "overview" ? <div className="mt-auto border-t border-border pt-3">
             <Button variant="quiet" className="h-auto w-full whitespace-normal px-2 py-2 text-left text-xs" onClick={() => {
               resetSettingsCategory(cat);
-              useIde.getState().setNotice(de ? "Bereich auf Standard gesetzt. Profile und Projektinhalte bleiben erhalten." : "Category reset. Profiles and project contents are kept.");
+              useIde.getState().setNotice(de ? "Die Einstellungen dieses Bereichs wurden zurückgesetzt. Profile und Projektinhalte bleiben erhalten." : "Category reset. Profiles and project contents are kept.");
             }}>
               {de ? "Bereich zurücksetzen" : "Reset category"}
             </Button>

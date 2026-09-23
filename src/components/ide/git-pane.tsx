@@ -103,7 +103,7 @@ export function GitPane() {
     try {
       const dest = await nativeHelper()?.workspacePick?.();
       if (!dest) {
-        setNotice("Ordner für ZIP wählen");
+        setNotice("Wähle einen Zielordner für das ZIP-Archiv.");
         return;
       }
       await holdCompanion();
@@ -158,12 +158,12 @@ export function GitPane() {
       }
       if (g.error && /git fehlt/i.test(g.error)) {
         const inst = await companionInstall("git");
-        setNotice(inst.ok ? "Git geholt. Clone nochmal." : g.error);
+        setNotice(inst.ok ? "Git wurde installiert. Starte das Klonen erneut." : g.error);
         return;
       }
       const dest = await nativeHelper()?.workspacePick?.();
       if (!dest) {
-        setNotice("Ordner für ZIP wählen");
+        setNotice("Wähle einen Zielordner für das ZIP-Archiv.");
         return;
       }
       const w = await companionWorkspace(dest);
@@ -250,7 +250,7 @@ export function GitPane() {
             {workspaceCwd}
           </p>
         ) : (
-          <p className="mb-2 text-xs text-subtle">Ordner wählen (Desktop) für echtes Git. Sonst Anvil-Schnappschuss.</p>
+          <p className="mb-2 text-xs text-subtle">Öffne in der Desktop-App einen Projektordner, um Git zu verwenden. Ohne Projektordner verwaltet Anvil eigene Sicherungsstände.</p>
         )}
         {live?.error ? <p className="mb-2 text-xs text-danger">{live.error}</p> : null}
         {live?.error && /git fehlt/i.test(live.error) ? (
@@ -262,7 +262,7 @@ export function GitPane() {
               void holdCompanion()
                 .then(() => companionInstall("git"))
                 .then((r) => {
-                  setNotice(r.ok ? "Git geholt. Status neu laden." : r.stderr || "Git-Install fehlgeschlagen");
+                  setNotice(r.ok ? "Git wurde installiert. Der Status wird aktualisiert." : r.stderr || "Git konnte nicht installiert werden.");
                   if (r.ok) void refreshLive();
                 })
                 .finally(() => {
@@ -271,7 +271,7 @@ export function GitPane() {
                 });
             }}
           >
-            Git holen
+            Git installieren
           </Button>
         ) : null}
         {live && !live.repo && live.ok ? (
@@ -292,7 +292,7 @@ export function GitPane() {
                 });
             }}
           >
-            git init
+            Git-Repository erstellen
           </Button>
         ) : null}
 
@@ -340,7 +340,7 @@ export function GitPane() {
                     if (r.ok) {
                       setLive(r);
                       if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && applyTreeKeep(t.files, t.dirs));
-                    } else setNotice(r.error || "Checkout fehlgeschlagen");
+                    } else setNotice(r.error || "Der Branch konnte nicht gewechselt werden.");
                   })
                   .finally(() => {
                     setBusy(false);
@@ -359,7 +359,7 @@ export function GitPane() {
 
         <p className="mb-1 text-xs text-muted">Geändert{changed.length ? ` · ${changed.length}` : ""}</p>
         {changed.length === 0 ? (
-          <p className="mb-3 text-xs text-subtle">Nichts zu committen</p>
+          <p className="mb-3 text-xs text-subtle">Keine Änderungen für einen Commit</p>
         ) : (
           <>
             <ul className="mb-2 space-y-0.5">
@@ -380,7 +380,7 @@ export function GitPane() {
               ))}
             </ul>
             <Button className="mb-3 h-8 text-xs" onClick={() => void import("@/lib/fix-agent").then((m) => m.askGit())}>
-              Diff → Agent
+              Änderungen vom Agenten prüfen lassen
             </Button>
           </>
         )}
@@ -436,7 +436,7 @@ export function GitPane() {
                 void holdCompanion()
                   .then(() => companionGit("pull", { cwd: workspaceCwd }))
                   .then((r) => {
-                    setNotice(r.ok ? "Pull" : r.error || "Pull fehlgeschlagen");
+                    setNotice(r.ok ? "Änderungen vom Remote-Repository übernommen." : r.error || "Änderungen konnten nicht abgerufen werden.");
                     if (r.ok) setLive(r);
                   })
                   .finally(() => {
@@ -465,8 +465,8 @@ export function GitPane() {
                   .then((r) => {
                     if (r.ok) {
                       setLive(r);
-                      setNotice("Stash");
-                    } else setNotice(r.error || "Stash fehlgeschlagen");
+                      setNotice("Änderungen im Stash zwischengespeichert.");
+                    } else setNotice(r.error || "Änderungen konnten nicht zwischengespeichert werden.");
                   })
                   .finally(() => {
                     setBusy(false);
@@ -474,7 +474,7 @@ export function GitPane() {
                   });
               }}
             >
-              Stash
+              Stash erstellen
             </Button>
             <Button
               className="h-8 flex-1 text-xs"
@@ -487,8 +487,8 @@ export function GitPane() {
                     if (r.ok) {
                       setLive(r);
                       if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && applyTreeKeep(t.files, t.dirs));
-                      setNotice("Stash holen");
-                    } else setNotice(r.error || "Stash pop fehlgeschlagen");
+                      setNotice("Zwischengespeicherte Änderungen wiederhergestellt.");
+                    } else setNotice(r.error || "Zwischengespeicherte Änderungen konnten nicht wiederhergestellt werden.");
                   })
                   .finally(() => {
                     setBusy(false);
@@ -496,7 +496,7 @@ export function GitPane() {
                   });
               }}
             >
-              Stash holen
+              Stash wiederherstellen
             </Button>
           </div>
         ) : null}
@@ -515,7 +515,7 @@ export function GitPane() {
                     setLive(r);
                     setBranchName("");
                     if (r.cwd) void companionTree(r.cwd).then((t) => t.ok && applyTreeKeep(t.files, t.dirs));
-                  } else setNotice(r.error || "Branch fehlgeschlagen");
+                  } else setNotice(r.error || "Der Branch konnte nicht erstellt werden.");
                 })
                 .finally(() => {
                   setBusy(false);
@@ -595,10 +595,10 @@ export function GitPane() {
             />
             <div className="flex gap-1">
               <Button className="h-8 flex-1 text-xs" disabled={busy || !githubRepo.trim()} onClick={() => void cloneRepo()}>
-                Clone
+                Klonen
               </Button>
               <Button className="h-8 flex-1 text-xs" disabled={busy || !githubRepo.trim()} onClick={() => void cloneZipIntoFolder()}>
-                ZIP in Ordner
+                ZIP in Ordner entpacken
               </Button>
               <Button className="h-8 flex-1 text-xs" variant="primary" disabled={busy} onClick={() => void pushRepo()}>
                 Push
@@ -617,7 +617,7 @@ export function GitPane() {
               ? [
                   { label: "Öffnen", onClick: () => openFile(menu.path!) },
                   { label: "Pfad kopieren", onClick: () => void navigator.clipboard.writeText(menu.path!) },
-                  { label: "Diff an den Agenten", onClick: () => void import("@/lib/fix-agent").then((m) => m.askGit()) },
+                  { label: "Änderungen vom Agenten prüfen lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askGit()) },
                   { sep: true, label: "" },
                   { label: "Änderung verwerfen", danger: true, onClick: () => revertFile(menu.path!) },
                 ]

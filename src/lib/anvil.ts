@@ -13,7 +13,10 @@ export async function prepareAnvilIntent(text: string) {
   if (valid()) prepared = { text, intent, valid: captureBrainScope("intent") };
 }
 
-export async function anvilHandle(text: string): Promise<{ hand: AnvilHand; reply?: string }> {
+export async function anvilHandle(text: string, context: { hasImages?: boolean } = {}): Promise<{ hand: AnvilHand; reply?: string }> {
+  // Text-only shortcuts cannot interpret an attachment, even if its caption
+  // looks like a known command or a prepared helper intent.
+  if (context.hasImages) return { hand: "model" };
   const it = prepared?.text === text && prepared.valid() ? prepared.intent : heuristicIntent(text);
   if (it.kind !== "agent" && it.conf >= 0.85) {
     const reply = applyIntent(it);

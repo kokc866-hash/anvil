@@ -81,15 +81,15 @@ export function BrainSection({ q = "" }: { q?: string }) {
       <p className="mb-3 text-xs text-muted">
         Optionales lokales KI-Modell für Titel, Kurzvorschläge und Notizen. Für Chat, Code und Planung nutzt Anvil weiterhin das unter Agent gewählte Modell. Du kannst Anvil ohne diesen Helfer verwenden.
       </p>
-      <Row label="Helfer an" hint="Mini-Modell nur, wenn die Heuristik unsicher ist">
+      <Row label="Helfer aktivieren" hint="Das Helfermodell wird verwendet, wenn Anvils feste Regeln keine eindeutige Antwort liefern.">
         <Toggle on={on} onChange={setOn} />
       </Row>
-      <Row label="Automatisch merken" hint="Context, Temperatur, Sliding, Prompt pro Modell. Wechsel stellt sie wieder her.">
+      <Row label="Modelleinstellungen merken" hint="Speichert Kontextlänge, Temperatur, Kontextfenster und Systemanweisungen für jedes Modell. Beim Modellwechsel werden sie wiederhergestellt.">
         <Toggle on={autoProfile} onChange={useBrain.getState().setAutoProfile} />
       </Row>
       <div className="mb-2 rounded-md border border-border px-2 py-2">
         <p className="text-xs text-muted">Helfer-Profil</p>
-        <p className="mb-1 text-[11px] text-subtle">Benannter Stand: Modell, Custom-ID und Slider. Unabhängig vom Agent-Profil.</p>
+        <p className="mb-1 text-[11px] text-subtle">Speichert das Modell und seine Einstellungen unter einem Namen. Das Agent-Profil wird separat verwaltet.</p>
         {helperProfiles.length ? (
           <ul className="mb-1 space-y-0.5">
             {helperProfiles.map((p) => (
@@ -145,14 +145,14 @@ export function BrainSection({ q = "" }: { q?: string }) {
           className="mt-1 h-9 w-full rounded-md border border-border bg-bg px-2 text-sm text-fg"
           onChange={(e) => useBrain.getState().setAutonomy(e.target.value as "off" | "quiet" | "on")}
         >
-          <option value="off">Aus — nur auf Knopfdruck</option>
-          <option value="quiet">Still — lernt, keine Hinweise</option>
-          <option value="on">An — Hinweise bei Fehlern, Diffs und Commits</option>
+          <option value="off">Aus – nur manuell starten</option>
+          <option value="quiet">Im Hintergrund – lernt ohne Hinweise</option>
+          <option value="on">An – Hinweise zu Fehlern, Änderungen und Commits</option>
         </select>
-        <span className="mt-1 block text-[11px] text-subtle">Der Helfer schreibt nie Dateien und ruft nie das Hauptmodell.</span>
+        <span className="mt-1 block text-[11px] text-subtle">Der Helfer bearbeitet keine Projektdateien und stellt keine Anfragen an das Hauptmodell.</span>
       </label>
       <p className="py-1 text-[11px] text-muted">
-        Jobs {stats.jobs} · Heuristik {stats.heur} · Cache {stats.cache} · LLM {stats.llm}
+        Aufgaben {stats.jobs} · Regelbasiert {stats.heur} · Zwischenspeicher {stats.cache} · Modellanfragen {stats.llm}
       </p>
       {blog.length ? (
         <ul className="mb-2 max-h-24 overflow-auto font-mono text-[10px] text-subtle">
@@ -164,31 +164,31 @@ export function BrainSection({ q = "" }: { q?: string }) {
           ))}
         </ul>
       ) : null}
-      <Row label="Beim Start laden" hint="Download kann 0.4–2.5 GB sein">
+      <Row label="Beim Start laden" hint="Beim ersten Laden werden je nach Modell etwa 0,4 bis 2,5 GB heruntergeladen.">
         <Toggle on={autoLoad} onChange={useBrain.getState().setAutoLoad} />
       </Row>
-      <Row label="Update prüfen" hint="Runtime + HuggingFace-Stempel">
+      <Row label="Aktualisierungen prüfen" hint="Prüft die Laufzeitumgebung und den Modellstand bei Hugging Face.">
         <Toggle on={autoUpdate} onChange={useBrain.getState().setAutoUpdate} />
       </Row>
-      <Row label="GPU High-Performance" hint="Adapter-Präferenz beim nächsten Laden; die verfügbare GPU bestimmt das System">
+      <Row label="Leistungsstarke GPU bevorzugen" hint="Gilt beim nächsten Laden. Welche Grafikkarte tatsächlich verwendet wird, entscheidet das System.">
         <Toggle
           on={gpuPower === "high-performance"}
           onChange={(v) => useBrain.getState().setGpuPower(v ? "high-performance" : "low-power")}
         />
       </Row>
-      <Row label="GPU-Worker" hint="Inferenz nicht im UI-Thread">
+      <Row label="Modell separat berechnen" hint="Führt die Modellberechnung getrennt von der Oberfläche aus.">
         <Toggle on={useWorker} onChange={useBrain.getState().setUseWorker} />
       </Row>
-      <Row label="GPU warm halten" hint="Nach 70 s Leerlauf ein kurzer Ping. Pausiert bei Agent-Arbeit, verborgenem Fenster und Autonomie Aus.">
+      <Row label="GPU einsatzbereit halten" hint="Sendet nach 70 Sekunden Leerlauf eine kurze Anfrage. Pausiert während Agentenaufträgen, bei verborgenem Fenster und bei ausgeschalteter Autonomie.">
         <Toggle on={gpuKeepAlive} onChange={useBrain.getState().setGpuKeepAlive} />
       </Row>
-      <Row label="Puffer anpassen" hint="Bei GPU-Speicherfehler einmal mit 2K Context erneut laden. Dein gewählter Wert bleibt gespeichert.">
+      <Row label="Puffer anpassen" hint="Lädt das Modell bei einem GPU-Speicherfehler einmal mit 2.048 Kontexttokens neu. Deine gewählte Kontextlänge bleibt gespeichert.">
         <Toggle on={gpuFitBuffer} onChange={useBrain.getState().setGpuFitBuffer} />
       </Row>
-      <Row label="Shader vorwärmen" hint="Nach dem Laden Prefill+Decode einmal kompilieren, erster Job wird schneller">
+      <Row label="GPU-Berechnung vorbereiten" hint="Bereitet nach dem Laden die benötigten GPU-Programme vor, damit die erste Modellanfrage schneller starten kann.">
         <Toggle on={gpuWarmShaders} onChange={useBrain.getState().setGpuWarmShaders} />
       </Row>
-      <Row label="Sliding Window" hint="Weniger VRAM bei langem Context">
+      <Row label="Gleitendes Kontextfenster" hint="Kann bei langen Eingaben den benötigten Grafikspeicher verringern.">
         <Toggle on={sliding} onChange={useBrain.getState().setSliding} />
       </Row>
       <ModelPick
@@ -205,7 +205,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
             useBrain.getState().setCustomId(id.trim());
           }
         }}
-        placeholder="Modell wählen oder ID eintippen"
+        placeholder="Modell auswählen oder Modell-ID eingeben"
         labelOf={(id) => {
           const m = BRAIN_MODELS.find((x) => x.id === id || x.alt === id);
           if (!m) return id;
@@ -213,7 +213,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
         }}
         hint={
           BRAIN_MODELS.find((m) => m.id === (customId.trim() || modelId) || m.alt === (customId.trim() || modelId))
-            ?.hint ?? "Ein Modell. Laden holt die Gewichte."
+            ?.hint ?? "Beim ersten Laden werden die Dateien des gewählten Modells heruntergeladen."
         }
       />
       {nativeHelper()?.pathsPick ? (
@@ -240,7 +240,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
             const spec = BRAIN_MODELS.find((m) => m.id === (customId.trim() || modelId));
             if (spec && spec.vramMb > 2500) {
               const ok = window.confirm(
-                `${spec.label} lädt ~${spec.size} von HuggingFace. Der Helfer braucht das nicht — Agent bleibt Ollama. Trotzdem laden?`,
+                `Für ${spec.label} werden etwa ${spec.size} von Hugging Face heruntergeladen. Für einfache Helferaufgaben genügt meist ein kleineres Modell. Das gewählte Agent-Modell bleibt unverändert. Fortfahren?`,
               );
               if (!ok) return;
             }
@@ -250,10 +250,10 @@ export function BrainSection({ q = "" }: { q?: string }) {
           {status === "ready" ? "Neu laden" : "Laden"}
         </Button>
         <Button variant="quiet" disabled={!loadedId && !busy} onClick={() => void unloadBrain()}>
-          {busy ? "Laden abbrechen" : "Entladen"}
+          {busy ? "Laden abbrechen" : "Aus Speicher entfernen"}
         </Button>
         <Button variant="quiet" disabled={!loadedId || busy} onClick={() => {
-          setPing("prüfe GPU…");
+          setPing("Helfermodell wird geprüft…");
           void brainGenerate({
             messages: [
               { role: "system", content: brainSystem("Antworte mit genau einem Wort: HELFER_OK") },
@@ -265,17 +265,17 @@ export function BrainSection({ q = "" }: { q?: string }) {
             job: "ping",
           })
             .then((t) => setPing(`Antwort: ${t.trim()} — Modell antwortet.`))
-            .catch((err) => setPing(err instanceof Error ? err.message : "kein Ping"));
+            .catch((err) => setPing(err instanceof Error ? err.message : "Das Helfermodell hat nicht geantwortet."));
         }}>
           Testen
         </Button>
         <Button variant="quiet" disabled={checkingUpdate} onClick={() => void checkBrainUpdate()}>
-          {checkingUpdate ? "Prüft Revision…" : "Update prüfen"}
+          {checkingUpdate ? "Aktualisierung wird geprüft…" : "Aktualisierung prüfen"}
         </Button>
         <Button
           variant="quiet"
           onClick={() => {
-            if (useModelLib.getState().keepHelperCache && !window.confirm("Lokal behalten ist an. Cache trotzdem löschen?")) return;
+            if (useModelLib.getState().keepHelperCache && !window.confirm("„Lokal behalten“ ist aktiviert. Möchtest du die zwischengespeicherten Modelldateien trotzdem löschen?")) return;
             void clearBrainCache(undefined, { force: true }).catch((err) => setPing(err instanceof Error ? err.message : "Cache konnte nicht gelöscht werden"));
           }}
         >
@@ -292,7 +292,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
           {status === "ready"
             ? `Läuft · ${BRAIN_MODELS.find((m) => m.id === loadedId || m.alt === loadedId)?.label ?? loadedId}`
             : status === "downloading"
-              ? "Lädt Gewichte…"
+              ? "Modelldateien werden geladen…"
               : status === "error"
                 ? "Nicht geladen"
                 : "Aus"}
@@ -304,16 +304,16 @@ export function BrainSection({ q = "" }: { q?: string }) {
           if (same) return null;
           return (
             <p className="text-[11px] text-danger">
-              Gewählt: {spec?.label ?? want} — Neu laden, sonst bleibt das alte Modell.
+              Gewählt: {spec?.label ?? want} – Wähle „Neu laden“, um das gewählte Modell zu verwenden.
             </p>
           );
         })()}
         <p className="text-[11px] text-subtle">
-          {progressText || (status === "ready" ? "Kurzbefehle / Titel / Commit — nicht der Agent." : "")}
+          {progressText || (status === "ready" ? "Helfer für Kurzbefehle, Titel und Commit-Nachrichten." : "")}
           {gpu || gpuNow ? ` · ${gpu || gpuNow}` : ""}
           {fp16 && status === "ready" ? " · fp16" : ""}
         </p>
-        {loadedConfig && loadedId ? <p className="text-[11px] text-subtle">Geladen: {loadedConfig}. Context, Sliding und GPU-Änderungen gelten nach Neu laden.</p> : null}
+        {loadedConfig && loadedId ? <p className="text-[11px] text-subtle">Geladen: {loadedConfig}. Änderungen an Kontextlänge, Kontextfenster und GPU werden nach dem Neuladen wirksam.</p> : null}
         {ping ? <p className="mt-1 font-mono text-[11px] text-fg">{ping}</p> : null}
         {error ? <p className="text-[11px] text-danger">{error}</p> : null}
         {updateHint && updateHint !== "Aktuell" ? (
@@ -322,7 +322,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
       </div>
 
       <Slider
-        label="Context"
+        label="Kontextlänge"
         hint="Gewünschter Kontext beim nächsten Laden"
         min={1024}
         max={32768}
@@ -341,7 +341,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
         format={(n) => n.toFixed(2)}
       />
       <Slider
-        label="Max Tokens"
+        label="Maximale Antwortlänge in Tokens"
         min={32}
         max={2048}
         step={32}
@@ -360,7 +360,7 @@ export function BrainSection({ q = "" }: { q?: string }) {
         format={(n) => n.toFixed(2)}
       />
       <label className="block py-2">
-        <span className="text-xs text-muted">Extra-Systemprompt</span>
+        <span className="text-xs text-muted">Zusätzliche Systemanweisungen</span>
         <textarea
           rows={3}
           value={systemExtra}
@@ -372,36 +372,36 @@ export function BrainSection({ q = "" }: { q?: string }) {
       <p className="mt-2 text-xs text-muted">Aufgaben</p>
       {(
         [
-          ["intent", "Intent (Run/Debug/Suche aus Chat)"],
+          ["intent", "Ausführen, Debuggen und Suchen im Chat erkennen"],
           ["distill", "Gedächtnis verdichten"],
           ["complete", "Code-Vorschläge"],
           ["palette", "Befehlspalette verstehen"],
-          ["compact", "Verlauf kompakt"],
-          ["inline", "Ctrl+K lokal (sonst schreibt das Hauptmodell)"],
-          ["ask", "Nur Ask-Modus, kurze Fragen. Agent-Modus immer Hauptmodell"],
-          ["help", "App-Hilfe (wo ist …)"],
-          ["usage", "App-Nutzung still verdichten"],
+          ["compact", "Verlauf zusammenfassen"],
+          ["inline", "Änderungsvorschläge mit Strg+K lokal erstellen"],
+          ["ask", "Kurze Fragen im Modus „Fragen“ beantworten"],
+          ["help", "Fragen zur Bedienung beantworten"],
+          ["usage", "Nutzung im Hintergrund zusammenfassen"],
           ["commit", "Commit-Nachricht"],
           ["errors", "Fehler erklären"],
-          ["diffs", "Diff kurz fassen"],
+          ["diffs", "Dateiänderungen zusammenfassen"],
           ["search", "Suche verstehen"],
           ["attach", "Passende Dateien anhängen"],
           ["title", "Chat-Titel"],
-          ["doc", "Docstring/Kommentar"],
-          ["prompts", "Prompt-Vorschläge in Chat und Ausgabe"],
+          ["doc", "Codebeschreibungen und Kommentare"],
+          ["prompts", "Anfragevorschläge in Chat und Ausgabe"],
           ["followup", "Nächste Schritte nach einer Agent-Runde"],
-          ["review", "Ein Satz zur Änderung (Risiko)"],
-          ["rename", "Dateiname vorschlagen beim Anlegen"],
-          ["runpick", "Welche Datei Run nimmt, wenn die aktuelle nicht läuft"],
-          ["fixline", "Unterschlangen als konkreten Auftrag"],
-          ["tabHint", "Tab-Hinweis (eine Zeile wozu die Datei da ist)"],
-          ["secrets", "Geheimnisse vor dem Prompt warnen"],
+          ["review", "Änderungsrisiken kurz einschätzen"],
+          ["rename", "Dateinamen für neue Dateien vorschlagen"],
+          ["runpick", "Ausführbare Datei vorschlagen, wenn die aktuelle ungeeignet ist"],
+          ["fixline", "Markierte Codeprobleme als Auftrag formulieren"],
+          ["tabHint", "Zweck der Datei im Tab-Hinweis erklären"],
+          ["secrets", "Vor dem Senden auf Zugangsdaten hinweisen"],
           ["mention", "@-Dateien nach Relevanz sortieren"],
-          ["stopNote", "Nach Stop: 3 Stichpunkte was schon lag"],
-          ["planText", "To-do-Schritte aus der Anfrage"],
-          ["comment", "Kommentar über die Auswahl"],
-          ["i18n", "i18n-Key aus Text (DE/EN)"],
-          ["logTrim", "Run-Log auf 5 Zeilen kürzen"],
+          ["stopNote", "Nach Abbruch den erreichten Stand zusammenfassen"],
+          ["planText", "Aufgabenschritte aus der Anfrage ableiten"],
+          ["comment", "Kommentar zur Codeauswahl erstellen"],
+          ["i18n", "Übersetzungsschlüssel aus deutschem oder englischem Text erstellen"],
+          ["logTrim", "Ausführungsprotokoll auf fünf Zeilen zusammenfassen"],
         ] as const
       ).map(([k, label]) => (
         <Row key={k} label={label}>

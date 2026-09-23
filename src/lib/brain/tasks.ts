@@ -19,17 +19,17 @@ export type BrainIntent = {
 };
 
 const HELP: Record<string, string> = {
-  helfer: "Einstellungen → Helfer. Optional, lokal. Kurzbefehle, nicht der Agent.",
-  gehirn: "Heißt jetzt Helfer. Einstellungen → Helfer. Das Denken übernimmt das Hauptmodell unter Agent.",
-  debug: "F5 starten, F9 Breakpoint, F10 Schritt, Shift+F5 stoppen. Ausgabe zeigt lokale Variablen.",
-  agent: "Ctrl+L. Ask erklärt, Agent schreibt Dateien. Modell unter Einstellungen → Agent.",
-  run: "Ctrl+Enter oder Run. HTML öffnet das Run-Fenster. Godot/Unity: Companion in den Einstellungen.",
-  engine: "Einstellungen → Agent → Companion. Auf dem Rechner: node companion/server.mjs. Dann engine_run oder MCP.",
-  git: "Activity-Leiste: Git. Commit lokal, Push braucht GitHub in den Einstellungen.",
-  datei: "Ctrl+P öffnet Dateien. Explorer links, Rechtsklick für neu oder umbenennen.",
-  speicher: "Einstellungen → Speicher. Browser oder Ordner auf der Platte.",
-  gedächtnis: "Activity → Gedächtnis. Person, Projekt, Sitzung, Skills. Die Sitzung überlebt Compacting.",
-  ausgabe: "Ctrl+J, Activity: Ausgabe. Auch als Fenster oder Seite.",
+  helfer: "Unter Einstellungen → Helfer kannst du das optionale lokale Hilfsmodell einrichten. Es unterstützt zum Beispiel Kurzbefehle; der Agent verwendet ein eigenes Modell.",
+  gehirn: "Dieser Bereich heißt jetzt Helfer und liegt unter Einstellungen → Helfer. Das Hauptmodell für deine Aufträge richtest du unter Einstellungen → Agent ein.",
+  debug: "Mit F5 startest du den Debugger, mit F9 setzt du einen Haltepunkt. F10 führt den nächsten Schritt aus, Shift+F5 beendet den Debugger. Lokale Variablen findest du in der Debug-Ausgabe.",
+  agent: "Mit Ctrl+L öffnest du den Chat zur Auswahl. Im Modus „Fragen“ erklärt das Modell den Code; im Modus „Agent“ kann es Dateien bearbeiten. Das Modell wählst du unter Einstellungen → Agent.",
+  run: "Klicke auf „Ausführen“ oder drücke Ctrl+Enter. HTML wird in einem eigenen Vorschaufenster geöffnet. Für Godot und Unity richtest du den Companion in den Einstellungen ein.",
+  engine: "Richte die Engine-Verbindung unter Einstellungen → Companion ein. Bei einem manuellen Start verwendest du node companion/server.mjs. Danach kann der Agent engine_run oder die freigegebenen MCP-Werkzeuge verwenden.",
+  git: "Öffne Git in der linken Seitenleiste. Ein Commit sichert Änderungen im lokalen Repository. Für die GitHub-Anbindung richtest du den Zugang in den Einstellungen ein.",
+  datei: "Mit Ctrl+P kannst du eine Datei suchen und öffnen. Im Datei-Explorer links kannst du per Rechtsklick Dateien anlegen oder umbenennen.",
+  speicher: "Unter Einstellungen → Speicher wählst du, ob dein Projekt im Anwendungsspeicher oder in einem lokalen Ordner gespeichert wird.",
+  gedächtnis: "Öffne Gedächtnis in der linken Seitenleiste. Dort findest du persönliche Angaben, Projektwissen, Sitzungsnotizen und Skills. Die Sitzungsnotizen bleiben auch beim Zusammenfassen des Kontexts erhalten.",
+  ausgabe: "Mit Ctrl+J öffnest du die Konsole. Die Ausgabe ist außerdem über die linke Seitenleiste erreichbar und lässt sich in einem eigenen Fenster anzeigen.",
 };
 
 function helpFor(text: string): string | null {
@@ -43,8 +43,8 @@ function helpFor(text: string): string | null {
     const hit = (exact && (t === k || t === `${k}?`)) || (asked && new RegExp(`\\b${k}\\b`).test(t));
     if (hit) return v;
   }
-  if (asked && t.length < 40) {
-    return "Activity links: Dateien, Suche, Git, Erweiterungen, Gedächtnis. Einstellungen unten. Agent rechts.";
+  if (asked && t.length < 40 && /\b(anvil|oberfläche|bedienung|menüs?|einstellungen)\b/.test(t)) {
+    return "In der linken Seitenleiste findest du Dateien, Suche, Git, Erweiterungen und Gedächtnis. Die Einstellungen öffnest du über das Zahnrad unten. Der Agentenchat befindet sich rechts.";
   }
   return null;
 }
@@ -115,7 +115,7 @@ export async function resolveIntent(text: string): Promise<BrainIntent> {
 
 export function applyIntent(it: BrainIntent): string {
   const ide = useIde.getState();
-  if (it.kind === "run") return "Ausführen: Ctrl+Enter oder Run.";
+  if (it.kind === "run") return "Klicke auf „Ausführen“ oder drücke Ctrl+Enter.";
   if (it.kind === "debug") return "Debugger: F5.";
   if (it.kind === "search") {
     ide.setSidebar("search");
@@ -323,7 +323,7 @@ export async function brainCompact(blob: string): Promise<string> {
 
 export async function brainAsk(question: string, onDelta?: (s: string) => void, context = "", onUsage?: (usage: TokenUsage) => void): Promise<string> {
   const prompt = helperQuestion(question, context);
-  if (!brainReady() || !useBrain.getState().jobs.ask) throw new Error("Ask lokal aus");
+  if (!brainReady() || !useBrain.getState().jobs.ask) throw new Error("Die lokale Beantwortung von Fragen durch den Helfer ist ausgeschaltet.");
   if (useBrain.getState().jobs.help) {
     const h = helpFor(question);
     if (h && question.length < 100) {

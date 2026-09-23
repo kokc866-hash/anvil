@@ -113,7 +113,7 @@ try {
     }),
   );
   await page.getByRole("button", { name: "Mehr", exact: true }).first().click();
-  await page.getByRole("button", { name: "Desktop-Ordner", exact: true }).click();
+  await page.getByRole("button", { name: "Lokalen Ordner öffnen", exact: true }).click();
   await page.waitForFunction(
     (directory) =>
       window.__anvilIde.getState().workspaceCwd.toLowerCase() === directory.toLowerCase(),

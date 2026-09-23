@@ -40,20 +40,20 @@ export function RefPane() {
         continue;
       }
       if (isSecretPath(got.name) || isSecretPath(`${REF_DIR}/${got.name}`)) {
-        setNotice(`Geheimnis übersprungen: ${file.name}`);
+        setNotice(`Datei mit möglichen Zugangsdaten übersprungen: ${file.name}`);
         continue;
       }
       writeFile(uniqueRefPath(useIde.getState().files, got.name), got.content);
       n += 1;
     }
-    if (n) setNotice(`${n} in ${REF_DIR}/`);
+    if (n) setNotice(`${n} Dateien in ${REF_DIR}/ eingefügt`);
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
       <div className="border-b border-border px-3 py-2">
         <p className="text-xs font-medium text-fg">Referenzen</p>
-        <p className="text-[11px] text-muted">Der Agent sieht diesen Ordner zuerst. Code bleibt im Workspace.</p>
+        <p className="text-[11px] text-muted">Lege hier Anleitungen und Beispiele für den Agenten ab. Der Projektcode bleibt an seinem bisherigen Speicherort.</p>
       </div>
       <div
         className={cn(
@@ -85,7 +85,7 @@ export function RefPane() {
         }}
       >
         <Upload className="mx-auto mb-1 size-4" />
-        Ablegen oder{" "}
+        Dateien hier ablegen oder{" "}
         <label className="cursor-pointer text-fg underline">
           wählen
           <input
@@ -102,7 +102,7 @@ export function RefPane() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
         {rows.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted">Leer. Specs, Screenshots, API-Beispiele hierhin.</p>
+          <p className="px-3 py-2 text-xs text-muted">Noch keine Referenzen. Füge zum Beispiel Anforderungen, Bildschirmaufnahmen oder API-Beispiele hinzu.</p>
         ) : (
           rows.map((row) => (
               <div
@@ -123,7 +123,7 @@ export function RefPane() {
                 <Button
                   variant="quiet"
                   className="h-7 w-7 p-0"
-                  aria-label="Entfernen"
+                  aria-label="Datei löschen"
                   onClick={() => {
                     void confirmApp(`„${row.path}“ löschen?`, { danger: true, ok: "Löschen" }).then((ok) => {
                       if (ok) deleteFile(row.path);
@@ -143,9 +143,9 @@ export function RefPane() {
           onClose={() => setMenu(null)}
           items={[
             { label: "Öffnen", onClick: () => openFile(menu.path) },
-            { label: "An Agent", onClick: () => useIde.getState().pushAgent(`Nutze die Referenz ${menu.path}`) },
+            { label: "Als Referenz für den Agenten verwenden", onClick: () => useIde.getState().pushAgent(`Nutze die Referenz ${menu.path}`) },
             {
-              label: "Entfernen",
+              label: "Datei löschen",
               danger: true,
               onClick: () => {
                 void confirmApp(`„${menu.path}“ löschen?`, { danger: true, ok: "Löschen" }).then((ok) => {

@@ -512,7 +512,7 @@ export function CompanionSetup({ compact, probeOnMount = true, revealConnection 
                         if (r.ok) {
                           setPing((p) => (p ? { ...p, lsp: r.servers } : p));
                           setNotice(t("lspPulled", { name: s.label }));
-                          useIde.getState().pushLspLog(true, `${s.label} geholt`);
+                          useIde.getState().pushLspLog(true, `${s.label} heruntergeladen`);
                           void import("@/lib/companion-lint").then((m) => m.refreshCompanionLint());
                         } else {
                           setNotice(r.error || t("lspPullFail"));
