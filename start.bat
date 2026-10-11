@@ -3,6 +3,14 @@ setlocal
 cd /d "%~dp0"
 title Anvil
 
+rem Prefer the verified ready-to-run desktop output, retaining this checkout's profile.
+set "ANVIL_PACKAGED_ROOT=%~dp0artifacts\anvil-update-2026-10-11-provider-models\distribution\win-unpacked"
+if exist "%ANVIL_PACKAGED_ROOT%\Anvil.exe" (
+  set "ANVIL_USER_DATA=%~dp0data"
+  start "" /D "%ANVIL_PACKAGED_ROOT%" "%ANVIL_PACKAGED_ROOT%\Anvil.exe"
+  exit /b 0
+)
+
 where node >nul 2>&1
 if errorlevel 1 (
   echo Einmalig Node.js LTS: https://nodejs.org

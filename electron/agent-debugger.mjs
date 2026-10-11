@@ -129,7 +129,7 @@ export class AgentDebugger {
     this.closed = new Promise(resolve => child.once('close', (code, sig) => { signal?.removeEventListener('abort', cancel); if (this.generation === generation) { clearTimeout(this.timer); this.state.active = false; this.state.paused = false; this.state.code = code; this.state.signal = sig; this.state.reason = this.state.error ? 'error' : 'ended'; this.socket?.close(); this.publish(); } resolve(); }));
     child.stdin.on('error', () => {});
     child.once('error', error => { if (this.generation === generation) { this.state.error = error.message; this.state.active = false; } });
-    child.stdout.on('data', data => { if (this.generation !== generation) return; this.language === 'python' ? this.feedPython(data.toString()) : this.state.stdout = (this.state.stdout + data).slice(-120000); });
+    child.stdout.on('data', data => { if (this.generation !== generation) return; if (this.language === 'python') this.feedPython(data.toString()); else this.state.stdout = (this.state.stdout + data).slice(-120000); });
     child.stderr.on('data', data => { if (this.generation !== generation) return; const s = data.toString(); this.state.stderr = (this.state.stderr + s).slice(-80000); this.url ||= /ws:\/\/127\.0\.0\.1:\d+\/[^\s]+/.exec(s)?.[0] || ''; if (/Waiting for the debugger to disconnect/.test(s)) this.socket?.close(); });
     const cancel = () => { if (this.generation !== generation) return; this.state.error = 'Debugger abgebrochen.'; void this.close(); };
     signal?.addEventListener('abort', cancel, { once: true });
@@ -161,7 +161,7 @@ export class AgentDebugger {
     });
   }
   receive(message) {
-    if (message.id) { const pending = this.pending.get(message.id); if (pending) { this.pending.delete(message.id); message.error ? pending.reject(Error(message.error.message)) : pending.resolve(message.result); } return; }
+    if (message.id) { const pending = this.pending.get(message.id); if (pending) { this.pending.delete(message.id); if (message.error) pending.reject(Error(message.error.message)); else pending.resolve(message.result); } return; }
     if (message.method === 'Debugger.scriptParsed') this.scripts.set(message.params.scriptId, message.params.url);
     if (message.method === 'Debugger.paused') {
       this.frames = message.params.callFrames || [];

@@ -18,7 +18,6 @@ export function CommandPalette() {
   const openFile = useIde((s) => s.openFile);
   const togglePanel = useIde((s) => s.togglePanel);
   const setSidebar = useIde((s) => s.setSidebar);
-  const setSettingsOpen = useIde((s) => s.setSettingsOpen);
   const [q, setQ] = useState("");
   const [i, setI] = useState(0);
   const [brainHit, setBrainHit] = useState<string | null>(null);
@@ -213,7 +212,7 @@ export function CommandPalette() {
         });
     }
     return [];
-  }, [palette, files, q, openFile, togglePanel, setSidebar, setSettingsOpen, recentPaths, t]);
+  }, [palette, files, q, openFile, togglePanel, setSidebar, setPalette, recentPaths, t]);
 
   useEffect(() => {
     if (palette !== "commands" || items.length > 0 || q.trim().length < 3) {

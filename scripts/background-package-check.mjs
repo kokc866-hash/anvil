@@ -18,10 +18,12 @@ export async function verifyBackgroundPackage(page,fixture){
  for(const [name,content]of Object.entries(files))await writeFile(path.join(root,name),content);
  let negativeConfirmed=false,shellConfirmed=false,canvasConfirmed=false,playConfirmed=false,seeConfirmed=false,imageConfirmed=false;
  const calls=[
-  ['shell',{command:'node negative.cjs',expected_exit_code:1}],
+  // Complete writes before execution checks: formatting after a shell check
+  // correctly invalidates that check for the current project input stamp.
   ['rename',{from:'main.cjs',to:'checked.cjs'}],
-  ['shell',{command:'node checked.cjs'}],
   ['format_file',{path:'format.ts'}],
+  ['shell',{command:'node negative.cjs',expected_exit_code:1}],
+  ['shell',{command:'node checked.cjs'}],
   ['run_file',{path:'index.html'}],
   ['play',{keys:['left'],hold_ms:150}],
   ['see_run',{}],

@@ -21,6 +21,7 @@ import {useBrain} from '@/lib/brain/store';
 import {useIntern} from '@/lib/intern';
 import {startBackgroundAgentMonitor,useBackgroundAgent} from '@/lib/background-agent';
 import {stopAgent} from '@/lib/abort';
+import {appLogLines} from '@/lib/app-log';
 await useIde.persist.rehydrate();
 useBrain.setState({on:false,autoLoad:false,autoUpdate:false,autonomy:'off',jobs:Object.fromEntries(Object.keys(useBrain.getState().jobs).map(k=>[k,false]))});
 useIntern.getState().setPrefs({on:false,autoHeal:false});
@@ -40,7 +41,7 @@ const job=(payload:any)=>({id:'browser-'+(++id),revision:1,project:payload.proje
  return{unchanged:true};
 }};
 useBackgroundAgent.setState({available:true,job:null,error:''});
-(window as any).fixture={native,ide:useIde,bg:useBackgroundAgent,stop:stopAgent};
+(window as any).fixture={native,ide:useIde,bg:useBackgroundAgent,stop:stopAgent,appLogLines};
 startBackgroundAgentMonitor();
 createRoot(document.getElementById('root')!).render(<ChatPane/>);
 `);
@@ -98,6 +99,27 @@ try{
   await page.waitForTimeout(30);await page.evaluate(()=>window.fixture.ide.setState({agentBusy:false}));
   await page.waitForFunction(()=>window.fixture.native.calls.length===2&&window.fixture.ide.getState().agentQueue.length===0);
  });
+ await run('persistent-start-failure',async page=>{
+  await page.evaluate(()=>{
+   window.fixture.native.mode='refuse';
+   window.fixture.native.state={id:'stopped-previous',revision:1,project:'browser-queue-project',prompt:'Previous synthetic order',status:'stopped',startedAt:1000,text:'Previous progress',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'Stopped',dismissed:true};
+  });
+  const field=page.locator('textarea');
+  await field.fill('Continue the synthetic stopped task');await field.press('Enter');
+  await page.waitForFunction(()=>window.fixture.native.calls.length===1&&!window.fixture.ide.getState().agentBusy);
+  assert.equal(await page.evaluate(()=>window.fixture.bg.getState().startFailure?.message),'Synthetic start refusal');
+  await page.evaluate(()=>window.fixture.ide.getState().setNotice(''));
+  // A native status poll must not erase the start error together with its toast.
+  await page.waitForTimeout(1400);
+  await page.getByRole('alert').getByText('Synthetic start refusal',{exact:true}).waitFor();
+  assert.equal(await field.inputValue(),'Continue the synthetic stopped task');
+  assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),1,'No automatic model retry');
+  assert.equal(await page.evaluate(()=>window.fixture.appLogLines().some(row=>row.tag==='agent-start'&&row.msg==='Synthetic start refusal')),true);
+  await page.screenshot({path:path.join(output,'persistent-start-failure-visible.png')});
+  await page.evaluate(()=>window.fixture.native.mode='accept');await field.press('Enter');
+  await page.waitForFunction(()=>window.fixture.native.calls.length===2&&window.fixture.bg.getState().startFailure===null);
+  assert.equal(await field.inputValue(),'');
+ });
  await run('queued-order-preserves-composer',async page=>{
   await page.locator('textarea').fill('Unsent new request must remain in the composer');
   await page.locator('input[type="file"]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+c2VQAAAAASUVORK5CYII=','base64')});
@@ -133,7 +155,7 @@ try{
   await page.locator('textarea').fill('Start then stop while the context is being prepared');await page.locator('textarea').press('Enter');
   await page.waitForFunction(()=>window.fixturePreparationEntered);
   // Actual ChatPane button: no fixture call to the stop function.
-  await page.getByRole('button',{name:'Abbrechen',exact:true}).click();
+  await page.locator('button[aria-label="Stoppen"]').click();
   await page.waitForFunction(()=>!window.fixture.ide.getState().agentBusy);
   await page.evaluate(()=>window.fixtureReleasePreparation());await page.waitForTimeout(400);
   assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),0,'Stop during asynchronous preparation must prevent native start');
@@ -142,7 +164,7 @@ try{
  await run('stop-during-native-acceptance',async page=>{
   await page.locator('textarea').fill('Stop while native acceptance is pending');await page.locator('textarea').press('Enter');
   await page.waitForFunction(()=>window.fixture.native.pending&&window.fixture.native.calls.length===1);
-  await page.getByRole('button',{name:'Abbrechen',exact:true}).click();
+  await page.locator('button[aria-label="Stoppen"]').click();
   await page.waitForFunction(()=>!window.fixture.ide.getState().agentBusy);
   await page.evaluate(()=>window.fixture.native.pending());
   await page.waitForFunction(()=>window.fixture.native.state?.status==='stopped');

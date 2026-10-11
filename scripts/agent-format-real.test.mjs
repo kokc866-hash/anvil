@@ -65,7 +65,7 @@ test('actual clang-format obeys indentation, preserves Unicode and does not clai
   const opts={tools:{...none,'clang-format':binary('clang-format')}};
   const content='// Grüße 🐣\nint main(){if(true){return 1;}return 0;}\n';
   const result=await formatAgentFile({path:'example.cpp',content,options:{tabSize:4,insertSpaces:true}},opts);
-  assert.equal(result.ok,true,result.error);assert.match(result.content,/\n    if/);assert.match(result.content,/Grüße 🐣/);
+  assert.equal(result.ok,true,result.error);assert.match(result.content,/\n {4}if/);assert.match(result.content,/Grüße 🐣/);
   assert.equal((await formatAgentFile({path:'example.cpp',content:result.content,options:{tabSize:4,insertSpaces:true}},opts)).content,result.content);
   const incomplete='int main( {';
   const rejected=await formatAgentFile({path:'example.cpp',content:incomplete},opts);

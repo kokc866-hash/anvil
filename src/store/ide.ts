@@ -331,6 +331,7 @@ export const useIde = create<IdeState>()(
       breakpoints: {},
       debug: EMPTY_DEBUG,
       notice: "",
+      persistenceWarning: "",
       undo: {},
       dirs: [],
       collapsed: [],
@@ -1205,7 +1206,7 @@ export const useIde = create<IdeState>()(
         const prev = get();
         noteDiskContents(next);
         const { openPaths, activePath, collapsed } = prev;
-        let files = { ...next };
+        const files = { ...next };
         const keepDirty = Boolean(opts?.keepDirty);
         const portable = !prev.workspaceCwd && Boolean(diskWorkspaceHandle());
         const storedId = next[".anvil/memory-id"]?.trim();

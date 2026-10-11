@@ -7,10 +7,11 @@ import { spawnRun, quoteCommand } from "./run-process.mjs";
 import { terminalStep } from "./run-terminal.mjs";
 import { beginRun, endRun } from "./run-jobs.mjs";
 import { fileBytes } from "../scripts/file-content.mjs";
+import { hasAsciiControl } from "../electron/text-controls.mjs";
 
 function safeRel(value) {
   const rel = String(value || "").replaceAll("\\", "/");
-  if (!rel || path.isAbsolute(rel) || /[:]/.test(rel) || rel.split("/").some((p) => p === "..") || /[\x00-\x1f]/.test(rel)) throw new Error("Ungültiger Snapshot-Pfad: " + rel);
+  if (!rel || path.isAbsolute(rel) || /[:]/.test(rel) || rel.split("/").some((p) => p === "..") || hasAsciiControl(rel)) throw new Error("Ungültiger Snapshot-Pfad: " + rel);
   return rel.replace(/^\.\//, "");
 }
 

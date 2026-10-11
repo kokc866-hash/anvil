@@ -1,6 +1,6 @@
 # Thinking in Anvil
 
-Recherche und Abgleich: 12. September 2026. Unter **Einstellungen → Agent → Thinking** lässt sich der Denkaufwand für die gewählte Verbindung einstellen. Die Auswahl gilt pro Verbindung und wird in Profilen und Sicherungen gespeichert.
+Recherche und Abgleich: 12. September 2026; Qwen AI und DeepSeek am 11. Oktober 2026 ergänzt. Unter **Einstellungen → Agent → Denkaufwand** lässt sich der Denkaufwand für die gewählte Verbindung einstellen. Die Auswahl gilt pro Verbindung und wird in Profilen und Sicherungen gespeichert.
 
 **Auto** überlässt die Denkstufe der CLI beziehungsweise dem Modell. **Aus** erscheint nur bei Modellen, die Abschalten unterstützen. Ist eine gespeicherte Stufe beim Modellwechsel nicht verfügbar, zeigt Anvil den Hinweis und verwendet Auto; die gespeicherte Auswahl bleibt erhalten. Unbekannte Modelle verwenden ihre Vorgabe. Lokale Anbieter behalten Aus/Auto/Low/Mid/High und ihre bisherige Übertragung.
 
@@ -26,11 +26,12 @@ CLI-Anmeldung, Werkzeugbeschränkungen, Temperatur und Antwortlimit bleiben beim
 | Gemini | `reasoning_effort` am OpenAI-kompatiblen Endpunkt | Gemini 2.5 Flash erlaubt `none`; 2.5 Pro und Gemini 3 erlauben kein Abschalten. Minimal/Low/Mid/High werden nach Googles Tabelle übersetzt. |
 | OpenRouter | `reasoning.effort` | Bekannte Modellfamilien verwenden ihre passenden Stufen. Dynamische Router und unbekannte Modelle bleiben auf Auto. |
 | xAI | `reasoning_effort` | Grok 4.5: Low/Mid/High; Grok 4.6 zusätzlich XHigh; beide ohne Aus. |
-| DeepSeek V4 | `thinking.type` und `reasoning_effort` | Aus/Auto/Low/High/Max. Mid und XHigh wären nur Umleitungen auf High und werden deshalb nicht angeboten. |
+| Qwen AI | Qwen 3.8: `enable_thinking` und `reasoning_effort`; ältere unterstützte Modelle: `thinking_budget` | 3.8: Aus/Auto/Niedrig/Mittel/Sehr hoch; reine Thinking-Modelle ohne Aus. Effort und Budget werden nicht gleichzeitig gesendet. Unbekannte Modelle bleiben auf Auto. |
+| DeepSeek Flash / V4 | `thinking.type` und `reasoning_effort` | Aus/Auto/Low/High/Max. Mid und XHigh wären nur Umleitungen auf High und werden deshalb nicht angeboten. |
 
 Quellen: [OpenAI: Reasoning](https://developers.openai.com/api/docs/guides/reasoning), [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5), [Claude: Effort](https://platform.claude.com/docs/en/build-with-claude/effort), [Claude: Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking), [Claude: alte Budgets](https://platform.claude.com/docs/en/build-with-claude/extended-thinking), [Gemini: OpenAI-Kompatibilität](https://ai.google.dev/gemini-api/docs/openai), [OpenRouter: Reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens), [xAI: Reasoning](https://docs.x.ai/developers/model-capabilities/text/reasoning), [DeepSeek: Thinking](https://api-docs.deepseek.com/guides/thinking_mode/).
 
-Die Modellliste, Verbindungsarten, Context-Auswahl, Wiederholungen und übrigen Einstellungen werden durch diese Änderung nicht umgestellt. Das bestehende Ausgabelimit begrenzt auch bei hohen Denkstufen weiterhin die Antwort einschließlich Thinking.
+Die dynamischen Modelllisten, API-Einrichtung und Übermittlung der Denk-Daten bei Werkzeugaufrufen für Qwen und DeepSeek sind unter [Qwen AI und DeepSeek](qwen-und-deepseek.md) beschrieben. Die Bedeutung des Ausgabelimits hängt vom Anbieter ab; Qwen trennt bei einigen Modellen Antwortlänge und Denkbudget. Das bestehende Antwortlimit bleibt wirksam.
 
 ## Lokale Prüfung
 

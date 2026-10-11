@@ -192,12 +192,12 @@ try {
   );
   await page.screenshot({ path: path.join(output, "dienste-katalog.png") });
   checks.push("Catalog search, categories, stable selection and blocked provider setup verified");
-  await page.getByText("Engines & 3D-Werkzeuge", {exact:true}).click();
-  await page.getByLabel("Engine-Erweiterung auswählen", {exact:true}).selectOption("unity-official");
+  await page.getByText("Engines, 3D & CAD", {exact:true}).click();
+  await page.getByLabel("Engine-, 3D- oder CAD-Erweiterung auswählen", {exact:true}).selectOption("unity-official");
   const beforeEngine = await page.evaluate(() => window.__anvilIde.getState().mcpServers.length);
   await page.getByRole("button",{name:"In MCP vorbereiten",exact:true}).click();
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().mcpServers.length), beforeEngine, "missing relay path cannot create a broken entry");
-  await page.getByLabel("Engine-Erweiterung auswählen", {exact:true}).selectOption("godot-coding-solo");
+  await page.getByLabel("Engine-, 3D- oder CAD-Erweiterung auswählen", {exact:true}).selectOption("godot-coding-solo");
   await page.getByRole("button",{name:"In MCP vorbereiten",exact:true}).click();
   const engineDraft = await page.evaluate(() => window.__anvilIde.getState().mcpServers.at(-1));
   assert.equal(engineDraft.transport,"stdio");

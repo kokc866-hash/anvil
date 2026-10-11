@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
     return () => ipcRenderer.removeListener("mcp-event", wrap);
   },
   cliProbe: (request) => ipcRenderer.invoke("cli-probe", request),
+  cliModels: (request) => ipcRenderer.invoke("cli-models", request),
   cliLogin: (request) => ipcRenderer.invoke("cli-login", request),
   cliRun: (request) => ipcRenderer.invoke("cli-run", request),
   projectCheckpoint: (request) => ipcRenderer.invoke("project-checkpoint", request),

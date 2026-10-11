@@ -121,7 +121,7 @@ export function SettingsPane() {
             {show("agent") ? <AgentSection q={query} /> : null}
             {show("companion") ? (
               <SettingsSection q={query} className="pb-6">
-                <Vis q={query} label="Companion Ausführen Run Unity Unreal Godot Engine Compiler Pakete Packages Sprachserver Language Server Go Rust Java Python C++ Token koppeln Pairing Verbindung Connection">
+                <Vis q={query} label="Companion Ausführen Run Unity Unreal Godot Engine Compiler Pakete Packages Sprachserver Language Server Go Rust Java Python C++ Token koppeln Pairing Verbindung Connection Updates Aktualisierung Versionen Sprachupdates Language updates">
                 <h3 className="pt-4 pb-1 text-xs font-medium tracking-wide text-muted uppercase">{t("catCompanion")}</h3>
                 <CompanionSetup probeOnMount={!query} revealConnection={Boolean(query)} />
                 </Vis>

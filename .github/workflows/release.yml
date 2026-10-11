@@ -94,6 +94,10 @@ jobs:
             runs/**/run.log
             runs/**/*-stderr.log
       - run: npm run typecheck
+      - name: Source and runtime lint
+        run: npm run lint
+      - name: Bundled skill library consistency
+        run: node scripts/build-skill-library.mjs --check
       - run: npx playwright install --with-deps chromium
       - name: Tool compatibility, transports and permissions
         run: npm run test:tools:browser
@@ -102,7 +106,7 @@ jobs:
       - name: Canvas, Run, inputs and popout
         run: npm run test:canvas:browser
       - name: Production Canvas build
-        run: npm run build
+        run: npm run build:desktop
         env:
           ANVIL_ELECTRON_BUILD: "1"
       - name: Production editor and local formatting
@@ -137,7 +141,7 @@ jobs:
       - name: Native Windows Run (Zig 0.16 and Python 3.12)
         run: node scripts/verify-native-windows.mjs
         timeout-minutes: 10
-      - run: npm run build
+      - run: npm run build:desktop
         env:
           ANVIL_ELECTRON_BUILD: "1"
       - name: Desktop onboarding, interactive help and tour

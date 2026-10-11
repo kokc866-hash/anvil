@@ -2,7 +2,7 @@
 
 Unter **Einstellungen → Agent** wählst du, wie Anvil auf dein KI-Modell zugreift.
 
-Dokumentationsstand: 13. September 2026, Release 1.3.29. Die beschriebenen CLI-Erweiterungen gehören zu diesem Stand.
+Dokumentationsstand: 11. Oktober 2026, lokaler Quellcode 1.3.35. Die beschriebenen CLI-Bild- und Teilantwortfunktionen wurden mit 1.3.29 eingeführt. Neue lokale Änderungen benötigen eine gesonderte Veröffentlichung; [aktuelle Abnahme](optimierungen-2026-10.md).
 
 | Typ | Zugang | Einrichtung |
 | --- | --- | --- |
@@ -10,6 +10,8 @@ Dokumentationsstand: 13. September 2026, Release 1.3.29. Die beschriebenen CLI-E
 | Cloud | API eines Anbieters | API-Schlüssel; bei Azure zusätzlich Ressourcenadresse und Bereitstellung (Deployment) |
 | Abo | Installiertes Befehlszeilenprogramm des Anbieters (CLI) | CLI installieren, **Anmelden** wählen und den Kontozugriff bestätigen |
 | Benutzerdefiniert | Eigener OpenAI-kompatibler Endpunkt | API-Adresse, Modell und optional ein API-Schlüssel |
+
+**Qwen AI und DeepSeek** sind eigene Cloud-Anbieter. Ihre Modelllisten werden beim Anbieter abgefragt und über **Modellliste aktualisieren** erneuert; sie haben keine fest eingebauten Modellvorschläge. Einrichtung, Tarif-Adressen und Grenzen stehen unter [Qwen AI und DeepSeek](qwen-und-deepseek.md).
 
 ## Abo über CLI
 
@@ -23,7 +25,11 @@ Eine aktuelle CLI muss auf dem Rechner installiert sein, auf dem Anvil Desktop l
 
 Anvil übergibt das Gespräch und den Werkzeugkatalog an die CLI. Fordert das Modell ein Werkzeug an, wird dieser Aufruf von Anvil geprüft und ausgeführt. Die CLI verwaltet ihre Zugangsdaten und erneuert die Anmeldung bei Bedarf. Anvil übernimmt diese OAuth-Zugangsschlüssel nicht in den Browserspeicher und wechselt bei einem Abo-Fehler nicht automatisch zu einem API-Schlüssel. API-Zugangsdaten aus den Umgebungsvariablen werden dem CLI-Prozess nicht übergeben.
 
-**CLI-Status laden** zeigt, ob die CLI installiert ist und welchen Kontotyp Codex oder Claude melden. Copilot bietet keinen entsprechenden Statusbefehl für den automatisierten Abruf. Deshalb zeigt Anvil hier die erkannte CLI-Version; Copilot prüft die Zugriffsberechtigung erst beim Senden. Die Statusprüfung selbst stellt keine Modellanfrage.
+**Modellliste aktualisieren** prüft die installierte CLI und lädt anschließend ihren Modellkatalog. Beim Öffnen der Agent-Einstellungen erfolgt dies automatisch. Codex und Claude melden dabei auch ihren Anmeldestatus. Copilot bietet keinen entsprechenden Statusbefehl für den automatisierten Abruf; sein Katalog wird über die vorhandene CLI-Anmeldung angefragt. Keine dieser Prüfungen startet einen Modellauftrag.
+
+Bei **Codex (ChatGPT-Abo)** lädt Anvil zusätzlich den Modellkatalog der installierten CLI. **Modellliste aktualisieren** ruft ihn erneut ab; beim Öffnen der Agent-Einstellungen erfolgt dies automatisch. Die mitgelieferten Katalogvorschläge enthalten auch neuere Modelle, falls die CLI-Liste dem aktuellen Angebot noch hinterherhinkt. Neue Modellkennungen aus der CLI werden ohne feste Namensfilter ergänzt. Die vorhandene Modellauswahl bleibt erhalten. API- und Abo-Kataloge können sich unterscheiden; weder ein Katalogvorschlag noch ein Eintrag aus der CLI bestätigt die Freigabe für dein Konto. Das zeigt erst eine tatsächliche Modellanfrage. Siehe [Codex-Modelle](https://learn.chatgpt.com/docs/models) und [CLI-Modellkatalog](https://learn.chatgpt.com/docs/cli/reference#codex-debug-models).
+
+Auch **Claude Code** und **GitHub Copilot** ergänzen neue Kennungen aus ihrer CLI-Liste. Bei Claude sind die Namen `sonnet`, `opus`, `haiku` und `fable` zusätzlich wählbar: Die installierte CLI löst sie auf ihre jeweilige Modellversion auf. Diese Namen werden nur beim Abo angeboten; API-Verbindungen verwenden die exakten Modellkennungen. Copilot und Anthropic können dieselbe Modellfamilie unterschiedlich benennen, etwa `claude-sonnet-5.5` bei Copilot und `claude-sonnet-5-5` bei Anthropic. Siehe [Claude-Modellnamen](https://code.claude.com/docs/en/model-config) und [Copilot-Modelle](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#supported-models). Eine ältere CLI kann neuere Modelle noch nicht unterstützen; ein Fehler ersetzt deine Auswahl nicht durch ein anderes Modell.
 
 **Neu in Release 1.3.29:** Alle drei CLI-Verbindungen können angehängte Bilder übertragen und die Antwort bereits während ihrer Erstellung anzeigen. Dafür ist nicht grundsätzlich eine API-Verbindung erforderlich. Das gewählte Modell muss Bildinhalte verarbeiten können; die Bildübertragung allein garantiert dies nicht.
 
@@ -55,9 +61,11 @@ Die API-Adresse darf keine Zugangsdaten, Abfrageparameter oder URL-Fragmente ent
 
 Anvil legt den Verbindungsweg vor dem Senden fest. Ein HTTP-Fehler des Anbieters wird angezeigt; dieselbe Anfrage wird nicht zusätzlich über einen anderen Proxy wiederholt. Erforderliche Anfrage-Header für Azure und Anthropic bleiben erhalten. Wenn du eine laufende Antwort stoppst, wird auch die Verbindung zum Anbieter geschlossen.
 
-**Modellliste laden** meldet HTTP-Fehler, ungültige Antworten und leere Listen. **Modellliste geladen · N Modelle** bestätigt, dass der Server seine Liste geliefert hat. Ob das gewählte Modell antwortet, zeigt erst eine Chat-Anfrage. Der Chat zeigt Vorbereitung, Modellanfrage, Denkphase, Antwort und Werkzeugausführung als getrennte Phasen an. Ein mitgelieferter Modellkatalog hilft bei der Auswahl, bestätigt aber keine Verbindung. Ein selbst gewähltes Modell wird durch das Laden der Liste nicht ersetzt. Bei Azure wird der Ressourcenzugriff über die [Models-List-API](https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21) geprüft; die gewählte Bereitstellung erst bei der Modellanfrage.
+**Modellliste aktualisieren** meldet HTTP-Fehler, ungültige Antworten und die Anzahl gelieferter Modelle. **Modellliste erreichbar** bestätigt den Katalogzugriff. Ob das gewählte Modell antwortet, zeigt erst eine Chat-Anfrage. Der Chat zeigt Vorbereitung, Modellanfrage, Denkphase, Antwort und Werkzeugausführung als getrennte Phasen an. Ein mitgelieferter Modellkatalog hilft bei anderen Anbietern bei der Auswahl, bestätigt aber keine Verbindung. Ein selbst gewähltes Modell wird durch die Aktualisierung nicht ersetzt. Bei Azure wird der Ressourcenzugriff über die [Models-List-API](https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21) geprüft; die gewählte Bereitstellung erst bei der Modellanfrage.
 
 Azure-Responses-Anfragen verwenden den [v1-Endpunkt ohne datierten Versionsparameter](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
+
+Modelllisten werden vollständig über ihre Folgeseiten geladen. Das gilt unter anderem für [Anthropic](https://platform.claude.com/docs/en/api/models/list), [Google](https://ai.google.dev/api/models) und [Cohere](https://docs.cohere.com/v2/reference/list-models). Cohere nutzt dafür seine native Modell-API mit dem Filter für Chatmodelle; Chat-Anfragen verwenden weiter die eingestellte OpenAI-kompatible Adresse. Auch [Togethers Listenformat](https://docs.together.ai/reference/models) wird unterstützt. Wiederholte Seiten, Zeitüberschreitungen und Fehler auf einer Folgeseite werden als unvollständige Aktualisierung gemeldet. Die bisher ausgewählte Modellkennung bleibt erhalten.
 
 GitHub Models wurde am 30. Juli 2026 eingestellt. Copilot wird deshalb ausschließlich unter Abo angeboten. Hugging Face wird über Cloud mit einem Inference-Token eingerichtet. [GitHub zur Einstellung von Models](https://docs.github.com/en/github-models).
 

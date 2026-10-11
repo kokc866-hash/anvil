@@ -20,7 +20,7 @@ let app, page;
 let watcherDirectory;
 const watchdog = setTimeout(() => { console.error("Renderer recovery test timed out"); app?.process()?.kill(); server.kill(); process.exitCode = 1; }, 120000);
 try {
-  for (let n = 0; n < 120; n++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 250)); }
+  for (let n = 0; n < 120; n++) { try { if ((await fetch(url)).ok) break; } catch { /* Retry while the production server is starting. */ } await new Promise(r => setTimeout(r, 250)); }
   app = await _electron.launch({ args: [path.resolve("fixtures/electron-boot.mjs")], env, timeout: 45000 });
   for (let n = 0; n < 360; n++) { page = app.windows().find(p => p.url() === url); if (page) break; await new Promise(r => setTimeout(r, 125)); }
   assert.ok(page); await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
@@ -107,7 +107,11 @@ try {
     assert(heartbeat.renderer?.heapUsedBytes > 0);
     console.log("EXTERNAL_WATCHER_AND_RENDERER_TELEMETRY_OK");
   }
-  const capture = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("/"))?.webContents.capturePage()).toDataURL());
+  const capture = await app.evaluate(async ({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("/"))?.webContents;
+    if (!contents) throw new Error("Das wiederhergestellte Projektfenster fehlt.");
+    return (await contents.capturePage()).toDataURL();
+  });
   await writeFile(path.join(output, "restored.png"), Buffer.from(capture.split(",")[1], "base64"));
   await writeFile(path.join(output, "result.json"), JSON.stringify({ ok: true, retention, checks: ["120 real screenshot steps with bounded image retention", "real renderer crash", "native recovery prompt", "saved project and steps restored", "agent stopped", "visible UI", "crash diagnostic"] }, null, 2));
   console.log("RENDERER_CRASH_RECOVERY_OK");

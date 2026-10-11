@@ -90,9 +90,34 @@ export function refWriteBlocked(path: string, content: string, exists: boolean):
   return null;
 }
 
-export function modelSeesImages(provider: string, model: string): boolean {
+const modelInputs = new Map<string, Map<string, boolean>>();
+function inputCatalogKey(provider: string, baseUrl: string): string {
+  return JSON.stringify([provider.toLowerCase(), baseUrl.trim().replace(/\/+$/, "")]);
+}
+
+/** Replace only a successfully queried endpoint's capabilities, never another connection's. */
+export function ingestModelInputs(provider: string, baseUrl: string, rows: Record<string, unknown>[]): void {
+  const entries = new Map<string, boolean>();
+  for (const row of rows) {
+    const id = row.id ?? row.model ?? row.name;
+    const inference = row.inference_metadata as { request_modality?: unknown } | undefined;
+    const architecture = row.architecture as { input_modalities?: unknown } | undefined;
+    const inputs = row.input_modalities ?? inference?.request_modality ?? architecture?.input_modalities;
+    if (typeof id === "string" && Array.isArray(inputs) && inputs.every(x => typeof x === "string"))
+      entries.set(id.replace(/^models\//, ""), inputs.some(x => /^image$/i.test(x)));
+  }
+  const key = inputCatalogKey(provider, baseUrl);
+  modelInputs.delete(key);
+  modelInputs.set(key, entries);
+  if (modelInputs.size > 32) modelInputs.delete(modelInputs.keys().next().value!);
+}
+
+export function modelSeesImages(provider: string, model: string, baseUrl = ""): boolean {
   const p = (provider || "").toLowerCase();
   const m = (model || "").toLowerCase();
+  const known = modelInputs.get(inputCatalogKey(p, baseUrl))?.get(model);
+  if (known !== undefined) return known;
+  if (p === "qwen" || p === "deepseek") return false;
   if (/ollama|lmstudio|llamacpp|gpt4all|jan|kobold|textgen|vllm|localai|openwebui/.test(p)) {
     return /llava|moondream|vision|minicpm|qwen2.?vl|qwen-vl|pixtral|gemma-3|llama-?3\.2.*vision|gpt-4o/.test(m);
   }

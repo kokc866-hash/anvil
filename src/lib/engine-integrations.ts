@@ -1,4 +1,5 @@
 import type { McpServer } from "./mcp";
+import { hasAsciiControl } from "../../electron/text-controls.mjs";
 
 export type EngineIntegration = {
   id: string;
@@ -11,9 +12,12 @@ export type EngineIntegration = {
   args: string[];
   programRequired?: boolean;
   cwdRequired?: boolean;
+  category?: "3d" | "cad";
+  example?: string;
 };
 
-// Maintainer documentation checked 2026-09-12. These are setup templates,
+// Engine documentation checked 2026-09-12; Blender/CAD refreshed 2026-09-30.
+// These are setup templates,
 // not installed tools or evidence that an editor connection has been tested.
 export const ENGINE_INTEGRATIONS: EngineIntegration[] = [
   {
@@ -90,23 +94,63 @@ export const ENGINE_INTEGRATIONS: EngineIntegration[] = [
   },
   {
     id: "blender-mcp",
-    name: "Blender MCP",
+    name: "Blender – MCP for Blender",
+    category: "3d",
     description:
       "3D-Modelle, Materialien und Szenen in Blender vorbereiten und für Unity, Unreal oder Godot exportieren.",
-    source: "https://github.com/ahujasid/blender-mcp",
+    source: "https://github.com/ahujasid/mcp-for-blender",
     maintainer: "Siddharth Ahuja · Community, nicht die Blender Foundation",
     requirements: [
       "Blender 3 oder neuer, Python 3.10 oder neuer und uv mit uvx.",
-      "Das zugehörige Blender-Addon installieren, aktivieren und im Blender-Seitenbereich den MCP-Server starten.",
+      "Das aktuelle Addon aus demselben Projekt installieren und in Blender unter Add-ons → Interface: MCP for Blender aktivieren. Im Seitenbereich den MCP-Server starten und Blender geöffnet lassen.",
       "Die Brücke kann Python in Blender ausführen. Änderungen am Modell erst am gewünschten Projekt vornehmen; nur eine MCP-Serverinstanz gleichzeitig betreiben.",
       "Mit DISABLE_TELEMETRY=true in den Umgebungsvariablen lässt sich die dokumentierte Telemetrie ausschalten. Die Vorlage setzt keine Umgebungsvariablen automatisch.",
       "Optionale Asset-Dienste benötigen eigene Zugänge und können Kosten verursachen. API-Schlüssel ausschließlich im Schlüsselspeicher der MCP-Verbindung hinterlegen.",
+      "Die Vorlage verwendet den aktuellen Paketnamen mcp-for-blender. Vorhandene Verbindungen und Add-ons werden nicht automatisch geändert. Codex-spezifische eingebettete Ansichten werden nicht übernommen.",
     ],
     command: "uvx",
-    args: ["blender-mcp"],
+    args: ["mcp-for-blender"],
+    example: "Verwende die eingerichtete Blender-MCP-Verbindung. Prüfe zuerst, ob Blender erreichbar ist. Erstelle in einer neuen Szene einen einfachen Tisch, prüfe Abmessungen und Materialien und zeige eine Ansicht. Speichere eine neue .blend-Datei und exportiere eine GLB-Datei in meinen gewählten Projektordner. Bestehende Dateien nicht überschreiben. Berichte nur tatsächlich ausgeführte Prüfungen. Fehlt die Verbindung oder ein Speicherziel, erkläre zuerst, was benötigt wird.",
+  },
+  {
+    id: "freecad-mcp",
+    name: "FreeCAD – parametrische Konstruktion",
+    category: "cad",
+    description: "Technische Bauteile in FreeCAD erstellen, Eigenschaften ändern und das Dokument sowie seine Ansicht prüfen.",
+    source: "https://github.com/neka-nat/freecad-mcp",
+    maintainer: "neka-nat · Community, nicht das FreeCAD-Projekt",
+    requirements: [
+      "FreeCAD, uv mit uvx und Python 3.12 oder neuer für den MCP-Server. FreeCAD verwendet seine eigene Python-Laufzeit; dort das Serverpaket nicht installieren.",
+      "Den Ordner addon/FreeCADMCP aus dem Repository in das Mod-Verzeichnis der verwendeten FreeCAD-Installation kopieren. FreeCAD neu starten, die Arbeitsumgebung MCP Addon wählen und Start RPC Server anklicken.",
+      "FreeCAD mit dem vorbereiteten Addon geöffnet lassen. Der interne RPC-Port 9875 ist keine MCP-HTTP-Adresse; die Verbindung wird hier als lokaler Prozess angelegt.",
+      "Addon und Server müssen zueinander passen. Die Werkzeuge können Python ausführen und Dokumente verändern. Vor Änderungen das gewünschte Dokument prüfen und eine eigene Sicherung speichern.",
+      "Beim ersten Aktivieren kann uvx das Paket freecad-mcp und dessen Abhängigkeiten herunterladen. FEM benötigt zusätzliche Solver und wird durch diese Vorlage nicht eingerichtet.",
+    ],
+    command: "uvx",
+    args: ["freecad-mcp"],
+    example: "Verwende die eingerichtete FreeCAD-MCP-Verbindung und prüfe zuerst ihren Status. Konstruiere in einem neuen Dokument eine parametrische Montageplatte: 80 × 50 × 3 mm, vier durchgehende Bohrungen mit 3,2 mm Durchmesser, jeweils 10 mm von den beiden angrenzenden Kanten entfernt. Prüfe nach der Neuberechnung die tatsächlichen Maße, Bohrungen und Gültigkeit des Volumenkörpers und zeige eine Ansicht. Speichere eine neue FCStd-Datei und exportiere STEP in meinen gewählten Projektordner. Bestehende Dokumente und Dateien nicht überschreiben. Einheiten und Prüfergebnisse nennen; fehlende Verbindung oder Speicherziele zuerst klären.",
+  },
+  {
+    id: "openscad-mcp",
+    name: "OpenSCAD – Konstruktion mit Code",
+    category: "cad",
+    description: "Parametrische Bauteile aus OpenSCAD-Code erstellen, Geometrie prüfen, Ansichten rendern und Modelle exportieren.",
+    source: "https://github.com/RobertCoop/openscad-mcp",
+    maintainer: "RobertCoop · Community, nicht das OpenSCAD-Projekt",
+    requirements: [
+      "OpenSCAD 2021.01 oder neuer, Python 3.10 oder neuer und uv mit uvx installieren. Ein geöffnetes OpenSCAD-Fenster ist für die Kommandozeilen-Werkzeuge nicht erforderlich.",
+      "Wenn OpenSCAD nicht gefunden wird, OPENSCAD_PATH unter MCP als Umgebungsvariable auf die installierte Programmdatei setzen. Das Verbindungsprogramm bleibt uvx, nicht openscad.exe.",
+      "Die Vorlage startet das Paket openscad-mcp von RobertCoop. Das ähnlich benannte Paket openscad-mcp-server gehört zu einer anderen Anbindung.",
+      "Modelldateien und Exportziele im gewünschten Projekt festlegen. Nach dem Rendern auch Fehlermeldungen und Geometrie prüfen: OpenSCAD kann trotz eines Modellfehlers den Prozess erfolgreich beenden.",
+      "Beim ersten Aktivieren kann uvx Server und Abhängigkeiten herunterladen. Ansichten und Exporte benötigen eine funktionsfähige lokale OpenSCAD-Installation.",
+    ],
+    command: "uvx",
+    args: ["openscad-mcp"],
+    example: "Verwende die eingerichtete OpenSCAD-MCP-Verbindung. Erstelle eine neue parametrische .scad-Datei für eine Montageplatte: 80 × 50 × 3 mm, vier durchgehende Bohrungen mit 3,2 mm Durchmesser, jeweils 10 mm von den angrenzenden Kanten entfernt. Verwende Millimeter und benannte Parameter. Prüfe Syntax, Fehlermeldungen und gemessene Geometrie, rendere eine Ansicht und exportiere STL in meinen gewählten Projektordner. Bestehende Dateien nicht überschreiben. Melde nur belegte Prüfergebnisse; ein erfolgreicher Prozess allein bestätigt noch kein korrektes Modell. Fehlt die Verbindung oder ein Speicherziel, kläre das zuerst.",
   },
   {
     id: "meshy-mcp",
+    category: "3d",
     name: "Meshy – 3D-Assets",
     description:
       "3D-Assets aus Text oder Bildern erzeugen, überarbeiten und herunterladen; für den Engine-Import anschließend prüfen.",
@@ -123,6 +167,7 @@ export const ENGINE_INTEGRATIONS: EngineIntegration[] = [
   },
   {
     id: "tripo-mcp",
+    category: "3d",
     name: "Tripo – Blender-Assets",
     description:
       "3D-Assets über Tripo erzeugen und in Blender importieren, um sie für das Engine-Projekt aufzubereiten.",
@@ -143,7 +188,7 @@ function absoluteSetupPath(value: string | undefined, label: string) {
   const path = value?.trim() || "";
   if (
     !path ||
-    /[\u0000-\u001f\u007f]/.test(path) ||
+    hasAsciiControl(path, true) ||
     !/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\/)/i.test(path)
   ) {
     throw new Error(`${label}: Bitte einen vollständigen absoluten Pfad angeben.`);

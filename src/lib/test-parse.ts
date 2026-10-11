@@ -69,7 +69,7 @@ export function discoverTests(files: Record<string, string>): TestHit[] {
         t.match(/^\s*func\s+(Test[A-Za-z_]\w*)\s*\(/) ||
         t.match(/^\s*(?:pub(?:\s+\([^)]+\))?\s+)?(?:async\s+)?fn\s+(test_[A-Za-z_]\w*)\s*\(/) ||
         t.match(/^\s*(?:public\s+|protected\s+)?(?:static\s+)?void\s+(test[A-Za-z_]\w*)\s*\(/) ||
-        t.match(/^\s*(?:def|function)\s+(test_[A-Za-z_]\w*)\s*[\(=]/);
+        t.match(/^\s*(?:def|function)\s+(test_[A-Za-z_]\w*)\s*[(=]/);
       if (m) {
         out.push({ path, line: i + 1, name: (m[1] || t.trim()).slice(0, 80), ok: true, text: "", skip: true });
         found += 1;

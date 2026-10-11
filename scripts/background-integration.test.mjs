@@ -3,20 +3,26 @@ import {test} from 'node:test';
 import {createServer} from 'vite';
 import path from 'node:path';
 import {contentVersion} from '../electron/content-version.mjs';
+import {IDBFactory,IDBKeyRange} from 'fake-indexeddb';
 
 const until=async fn=>{for(let n=0;n<100;n++){if(fn())return;await new Promise(r=>setTimeout(r,10));}throw Error('Background integration timed out');};
 let sequence=0;
 const job=(changes={})=>({id:`integration-${++sequence}`,revision:1,project:'integration-project',prompt:'Synthetic request',status:'running',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,...changes});
 async function setup(t){
- const values=new Map(),oldFetch=globalThis.fetch;
+ const keys=['fetch','window','document','localStorage','indexedDB','IDBKeyRange'];
+ const previous=keys.map(key=>[key,Object.hasOwn(globalThis,key),globalThis[key]]);
+ const values=new Map(),timers=new Set();
+ globalThis.indexedDB=new IDBFactory();globalThis.IDBKeyRange=IDBKeyRange;
  globalThis.localStorage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,String(v)),removeItem:k=>values.delete(k)};
- globalThis.window=Object.assign(new EventTarget(),{localStorage,setTimeout,clearTimeout});
+ globalThis.window=Object.assign(new EventTarget(),{localStorage,setTimeout:(fn,ms)=>{const id=setTimeout(()=>{timers.delete(id);fn();},ms);timers.add(id);return id;},clearTimeout:id=>{timers.delete(id);clearTimeout(id);}});
  globalThis.document=Object.assign(new EventTarget(),{documentElement:{lang:'de'}});
  const network=[];globalThis.fetch=async(...args)=>{network.push(String(args[0]));throw Error('No model/network allowed in integration fixture');};
- const server=await createServer({configFile:false,root:process.cwd(),resolve:{alias:{'@':path.resolve('src')}},server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
+ const server=await createServer({configFile:false,root:process.cwd(),resolve:{alias:{'@':path.resolve('src')}},ssr:{external:['react','react-dom','react/jsx-runtime','zustand','zustand/vanilla','zustand/middleware','js-yaml','fake-indexeddb','lucide-react','@tanstack/react-start','@tanstack/react-router']},optimizeDeps:{noDiscovery:true,include:[]},server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
  const {useIde}=await server.ssrLoadModule('/src/store/ide.ts');
+ await useIde.persist.rehydrate();
  const {useIntern}=await server.ssrLoadModule('/src/lib/intern.ts');useIntern.getState().setPrefs({on:false,autoHeal:false});
  const {useBrain}=await server.ssrLoadModule('/src/lib/brain/store.ts');useBrain.setState({on:false,autoLoad:false,autoUpdate:false,autonomy:'off',jobs:Object.fromEntries(Object.keys(useBrain.getState().jobs).map(k=>[k,false]))});
+ const {useLearn}=await server.ssrLoadModule('/src/lib/learn.ts');await useLearn.persist.rehydrate();useLearn.setState({on:false});
  const bg=await server.ssrLoadModule('/src/lib/background-agent.ts');
  const {sendChat}=await server.ssrLoadModule('/src/lib/chat-session.ts');
  const {onPlugin,clearPluginHooks}=await server.ssrLoadModule('/src/lib/plugins/events.ts');
@@ -24,8 +30,8 @@ async function setup(t){
  const stops=[];
  t.after(async()=>{
   stops.forEach(stop=>stop());clearPluginHooks();
-  try{const {flushPersistence}=await server.ssrLoadModule('/src/lib/persist-storage.ts');await flushPersistence();}
-  finally{await server.close();globalThis.fetch=oldFetch;delete globalThis.window;delete globalThis.document;delete globalThis.localStorage;}
+  try{const {flushPersistence}=await server.ssrLoadModule('/src/lib/persist-storage.ts');await flushPersistence();const {flushSecrets}=await server.ssrLoadModule('/src/lib/secrets.ts');await flushSecrets();await new Promise(r=>setTimeout(r,30));}
+  finally{for(const timer of timers)clearTimeout(timer);await server.close();for(const[key,exists,value]of previous){if(exists)globalThis[key]=value;else delete globalThis[key];}}
   assert.deepEqual(network,[],'helper/model network must remain disabled');
  });
  useIde.setState({workspaceCwd:'',memoryWorkspace:'integration-project',workspaceEpoch:1,files:{'notes.txt':'Synthetic note'},dirs:[],openPaths:[],recentPaths:[],activePath:null,attached:[],dirty:{},pendingDiffs:[],agentRules:'',pendingAsk:null,chat:[],agentBusy:false,agentJob:null,agentInbox:null,agentQueue:[],agentDraft:'',output:[],backgroundAgent:true,backgroundWriteThrough:false,agentMode:'agent',locale:'de',llmProvider:'ollama',llmModel:'qwen3-vl',llmAuthMode:'key',llmBaseUrl:'http://127.0.0.1:1',llmApiKey:'',llmRetries:4,llmToolModes:{},llmCompact:'auto',planWho:'agent',mcpServers:[],activeSurfaceId:'anvil',surfaceMode:'bridge',autoSaveDisk:false,autoPreview:false,sessionTokens:{prompt:0,completion:0,estimated:false},lastRequestTokens:null});
@@ -41,6 +47,19 @@ function input(draft='Synthetic request',images=[]){
  const state={draft,images,mention:'notes.txt',cleared:0};
  return{state,props:{draft,images,title:'Fixture',setTitle:()=>{},setDraft:v=>{state.draft=v;state.cleared++;},setImages:v=>state.images=v,setMention:v=>state.mention=v}};
 }
+
+test('Qwen and DeepSeek API choices reach the independent background owner without model aliases',async t=>{
+ for(const provider of ['qwen','deepseek'])await t.test(provider,async t=>{
+  const f=await setup(t),sent=[];
+  f.useIde.setState({llmProvider:provider,llmModel:'future-model-fixture',llmBaseUrl:'http://127.0.0.1:1/v1',llmApiKey:'synthetic-key'});
+  window.anvilNative={agentJob:async(action,payload)=>{if(action==='start'){sent.push(payload);return{state:job({project:payload.project,prompt:payload.userPrompt})};}return{unchanged:true};}};
+  await f.sendChat(input('Explain the artificial fixture.').props);
+  assert.equal(sent.length,1,f.useIde.getState().notice);
+  assert.equal(sent[0].model.provider,provider);
+  assert.equal(sent[0].model.model,'future-model-fixture');
+  assert.equal(sent[0].model.apiKey,'synthetic-key');
+ });
+});
 
 test('real background start freezes project instructions, selection, references and configured controls',async t=>{
  const f=await setup(t),sent=[];
@@ -69,7 +88,7 @@ test('follow-up preserves evidence and context display while preparing a smaller
  assert.deepEqual(f.useIde.getState().lastRequestTokens,previous);
  assert.ok(sent.messages.some(m=>m.content==='Build a counter'));
  assert.ok(sent.messages.some(m=>m.content==='Counter added'));
- const handoff=sent.messages.at(-1).content;
+ const handoff=sent.messages.map(m=>m.content).join('\n');
  assert.match(handoff,/counter.ts/);assert.match(handoff,/3 passed, 1 failed/);assert.match(handoff,/Fix reset/);assert.match(handoff,/historical/);
  await f.deliver({...next,revision:2,requestSequence:1,requestTokens:{prompt:10000,limit:256000,estimated:true}});
  assert.equal(f.useIde.getState().lastRequestTokens.prompt,10000);

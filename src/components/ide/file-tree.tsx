@@ -1,5 +1,5 @@
 import { selectFileKeys } from "@/lib/workspace-index";
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -131,10 +131,10 @@ export function FileTree() {
     if (creating) nameRef.current?.focus();
   }, [creating, inDir]);
 
-  const allPaths = fileKeys.split("\n").filter(Boolean);
+  const allPaths = useMemo(() => fileKeys.split("\n").filter(Boolean), [fileKeys]);
   const items = useMemo(
     () => visibleTree(buildTree(allPaths, dirs), collapsed, filter),
-    [fileKeys, dirs, collapsed, filter],
+    [allPaths, dirs, collapsed, filter],
   );
 
   const hasKids = useMemo(() => {
@@ -151,7 +151,7 @@ export function FileTree() {
       if (p) s.add(p);
     }
     return s;
-  }, [fileKeys, dirs]);
+  }, [allPaths, dirs]);
 
   useEffect(() => {
     if (!flashPath) return;
@@ -176,14 +176,14 @@ export function FileTree() {
     return () => ro.disconnect();
   }, [fileKeys]);
 
-  function targetDir(): string {
+  const targetDir = useCallback((): string => {
     if (!selected) return "";
     const hit = items.find((i) => i.path === selected);
     if (hit?.type === "dir") return selected;
     return parentDir(selected);
-  }
+  }, [selected, items]);
 
-  function beginCreate(kind: "file" | "dir", dir = targetDir()) {
+  const beginCreate = useCallback((kind: "file" | "dir", dir = targetDir()) => {
     const version = ++createVersion.current;
     if (dir && collapsed.includes(dir)) toggleCollapsed(dir);
     setInDir(dir);
@@ -209,7 +209,7 @@ export function FileTree() {
       setNewName("");
     }
     setMenu(null);
-  }
+  }, [targetDir, collapsed, toggleCollapsed]);
 
   useEffect(() => {
     function onNew(e: Event) {
@@ -251,7 +251,7 @@ export function FileTree() {
       window.removeEventListener("anvil-open-disk", onOpen);
       window.removeEventListener("anvil-save-disk", onSave);
     };
-  }, [applyFiles, openFile, setDiskName, setNotice]);
+  }, [applyFiles, openFile, setDiskName, setNotice, beginCreate]);
 
   function submitNew() {
     const raw0 = cleanPath(inDir ? joinPath(inDir, newName) : newName);

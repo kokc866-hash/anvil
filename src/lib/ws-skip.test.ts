@@ -4,6 +4,7 @@ import {
   contentSig,
   formatBytes,
   isSourcePath,
+  isImportedPluginPath,
   keepBareFile,
   keepDotName,
   overlayDiskTree,
@@ -13,6 +14,14 @@ import {
 } from "./ws-skip.ts";
 
 describe("ws-skip", () => {
+  it("recognizes only reserved imported package paths without widening source filters", () => {
+    assert.equal(isImportedPluginPath(".anvil/skills/package-photo/assets/logo.png"), true);
+    assert.equal(isImportedPluginPath(".anvil/skills/package-photo/.codex-plugin/plugin.json"), true);
+    assert.equal(isImportedPluginPath(".anvil/plugin-imports/photo.json"), true);
+    for (const p of ["src/.anvil/skills/package-photo/icon.png", ".anvil/skills/package-/x", ".anvil/skills/package-x/../../outside.png", ".anvil/skills/package-x//x", ".anvil/skills/other/icon.png", ".anvil/plugin-imports/arbitrary.txt"])
+      assert.equal(isImportedPluginPath(p), false, p);
+    assert.equal(skipPath(".anvil/skills/package-photo/assets/logo.png"), true);
+  });
   it("drops vendor dirs and lockfiles", () => {
     assert.equal(skipDirName("node_modules"), true);
     assert.equal(skipDirName("src"), false);

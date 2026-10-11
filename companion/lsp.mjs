@@ -460,14 +460,29 @@ export function diagnoseWithLsp(spec, root, files, timeoutMs = 8000) {
     let buf = Buffer.alloc(0);
     const hits = [];
     let n = 0;
+    let finished = false;
+    let openTimer;
+    let deadline;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(openTimer);
+      clearTimeout(deadline);
+      child.stdin?.destroy();
+      child.kill("SIGTERM");
+      resolve(hits);
+    };
+    child.stdin?.on("error", done);
+    child.on("error", done);
+    child.on("close", done);
     const send = (obj) => {
+      if (finished || !child.stdin?.writable || child.stdin.destroyed) return;
       const msg = JSON.stringify(obj);
       const b = Buffer.from(msg, "utf8");
       try {
-        child.stdin.write(`Content-Length: ${b.length}\r\n\r\n`);
-        child.stdin.write(b);
+        child.stdin.write(Buffer.concat([Buffer.from(`Content-Length: ${b.length}\r\n\r\n`), b]));
       } catch {
-        /* closed */
+        done();
       }
     };
     const request = (method, params) => {
@@ -517,7 +532,7 @@ export function diagnoseWithLsp(spec, root, files, timeoutMs = 8000) {
       rootUri: pathToFileURL(root).href,
       capabilities: { workspace: { workspaceFolders: true }, textDocument: { publishDiagnostics: {}, hover: {}, completion: {} } },
     });
-    setTimeout(() => {
+    openTimer = setTimeout(() => {
       send({ jsonrpc: "2.0", method: "initialized", params: {} });
       for (const f of want.slice(0, 12)) {
         const full = path.join(root, f.path);
@@ -535,19 +550,7 @@ export function diagnoseWithLsp(spec, root, files, timeoutMs = 8000) {
         });
       }
     }, 200);
-    const done = () => {
-      try {
-        request("shutdown", null);
-        send({ jsonrpc: "2.0", method: "exit" });
-      } catch {
-        /* */
-      }
-      child.kill("SIGTERM");
-      resolve(hits);
-    };
-    setTimeout(done, timeoutMs);
-    child.on("error", () => resolve(hits));
-    child.on("close", () => resolve(hits));
+    deadline = setTimeout(done, timeoutMs);
   });
 }
 
@@ -597,6 +600,10 @@ export async function checkLsp(id) {
     }
     let stderr = "";
     let ok = false;
+    child.stdin?.on("error", (err) => {
+      stderr = (stderr + String(err.message)).slice(-2000);
+      child.kill("SIGTERM");
+    });
     child.stderr?.on("data", (d) => {
       stderr = (stderr + d.toString()).slice(-2000);
     });

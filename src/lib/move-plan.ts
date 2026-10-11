@@ -1,7 +1,8 @@
 import { ancestorDirs, isInside, remapPath } from "./fs.ts";
+import { hasAsciiControl } from "../../electron/text-controls.mjs";
 
 export function planMove(files: Record<string, string>, dirs: string[], from: string, to: string) {
-  const valid = (p: string) => Boolean(p) && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((s) => !s || s === "." || s === "..") && !/[:\x00-\x1f]/.test(p);
+  const valid = (p: string) => Boolean(p) && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((s) => !s || s === "." || s === "..") && !p.includes(":") && !hasAsciiControl(p);
   if (!valid(from) || !valid(to) || isInside(to, from)) throw new Error("Ungültiges Verschiebeziel.");
   const allDirs = new Set([...dirs, ...Object.keys(files).flatMap(ancestorDirs)]);
   const paths = Object.keys(files).filter((p) => isInside(p, from));

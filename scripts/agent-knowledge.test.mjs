@@ -78,3 +78,35 @@ test('explicit skill write can reinstall a previously forgotten name without ign
  const state={facts:[],skills:[],forgotten:[forgotten],forgottenFacts:[]};
  const merged=mergeKnowledgeEvent(state,r.knowledgeEvents[0]);assert.equal(merged.conflict,false);assert.equal(merged.state.forgotten.length,0);
 });
+
+test('instruction skills work independently while personal and project memory stays inaccessible', async t => {
+ const skill={id:'anvil-test',name:'anvil-test',description:'Verify an artificial project',when:'test project',body:'Read the test and verify its real result.',builtin:true,scope:'user',resources:['references/check.md'],resourceContents:{'references/check.md':'Check the actual exit code.'}};
+ const f=fixture(t,{memoryEnabled:false,memories:[{id:'private',text:'Personal fixture secret',scope:'user'}],skills:[skill]});
+ assert.deepEqual((await f.call('list')).person,[]);
+ assert.match((await f.call('add',{text:'Must not be stored'})).error,/aus/);
+ const read=await f.call('read',{name:skill.id});assert.equal(read.body,skill.body);assert.equal(read.resourceContents,undefined);
+ assert.equal((await f.call('read',{name:skill.id,resource:'references/check.md'})).content,'Check the actual exit code.');
+ assert.ok((await f.call('read',{name:skill.id,resource:'../private.txt'})).error);
+ assert.equal((await f.call('run',{name:skill.id})).skill,skill.name);
+ assert.ok((await f.call('patch',{name:skill.id,body:'Replace trusted instructions'})).error);
+ assert.equal(f.host.state.skills[0].body,skill.body);
+});
+
+test('disabled skills and reference-body permissions apply before a recorded operation can replay', async t => {
+ const skill={id:'anvil-disabled',name:'anvil-disabled',body:'Read the artificial file and check it.',scope:'user',builtin:true};
+ const f=fixture(t,{skills:[skill]});await f.call('run',{name:skill.id},{operationId:'skill-once'});
+ f.host.begin({...f.request,knowledge:{...f.request.knowledge,disabledSkills:[skill.id]}},'job-one');
+ assert.ok((await f.call('read',{name:skill.id})).error);
+ assert.ok((await f.host.execute({action:'run',args:{name:skill.id}},{operationId:'skill-once'})).error);
+ const bodies=fixture(t,{skillBodies:false,skills:[{...skill,resourceContents:{'ref.md':'hidden reference'}}]});
+ assert.ok((await bodies.call('read',{name:skill.id,resource:'ref.md'})).error);
+});
+
+test('a disabled built-in skill omitted from the visible snapshot cannot be recreated by name', async t => {
+ const f=fixture(t,{skills:[],disabledSkills:['anvil-godot']});
+ for(const action of ['read','run','write','patch']) {
+  assert.match((await f.call(action,{name:'anvil-godot',body:'Replacement instructions'})).error,/ausgeschaltet/);
+ }
+ assert.deepEqual(f.host.state.skills,[]);
+ assert.deepEqual(f.host.events(),[]);
+});

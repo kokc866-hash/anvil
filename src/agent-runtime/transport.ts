@@ -6,6 +6,7 @@ import type { LlmChoice } from "../lib/agent-core";
 import { prepareTextTools, shrinkTools } from "../lib/tool-fallback";
 import type { ToolSession, ToolCompatibility } from "../lib/tool-compat";
 import { applyCapToPayload, classifyLlmError, type ModelCap } from "../lib/model-caps";
+import { withModelFailureContext } from "../../electron/agent-failure.mjs";
 
 export type RuntimeModel = {
   provider: string; baseUrl: string; model: string; apiKey: string;
@@ -51,13 +52,14 @@ export async function completeRuntime(model: RuntimeModel, messages: Record<stri
     } catch (error) {
       requestSignal.throwIfAborted();
       // Only failures before response headers are retryable. Never replay a partial answer.
-      if (attempt >= attempts || !(error instanceof TypeError) || !/fetch failed|network|failed to fetch/i.test(error.message)) throw error;
+      if (attempt >= attempts || !(error instanceof TypeError) || !/fetch failed|network|failed to fetch/i.test(error.message)) throw withModelFailureContext(error, { phase: "connect", attempt });
       await backoff(attempt, requestSignal);
       continue;
     }
     if (!response.ok) {
-      const body = await boundedText(response, 64 * 1024);
+      const body = await boundedText(response, 64 * 1024).catch(error => { throw withModelFailureContext(error, { phase: "http-body", attempt, status: response.status }); });
       const error = new Error(`Modellanfrage fehlgeschlagen (HTTP ${response.status}): ${body.slice(0, 500) || response.statusText}`);
+      withModelFailureContext(error, { phase: "response", attempt, status: response.status });
       requestSignal.throwIfAborted();
       if (attempt >= attempts) throw error;
       if (isVramError(body) && context > 4096) {
@@ -99,10 +101,16 @@ export async function completeRuntime(model: RuntimeModel, messages: Record<stri
       continue;
     }
     // Once headers arrive the response is consumed exactly once, even if it is empty or truncated.
-    const res = wrapOllamaResponse(url, response);
-    const choice = res.headers.get("content-type")?.includes("application/json")
-      ? await readJson(res, delta) : await readStream(res, delta);
-    return withRequestTokens(choice, payload, context);
+    let phase: "response" | "stream" = "stream";
+    try {
+      const res = wrapOllamaResponse(url, response);
+      const json = res.headers.get("content-type")?.includes("application/json");
+      phase = json ? "response" : "stream";
+      const choice = json ? await readJson(res, delta) : await readStream(res, delta);
+      return withRequestTokens(choice, payload, context);
+    } catch (error) {
+      throw withModelFailureContext(error, { phase, attempt, status: response.status });
+    }
   }
   throw new Error("Modellanfrage nach allen Versuchen fehlgeschlagen.");
 }
@@ -193,7 +201,9 @@ async function readStream(res: Response, delta: (text: string, kind?: "text" | "
         if (!d) continue;
         if (typeof d.content === "string") { choice.content += d.content; delta(d.content, "text"); }
         const thought = d.reasoning_content ?? d.reasoning;
-        if (typeof thought === "string") { choice.reasoning = ((choice.reasoning || "") + thought).slice(-1_000_000); delta(thought, "think"); }
+        // The total stream is bounded above. Never silently truncate reasoning
+        // needed by the provider on the next tool turn.
+        if (typeof thought === "string") { choice.reasoning = (choice.reasoning || "") + thought; delta(thought, "think"); }
         for (const call of d.tool_calls || []) {
           const index = Number(call.index || 0);
           if (!Number.isInteger(index) || index < 0 || index > 64) throw new Error("Ungültiger Werkzeugaufruf.");

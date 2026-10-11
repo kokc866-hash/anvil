@@ -114,7 +114,7 @@ export function resolveBin(bin) {
   const aliases = {
     cc: ["cc", "gcc", "clang"],
     cxx: ["c++", "g++", "clang++"],
-    python: ["python3", "python", "py"],
+    python: WIN ? ["python", "python3", "py"] : ["python3", "python", "py"],
     tsc: ["tsc"],
   };
   const names = aliases[bin] || [bin];

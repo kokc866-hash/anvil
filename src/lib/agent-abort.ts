@@ -207,8 +207,11 @@ export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {
   throwIfAborted();
   const signal = ctrl.signal;
   return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new AgentAbortError(abortReason() || "Gestoppt"));
+      return;
+    }
     let done = false;
-    let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
     const finish = (fn: () => void) => {
       if (done) return;
       done = true;
@@ -217,17 +220,13 @@ export function raceAbort<T>(p: Promise<T>, ms = 0): Promise<T> {
       fn();
     };
     const onAbort = () => finish(() => reject(new AgentAbortError(abortReason() || "Gestoppt")));
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-    timer =
+    const timer =
       ms > 0
         ? globalThis.setTimeout(() => {
             finish(() => reject(new AgentAbortError(`Seit ${Math.round(ms / 1000)} Sekunden ist keine Antwort eingegangen. Die Anfrage wurde abgebrochen; du kannst sie erneut senden.`)));
           }, ms)
         : undefined;
+    signal.addEventListener("abort", onAbort, { once: true });
     p.then(
       (v) => finish(() => resolve(v)),
       (e) => finish(() => reject(e)),

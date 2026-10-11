@@ -75,6 +75,20 @@ export function applyLlmOptions(
   const anthropic = rt.api === "anthropic" || rt.provider === "anthropic";
   const completion = !anthropic && needsCompletionTokens(rt.model, rt.provider);
 
+  if (["qwen", "deepseek"].includes(rt.provider) && Array.isArray(payload.messages)) {
+    // Streaming parsers use Anvil's `reasoning` field. These APIs require the
+    // original reasoning separately from visible content on subsequent tool turns.
+    payload.messages = (payload.messages as Record<string, unknown>[]).map(message => {
+      if (message.role !== "assistant") return message;
+      const { reasoning, ...wire } = message;
+      if (typeof wire.reasoning_content !== "string" && typeof reasoning === "string") wire.reasoning_content = reasoning;
+      // Earlier plain-text chat summaries (or replies from another provider)
+      // have no returned reasoning. DeepSeek still requires the field with tools.
+      if (rt.provider === "deepseek" && typeof wire.reasoning_content !== "string") wire.reasoning_content = "";
+      return wire;
+    });
+  }
+
   if (completion) {
     payload.max_completion_tokens = maxOut;
     delete payload.max_tokens;
@@ -130,7 +144,7 @@ export function applyLlmOptions(
   }
 
   // Only opt in on known OpenAI-compatible services; legacy local servers may reject it.
-  if (payload.stream && !anthropic && ["openai", "azure", "xai", "grok", "openrouter", "groq", "deepseek"].includes(rt.provider)) {
+  if (payload.stream && !anthropic && ["openai", "azure", "xai", "grok", "openrouter", "groq", "deepseek", "qwen"].includes(rt.provider)) {
     payload.stream_options = { ...((payload.stream_options as object) || {}), include_usage: true };
   }
 
@@ -143,6 +157,18 @@ export function applyLlmOptions(
   const mode = effectiveThinking(provider, rt.model, rt.thinking);
   // Auto leaves effort to the model. Never send a made-up level to a provider.
   delete payload.reasoning_effort;
+  if (provider === "qwen") {
+    delete payload.thinking_budget;
+    delete payload.enable_thinking;
+    if (mode !== "auto") {
+      payload.enable_thinking = mode !== "off";
+      if (mode !== "off") {
+        if (/^qwen3\.8-/.test(rt.model)) payload.reasoning_effort = mode;
+        else payload.thinking_budget = budget;
+      }
+    }
+    return payload;
+  }
   if (anthropic && thinkingModes(provider, rt.model).length > 1) {
     if (mode === "off") {
       payload.thinking = { type: "disabled" };
@@ -170,6 +196,7 @@ export function applyLlmOptions(
       if (mode !== "off") payload.reasoning_effort = mode;
     } else payload.reasoning_effort = mode === "off" ? "none" : mode;
   }
+  if (provider === "deepseek" && (mode !== "off" && thinkingModes(provider, rt.model).length > 1 || /deepseek-reasoner/.test(rt.model))) delete payload.temperature;
   return payload;
 }
 
@@ -249,7 +276,18 @@ export function toResponsesInput(messages: Record<string, unknown>[]): { instruc
       if (t) input.push({ role: "assistant", content: t });
       continue;
     }
-    input.push({ role, content: textOf(m.content) });
+    const content = Array.isArray(m.content) ? m.content.map(part => {
+      if (typeof part === "string") return { type: role === "assistant" ? "output_text" : "input_text", text: part };
+      if (!part || typeof part !== "object") return { type: "input_text", text: String(part ?? "") };
+      const value = part as Record<string, unknown>;
+      if (value.type === "text") return { ...value, type: role === "assistant" ? "output_text" : "input_text" };
+      if (value.type === "image_url") {
+        const image = value.image_url as { url?: unknown; detail?: unknown } | undefined;
+        return { type: "input_image", image_url: String(image?.url ?? ""), ...(image?.detail ? { detail: image.detail } : {}) };
+      }
+      return value;
+    }) : textOf(m.content);
+    input.push({ role, content });
   }
   const instructions = inst.filter(Boolean).join("\n\n");
   if (!input.length) input.push({ role: "user", content: instructions || " " });

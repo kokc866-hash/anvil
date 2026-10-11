@@ -11,9 +11,9 @@ test('background skill and formatter results respect acknowledged workspace chan
     const {beginAgent}=await server.ssrLoadModule('/src/lib/agent-abort.ts');
     const data={messages:[{role:'user',content:'Prüfe das Beispiel und speichere die angeforderte Änderung.'}],files:[{path:'main.js',content:'const number=1;'}],runLoop:false,afterWrite:'none',maxRounds:8};
     const call=(name,args)=>({id:crypto.randomUUID(),type:'function',function:{name,arguments:JSON.stringify(args)}});
-    const scripted=rounds=>async()=>({content:'Der Vorgang ist beendet.',toolContract:{transport:'native',names:['run_file','skill_write','format_file','read_file']},tool_calls:rounds.shift()||[]});
+    const scripted=rounds=>async()=>({content:'Der Vorgang ist beendet.',toolContract:{transport:'native',names:['run_file','skill_write','write_file','format_file','read_file']},tool_calls:rounds.shift()||[]});
 
-    await t.test('a partially acknowledged skill write invalidates a previously passing run',async()=>{
+    await t.test('a partially acknowledged skill write remains an unresolved action without invalidating unchanged code tests',async()=>{
       beginAgent();
       const firstPath='.anvil/skills/example.md',secondPath='plugins/skills/example.js';
       const acknowledged=[],attempted=[],outcomes=[];
@@ -42,8 +42,30 @@ test('background skill and formatter results respect acknowledged workspace chan
       assert.match(outcomes.find(info=>info.name==='skill_write').result.error,/zwischenzeitlich geändert/);
       assert.equal(result.files.find(file=>file.path===firstPath).content,acknowledged[0].content);
       assert.equal(result.files.some(file=>file.path===secondPath),false,'a rejected second write is not adopted');
-      assert.equal(result.verification.state,'stale','the earlier run cannot certify the acknowledged first change');
-      assert.match(result.reply,/Noch nicht bestätigt/,'the final response must disclose stale verification');
+      assert.equal(result.verification.state,'failed','the rejected plugin save leaves the requested action incomplete, even though the code inputs are unchanged');
+      assert.equal(result.ok,false);
+      assert.match(result.reply,/Nicht abgeschlossen/,'the final response must disclose the failed save');
+      assert.match(result.verification.detail,/zwischenzeitlich geändert/);
+    });
+
+    await t.test('acknowledged skill documentation and README preserve a passing code run without repeating it',async()=>{
+      beginAgent();let runs=0;const acknowledged=[];
+      const skillPath='.anvil/skills/guide.md';
+      const result=await runAgentLoop(data,scripted([
+        [call('run_file',{path:'main.js'})],
+        [call('skill_write',{name:'guide',when:'For the regression test',body:'Inspect then verify.',kind:'guide'})],
+        [call('write_file',{path:'README.md',content:'# Synthetic example\nCode verified.\n'})],
+      ]),{
+        runFile:async()=>{runs++;return {ok:true,stdout:'Fixture passed',stderr:''};},
+        learn:async action=>{assert.equal(action,'write');return {ok:true,workspaceWrites:[{path:skillPath,before:null,content:'# Guide\nInspect then verify.\n'}]};},
+        onWorkspace:async event=>acknowledged.push(event),
+      });
+      assert.equal(runs,1,'documentation edits do not trigger another identical code execution');
+      assert.equal(result.ok,true);
+      assert.equal(result.verification.state,'passed');
+      assert.deepEqual(acknowledged.map(event=>event.path),[skillPath,'README.md']);
+      assert.equal(result.files.find(file=>file.path==='main.js').content,'const number=1;');
+      assert.ok(result.files.some(file=>file.path===skillPath));
     });
 
     await t.test('a rejected formatter acknowledgement never changes the core file map',async()=>{

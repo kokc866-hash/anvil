@@ -114,8 +114,11 @@ test("current run results belong to their project and use seconds", async (t) =>
     reset({ output: [], testResults: {} });
     const { testAfterRound } = await server.ssrLoadModule("/src/lib/test-loop.ts");
     let finish;
-    globalThis.__resultRun = () => new Promise(resolve => { finish = resolve; });
+    let started;
+    const runStarted = new Promise(resolve => { started = resolve; });
+    globalThis.__resultRun = () => new Promise(resolve => { finish = resolve; started(); });
     const pending = testAfterRound();
+    await runStarted;
     useIde.getState().resetWorkspace();
     const nextChat = [{ id: "new-message", role: "assistant", content: "New project" }];
     useIde.setState({ chat: nextChat });
@@ -136,7 +139,11 @@ test("current run results belong to their project and use seconds", async (t) =>
     reset({ files: { "project.godot": "config_version=5" }, output: [], testResults: {} });
     globalThis.__engineJob = { ok: true, code: 0, stdout: "Import passed", stderr: "", duration: 1937, cmd: "godot --headless" };
     const { clientTools } = await server.ssrLoadModule("/src/lib/agent-client.ts");
-    const result = await clientTools({}).engine("run", { action: "check", engine: "godot" });
+    const {beginAgent} = await server.ssrLoadModule("/src/lib/agent-abort.ts");
+    const {captureAgentRun} = await server.ssrLoadModule("/src/lib/agent-run.ts");
+    beginAgent();
+    const epoch = useIde.getState().workspaceEpoch;
+    const result = await clientTools({}, captureAgentRun(() => useIde.getState().workspaceEpoch === epoch)).engine("run", { action: "check", engine: "godot" });
     assert.equal(useIde.getState().output[0].duration, 1.937);
     assert.equal(result.duration, 1937, "external companion result contract remains milliseconds");
     useIde.getState().pushOutput({ ...output, label: "cart.test.mjs" });

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, session, shell, ipcMain } from "electron";
+import { readChatClipboard } from "./clipboard.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, appendFileSync } from "node:fs";
 import { createConnection } from "node:net";
@@ -489,7 +490,7 @@ if (!gotLock) {
   });
   app.whenReady().then(async () => {
     try { watchdog = startWatchdog({ app, getWindow: () => win, logs: loadPaths().logs, mode: desktopMode }); }
-    catch (error) { try { appendFileSync(logFile(), `${new Date().toISOString()} watchdog-start-failed ${error?.code || "unknown"}\n`); } catch {} }
+    catch (error) { try { appendFileSync(logFile(), `${new Date().toISOString()} watchdog-start-failed ${error?.code || "unknown"}\n`); } catch { /* Logging must not prevent desktop startup. */ } }
     if (process.platform === "win32") {
       app.setAppUserModelId("app.anvil.ide");
     }
@@ -537,17 +538,7 @@ if (!gotLock) {
     handleOnce("companion-ensure", () => ensureCompanion());
     handleOnce("companion-idle", (_e, keep) => releaseCompanion(Boolean(keep), false));
     handleOnce("companion-release", (_e, keep) => releaseCompanion(Boolean(keep)));
-    handleOnce("clipboard-read", () => {
-      const text = clipboard.readText() || "";
-      let image = "";
-      try {
-        const img = clipboard.readImage();
-        if (img && !img.isEmpty()) image = img.toDataURL();
-      } catch {
-        /* */
-      }
-      return { text, image };
-    });
+    handleOnce("clipboard-read", () => readChatClipboard(clipboard));
     bindHelperIpc((p) => win?.webContents.send("helper-progress", p));
     showSplash();
     const up = await portOpen(PORT);
@@ -558,7 +549,7 @@ if (!gotLock) {
       server = startServer();
       await waitForServer(desktopMode === "production" ? 180000 : 60000);
     }
-    try { appendFileSync(logFile(), `${new Date().toISOString()} desktop-mode ${desktopMode}\n`); } catch {}
+    try { appendFileSync(logFile(), `${new Date().toISOString()} desktop-mode ${desktopMode}\n`); } catch { /* Logging must not prevent desktop startup. */ }
     await createWindow();
   }).catch((err) => {
     hideSplash();

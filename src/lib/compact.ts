@@ -7,6 +7,16 @@ export type CompactMode = "off" | "auto" | "aggressive";
 
 export { COMPACT_MARK };
 
+// Content markers survive native/CLI payload conversions without private wire fields.
+export const USER_REQUEST_MARK = "[Anvil current user request; preserve the complete text]\n";
+export const SUPPLEMENTAL_CONTEXT_MARK = "[Supplemental project context; may be shortened. Read omitted files with read_file.]\n";
+export function isPinnedRequest(message: Record<string, unknown>): boolean {
+  if (message.role !== "user") return false;
+  const content = message.content;
+  const text = Array.isArray(content) ? content.map(part => part && typeof part === "object" && "text" in part ? String(part.text) : "").join("\n") : String(content ?? "");
+  return text.startsWith(USER_REQUEST_MARK);
+}
+
 function isSys(m: Record<string, unknown>): boolean {
   return m.role === "system" && !String(m.content ?? "").startsWith(COMPACT_MARK);
 }
@@ -100,8 +110,9 @@ export function compactMessages(
 
   const sys = messages.filter(isSys);
   const rest = messages.filter((m) => !isSys(m));
-  const recent = keepRecent(rest, mode, budget);
-  const old = rest.slice(0, rest.length - recent.length);
+  const kept = new Set([...keepRecent(rest, mode, budget), ...rest.filter(isPinnedRequest)]);
+  const recent = rest.filter(message => kept.has(message));
+  const old = rest.filter(message => !kept.has(message));
 
   if (!old.length) {
     const stubbed = rest.map((m, i) => (isTool(m) && i < rest.length - 1 ? stubTool(m) : m));
@@ -119,6 +130,7 @@ export function compactMessages(
   if (estimateTokens(JSON.stringify(slimMessages(next))) > budget) {
     const tail = keepTail(recent, 4);
     const mid = recent.slice(0, recent.length - tail.length).map((m) => {
+      if (isPinnedRequest(m)) return m;
       if (isTool(m)) return stubTool(m);
       if (m.role === "assistant") {
         const copy = { ...m };
@@ -150,27 +162,29 @@ export function estimatePrompt(messages: unknown, tools?: unknown): number {
 }
 
 function dropOldestTurn(msgs: Record<string, unknown>[]): Record<string, unknown>[] | null {
-  const i = msgs.findIndex((m, idx) => idx > 0 && idx < msgs.length - 2 && !isSys(m));
-  if (i < 0) return null;
-  const role = String(msgs[i].role);
-  let end = i + 1;
-  if (role === "assistant") {
-    while (end < msgs.length && isTool(msgs[end])) end += 1;
-  } else if (role === "user") {
-    if (end < msgs.length && msgs[end].role === "assistant") {
-      end += 1;
+  for (let i = 1; i < msgs.length - 2; i++) {
+    if (isSys(msgs[i]) || isPinnedRequest(msgs[i])) continue;
+    const role = String(msgs[i].role);
+    let end = i + 1;
+    if (role === "assistant") {
       while (end < msgs.length && isTool(msgs[end])) end += 1;
+    } else if (role === "user") {
+      if (end < msgs.length && msgs[end].role === "assistant") {
+        end += 1;
+        while (end < msgs.length && isTool(msgs[end])) end += 1;
+      }
     }
+    if (end >= msgs.length - 1 || msgs.slice(i, end).some(isPinnedRequest)) continue;
+    return [...msgs.slice(0, i), ...msgs.slice(end)];
   }
-  if (end >= msgs.length - 1) return null;
-  return [...msgs.slice(0, i), ...msgs.slice(end)];
+  return null;
 }
 
 export function fitMessages(messages: Record<string, unknown>[], budget: number): Record<string, unknown>[] {
   const cap = Math.max(0, Math.floor(budget));
+  if (estimatePrompt(messages) <= cap) return messages;
   let next = messages.map((m) => ({ ...m }));
   const used = () => estimatePrompt(next);
-  if (used() <= cap) return next;
 
   const packed = compactMessages(next, cap, "aggressive");
   next = packed.messages;
@@ -197,7 +211,7 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
 
   let extra = used() - cap;
   for (let i = 0; i < next.length && extra > 0; i++) {
-    if (isSys(next[i])) continue;
+    if (isSys(next[i]) || isPinnedRequest(next[i])) continue;
     if (i === next.length - 1) break;
     const t = String(next[i].content ?? "");
     const cut = Math.min(Math.max(0, t.length - 200), extra * 4);
@@ -209,21 +223,21 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
   extra = used() - cap;
   if (extra > 0) {
     const last = next.length - 1;
-    if (last >= 0 && !isSys(next[last])) {
+    if (last >= 0 && !isSys(next[last]) && !isPinnedRequest(next[last])) {
       const t = String(next[last].content ?? "");
       next[last] = trimContent(next[last], Math.max(200, t.length - extra * 4));
     }
   }
   // Account for trim markers, multipart text and indivisible image/tool overhead.
   for (let i = 0; i < next.length && used() > cap; i++) {
-    if (isSys(next[i])) continue;
+    if (isSys(next[i]) || isPinnedRequest(next[i])) continue;
     let chars = JSON.stringify(next[i].content ?? "").length;
     while (used() > cap && chars > 80) {
       chars = Math.max(80, Math.floor(chars / 2));
       next[i] = trimContent(next[i], chars);
     }
   }
-  if (used() > cap) throw new Error("Context window zu klein für System, Bilder und Werkzeugaufrufe. Kontext vergrößern oder weniger Werkzeuge/Bilder verwenden.");
+  if (used() > cap) throw new Error("Context window zu klein für den vollständigen Nutzerauftrag, System, Bilder und Werkzeugaufrufe. Kontext vergrößern oder weniger Werkzeuge/Bilder verwenden; der Auftrag wurde nicht gekürzt.");
   return next;
 }
 

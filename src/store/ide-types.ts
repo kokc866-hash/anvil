@@ -109,6 +109,9 @@ export type Checkpoint = {
   files: Record<string, string>;
   dirs: string[];
   workspace?: string;
+  /** Compact recovery contains metadata only until the matching archived revision is loaded. */
+  archiveRevision?: string;
+  archiveMissing?: boolean;
   /** Captured at round completion; old snapshots remain reviewable but are not destructive restore targets. */
   endFiles?: Record<string, string>;
   endDirs?: string[];
@@ -122,6 +125,9 @@ export type Checkpoint = {
 export type ChatVoice = "agent" | "helper";
 
 export type ChatMsg = {
+  acceptance?: import('../../electron/task-acceptance.mjs').AcceptanceResult;
+  workflow?: import("@/lib/agent-workflow").WorkflowSnapshot;
+  skillSelection?:import('../lib/skill-library').SkillSelection[];
   backgroundJobId?:string;
   backgroundFinalized?:boolean;
   backgroundEvents?:string[];
@@ -337,6 +343,7 @@ export type IdeState = {
   breakpoints: Record<string, number[]>;
   debug: DebugState;
   notice: string;
+  persistenceWarning: string;
   undo: Record<string, string[]>;
   dirs: string[];
   collapsed: string[];

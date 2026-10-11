@@ -7,6 +7,12 @@ import { langFromPath } from "./languages";
 import { useIde } from "@/store/ide";
 import { debugSkill } from "./skill-debug";
 import { SEED } from "./skill-seeds";
+import { builtinSkill, librarySeeds, mergeSkillLibrary, selectTaskSkills, type SkillEnvironment, type SkillSelection } from "./skill-library";
+import { publicSkill, readSkillResource } from "../../electron/skill-access.mjs";
+import { detectEngines } from "./engines";
+import { mcpSnapshot } from "./mcp";
+import { isSecretPath } from "./ref";
+import { IMPORTED_PLUGIN_PREFIX, importedSkillPaths } from "./agent-plugin-registry";
 import {
   type LearnKind,
   type SkillKind,
@@ -40,6 +46,7 @@ export type LearnSkill = {
   name: string;
   when: string;
   body: string;
+  builtin?: boolean;
   file?: string;
   frontmatter?: string;
   kind: SkillKind;
@@ -60,6 +67,7 @@ export type LearnPrefs = {
   profile: boolean;
   negatives: boolean;
   skills: boolean;
+  skillAuto: boolean;
   skillBodies: boolean;
   distill: boolean;
   adaptIde: boolean;
@@ -75,6 +83,7 @@ export const LEARN_DEFAULTS: LearnPrefs = {
   profile: true,
   negatives: true,
   skills: true,
+  skillAuto: true,
   skillBodies: true,
   distill: true,
   adaptIde: true,
@@ -96,6 +105,13 @@ type LearnState = {
   backgroundKnowledgeEvents: string[];
   assignLegacy: (id: string) => void;
   activeSkills: string[];
+  disabledSkills: string[];
+  pinnedSkills: Record<string, string[]>;
+  skillSelection: SkillSelection[];
+  setSkillEnabled: (id: string, enabled: boolean) => void;
+  pinSkill: (id: string, pinned: boolean) => void;
+  libraryRequested: boolean;
+  clearMemories: () => void;
   setOn: (v: boolean) => void;
   setPref: <K extends keyof LearnPrefs>(k: K, v: LearnPrefs[K]) => void;
   resetPrefs: () => void;
@@ -110,7 +126,7 @@ type LearnState = {
   forgetNeg: (id: string) => void;
   clear: () => void;
   clearLog: () => void;
-  importDump: (d: Partial<Pick<LearnState, "facts" | "skills" | "negs" | "forgotten" | "forgottenFacts" | "on" | "prefs">>) => void;
+  importDump: (d: Partial<Pick<LearnState, "facts" | "skills" | "negs" | "forgotten" | "forgottenFacts" | "on" | "prefs" | "disabledSkills" | "pinnedSkills">>) => void;
 };
 
 function nid() {
@@ -133,7 +149,10 @@ export function workspaceId(): string {
 function projectFact(f: LearnFact) { return f.scope === "project" || f.kind === "project" || /^Nicht so \(/.test(f.text); }
 function factKey(f: Pick<LearnFact, "text" | "ws">) { return JSON.stringify([f.ws || "", norm(f.text)]); }
 function skillKey(s: Pick<LearnSkill, "scope" | "ws" | "name">) { return JSON.stringify([s.scope === "project" ? s.ws || "legacy" : "", norm(s.name)]); }
-function skillHere(s: LearnSkill) { return s.scope !== "project" || s.ws === workspaceId(); }
+function importedSkillEnabled(s: LearnSkill) {
+  return !s.file?.startsWith(IMPORTED_PLUGIN_PREFIX) || importedSkillPaths(useIde.getState().files).has(s.file);
+}
+function skillHere(s: LearnSkill) { return !useLearn.getState().disabledSkills.includes(s.id) && (s.scope !== "project" || s.ws === workspaceId()) && importedSkillEnabled(s); }
 function findSkill(id: string): LearnSkill | undefined { return useLearn.getState().skills.find(s => skillHere(s) && s.id === id)
   ?? useLearn.getState().skills.find(s => skillHere(s) && s.scope === "project" && s.name === id)
   ?? useLearn.getState().skills.find(s => skillHere(s) && s.name === id); }
@@ -168,13 +187,29 @@ export const useLearn = create<LearnState>()(
       prefs: { ...LEARN_DEFAULTS },
       events: [],
       facts: [],
-      skills: SEED,
+      skills: librarySeeds(),
       negs: [],
       forgotten: [],
       forgottenFacts: [],
       eventCount: 0,
       backgroundKnowledgeEvents: [],
       activeSkills: [],
+      disabledSkills: [],
+      pinnedSkills: {},
+      skillSelection: [],
+      libraryRequested: false,
+      setSkillEnabled: (id, enabled) => {
+        invalidateMemory();
+        set({ disabledSkills: enabled ? get().disabledSkills.filter(key => key !== id) : [...new Set([...get().disabledSkills, id])] });
+      },
+      pinSkill: (id, pinned) => {
+        const ws = workspaceId(), current = (get().pinnedSkills[ws] || []).filter(key => get().skills.some(skill => skill.id === key && (skill.scope !== 'project' || skill.ws === ws)));
+        set({ pinnedSkills: { ...get().pinnedSkills, [ws]: pinned ? [...new Set([...current, id])].slice(0, 3) : current.filter(key => key !== id) } });
+      },
+      clearMemories: () => {
+        invalidateMemory();
+        set({ facts: [], negs: [], events: [], eventCount: 0, forgottenFacts: [...new Set([...get().forgottenFacts, ...get().facts.map(factKey)])] });
+      },
       setOn: (on) => { invalidateMemory(); set({ on }); },
       setPref: (k, v) => { invalidateMemory(); set({ prefs: { ...get().prefs, [k]: v } }); },
       resetPrefs: () => { invalidateMemory(); set({ on: true, prefs: { ...LEARN_DEFAULTS } }); },
@@ -229,6 +264,7 @@ export const useLearn = create<LearnState>()(
       },
       writeSkill: (s) => {
         const name = s.name.trim() || "skill";
+        if (builtinSkill(name)) throw new Error("Anvil-Skills werden mit dem Programm aktualisiert. Für eigene Änderungen einen neuen Skill-Namen verwenden.");
         const scope = s.scope ?? "project";
         const ws = scope === "project" ? workspaceId() : undefined;
         const cur = get().skills.find(x => x.name === name && x.scope === scope && x.ws === ws);
@@ -260,8 +296,9 @@ export const useLearn = create<LearnState>()(
         invalidateMemory();
         const s = get().skills.find(x => x.id === id) ?? findSkill(id);
         if (!s) return;
+        if (builtinSkill(s.id)) { get().setSkillEnabled(s.id, false); return; }
         const forgotten = [...new Set([...get().forgotten, skillKey(s), ...(s.scope === "user" ? [s.id] : [])])];
-        set({ skills: get().skills.filter(x => x.id !== s.id), forgotten, activeSkills: get().activeSkills.filter(x => x !== s.id) });
+        set({ skills: get().skills.filter(x => x.id !== s.id), forgotten, activeSkills: get().activeSkills.filter(x => x !== s.id), pinnedSkills: Object.fromEntries(Object.entries(get().pinnedSkills).map(([ws, ids]) => [ws, ids.filter(key => key !== s.id)])) });
         lastSkillIds = lastSkillIds.filter(x => x !== s.id);
         if (skillHere(s)) dropSkillFiles(s);
       },
@@ -298,9 +335,9 @@ export const useLearn = create<LearnState>()(
         invalidateMemory();
         const forgotten = [...new Set([...get().forgotten, ...SEED.map(s => s.id), ...get().skills.map(skillKey)])];
         const forgottenFacts = [...new Set([...get().forgottenFacts, ...get().facts.map(factKey)])];
-        for (const s of get().skills.filter(skillHere)) dropSkillFiles(s);
+        for (const s of get().skills.filter(s => !builtinSkill(s.id) && skillHere(s))) dropSkillFiles(s);
         lastSkillIds = [];
-        set({ events: [], eventCount: 0, facts: [], skills: [], negs: [], forgotten, forgottenFacts, activeSkills: [] });
+        set({ events: [], eventCount: 0, facts: [], skills: librarySeeds(), negs: [], forgotten, forgottenFacts, activeSkills: [], skillSelection: [] });
       },
       clearLog: () => { invalidateMemory(); set({ events: [], eventCount: 0 }); },
       importDump: (d) => {
@@ -310,11 +347,13 @@ export const useLearn = create<LearnState>()(
           activeSkills: [],
           forgottenFacts: d.forgottenFacts ?? (d.facts ? [] : get().forgottenFacts),
           facts: Array.isArray(d.facts) ? d.facts : get().facts,
-          skills: Array.isArray(d.skills) ? d.skills : get().skills,
+          skills: Array.isArray(d.skills) ? mergeSkillLibrary(d.skills) : get().skills,
           negs: Array.isArray(d.negs) ? d.negs : get().negs,
           forgotten: Array.isArray(d.forgotten) ? d.forgotten : get().forgotten,
           on: typeof d.on === "boolean" ? d.on : get().on,
           prefs: d.prefs ? { ...LEARN_DEFAULTS, ...get().prefs, ...d.prefs } : get().prefs,
+          disabledSkills: d.disabledSkills ?? get().disabledSkills,
+          pinnedSkills: d.pinnedSkills ?? get().pinnedSkills,
         });
       },
     }),
@@ -327,6 +366,8 @@ export const useLearn = create<LearnState>()(
         events: s.events.slice(0, 80),
         facts: s.facts,
         skills: s.skills,
+        disabledSkills: s.disabledSkills,
+        pinnedSkills: s.pinnedSkills,
         negs: s.negs,
         forgotten: s.forgotten ?? [],
         forgottenFacts: s.forgottenFacts,
@@ -337,11 +378,7 @@ export const useLearn = create<LearnState>()(
         const p = (persisted ?? {}) as Partial<LearnState>;
         const forgotten = [...new Set([...(p.forgotten ?? current.forgotten ?? [])])];
         const skills = [...(p.skills ?? current.skills)];
-        for (const seed of SEED) {
-          if (forgotten.includes(seed.id) || forgotten.includes(seed.name)) continue;
-          if (!skills.some((s) => s.id === seed.id || s.name === seed.name)) skills.push(seed);
-        }
-        return { ...current, ...p, forgotten, skills, activeSkills: [], forgottenFacts: p.forgottenFacts ?? [], prefs: { ...LEARN_DEFAULTS, ...p.prefs } };
+        return { ...current, ...p, forgotten, skills: mergeSkillLibrary(skills), disabledSkills: p.disabledSkills ?? [], pinnedSkills: p.pinnedSkills ?? {}, skillSelection: [], activeSkills: [], forgottenFacts: p.forgottenFacts ?? [], prefs: { ...LEARN_DEFAULTS, ...p.prefs } };
       },
     },
   ),
@@ -428,7 +465,7 @@ function extractNegative(d: string) {
 export function skillOutcome(kind: "ok" | "fail" | "reject" | "undo") {
   const st = useLearn.getState();
   const ids = lastSkillWorkspace === workspaceId() ? (st.activeSkills?.length ? st.activeSkills : lastSkillIds).filter(Boolean) : [];
-  if (!st.on || !ids.length || !prefs().skills) return;
+  if (!ids.length || !prefs().skills) return;
   const delta = kind === "ok" ? 0.12 : -0.14;
   for (const id of ids) {
     const raw = findSkill(id);
@@ -441,7 +478,7 @@ export function skillOutcome(kind: "ok" | "fail" | "reject" | "undo") {
     if (kind !== "ok" && fails >= 2) {
       body += "\n⚠ Letzte Nutzung schlug fehl oder wurde verworfen — Variante prüfen, nicht blind wiederholen.";
     }
-    st.patchSkill(s.id, { score, wins, fails, body, at: Date.now() });
+    st.patchSkill(s.id, { score, wins, fails, body: builtinSkill(s.id)?.body ?? body, at: Date.now() });
   }
   if (kind === "ok") {
     lastSkillIds = [];
@@ -502,10 +539,22 @@ function dropSkillFiles(skill?: LearnSkill, id?: string) {
 
 export function hydrateLearnFromFiles(files: Record<string, string>, explicitlyImported: string[] = []): void {
   const ws = workspaceId();
+  const imported = importedSkillPaths(files);
+  const unavailable = useLearn.getState().skills.filter(skill => skill.ws === ws && skill.file?.startsWith(IMPORTED_PLUGIN_PREFIX) && !imported.has(skill.file));
+  if (unavailable.length) {
+    const ids = new Set(unavailable.map(skill => skill.id));
+    useLearn.setState(state => ({ skills: state.skills.filter(skill => !ids.has(skill.id)), activeSkills: state.activeSkills.filter(id => !ids.has(id)), pinnedSkills: Object.fromEntries(Object.entries(state.pinnedSkills).map(([key, pins]) => [key, pins.filter(id => !ids.has(id))])) }));
+    lastSkillIds = lastSkillIds.filter(id => !ids.has(id));
+    invalidateMemory();
+  }
   for (const [path, src] of Object.entries(files)) {
     if (!/^\.anvil\/skills\/(?:[^/]+\.md|(?:[^/]+\/)+SKILL\.md)$/i.test(path.replaceAll("\\", "/"))) continue;
+    const packageSkill = path.startsWith(IMPORTED_PLUGIN_PREFIX);
+    if (packageSkill && !imported.has(path)) continue;
     const parsed = parseSkillMd(src, path);
     if (!parsed) continue;
+    // An imported package cannot promote itself to a global or executable skill.
+    if (packageSkill) { parsed.scope = "project"; parsed.kind = "guide"; }
     let st = useLearn.getState();
     const scope = parsed.scope;
     const draft = { ...parsed, ws: scope === "project" ? ws : undefined };
@@ -554,17 +603,42 @@ function scoreSkill(s: LearnSkill, q: string) {
 }
 
 function skillFilesContext(skill: LearnSkill) {
+  const builtin = builtinSkill(skill.id);
+  if (builtin) return { baseDirectory: `anvil://skills/${builtin.id}`, resources: Object.keys(builtin.resources), resourceContents: builtin.resources };
   const baseDirectory = skill.file?.replace(/\/[^/]+$/, "");
-  const resources = baseDirectory ? Object.keys(useIde.getState().files).filter(path => path.startsWith(`${baseDirectory}/`) && path !== skill.file) : [];
+  const resources = baseDirectory ? Object.keys(useIde.getState().files).filter(path => path.startsWith(`${baseDirectory}/`) && path !== skill.file && !isSecretPath(path)) : [];
   return { baseDirectory, resources };
 }
 
-function visibleSkills(): LearnSkill[] {
+export function skillEnvironment(): SkillEnvironment {
+  const ide = useIde.getState(), catalog = mcpSnapshot(ide.mcpServers);
+  const execution = ide.agentMode !== "ask" && (ide.activeSurfaceId === "anvil" || !ide.activeSurfaceId || ide.surfaceMode === "bridge");
+  return {
+    project: Object.keys(ide.files).some(path => !path.startsWith(".anvil/") && !path.startsWith("plugins/")), saved: Boolean(ide.workspaceCwd.trim() || diskWorkspaceHandle()),
+    engines: detectEngines(ide.files, ide.dirs).map(hit => hit.id), execution,
+    services: ide.mcpServers.map(server => ({ name: `${server.id} ${server.name} ${server.service || ""}`, enabled: server.enabled, catalog: catalog.ready.has(server.id), tools: catalog.tools.some(tool => tool.serverId === server.id) })),
+  };
+}
+
+export function foregroundKnowledgePermissions() {
+  const state = useLearn.getState(), p = prefs(), memoryEnabled = state.on && p.inject;
+  return { enabled: memoryEnabled || p.skills, memoryEnabled, skillsEnabled: p.skills, skillBodies: p.skillBodies,
+    personEnabled: memoryEnabled && p.person, projectEnabled: memoryEnabled && p.project,
+    pluginSkills: p.pluginSkills, disabledSkills: state.disabledSkills };
+}
+
+export function openSkillLibrary() {
+  useLearn.setState({ libraryRequested: true });
+  useIde.getState().setSidebar("ext");
+}
+
+export function visibleSkills(): LearnSkill[] {
   const ws = workspaceId();
   return useLearn
     .getState()
     .skills.map(hydrateSkill)
-    .filter((s) => (s.score ?? 0.5) >= 0.22)
+    .filter((s) => builtinSkill(s.id) || (s.score ?? 0.5) >= 0.22)
+    .filter(skillHere)
     .filter((s) => s.scope !== "project" || s.ws === ws);
 }
 
@@ -591,7 +665,7 @@ export function matchSkills(query: string, limit = 3): LearnSkill[] {
 export function learnPrompt(lastAsk = ""): string {
   const st = useLearn.getState();
   const p = prefs();
-  if (!st.on || !p.inject) return "";
+  const memoryOn = st.on && p.inject;
   const prof = profile();
   const facts = [...visibleFacts()].sort((a, b) => b.at - a.at || b.conf - a.conf);
   const cap = Math.min(20, Math.max(0, p.factLimit | 0));
@@ -599,26 +673,30 @@ export function learnPrompt(lastAsk = ""): string {
   const person = p.person ? facts.filter((f) => !projectFact(f)).slice(0, cap) : [];
   const proj = p.project ? facts.filter((f) => projectFact(f)).slice(0, cap) : [];
   const negs = p.negatives && p.project ? st.negs.filter(n => n.ws === workspaceId()).slice(0, 6) : [];
-  const matched = p.skills ? matchSkills(lastAsk, Math.min(2, skillCap)) : [];
+  const selection = p.skills ? selectTaskSkills(lastAsk, visibleSkills(), skillEnvironment(), { automatic: p.skillAuto, pinned: st.pinnedSkills[workspaceId()] || [], limit: Math.min(2, skillCap) }) : [];
+  const matched = selection.map(selected => visibleSkills().find(skill => skill.id === selected.id)!);
+  useLearn.setState({ skillSelection: p.skillBodies ? selection : [], activeSkills: p.skillBodies ? matched.map(skill => skill.id) : [] });
+  lastSkillIds = p.skillBodies ? matched.map(skill => skill.id) : [];
+  lastSkillWorkspace = workspaceId();
   const rest = p.skills
     ? visibleSkills()
         .filter((s) => !matched.some((m) => m.id === s.id))
         .slice(0, Math.max(0, skillCap - matched.length))
     : [];
   const lines = [
-    "Gelerntes (lokal). Person und Projekt getrennt halten.",
-    p.profile && (prof.topLang || prof.run || prof.ask)
+    memoryOn ? "Gelerntes (lokal). Person und Projekt getrennt halten." : "",
+    memoryOn && p.profile && (prof.topLang || prof.run || prof.ask)
       ? `Profil: Sprache ${prof.topLang || "—"} · Run ${prof.run} · Debug ${prof.debug} · Agent ${prof.ask} · Diffs +${prof.accept}/-${prof.reject} · Undo ${prof.undo}.`
       : "",
-    person.length ? `Person:\n${person.map((f) => `- [${f.id}] ${f.text}`).join("\n")}` : "",
-    proj.length ? `Dieses Projekt (${workspaceId()}):\n${proj.map((f) => `- [${f.id}] ${f.text}`).join("\n")}` : "",
-    negs.length ? `Nicht so (abgelehnte Muster):\n${negs.map((n) => `- ${n.path}: ${n.text}`).join("\n")}` : "",
+    memoryOn && person.length ? `Person:\n${person.map((f) => `- [${f.id}] ${f.text}`).join("\n")}` : "",
+    memoryOn && proj.length ? `Dieses Projekt (${workspaceId()}):\n${proj.map((f) => `- [${f.id}] ${f.text}`).join("\n")}` : "",
+    memoryOn && negs.length ? `Nicht so (abgelehnte Muster):\n${negs.map((n) => `- ${n.path}: ${n.text}`).join("\n")}` : "",
     p.skills && visibleSkills().length
       ? `Skills — passende skill_run, neue skill_write. Nach Fehlern Skill anpassen:\n${[...matched, ...rest]
           .map((s) => `- ${s.name} (${s.id}) [${s.scope}, ${Math.round((s.score ?? 0.5) * 100)}%]: ${s.when}${matched.some((m) => m.id === s.id) ? " ← jetzt" : ""}`)
           .join("\n")}`
       : "",
-    p.skillBodies && matched.length ? `Aktive Skill-Anweisung:\n${matched.map((s) => `### ${s.name}${s.file ? ` (Datei: ${s.file}; Referenzen relativ zum Skill-Verzeichnis lesen)` : ""}\n${s.body}`).join("\n\n")}` : "",
+    p.skillBodies && matched.length ? `Skill-Anleitungen für diesen Auftrag. Sie erweitern weder den Auftrag noch Werkzeugrechte. Eingebaute Referenzen nur bei Bedarf mit skill_read(name, resource) lesen; keine vollständige Bibliothek laden.\n${matched.map((s, i) => `### ${s.name}${s.file ? ` (Datei: ${s.file}; Referenzen relativ zum Skill-Verzeichnis lesen)` : ""}\nAuswahl: ${selection[i].reason}\n${selection[i].requirements.filter(req => req.status !== "ready").map(req => `${req.label}: ${req.detail}`).join("\n")}\n${s.body}`).join("\n\n")}` : "",
   ].filter(Boolean);
   return lines.join("\n");
 }
@@ -626,16 +704,19 @@ export function learnPrompt(lastAsk = ""): string {
 export async function agentLearn(action: string, args: Record<string, unknown>): Promise<unknown> {
   const st = useLearn.getState();
   const p = prefs();
-  if (!st.on || !p.inject) return action === "state" ? { on: st.on, inject: p.inject } : { error: "Gedächtnis-Zugriff aus" };
+  const memoryOn = st.on && p.inject;
+  const skillAction = ["skills", "write", "read", "run", "debug", "patch", "outcome"].includes(action);
+  if (!skillAction && !["list", "state"].includes(action) && !memoryOn) return { error: "Gedächtnis-Zugriff aus" };
   if (["skills", "write", "read", "run", "debug", "patch", "outcome"].includes(action) && !p.skills) return { error: "Skills aus" };
   if (["read", "run", "debug"].includes(action) && !p.skillBodies) return { error: "Skill-Anweisungen aus" };
   if (action === "list" || action === "state") {
     return {
-      person: p.person ? visibleFacts().filter(f => !projectFact(f)) : [],
-      project: p.project ? visibleFacts().filter(projectFact) : [],
+      on: st.on, inject: p.inject, skillsEnabled: p.skills,
+      person: memoryOn && p.person ? visibleFacts().filter(f => !projectFact(f)) : [],
+      project: memoryOn && p.project ? visibleFacts().filter(projectFact) : [],
       skills: p.skills ? visibleSkills().map((s) => ({ name: s.name, when: s.when, score: s.score, uses: s.uses, scope: s.scope })) : [],
-      negatives: p.negatives && p.project ? st.negs.filter(n => n.ws === workspaceId()).slice(0, 8) : [],
-      profile: p.profile ? profile() : undefined,
+      negatives: memoryOn && p.negatives && p.project ? st.negs.filter(n => n.ws === workspaceId()).slice(0, 8) : [],
+      profile: memoryOn && p.profile ? profile() : undefined,
       workspace: workspaceId(),
     };
   }
@@ -658,6 +739,7 @@ export async function agentLearn(action: string, args: Record<string, unknown>):
     return visibleSkills().map((s) => ({ name: s.name, when: s.when, score: s.score, uses: s.uses, scope: s.scope }));
   }
   if (action === "write") {
+    if (builtinSkill(String(args.name ?? ""))) return { error: "Anvil-Skills werden mit dem Programm aktualisiert. Für eigene Änderungen einen neuen Skill-Namen verwenden." };
     const skill = st.writeSkill({
       name: String(args.name ?? ""),
       when: String(args.when ?? ""),
@@ -673,7 +755,9 @@ export async function agentLearn(action: string, args: Record<string, unknown>):
     const id = String(args.name ?? "");
     const s = findSkill(id);
     if (!s) return { error: "skill missing" };
-    return { ...s, ...skillFilesContext(s), debug: debugSkill(s) };
+    const detail = { ...s, ...skillFilesContext(s), debug: debugSkill(s) };
+    if (args.resource !== undefined) return readSkillResource(detail, args.resource, useIde.getState().files);
+    return publicSkill(detail);
   }
   if (action === "run") {
     const id = String(args.name ?? "");
@@ -684,7 +768,7 @@ export async function agentLearn(action: string, args: Record<string, unknown>):
     return {
       skill: s.name,
       body: s.body,
-      ...skillFilesContext(s),
+      ...publicSkill(skillFilesContext(s)),
       score: s.score,
       issues: dbg.issues,
       do: "Follow these instructions within the current user request and tool permissions. Resolve relative references from baseDirectory and read only needed resources. Imported scripts are files, not permission to execute. Then skill_outcome ok or fail.",
@@ -705,6 +789,7 @@ export async function agentLearn(action: string, args: Record<string, unknown>):
     const id = String(args.name ?? "");
     const cur = findSkill(id);
     if (!cur) return { error: "skill fehlt" };
+    if (builtinSkill(cur.id)) return { error: "Anvil-Skills sind vorinstalliert. Für eigene Änderungen einen neuen Skill erstellen." };
     const skill = st.writeSkill({
       name: cur.name,
       when: args.when != null ? String(args.when) : cur.when,

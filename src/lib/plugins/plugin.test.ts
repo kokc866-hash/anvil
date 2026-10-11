@@ -4,6 +4,7 @@ import {
   isWorkspacePluginPath,
   pluginTrustFromHead,
   pluginWatchPath,
+  pluginContentRevision,
   prunePluginIds,
   vsPackPluginId,
 } from "./util.ts";
@@ -28,6 +29,13 @@ describe("plugin paths and trust", () => {
     assert.equal(pluginWatchPath(".vscode/foo.code-snippets"), true);
     assert.equal(pluginWatchPath(".anvil/board.json"), false);
     assert.equal(pluginWatchPath(".anvil/harness.json"), false);
+  });
+  it("reloads equal-length code/snippet edits and ignores unrelated files", () => {
+    const a = { "plugins/a.js": "alpha", ".vscode/x.code-snippets": "alpha", "src/a.ts": "old" };
+    assert.notEqual(pluginContentRevision(a), pluginContentRevision({ ...a, "plugins/a.js": "bravo" }));
+    assert.notEqual(pluginContentRevision(a), pluginContentRevision({ ...a, ".vscode/x.code-snippets": "bravo" }));
+    assert.equal(pluginContentRevision(a), pluginContentRevision({ ...a, "src/a.ts": "new" }));
+    assert.equal(pluginContentRevision(a), pluginContentRevision(Object.fromEntries(Object.entries(a).reverse())));
   });
   it("prunes ghost ws:/vs: ids, keeps builtins", () => {
     assert.deepEqual(prunePluginIds(["format", "ws:plugins/gone.js", "ws:plugins/a.js"], "ws:", ["ws:plugins/a.js"]), [

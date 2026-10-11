@@ -158,5 +158,5 @@ function bootScript(instrumented: string): string {
     catch(e){ parent.postMessage({anvilDbg:1,t:"done",err:String(e&&e.stack||e),logs:logs},"*"); }
   })();
 })();
-<\/script>`;
+</script>`;
 }

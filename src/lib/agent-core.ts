@@ -6,12 +6,13 @@ import { parseTextTool, validateToolCall, isToolStall, type ToolContract } from 
 import { toolCallFingerprint } from "./tool-call-fingerprint.ts";
 import type { ToolLearningBridge } from "./tool-learning";
 import { CANVAS_AGENT_GUIDE } from "./canvas/reference";
-import { compactMessages, COMPACT_MARK, type CompactMode } from "./compact.ts";
+import { compactMessages, fitMessages, COMPACT_MARK, USER_REQUEST_MARK, SUPPLEMENTAL_CONTEXT_MARK, type CompactMode } from "./compact.ts";
+import { captureAgentRun, bindAgentRun, type AgentRun } from "./agent-run.ts";
 import { throwIfAborted, isAbortLike, agentGen, AgentAbortError } from "./agent-abort";
 import { ANVIL_SURFACE, surfaceBlockWrite, toolsAllowed, type SurfaceMode } from "./surface";
 import { enginePrompt, primaryEngine } from "./engines";
 import { afterTool, applyHarnessTool, loadProjectGraph, loadProjectHarness, mergeOpts, projectHarnessPrompt } from "./harness-project";
-import { harnessBar, startHarness, effectiveAfterWrite } from "./harness";
+import { harnessBar, startHarness } from "./harness";
 import { applyBoardTool, BOARD_PATH, filesFromBoard, parseBoard, settingsFromFiles, syncBoardFromFiles, syncBoardSettings } from "./harness-board";
 import { isSecretPath as secretPath, isRefPath, refWriteBlocked, imageStub } from "./ref";
 import { skipPath } from "./ws-skip";
@@ -26,7 +27,10 @@ import { journalPrompt, type SessionJournal } from "./session";
 import { parseAsk, type JobAsk } from "./agent-ask";
 import { ANVIL_RUN_FRAME } from "./agent-image.ts";
 import { PlanProgress } from "./plan-progress.ts";
+import { fileHasInlineTests, isTestFile } from "./test-parse.ts";
+import { AgentWorkflow, workflowToolFailed, type WorkflowSnapshot } from "./agent-workflow.ts";
 import { planFromTool } from "./plan.ts";
+import { acceptanceReply, acceptanceLocksTool, type AcceptanceResult } from "../../electron/task-acceptance.mjs";
 import type { PlanStep } from "@/store/ide";
 
 export type AgentFile = { path: string; content: string };
@@ -68,6 +72,7 @@ export type AgentCommand =
 export type AgentResult = {
   ok: boolean;
   verification?: Verification;
+  acceptance?: AcceptanceResult;
   reply: string;
   modelReply?: string;
   files?: AgentFile[];
@@ -82,6 +87,7 @@ export type AgentResult = {
   ask?: JobAsk;
   parked?: boolean;
   plan?: PlanStep[];
+  workflow?: WorkflowSnapshot;
 };
 
 export const AGENT_TOOLS = TOOL_REGISTRY.filter((t) => t.function.name !== "select_tools");
@@ -114,7 +120,7 @@ export const AGENT_SYSTEM = `You are Anvil's main model. Change the workspace on
 Always reply in the user's language (German if they write German).
 
 Flow:
-1. set_plan — create 3–7 short steps with kinds (read, edit, run, check, service, report). Update individual steps during work using updates with step number, status, reason and matching evidence IDs from the current checklist context. Reconcile the checklist before your final answer; never repeat completed changes just to advance checkmarks. Keep source inspection, edits, checks, launching and reporting separate.
+1. set_plan — create 3–7 short steps with kinds (read, edit, run, check, service, report). Before changes/execution, define criteria with stable IDs, expected values, operators and tolerances. Counts are JSON numbers (0, 1); existence is boolean (true, false), never quoted text. Criteria stay binding; never remove checks or relax limits to pass. Executed checkers emit anvil_acceptance.observations rows with criterion, actual, artifact and sha256. Save the measurement report in the owning project; artifact is its actual relative file path and sha256 is the computed SHA-256 of those saved bytes (64 lowercase hexadecimal digits). Never invent hashes, copy example digests or substitute a label for a file. Anvil independently checks file/digest correspondence; this does not make the checker itself independent. Values must use the exact type of the binding expected value. Recheck the final saved state after later modifications; older passing reports do not certify changed CAD, parameters or exports. Anvil evaluates these values, not pass/fail prose. Update checklist steps with status, reason and matching evidence IDs. Checklist/tool success is separate from task acceptance; report failed or missing checks honestly.
 2. Read what you need (index, ref/, .anvil/rules.md).
 3. Change existing files with focused edit_file / append_file calls; use write_file for new files or deliberate whole-file replacements. Then run_file on anything executable (compiled langs too).
 4. On error: read the Compile/Run output, patch, run_file at most 3×. Then tell the user briefly what is left, in their language.
@@ -159,6 +165,7 @@ export type LlmChoice = {
   tool_calls?: ToolCall[];
   role?: string;
   reasoning?: string;
+  reasoning_content?: string;
   finish_reason?: string;
   usage?: ReportedUsage;
   requestTokens?: RequestTokens;
@@ -595,6 +602,7 @@ export async function runAgentLoop(
     context?: number;
     compact?: CompactMode;
     runLoop?: boolean;
+    autoRunAgent?: boolean;
     graphLoop?: boolean;
     testLoop?: boolean;
     engineLoop?: boolean;
@@ -612,11 +620,15 @@ export async function runAgentLoop(
     prefer?: string[];
     locale?: "de" | "en";
     observeOnly?: boolean;
+    workflow?: WorkflowSnapshot;
+    workflowId?: string;
   },
   complete: (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => Promise<LlmChoice>,
   opts?: {
+    run?: AgentRun;
     onNotice?: (kind: string, text: string) => void;
     verify?: (paths: string[]) => Promise<{ ok: boolean; detail: string }>;
+    verifyArtifacts?: (result: Record<string, unknown>) => Promise<Record<string, unknown>>;
     fetchUrl?: (url: string) => Promise<string>;
     onDelta?: (s: string, kind?: "text" | "think") => void;
     onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
@@ -635,17 +647,24 @@ export async function runAgentLoop(
     summarize?: (blob: string) => Promise<string>;
     mcp?: (action: "list" | "call" | "read" | "output", server?: string, name?: string, args?: unknown) => Promise<unknown>;
     engine?: (action: "status" | "run", args?: Record<string, unknown>) => Promise<unknown>;
-    runFile?: (path: string, files: Record<string, string>) => Promise<unknown>;
+    runFile?: (path: string, files: Record<string, string>, asTest?: boolean) => Promise<unknown>;
     play?: (keys: string[], hold?: number) => Promise<unknown>;
     see?: () => Promise<unknown>;
     onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
     onHarness?: (bar: string) => void;
+    capabilities?: string[];
+    onWorkflow?: (snapshot: WorkflowSnapshot) => void | Promise<void>;
     selectTools?: (names: string[]) => unknown;
     tryTextFallback?: () => boolean;
     onNativeToolSuccess?: () => void;
     toolLearning?: ToolLearningBridge;
   },
 ): Promise<AgentResult> {
+  const run = opts?.run ?? captureAgentRun();
+  const loopGen = run.generation;
+  run.assertCurrent();
+  opts = bindAgentRun(run, { ...opts, run });
+  complete = bindAgentRun(run, { complete }).complete;
   const files = new Map(data.files.map((f) => [f.path, f.content]));
   const dirs = new Set<string>(data.dirs ?? []);
   for (const p of files.keys()) for (const d of parents(p)) dirs.add(d);
@@ -694,6 +713,35 @@ export async function runAgentLoop(
     projH,
   );
   let harness = startHarness(hopts);
+  const capabilities = opts?.capabilities ?? AGENT_TOOLS.map(t => t.function.name).filter(name =>
+    name !== "run_file" || Boolean(opts?.runFile)).filter(name => name !== "engine_run" || Boolean(opts?.engine))
+    .filter(name => name !== "see_run" || Boolean(opts?.see));
+  const workflowOptions = () => ({ ...hopts, autoRunAgent: data.autoRunAgent, recipes: projG?.recipes });
+  const workflow = new AgentWorkflow(fileMap, workflowOptions(), capabilities, data.workflow, data.workflowId);
+  await workflow.update(fileMap, workflowOptions(), projG?.edges || []);
+  run.assertCurrent();
+  if (data.workflow) {
+    workflow.setPhase("act");
+    evidence.restore(workflow.proof("verificationEvidence"));
+    const savedPlan = workflow.proof("planProgress");
+    if (!planProgress.restore(savedPlan) && (workflow.snapshot().planProgress !== undefined || workflow.snapshot().operations.length)) planProgress.uncertainAcceptanceRecovery();
+    // A pre-action checkpoint can precede record(), even if the external action
+    // already started. Resume must not define its acceptance retrospectively.
+    if (workflow.snapshot().operations.some(op => acceptanceLocksTool(op.name)) && !planProgress.acceptanceResult().locked) planProgress.uncertainAcceptanceRecovery();
+    const saved = workflow.snapshot().harness;
+    if (saved) harness = { ...saved, phase: "act", reason: "Vom Nutzer fortgesetzt.", autoContinueRounds: harness.autoContinueRounds,
+      budget: { ...harness.budget, rounds: harness.budget.rounds + saved.used.rounds, tools: harness.budget.tools + saved.used.tools }, used: { ...saved.used } };
+  }
+  evidence.setInputStamp(workflow.inputStamp); planProgress.setInputStamp(workflow.inputStamp);
+  if (opts?.getPlan) planProgress.sync(opts.getPlan());
+  const saveWorkflow = async () => {
+    run.assertCurrent();
+    const snapshot = workflow.checkpoint({ planProgress: planProgress.snapshot(), verificationEvidence: evidence.snapshot(), harness });
+    await opts?.onWorkflow?.(snapshot);
+    run.assertCurrent();
+    return snapshot;
+  };
+  await saveWorkflow();
   const harnessNote = projectHarnessPrompt(projH, projG, { runLoop: hopts.runLoop, graphLoop: hopts.graphLoop });
   const mcpNote = data.mcpCatalog?.trim() ?? "";
   const sysParts = [
@@ -708,16 +756,19 @@ export async function runAgentLoop(
   let messages: Record<string, unknown>[] = [
     { role: "system", content: sysParts.join("\n\n") },
     ...pinHistory(data.messages).map((m) => {
+      const current = m === lastUserOf(data.messages);
+      const content = current ? (m.content.startsWith(USER_REQUEST_MARK) ? m.content : USER_REQUEST_MARK + m.content)
+        : m.content.startsWith(SUPPLEMENTAL_CONTEXT_MARK) || m.content.startsWith(USER_REQUEST_MARK) ? m.content : m.content.slice(0, 8000);
       if (m.images?.length) {
         return {
           role: m.role,
           content: [
-            { type: "text", text: m.content.slice(0, m === lastUserOf(data.messages) ? 16000 : 8000) },
+            { type: "text", text: content },
             ...m.images.slice(0, 4).map((url) => ({ type: "image_url", image_url: { url } })),
           ],
         };
       }
-      return { role: m.role, content: m.content.slice(0, m === lastUserOf(data.messages) ? 16000 : 8000) };
+      return { role: m.role, content };
     }),
   ];
 
@@ -732,20 +783,40 @@ export async function runAgentLoop(
           const sum = await opts.summarize(String(mark.content));
           if (sum.trim()) mark.content = `${COMPACT_MARK}, summary):\n${sum}`;
         } catch {
+          run.assertCurrent();
           /* keep truncated */
         }
       }
     }
+    run.assertCurrent();
+    const fitted = fitMessages(messages, Math.max(0, (data.context ?? 32768) - 208));
+    if (fitted.length !== messages.length || fitted.some((message, i) => message !== messages[i])) {
+      compacted = true;
+      opts?.onNotice?.("context", data.locale === "en" ? "Supplemental context shortened; the complete current request is preserved." : "Zusatzkontext gekürzt; der aktuelle Nutzerauftrag bleibt vollständig erhalten.");
+    }
+    messages = fitted;
   };
   await pack();
+  run.assertCurrent();
 
-  const packResult = (reply: string, extra: Partial<AgentResult> = {}): AgentResult => {
+  const packResult = async (reply: string, extra: Partial<AgentResult> = {}): Promise<AgentResult> => {
+    run.assertCurrent();
     if (opts?.getPlan) planProgress.sync(opts.getPlan());
     const openPlan = !data.observeOnly && !extra.parked && planProgress.hasOpenWork();
     if (openPlan) reply += data.locale === "en"
       ? "\n\nChecklist not fully confirmed: open steps remain visible."
       : "\n\nTo-do noch nicht vollständig bestätigt: Offene Schritte bleiben sichtbar.";
     let verification = evidence.status();
+    const checks = workflow.outstandingChecks();
+    if (checks.failed.length) verification = { state: "failed", detail: [...new Set([verification.state === "failed" ? verification.detail : "", ...checks.failed])].filter(Boolean).join("\n") };
+    if (!extra.parked && verification.state !== "failed" && (checks.pending.length || openPlan)) verification = {
+      state: "stale", detail: [checks.pending.length ? "Gestartete oder vorgesehene Prüfungen sind noch nicht vollständig bestätigt." : "", ...new Set(checks.pending), openPlan ? "Offene To-do-Schritte sind noch nicht vollständig bestätigt." : ""].filter(Boolean).join("\n"),
+    };
+    const unclearEffect = workflow.snapshot().operations.some(op=>op.external&&op.status==='unclear'&&!op.recovery);
+    if(unclearEffect)verification={state:'failed',detail:[verification.state==='failed'?verification.detail:'',"Der Ausgang einer gestarteten externen Aktion ist unbestätigt. Vor dem Abschließen zuerst beim Dienst oder im Werkzeugprotokoll prüfen."].filter(Boolean).join('\n')};
+    const skippedEffect=workflow.snapshot().operations.some(op=>op.external&&op.status==='unclear'&&op.recovery?.mode==='skip');
+    if(workflow.recoveryNeedsInspection()&&verification.state!=='failed')verification={state:'stale',detail:'Der aktuelle Projekt- oder Dienststand wurde noch nicht geprüft. Zuerst mit einem Lesewerkzeug prüfen.'};
+    if(skippedEffect)reply+=data.locale==='en'?'\n\nA previous action remains unconfirmed and blocked from repetition.':'\n\nEine frühere Aktion bleibt unbestätigt und wird nicht wiederholt.';
     if (diagnosticTask && !extra.parked) {
       if (!diagnosticCheck || diagnosticCheck.revision !== evidence.revision) {
         if (verification.state !== "failed") verification = { state: "stale", detail: "Aktuelle Diagnosen noch nicht bestätigt." };
@@ -755,22 +826,28 @@ export async function runAgentLoop(
     }
     const failed = verification.state === "failed";
     const unverified = verification.state === "stale";
+    const acceptance = data.observeOnly ? undefined : planProgress.acceptanceResult({ verification:skippedEffect&&verification.state!=='failed'?{state:'stale'}:verification, open: openPlan });
+    workflow.setPhase(extra.parked ? "plan" : extra.stopReason ? "abort" : failed || unverified || openPlan ? "patch" : "done");
+    const savedWorkflow = await saveWorkflow();
     return {
       files: [...files.entries()].map(([path, content]) => ({ path, content })),
       runPaths: [...new Set(runPaths)], tools: used, deleted: [...new Set(deleted)],
       applied: Boolean(opts?.onWorkspace), usage, compacted, ...extra,
       plan: planProgress.plan,
-      ok: (extra.ok ?? true) && !failed && !(diagnosticTask && unverified),
+      ok: (extra.ok ?? true) && !failed && !unverified && !openPlan,
       verification,
-      error: failed ? verification.detail : extra.error,
+      acceptance,
+      workflow: savedWorkflow,
+      error: failed || unverified ? verification.detail : extra.error,
       modelReply: reply,
-      reply: extra.parked ? reply : verifiedReply(reply, verification),
+      reply: extra.parked ? reply : acceptance ? acceptanceReply(verifiedReply(reply, verification), acceptance, data.locale) : verifiedReply(reply, verification),
     };
   };
 
   let nudged = 0;
   let planNudges = 0;
   let planRejections = 0;
+  let checklistWarning = false;
   let emptyHits = 0;
   let stopAfter = false;
   let lastRead = "";
@@ -778,9 +855,9 @@ export async function runAgentLoop(
   let lastFail = "";
   const cap = Math.min(128, Math.max(8, hopts.maxRounds ?? data.maxRounds ?? 24));
   const autoContinue = Boolean(harness.autoContinueRounds);
+  const roundsBeforeResume = harness.used.rounds;
   const progressKeys = new Set<string>();
   let lastProgressRound = -1;
-  const loopGen = agentGen();
   const de = data.locale !== "en";
   const say = (a: string, b: string) => (de ? a : b);
   const observeOnly = Boolean(data.observeOnly);
@@ -793,12 +870,9 @@ export async function runAgentLoop(
   for (let round = 0; autoContinue || round < cap; round++) {
     if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
     throwIfAborted();
-    if (planRejections >= 3) {
-      const detail = say(
-        "To-do-Abgleich unterbrochen: Drei Statusaktualisierungen wurden ohne neuen Arbeitserfolg abgelehnt. Vorhandene Änderungen bleiben erhalten; offene Schritte sind nicht bestätigt. Nachweis-Zuordnung klären, statt erledigte Arbeit zu wiederholen.",
-        "Checklist reconciliation paused: Three status updates were rejected without new successful work. Existing changes are preserved; open steps remain unconfirmed. Resolve the evidence mapping instead of repeating completed work.",
-      );
-      return packResult(detail, { ok: false, error: detail, stopReason: "no-progress" });
+    if (planRejections >= 3 && !checklistWarning) {
+      checklistWarning = true;
+      messages.push({ role: "user", content: say("Drei To-do-Statusänderungen wurden ohne passenden Nachweis abgelehnt. Arbeite an den übrigen Aufgaben weiter. Lass nicht bestätigte Punkte offen und benenne den Grund; erledigte Arbeit nicht wiederholen.", "Three checklist updates lacked matching evidence. Continue remaining work. Leave unconfirmed steps open with their reason; do not repeat completed work.") });
     }
     if (autoContinue && round >= cap && round - lastProgressRound >= cap) {
       const detail = say(
@@ -807,13 +881,15 @@ export async function runAgentLoop(
       );
       return packResult(detail, { ok: false, error: detail, stopReason: "no-progress" });
     }
-    harness = { ...harness, used: { ...harness.used, rounds: round + 1 } };
+    harness = { ...harness, used: { ...harness.used, rounds: roundsBeforeResume + round + 1 } };
     opts?.onHarness?.(harnessBar(harness));
     await pack();
+    run.assertCurrent();
     let choice: LlmChoice;
     try {
       if (opts?.getPlan) planProgress.sync(opts.getPlan());
-      const planContext = !data.observeOnly && planProgress.context();
+      const acceptanceContext = planProgress.acceptanceResult();
+      const planContext = !data.observeOnly && [planProgress.context(), `Binding task acceptance: ${JSON.stringify({criteria:acceptanceContext.criteria,state:acceptanceContext.state,checks:acceptanceContext.checks,changes:acceptanceContext.changes})}`, workflow.summary()].filter(Boolean).join("\n\n");
       // Inject after compaction without accumulating a second stale plan in history.
       const requestMessages = planContext ? messages.map((m, i) => i === 0 && m.role === "system"
         ? { ...m, content: `${m.content}\n\n${planContext}` } : m) : messages;
@@ -851,8 +927,20 @@ export async function runAgentLoop(
     if (parsedText?.error) return packResult(say(`Ungültiger Werkzeugaufruf: ${parsedText.error}`, `Invalid tool call: ${parsedText.error}`), { ok: false, error: parsedText.error });
     const harvested = parsedText ? parsedText.calls : toolContract ? [] : harvestTools(choice.content || "");
     let toolCalls = (parsedText ? parsedText.calls : choice.tool_calls?.length ? choice.tool_calls : harvested) ?? [];
+    const automaticCalls = new Map<ToolCall, string>();
+    const appendAutomatic = async (final = false) => {
+      if (observeOnly || toolCalls.length >= 96 || harness.phase === "abort") return;
+      const action = await workflow.next(final, Math.max(0, harness.budget.sees - harness.used.sees));
+      run.assertCurrent();
+      if (!action) return;
+      const call: ToolCall = { id: `call_auto_${round}_${toolCalls.length}`, type: "function", function: { name: action.name, arguments: JSON.stringify(action.args) } };
+      automaticCalls.set(call, action.id); toolCalls.push(call);
+    };
     if (choice.tool_calls?.length && toolContract?.transport !== "text" && choice.tool_calls.every((c) => !validateToolCall(c, toolContract?.names || AGENT_TOOLS.map((t) => t.function.name)).error)) {
       opts?.onNativeToolSuccess?.();
+    }
+    if (!toolCalls.length) {
+      await appendAutomatic(true);
     }
     if (!toolCalls.length) {
       const text = choice.content?.trim() || "";
@@ -947,36 +1035,6 @@ export async function runAgentLoop(
       }
       return packResult(text || say("Fertig.", "Done."));
     }
-    const automaticCalls = new Set<ToolCall>();
-    if (!observeOnly && toolCalls.length) {
-      const names = toolCalls.map((c) => c.function.name);
-      const wroteNow = names.some((n) => /write_file|append_file|edit_file/.test(n));
-      const ranNow = names.some((n) => /run_file|engine_run/.test(n));
-      const mode = effectiveAfterWrite(hopts);
-      if (wroteNow && !ranNow && hopts.runLoop && mode === "run") {
-        const written: string[] = [];
-        for (const tc of toolCalls) {
-          if (!/write_file|append_file|edit_file/.test(tc.function.name)) continue;
-          try {
-            if (toolContract && validateToolCall(tc, toolContract.names).error) continue;
-            const p = String(parseToolArgs(tc.function.arguments || "{}").args.path ?? "");
-            if (p && !skipAutoRunPath(p)) written.push(p);
-          } catch {
-            /* */
-          }
-        }
-        const hint = written.at(-1) || "";
-        const path = hint ? pickRunPath([...files.keys(), ...written], hint) : "";
-        if (path) {
-          const automatic: ToolCall = {
-            id: `call_auto_run_${round}`, type: "function",
-            function: { name: "run_file", arguments: JSON.stringify({ path }) },
-          };
-          automaticCalls.add(automatic);
-          toolCalls = [...toolCalls, automatic];
-        }
-      }
-    }
     const lastAsst = messages.at(-1);
     if (lastAsst && lastAsst.role === "assistant") lastAsst.tool_calls = toolCalls;
     let batchFail = false;
@@ -995,7 +1053,7 @@ export async function runAgentLoop(
         argsCut = true;
       }
       const checked = toolContract ? validateToolCall(tc,
-        automaticCalls.has(tc) && !observeOnly ? ["run_file"] : toolContract.names) : undefined;
+        automaticCalls.has(tc) && !observeOnly ? capabilities : toolContract.names) : undefined;
       if (checked && !checked.error) { args = checked.args; argsCut = false; }
       if (argsCut) args.truncated = true;
       // Hash once: these sets live across automatic continuation and must not retain full files.
@@ -1004,7 +1062,7 @@ export async function runAgentLoop(
       opts?.onToolStart?.({ name: tc.function.name, args });
       throwIfAborted();
       if (agentGen() !== loopGen) throw new AgentAbortError("replaced");
-      const blocked =
+      let blocked =
         opts?.toolLearning?.before(tc) ||
         checked?.error ||
         (observeOnly && !observeTool(tc.function.name) && tc.function.name !== "select_tools" ? say("Im Modus „Fragen“ sind nur Lesezugriffe erlaubt.", "Ask mode: read only.") : null) ||
@@ -1015,6 +1073,13 @@ export async function runAgentLoop(
         (!toolsAllowed(data.surfaceId || ANVIL_SURFACE, data.surfaceMode || "exclusive", tc.function.name)
           ? say(`Aktive Fläche ist MCP. Kein ${tc.function.name}. Nutze mcp_call oder Brücke.`, `Active surface is MCP. No ${tc.function.name}. Use mcp_call or a bridge.`)
           : null);
+      let operationId: string | undefined;
+      if (!blocked) {
+        const started = await workflow.begin(tc.function.name, args, automaticCalls.get(tc));
+        operationId = started.id;
+        if (started.error) blocked = started.error;
+        await saveWorkflow();
+      }
       const denied =
         !blocked &&
         strictAllow &&
@@ -1028,14 +1093,16 @@ export async function runAgentLoop(
       let event: WorkspaceEvent | undefined;
       let command: AgentCommand | undefined;
       let writes: Record<string, string> | undefined;
+      const filesBefore = new Map(files), dirsBefore = new Set(dirs);
+      const acknowledged = new Set<string>();
       if (blocked) {
-        result = { error: blocked };
+        result = { error: blocked, definitelyNotExecuted: true };
       } else if (beforeTextFallback?.has(callFingerprint)) {
         result = { ok: true, already_executed: true, message: "Already completed before the transport change. No action repeated." };
       } else if (batchFail && (mutateTool(tc.function.name) || automaticCalls.has(tc))) {
-        result = { error: say("Vorheriges Tool fehlgeschlagen — Rest übersprungen.", "Previous tool failed — remaining writes skipped.") };
+        result = { error: say("Vorheriges Tool fehlgeschlagen — Rest übersprungen.", "Previous tool failed — remaining writes skipped."), definitelyNotExecuted: true };
       } else if (denied) {
-        result = { error: `Harness budget: only ${allow.join(", ")}` };
+        result = { error: `Harness budget: only ${allow.join(", ")}`, definitelyNotExecuted: true };
       } else if (tc.function.name === "select_tools" && opts?.selectTools) {
         result = opts.selectTools(args.names as string[]);
       } else if (tc.function.name === "set_plan") {
@@ -1075,8 +1142,10 @@ export async function runAgentLoop(
         try {
           result = await runCommand(command, files, dirs, deleted, opts?.onWorkspace?{...opts,onWorkspace:async event=>{
             await opts.onWorkspace!(event);
-            if(['write','delete','rename','mkdir'].includes(event.op))evidence.changed();
+            if(event.op==='write')acknowledged.add(event.path);
           }}:opts);
+          if(opts?.verifyArtifacts && /^(run_file|shell|engine_run|mcp_call)$/.test(tc.function.name) && result && typeof result === 'object')
+            result = await opts.verifyArtifacts(result as Record<string, unknown>);
           if(result&&typeof result==='object'&&'workspaceChanged' in result){
             const changedResult={...result as Record<string,unknown>};
             if(changedResult.workspaceChanged===true&&!opts?.onWorkspace)evidence.changed();
@@ -1097,12 +1166,14 @@ export async function runAgentLoop(
             result = copy;
           }
         } catch (err) {
+          run.assertCurrent();
           result = { error: err instanceof Error ? err.message : String(err) };
         }
       } else if (result && typeof result === "object" && "fetch" in result && opts?.fetchUrl) {
         try {
           result = { text: await opts.fetchUrl(String((result as { fetch: string }).fetch)) };
         } catch (err) {
+          run.assertCurrent();
           result = { error: err instanceof Error ? err.message : String(err) };
         }
       }
@@ -1110,6 +1181,7 @@ export async function runAgentLoop(
         for (const [path, content] of Object.entries(writes)) {
           try {
             await opts.onWorkspace({ op: "write", path, content });
+            acknowledged.add(path);
           } catch (err) {
             result = { error: err instanceof Error ? err.message : String(err), result };
           }
@@ -1128,10 +1200,23 @@ export async function runAgentLoop(
           result = { error: err instanceof Error ? err.message : String(err), result };
         }
       }
-      if ((writes && Object.keys(writes).length) || event) evidence.changed();
+      const record = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
+      if (workflowToolFailed(record) && (writes || event)) {
+        // applyTool prepares a local draft first. Failed acknowledgements must not leave phantom files.
+        for (const path of new Set([...filesBefore.keys(), ...files.keys()])) if (!acknowledged.has(path)) {
+          if (filesBefore.has(path)) files.set(path, filesBefore.get(path)!); else files.delete(path);
+        }
+        dirs.clear(); for (const dir of dirsBefore) dirs.add(dir);
+      }
+      const changedPaths = [...new Set([...filesBefore.keys(), ...files.keys()])].filter(path => filesBefore.get(path) !== files.get(path));
+      if (changedPaths.length) { evidence.changed(); workflow.confirmedChanges(changedPaths); }
+      const inputChanged = await workflow.update(Object.fromEntries(files), workflowOptions(), projG?.edges || []);
+      run.assertCurrent();
+      evidence.setInputStamp(workflow.inputStamp); planProgress.setInputStamp(workflow.inputStamp);
+      workflow.finish(operationId, tc.function.name, args, frame ? { ...record, image: frame } : record);
       opts?.onTool?.({ name: tc.function.name, args, result: frame ? { ...(result as object), image: frame } : result });
-      const rec = result && typeof result === "object" ? { ...(result as Record<string, unknown>) } : {};
-      const planEvidenceId = planProgress.record(tc.function.name, args, frame ? { ...rec, image: frame } : rec, Boolean((writes && Object.keys(writes).length) || event));
+      const rec = record;
+      const planEvidenceId = planProgress.record(tc.function.name, args, frame ? { ...rec, image: frame } : rec, changedPaths.length > 0);
       if (opts?.getPlan) planProgress.sync(opts.getPlan());
       else if (tc.function.name !== "set_plan") {
         const next = planFromTool(tc.function.name, planProgress.plan, Boolean(rec.error || rec.isError || rec.ok === false), args, rec);
@@ -1149,8 +1234,10 @@ export async function runAgentLoop(
         if (mutateTool(tc.function.name) || /^(mcp_call|shell|git_commit|git_push|memory_add|memory_forget)$/.test(tc.function.name)) completedChanges.add(callFingerprint);
         // Repeated calls and plan/configuration churn cannot buy more rounds.
         // This measures new successful actions, not semantic task completion.
-        if (!rec.isError && !blocked && !denied && !checked?.error && !/^(set_plan|harness_|graph_|board_)/.test(tc.function.name)) {
-          if (!progressKeys.has(callFingerprint)) { progressKeys.add(callFingerprint); lastProgressRound = round; planRejections = 0; }
+        if (!workflowToolFailed(rec) && !blocked && !denied && !checked?.error && !/^(set_plan|harness_|graph_|board_)/.test(tc.function.name)) {
+          const key = /^(run_file|shell|engine_run|play|see_run)$/.test(tc.function.name) ? `${callFingerprint}:${workflow.inputStamp}` : callFingerprint;
+          const useful = inputChanged || changedPaths.length || /^(mcp_call|shell|git_commit|git_push|memory_add|memory_forget|run_file|engine_run|play|see_run)$/.test(tc.function.name) || round < cap;
+          if (useful && !progressKeys.has(key)) { progressKeys.add(key); lastProgressRound = round; if (!/^(read_file|grep|list_files)$/.test(tc.function.name)) planRejections = 0; }
         }
       }
       if (mutateTool(tc.function.name) && (rec.error || rec.ok === false)) batchFail = true;
@@ -1159,10 +1246,13 @@ export async function runAgentLoop(
         engineOk: data.engineOk ?? Boolean(hit),
         edges: projG?.edges,
         queued: toolCalls.slice(ti + 1).map((c) => c.function.name),
+        context: { phase: rec.graphical && !workflowToolFailed(rec) ? "see" : workflow.phase, completed: workflow.completed, remainingSees: Math.max(0, harness.budget.sees - harness.used.sees), testsPassed: workflow.testsPassed },
       });
       harness = w.state;
       allow = w.allow;
       strictAllow = Boolean(w.strict);
+      workflow.setPhase(harness.phase);
+      await saveWorkflow();
       opts?.onHarness?.(harnessBar(harness));
       messages.push({
         role: "tool",
@@ -1241,6 +1331,8 @@ export async function runAgentLoop(
           },
           projH,
         );
+        await workflow.update(Object.fromEntries(files), workflowOptions(), projG?.edges || []);
+        await saveWorkflow();
       }
       if (mcpImages.length) {
         messages.push({ role: "user", mcpResult: true, content: [
@@ -1262,19 +1354,20 @@ export async function runAgentLoop(
         });
         pruneGraphFrames(messages, 2);
       }
+      if (ti === toolCalls.length - 1 && !stopAfter && !batchFail) {
+        await appendAutomatic(automaticCalls.has(tc));
+        if (lastAsst?.role === "assistant") lastAsst.tool_calls = toolCalls;
+      }
     }
     if (stopAfter) {
       if (/budget/i.test(harness.reason)) {
         const detail = say(`Unterbrochen: Werkzeug-/Rundenbudget erreicht. Runden ${harness.used.rounds}/${cap}, Werkzeuge ${harness.used.tools}/${harness.budget.tools}. Auftrag noch offen.`, `Paused: Tool/round budget reached. Rounds ${harness.used.rounds}/${cap}, tools ${harness.used.tools}/${harness.budget.tools}. Task still open.`);
         return packResult(detail, { ok: false, error: detail, stopReason: "tool-limit" });
       }
-      const last = await complete(messages, true, opts?.onDelta);
+      const last = await complete(messages, false, opts?.onDelta);
       recordUsage(last);
       const extra = extractFileBlocks(last.content ?? "");
-      for (const b of extra) {
-        files.set(b.path, b.content);
-        if (opts?.onWorkspace) await opts.onWorkspace({ op: "write", path: b.path, content: b.content });
-      }
+      if (extra.length || last.tool_calls?.length) return packResult(last.content?.trim() || "Der Auftrag wurde unterbrochen.", { ok: false, error: "Die Abschlussantwort enthält weitere Änderungen. Nach dem Stopp wurden sie nicht ausgeführt.", stopReason: "tool-limit" });
       return packResult(last.content?.trim() || "Änderungen übernommen.");
     }
   }
@@ -1308,6 +1401,7 @@ async function runCommand(
   dirs: Set<string>,
   deleted: string[],
   opts?: {
+    run?: AgentRun;
     fetchUrl?: (url: string) => Promise<string>;
     onWorkspace?: (ev: WorkspaceEvent) => void | Promise<void>;
     formatFile?: (path: string, content: string) => Promise<string>;
@@ -1320,12 +1414,14 @@ async function runCommand(
     learn?: (action: string, args: Record<string, unknown>) => Promise<unknown>;
     mcp?: (action: "list" | "call" | "read" | "output", server?: string, name?: string, args?: unknown) => Promise<unknown>;
     engine?: (action: "status" | "run", args?: Record<string, unknown>) => Promise<unknown>;
-    runFile?: (path: string, files: Record<string, string>) => Promise<unknown>;
+    runFile?: (path: string, files: Record<string, string>, asTest?: boolean) => Promise<unknown>;
     play?: (keys: string[], hold?: number) => Promise<unknown>;
     see?: () => Promise<unknown>;
   },
 ): Promise<unknown> {
-  throwIfAborted();
+  const run = opts?.run ?? captureAgentRun();
+  run.assertCurrent();
+  opts = bindAgentRun(run, { ...opts, run });
   if (command.cmd === "fetch") {
     if (!opts?.fetchUrl) return { error: "fetch not available" };
     return { text: (await opts.fetchUrl(command.url)).slice(0, 8000) };
@@ -1394,7 +1490,7 @@ async function runCommand(
       if(writes.length>8||!opts.onWorkspace)throw Error('Skill-Dateien können hier nicht gesichert werden.');
       for(const write of writes){
         const path=write?.path;
-        if(typeof path!=='string'||!path||norm(path)!==path||/[\\:\x00-\x1f]/.test(path)||path.split('/').some(p=>['.','..','__proto__','constructor','prototype'].includes(p))||secretPath(path)||typeof write.content!=='string'||write.content.length>200000)
+        if(typeof path!=='string'||!path||norm(path)!==path||path.includes('\\')||path.includes(':')||Array.from(path).some(char=>char.charCodeAt(0)<32)||path.split('/').some(p=>['.','..','__proto__','constructor','prototype'].includes(p))||secretPath(path)||typeof write.content!=='string'||write.content.length>200000)
           throw Error('Ungültige Skill-Datei.');
         if((files.get(path)??null)!==write.before)throw Error(`Skill-Datei inzwischen geändert: ${path}. Gespeichertes Wissen bleibt erhalten; Datei zuerst abgleichen.`);
       }
@@ -1421,7 +1517,7 @@ async function runCommand(
   }
   if (command.cmd === "run") {
     if (!opts?.runFile) return { error: "run not available" };
-    return await opts.runFile(command.path, Object.fromEntries(files));
+    return await opts.runFile(command.path, Object.fromEntries(files), isTestFile(command.path) || fileHasInlineTests(command.path, files.get(command.path) || ""));
   }
   if (command.cmd === "play") {
     if (!opts?.play) return { error: "play not available" };

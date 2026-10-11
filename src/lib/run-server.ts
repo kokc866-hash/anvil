@@ -21,11 +21,13 @@ const WANDBOX_LANG: Record<string, string> = {
 
 let compilers: { language: string; name: string }[] | null = null;
 
-async function compilerFor(wandboxLang: string): Promise<string> {
+async function compilerFor(wandboxLang: string, sendRequest: typeof fetch = fetch, signal?: AbortSignal): Promise<string> {
   if (!compilers) {
-    const res = await fetch("https://wandbox.org/api/list.json");
+    const res = await sendRequest("https://wandbox.org/api/list.json");
     if (!res.ok) throw new Error(`Compiler-Liste: HTTP ${res.status}`);
-    compilers = (await res.json()) as { language: string; name: string }[];
+    const found = (await res.json()) as { language: string; name: string }[];
+    signal?.throwIfAborted();
+    compilers = found;
   }
   const match = compilers.filter((c) => c.language === wandboxLang);
   const stable = match.find((c) => !c.name.includes("head") && !c.name.includes("trunk"));
@@ -52,17 +54,23 @@ export const runRemote = createServerFn({ method: "POST" })
     const others = data.files.filter((f) => f.path !== entry.path && f.content.length < 80_000);
 
     try {
+      const { requestTransport } = await import("./request-abort.server");
+      const { signal, send } = requestTransport();
+      signal.throwIfAborted();
       if (data.lang === "go" && others.length === 0) {
-        const go = await runGoPlay(entry.content);
+        const go = await runGoPlay(entry.content, send);
+        signal.throwIfAborted();
         if (go) return go;
       }
       if (data.lang === "rust" && others.length === 0) {
-        const rust = await runRustPlay(entry.content);
+        const rust = await runRustPlay(entry.content, send);
+        signal.throwIfAborted();
         if (rust) return rust;
       }
 
-      const compiler = await compilerFor(wandboxLang);
-      const res = await fetch("https://wandbox.org/api/compile.json", {
+      const compiler = await compilerFor(wandboxLang, send, signal);
+      signal.throwIfAborted();
+      const res = await send("https://wandbox.org/api/compile.json", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -84,6 +92,7 @@ export const runRemote = createServerFn({ method: "POST" })
         compiler_error?: string;
         compiler_message?: string;
       };
+      signal.throwIfAborted();
       const stderr = [json.compiler_error, json.compiler_message, json.program_error]
         .filter(Boolean)
         .join("\n");
@@ -99,9 +108,9 @@ export const runRemote = createServerFn({ method: "POST" })
     }
   });
 
-async function runGoPlay(code: string): Promise<RemoteRun | null> {
+async function runGoPlay(code: string, sendRequest: typeof fetch = fetch): Promise<RemoteRun | null> {
   try {
-    const res = await fetch("https://play.golang.org/compile", {
+    const res = await sendRequest("https://play.golang.org/compile", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `version=2&body=${encodeURIComponent(code)}`,
@@ -124,9 +133,9 @@ async function runGoPlay(code: string): Promise<RemoteRun | null> {
   }
 }
 
-async function runRustPlay(code: string): Promise<RemoteRun | null> {
+async function runRustPlay(code: string, sendRequest: typeof fetch = fetch): Promise<RemoteRun | null> {
   try {
-    const res = await fetch("https://play.rust-lang.org/execute", {
+    const res = await sendRequest("https://play.rust-lang.org/execute", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

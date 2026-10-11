@@ -38,6 +38,7 @@ export function TrailPane() {
   const setThinkH = useIde((s) => s.setTrailThinkH);
   const rounds = useMemo(() => chat.filter((m) => m.role === "assistant" && hasTrailMsg(m)), [chat]);
   const latest = rounds.at(-1) ?? [...chat].reverse().find((m) => m.role === "assistant") ?? null;
+  const latestId = latest?.id;
   const [pick, setPick] = useState("");
   const current = (pick && rounds.find((m) => m.id === pick)) || latest;
   const idx = current ? rounds.findIndex((m) => m.id === current.id) : -1;
@@ -58,8 +59,8 @@ export function TrailPane() {
   );
 
   useEffect(() => {
-    if (busy && latest) setPick(latest.id);
-  }, [busy, latest?.id]);
+    if (busy && latestId) setPick(latestId);
+  }, [busy, latestId]);
 
   useEffect(() => {
     setThinkOpen(live);

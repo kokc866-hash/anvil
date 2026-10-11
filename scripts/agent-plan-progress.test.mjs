@@ -46,14 +46,40 @@ test('agent reconciles descriptive checklists against actual tool results', asyn
         assert.equal(n, 5);
       }
     });
-    await t.test('rejected status churn stops without checking open work or replaying edits', async () => {
+    await t.test('three rejected checklist updates allow real work, correct reconciliation and completion', async () => {
+      beginAgent(); let n = 0; let visible = []; const outcomes = [];
+      const result = await runAgentLoop({ ...data, autoContinueRounds: true }, async messages => {
+        if (++n === 1) return call('set_plan', { steps: ['Datei ändern', 'Ergebnis prüfen', 'Ergebnis berichten'], kinds: ['edit', 'check', 'report'] });
+        if (n === 2) return call('edit_file', { path: 'index.html', old_string: 'Old', new_string: 'Changed' });
+        if (n <= 5) return call('set_plan', { updates: [{ step: 1, status: 'ok', evidence: [n % 2 ? 'guessed' : 'missing'], reason: 'I think it is done' }] });
+        if (n === 6) {
+          assert.match(JSON.stringify(messages), /Drei To-do-Statusänderungen|Three checklist updates/);
+          return call('edit_file', { path: 'index.html', old_string: 'Changed', new_string: 'Final' });
+        }
+        if (n === 7) return call('run_file', { path: 'index.html' });
+        if (n === 8) return call('see_run', {});
+        if (n === 9) return call('set_plan', { updates: [
+          { step: 1, status: 'ok', evidence: ['e2'], reason: 'The final requested edit was applied.' },
+          { step: 2, status: 'ok', evidence: ['e4'], reason: 'The final preview was captured.' },
+        ] });
+        return { content: 'Die Änderung wurde umgesetzt und geprüft.' };
+      }, { getPlan: () => visible, onTool: info => { outcomes.push(info); if (info.result?.plan) visible = info.result.plan; }, runFile: async () => ({ ok: true }), see: async () => ({ ok: true, image: 'data:image/png;base64,AAAA' }) });
+      assert.equal(n, 10);
+      assert.notEqual(result.stopReason, 'no-progress');
+      assert.equal(result.ok, true);
+      assert.equal(result.files.find(f => f.path === 'index.html').content, '<p>Final</p>');
+      assert.deepEqual(result.plan.slice(0, 2).map(step => step.status), ['ok', 'ok']);
+      assert.equal(outcomes.filter(info => info.name === 'set_plan' && info.result?.error).length, 3);
+      assert.equal(result.tools.filter(name => name === 'edit_file').length, 2, 'each actual edit runs once; rejected checklist updates do not replay edits');
+    });
+    await t.test('repeated invalid status churn still reaches the ordinary bounded no-progress guard', async () => {
       beginAgent(); let n = 0; let visible = [];
-      const result = await runAgentLoop({ ...data, autoContinueRounds: true }, async () => {
+      const result = await runAgentLoop({ ...data, maxRounds: 8, autoContinueRounds: true }, async () => {
         if (++n === 1) return call('set_plan', { steps: ['Datei ändern', 'Ergebnis berichten'], kinds: ['edit', 'report'] });
         if (n === 2) return call('edit_file', { path: 'index.html', old_string: 'Old', new_string: 'Changed' });
-        return call('set_plan', { updates: [{ step: 1, status: 'ok', evidence: [n % 2 ? 'guessed' : 'missing'], reason: 'I think it is done' }] });
+        return call('set_plan', { updates: [{ step: 1, status: 'ok', evidence: ['missing'], reason: 'Still no actual evidence supplied.' }] });
       }, { getPlan: () => visible, onTool: ({ result }) => { if (result?.plan) visible = result.plan; } });
-      assert.equal(n, 5);
+      assert.ok(n > 5 && n <= 10, `the first three rejected updates warn; continued lack of real progress remains bounded (${n} model calls)`);
       assert.equal(result.stopReason, 'no-progress');
       assert.equal(result.ok, false);
       assert.equal(result.files.find(f => f.path === 'index.html').content, '<p>Changed</p>');

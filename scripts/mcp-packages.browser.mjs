@@ -106,7 +106,7 @@ try {
   for (let i = 0; i < 120; i++) {
     try {
       if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break;
-    } catch {}
+    } catch { /* Retry while the production server is starting. */ }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   await launch();

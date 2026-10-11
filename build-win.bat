@@ -25,8 +25,9 @@ if not exist "node_modules\electron-builder\package.json" (
   )
 )
 
-echo Baut Anvil Setup.exe nach dist-win\  (Node muss auf dem PC bleiben)
-call npx electron-builder --win nsis portable
+echo Baut die aktuelle Oberflaeche und den Hintergrundprozess.
+echo Erstellt Setup.exe und portable ZIP nach dist-win\.
+call npm run dist:win
 if errorlevel 1 (
   echo Build fehlgeschlagen.
   pause
@@ -35,5 +36,6 @@ if errorlevel 1 (
 
 echo.
 echo Fertig: dist-win\
-echo Anvil Setup.exe installiert, Anvil.exe ist portabel. start.bat geht weiter.
+echo Setup.exe installiert Anvil. Die portable ZIP entpacken und Anvil.exe starten.
+echo Die fertigen Ausgaben benoetigen kein extern installiertes Node.js.
 pause

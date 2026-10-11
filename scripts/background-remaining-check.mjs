@@ -33,7 +33,7 @@ export async function verifyBackgroundRemaining(page,fixture){
  const server=createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw),n=++requests;
   for(const message of body.messages||[])if(message.role==='tool'){
-   try{const value=JSON.parse(message.content);results.set(message.tool_call_id,value);if(value.fact?.id)factId=value.fact.id;}catch{}
+   try{const value=JSON.parse(message.content);results.set(message.tool_call_id,value);if(value.fact?.id)factId=value.fact.id;}catch{ /* Non-JSON tool output is not a fact record. */ }
   }
   if(n===3){held=true;await new Promise(r=>release=r);}
   if(canTrace&&n===19){traceHeld=true;await new Promise(r=>releaseTrace=r);}

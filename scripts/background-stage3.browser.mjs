@@ -374,7 +374,7 @@ try {
     const deadline = setTimeout(() => proc?.kill(), 8000);
     try {
       await app.close();
-    } catch {}
+    } catch { /* The app may already be closed; the deadline handles a hung process. */ }
     clearTimeout(deadline);
   }
   model.closeAllConnections();

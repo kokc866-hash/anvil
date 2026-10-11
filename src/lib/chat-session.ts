@@ -1,10 +1,13 @@
 import type { TokenUsage, RequestTokens } from "./token-usage";
 import { isExecutablePath } from "./run-target";
-import { automaticRunVerification, verifiedReply } from "./agent-evidence";
+import { automaticRunVerification, verifiedReply, toolResultFailed, toolResultPending } from "./agent-evidence";
+import { acceptanceResult, acceptanceReply, workflowAcceptance } from "../../electron/task-acceptance.mjs";
 import { finishedHarness } from "./chat-finalize";
 import { connectionCapabilities, imageAttachmentError, historyForConnection } from "./connection-capabilities";
 import { chatWithProvider } from "@/lib/agent-client";
-import { completeText } from "@/lib/complete";
+import { persistAgentWorkflow } from "@/lib/workflow-storage";
+import { captureAgentRun, type AgentRun } from "./agent-run";
+import { packAgentHistory } from "./agent-context";
 import { toolCode, toolDetail } from "@/lib/llm-options";
 import { runFile } from "@/lib/run-client";
 import { emitPlugin } from "@/lib/plugins/events";
@@ -35,7 +38,7 @@ import {
 } from "@/lib/plan";
 
 import { resetLoopFails } from "@/lib/run-loop";
-import { agentGen, beginAgent, explainAbort, explainLlmError, isAbortLike } from "@/lib/abort";
+import { beginAgent, explainAbort, explainLlmError, isAbortLike } from "@/lib/abort";
 import { idleCompanion } from "@/lib/companion-life";
 import { askCorrection, formatAskAnswer, isAskAnswer, newJob } from "@/lib/agent-ask";
 import { appLog, logHost } from "@/lib/app-log";
@@ -55,13 +58,14 @@ import {
   useBrain,
 } from "@/lib/brain";
 
-import { learnPrompt, markSkills, reflectUtterance, skillOutcome, useLearn } from "@/lib/learn";
+import { learnPrompt, markSkills, reflectUtterance, skillOutcome, useLearn, visibleSkills } from "@/lib/learn";
+import { withLoadedSkill } from "../../electron/skill-access.mjs";
 import { taskHandoff } from "@/lib/task-handoff";
 import {
   beginJournal,
   extractJournal,
   mergeJournal,
-  packChatHistory,
+
   pruneSession,
 } from "@/lib/session";
 import type { WorkspaceEvent } from "@/lib/agent-core";
@@ -80,7 +84,8 @@ import { requestPhase, useRequestState } from "@/lib/request-state";
 import { beginProjectCheckpoint, sealProjectCheckpoint } from "./project-checkpoints";
 import { trySendBackground } from "./background-agent";
 
-export async function applyWorkspace(ev: WorkspaceEvent) {
+export async function applyWorkspace(ev: WorkspaceEvent, run?: AgentRun) {
+  run?.assertCurrent();
   const s = useIde.getState();
   if (ev.op === "write") {
     if (s.autoAcceptDiffs) s.writeFile(ev.path, ev.content, { quiet: true });
@@ -98,10 +103,10 @@ export async function applyWorkspace(ev: WorkspaceEvent) {
     s.setRunPath(ev.path);
     s.setPreviewOpen(true);
     if (/\.html?$/i.test(ev.path) || s.runInWindow) {
-      void import("@/lib/run-window").then((m) => m.openRunWindow({ agent: true }));
+      void import("@/lib/run-window").then((m) => { if (!run || run.current()) m.openRunWindow({ agent: true }); });
     } else {
       s.revealOutput();
-      void import("@/lib/run-window").then((m) => m.agentOpenedPreview());
+      void import("@/lib/run-window").then((m) => { if (!run || run.current()) m.agentOpenedPreview(); });
     }
   } else if (ev.op === "board") {
     s.setHarnessBoardOpen(ev.open !== false);
@@ -130,7 +135,12 @@ export async function sendChat(
   const background = trySendBackground({ preset, draft, images, setDraft, setImages, setMention, onAccepted: opts?.onAccepted }, opts?.mode);
   if (typeof background === "boolean" ? background : await background) return;
   const initial = useIde.getState();
-  const connectionError = imageAttachmentError({ provider: initial.llmProvider, authMode: initial.llmAuthMode, baseUrl: initial.llmBaseUrl, model: initial.llmModel }, images.length, initial.locale);
+  const connection = Object.freeze({ provider: initial.llmProvider, authMode: initial.llmAuthMode, baseUrl: initial.llmBaseUrl, model: initial.llmModel, apiKey: initial.llmApiKey });
+  if (initial.pathOperation) {
+    initial.setNotice(initial.locale === "en" ? "Project files are being updated. Wait until this finishes. Your draft is kept." : "Die Projektdateien werden gerade geändert. Warte, bis der Vorgang abgeschlossen ist. Dein Entwurf bleibt erhalten.");
+    return;
+  }
+  const connectionError = imageAttachmentError(connection, images.length, initial.locale);
   if (connectionError) { initial.setNotice(connectionError); return; }
   if (images.length && initial.agentBusy && initial.agentJob?.status !== "ask") {
     initial.setNotice(initial.locale === "en" ? "Wait for this round to finish before sending images. Your draft is kept." : "Warte vor dem Senden von Bildern auf das Ende dieser Runde. Dein Entwurf bleibt erhalten.");
@@ -165,7 +175,7 @@ export async function sendChat(
     if (!text && images.length) text = initial.locale === "en" ? "Describe the attached image." : "Beschreibe das angehängte Bild.";
     if (!text) return;
   }
-  let holdUi = false;
+  const holdUi = false;
   let parked = false;
   if (!asking && useIde.getState().agentBusy) {
     useIde.getState().pushAgent(text, false, selectedMode);
@@ -174,14 +184,17 @@ export async function sendChat(
     return;
   }
   const scrub = scrubSecrets(text);
-  let work = scrub.text;
+  const work = scrub.text;
+  let selectionContext = "";
   if (pending && !asking) {
-    work = `Auswahl in ${pending.path}:\n\`\`\`\n${pending.text.slice(0, 4000)}\n\`\`\`\n\n${work}`;
+    selectionContext = `Auswahl in ${pending.path}:\n\`\`\`\n${pending.text.slice(0, 4000)}\n\`\`\``;
     useIde.getState().setPendingAsk(null);
   }
   const forceAsk = Boolean(pending) && (!typed || useIde.getState().agentMode === "ask");
   // The selected mode is a user decision, not a guess based on request wording.
   const observeRequest = asking ? (jobNow?.mode ?? selectedMode) === "ask" : selectedMode === "ask" || forceAsk;
+  const continuing = !observeRequest && jobNow?.status === "paused" && Boolean(jobNow.workflow)
+    && /^(?:weiter(?:machen)?|fortsetzen|mach weiter|continue|resume)[.!]?$/i.test(typed);
   if (scrub.n) useIde.getState().setNotice(t("secretsN", { n: scrub.n }));
   else {
     const warningEpoch = useIde.getState().workspaceEpoch;
@@ -191,6 +204,7 @@ export async function sendChat(
   }
   const my = beginAgent();
   const workspaceEpoch = useIde.getState().workspaceEpoch;
+  const run = captureAgentRun(() => useIde.getState().workspaceEpoch === workspaceEpoch);
   let roundVerification: import("./agent-evidence").Verification | undefined;
   let roundStopReason: import("./agent-core").AgentResult["stopReason"];
   let roundStopLabel: string | undefined;
@@ -198,7 +212,7 @@ export async function sendChat(
   setAgentBusy(true);
   opts?.onAccepted?.();
   await import("@/lib/model-context").then((m) => m.applyCloudContext()).catch(() => null);
-  if (my !== agentGen()) return;
+  if (!run.current()) return;
   appLog(
     "agent",
     `R${my} start ${useIde.getState().llmProvider} ${useIde.getState().llmModel || "-"} host=${logHost(useIde.getState().llmBaseUrl)} ctx=${useIde.getState().llmContext} think=${useIde.getState().llmThinking}`,
@@ -215,13 +229,13 @@ export async function sendChat(
   if (!title)
     void brainChatTitle(work)
       .then((value) => {
-        if (my === agentGen()) setTitle(value);
+        if (run.current()) setTitle(value);
       })
       .catch(() => undefined);
   reflectUtterance(work, "ask");
   try {
     const routed = observeRequest ? { hand: "model" as const } : await anvilHandle(work, { hasImages: pics.length > 0 });
-    if (my !== agentGen()) return;
+    if (!run.current()) return;
     if (routed.hand === "app" && routed.reply) {
       finalizeAssistant(routed.reply);
       return;
@@ -230,8 +244,8 @@ export async function sendChat(
     if (!observeRequest) {
       diskCheckpointId = ck;
       useIde.setState((state) => ({ chat: state.chat.map((m) => m.id === asstId ? { ...m, checkpointId: ck } : m) }));
-      await beginProjectCheckpoint(ck);
-      if (my !== agentGen()) return;
+      await beginProjectCheckpoint(ck, run);
+      if (!run.current()) return;
     }
     emitPlugin("agent", work);
     resetLoopFails();
@@ -242,7 +256,7 @@ export async function sendChat(
     if (useBrain.getState().jobs.attach) {
       extraFiles = [...new Set([...extraFiles, ...attachmentHints(work, selectFileKeys(s))])];
     }
-    if (my !== agentGen()) return;
+    if (!run.current()) return;
     s = useIde.getState();
     const prefer = [
       ...new Set(
@@ -254,11 +268,17 @@ export async function sendChat(
     const rules = workspaceRules(s.files, s.agentRules);
     const { internPrompt } = await import("@/lib/intern");
     const { hydrateLearnFromFiles } = await import("@/lib/learn");
+    run.assertCurrent();
     hydrateLearnFromFiles(s.files);
     const memory = [learnPrompt(work), internPrompt()].filter(Boolean).join("\n\n");
+    useIde.setState(state => ({ chat: state.chat.map(message => message.id === asstId ? { ...message, skillSelection: useLearn.getState().skillSelection } : message) }));
+    const recordSkillLoad = (name: string, args: Record<string, unknown>, out: unknown) => {
+      if (!['skill_run', 'skill_read'].includes(name) || !out || typeof out !== 'object' || !('body' in out) || 'error' in out) return;
+      const skill = visibleSkills().find(skill => skill.id === args.name || skill.name === args.name);
+      useIde.setState(state => ({ chat: state.chat.map(message => message.id === asstId ? { ...message, skillSelection: withLoadedSkill(message.skillSelection || [], skill, name) } : message) }));
+    };
     const helperNotes = lanePrompt();
-    const connection = { provider: s.llmProvider, authMode: s.llmAuthMode, baseUrl: s.llmBaseUrl, model: s.llmModel };
-    const vision = connectionCapabilities(connection).images !== "unsupported" && modelSeesImages(s.llmProvider, s.llmModel);
+    const vision = connectionCapabilities(connection).images !== "unsupported" && modelSeesImages(connection.provider, connection.model, connection.baseUrl);
     const refs = packRefContext(
       s.files,
       work,
@@ -266,6 +286,7 @@ export async function sendChat(
       { vision },
     );
     const pinBlock = (await import("@/lib/fix-agent")).pinContext(work);
+    run.assertCurrent();
     const context = extraFiles
       .filter(
         (p) =>
@@ -290,6 +311,7 @@ export async function sendChat(
         refs.text,
         pinBlock,
         taskHandoff(s.chat),
+        selectionContext,
         context ? `Angehängte Dateien:\n${context}` : "",
       ]
         .filter(Boolean)
@@ -302,9 +324,10 @@ export async function sendChat(
       : prefix
         ? `${prefix}\n\nAuftrag:\n${work}`
         : work;
-    const history = packChatHistory(
+    const history = packAgentHistory(
       historyForConnection(s.chat.map((m) => ({ role: m.role, content: m.content, images: m.images })), connection),
-      { content: user, images: vision ? [...pics, ...refs.images].slice(0, 4) : pics.slice(0, 4) },
+      { content: work, images: vision ? [...pics, ...refs.images].slice(0, 4) : pics.slice(0, 4) },
+      prefix,
     );
     const fileList = Object.entries(s.files)
       .filter(([path]) => !isSecretPath(path))
@@ -315,7 +338,7 @@ export async function sendChat(
         content,
       }));
     const onUsage = (usage: TokenUsage, request?: RequestTokens) => {
-      if (my !== agentGen()) return;
+      if (!run.current()) return;
       addSessionTokens(usage.prompt, usage.completion, usage.estimated);
       useIde.setState({ lastRequestTokens: request ?? null });
     };
@@ -328,40 +351,38 @@ export async function sendChat(
         !forceAsk &&
         brainReady() &&
         useBrain.getState().jobs.ask &&
-        routeKind(work) === "ask-local";
+        routeKind(work) === "ask-local" && user.length <= 8000;
       let reply: string;
       if (helperAsk) {
         requestPhase(my, "waiting");
         try {
           reply = await brainAsk(user, (chunk) => {
-            if (my !== agentGen()) return;
+            if (!run.current()) return;
             requestPhase(my, "answering");
             appendAssistant(chunk);
-          }, memory, onUsage);
+          }, memory, onUsage, run.signal);
         } catch {
-          if (my !== agentGen()) return;
+          if (!run.current()) return;
           requestPhase(my, "waiting");
-          reply = await completeText({
-            onUsage,
-            prompt: `You are Anvil in Ask mode. Do not change files. Explain briefly in the user's language.\n\n${memory ? `${memory}\n\n` : ""}${user}`,
-            provider: s.llmProvider,
-            baseUrl: s.llmBaseUrl,
-            model: s.llmModel,
-            apiKey: s.llmApiKey,
-            images: vision ? [...pics, ...refs.images].slice(0, 4) : undefined,
+          const fallback = await chatWithProvider({
+            run,
+            onUsage, ...connection, messages: history, files: fileList,
+            context: s.llmContext, thinking: s.llmThinking, compact: s.llmCompact,
+            memory, locale: s.locale, observeOnly: true, maxRounds: 8,
+            autoContinueRounds: false, loopTries: 1, runLoop: false, graphLoop: false,
           });
+          if (!run.current()) return;
+          reply = fallback.reply;
         }
       } else {
         useIde.getState().setAgentJob(asking && jobNow
           ? { ...jobNow, mode: "ask", status: "run", ask: null, rounds: jobNow.rounds + 1 }
           : newJob(work, "ask"));
-        if (my !== agentGen()) return;
+        if (!run.current()) return;
         const asked = await chatWithProvider({
+          run,
           onUsage,
-          provider: s.llmProvider,
-          baseUrl: s.llmBaseUrl,
-          model: s.llmModel,
-          apiKey: s.llmApiKey,
+          ...connection,
           messages: history,
           files: fileList,
           dirs: s.dirs,
@@ -379,12 +400,12 @@ export async function sendChat(
           runLoop: false,
           graphLoop: false,
           onDelta: (chunk, kind) => {
-            if (my !== agentGen()) return;
+            if (!run.current()) return;
             if (kind === "think") appendThinking(chunk);
             else appendAssistant(chunk);
           },
           onToolStart: ({ name, args }) => {
-            if (my !== agentGen()) return;
+            if (!run.current()) return;
             addAgentStep({
               name,
               detail: toolDetail(name, args),
@@ -393,8 +414,9 @@ export async function sendChat(
             });
           },
           onTool: ({ name, args, result: out }) => {
-            if (my !== agentGen()) return;
+            if (!run.current()) return;
             const err = Boolean(out && typeof out === "object" && ((out as { error?: unknown }).error || (out as { isError?: boolean }).isError));
+            if (!err) recordSkillLoad(name, args, out);
             addAgentStep({
               name,
               detail: toolDetail(name, args, out),
@@ -403,6 +425,7 @@ export async function sendChat(
             });
           },
         });
+        if (!run.current()) return;
         if (!asked.ok) requestPhase(my, "error");
         reply = asked.reply;
         if (asked.parked && asked.ask) {
@@ -411,7 +434,7 @@ export async function sendChat(
           if (cur) useIde.getState().setAgentJob({ ...cur, status: "ask", ask: asked.ask });
         }
       }
-      if (my !== agentGen()) return;
+      if (!run.current()) return;
       finalizeAssistant(reply, undefined, { replace: useRequestState.getState().phase === "error" });
       void brainDistill(work, reply);
       {
@@ -440,7 +463,7 @@ export async function sendChat(
     });
     const planMessageId = useIde.getState().chat.at(-1)?.id;
     void brainPlanText(work).then((steps) => {
-      if (my !== agentGen()) return;
+      if (!run.current()) return;
       const st = useIde.getState();
       const last = st.chat.at(-1);
       // A delayed helper must not install a fresh 0/N list after work has ended
@@ -453,7 +476,7 @@ export async function sendChat(
       if (steps.length >= 3)
         useIde.getState().setChatPlan(steps.map((text) => ({ text, status: "todo" as const })));
     });
-    if (asking && jobNow) {
+    if ((asking || continuing) && jobNow) {
       useIde
         .getState()
         .setAgentJob({ ...jobNow, status: "run", ask: null, rounds: jobNow.rounds + 1 });
@@ -470,13 +493,21 @@ export async function sendChat(
       const stj = useIde.getState();
       stj.setSessionJournal(beginJournal(work, stj.sessionJournal));
     }
-    if (my !== agentGen()) return;
+    if (!run.current()) return;
     const result = await chatWithProvider({
+      run,
       onUsage,
-      provider: s.llmProvider,
-      baseUrl: s.llmBaseUrl,
-      model: s.llmModel,
-      apiKey: s.llmApiKey,
+      workflow: asking || continuing ? jobNow?.workflow : undefined,
+      workflowId: useIde.getState().agentJob?.id,
+      onWorkflow: async (workflow) => {
+        run.assertCurrent();
+        await persistAgentWorkflow(s.workspaceCwd || "", workflow);
+        run.assertCurrent();
+        const st = useIde.getState(), currentJob = st.agentJob, last = st.chat.at(-1);
+        if (currentJob) st.setAgentJob({ ...currentJob, workflow });
+        if (last?.role === "assistant") useIde.setState({ chat: st.chat.map(m => m.id === last.id ? { ...m, workflow, acceptance: acceptanceResult(workflowAcceptance(workflow)) } : m) });
+      },
+      ...connection,
       messages: history,
       files: fileList,
       dirs: s.dirs,
@@ -504,19 +535,19 @@ export async function sendChat(
       autoContinueRounds: s.harnessAutoContinue,
       graphSees: s.graphSees,
       onHarness: (bar) => {
-        if (my !== agentGen()) return;
+        if (!run.current()) return;
         useIde.getState().setChatHarness(bar);
       },
       onDelta: (chunk, kind) => {
-        if (my !== agentGen()) return;
+        if (!run.current()) return;
         if (kind === "think") appendThinking(chunk);
         else appendAssistant(chunk);
       },
       onWorkspace: (event) => {
-        if (my === agentGen() && useIde.getState().workspaceEpoch === workspaceEpoch) return applyWorkspace(event);
+        if (run.current() && useIde.getState().workspaceEpoch === workspaceEpoch) return applyWorkspace(event, run);
       },
       onToolStart: ({ name, args }) => {
-        if (my !== agentGen()) return;
+        if (!run.current()) return;
         const started = planStart(name, useIde.getState().chat.at(-1)?.plan, args);
         if (started) useIde.getState().setChatPlan(started);
         addAgentStep({
@@ -525,7 +556,7 @@ export async function sendChat(
           status: "run",
           ...toolCode(name, args),
         });
-        void import("@/lib/run-window").then((m) => m.agentToolUi(name, String(args.path ?? "")));
+        void import("@/lib/run-window").then((m) => { if (run.current()) m.agentToolUi(name, String(args.path ?? "")); });
         if (
           name === "run_file" ||
           name === "engine_run" ||
@@ -551,20 +582,16 @@ export async function sendChat(
           });
         }
       },
-      getPlan: () => my === agentGen() ? useIde.getState().chat.at(-1)?.plan : undefined,
+      getPlan: () => run.current() ? useIde.getState().chat.at(-1)?.plan : undefined,
       canReplacePlan: () => {
         const st = useIde.getState();
-        return my === agentGen() && planAgentMayReplace(normalizePlanWho(st.planWho), Boolean(st.chat.at(-1)?.planLocked));
+        return run.current() && planAgentMayReplace(normalizePlanWho(st.planWho), Boolean(st.chat.at(-1)?.planLocked));
       },
       onTool: ({ name, args, result: out }) => {
-        if (my !== agentGen()) return;
-        const err = Boolean(out && typeof out === "object" && ((out as { error?: unknown }).error || (out as { isError?: boolean }).isError));
-        const failed =
-          Boolean(err) ||
-          Boolean(
-            out && typeof out === "object" && "ok" in out && (out as { ok?: boolean }).ok === false,
-          );
-        if (name === "skill_run") markSkills([String(args.name ?? "")]);
+        if (!run.current()) return;
+        const failed = Boolean(out && typeof out === "object" && toolResultFailed(out as Record<string,unknown>));
+        if (name === "skill_run" && !failed) markSkills([String(args.name ?? "")]);
+        if (!failed) recordSkillLoad(name, args, out);
         if (name === "set_plan" && !failed && out && typeof out === "object" && "plan" in out && Array.isArray(out.plan)) {
           // Validated by the loop against this request's actual tool results.
           useIde.getState().setChatPlan(out.plan);
@@ -621,7 +648,7 @@ export async function sendChat(
           const left = typeof o.tries_left === "number" ? o.tries_left : max;
           useIde.getState().setChatLastRun({
             id: o.stage?.id,
-            ok: !err && o.ok !== false && !o.isError,
+            ok: !failed && o.ok === true && !toolResultPending(out as Record<string, unknown>),
             path: String(
               args.path ??
                 args.cmd ??
@@ -634,13 +661,14 @@ export async function sendChat(
             attempt: Math.max(1, max - left + (o.ok ? 0 : 1)),
             max,
             graphical: Boolean(o.graphical),
-            running: o.stage?.kind === "window",
+            running: toolResultPending(out as Record<string, unknown>) || o.stage?.kind === "window",
           });
         }
       },
     });
-    if (my !== agentGen()) return;
+    if (!run.current()) return;
     roundVerification = result.verification;
+    if(result.acceptance){const st=useIde.getState();useIde.setState({chat:st.chat.map(m=>m.id===asstId?{...m,acceptance:result.acceptance}:m)});}
     roundStopReason = result.stopReason;
     roundStopLabel = roundStopReason === "round-limit" ? (s.locale === "en" ? "Round limit" : "Rundenlimit") : roundStopReason === "no-progress" ? (s.locale === "en" ? "No progress" : "Kein Fortschritt") : roundStopReason === "tool-limit" ? (s.locale === "en" ? "Tool limit" : "Werkzeuglimit") : undefined;
     if (!result.ok) requestPhase(my, "error");
@@ -651,19 +679,21 @@ export async function sendChat(
     }
     finalizeAssistant(result.reply, result.tools, { replace: !result.ok || Boolean(result.plan?.length), incompleteReason: roundStopLabel });
     if (result.ok) {
-      void import("@/lib/intern").then((m) => m.resolveKind("agent"));
-      void import("@/lib/problems").then((m) => m.refreshProblems());
+      void import("@/lib/intern").then((m) => { if (run.current()) m.resolveKind("agent"); });
+      void import("@/lib/problems").then((m) => { if (run.current()) return m.refreshProblems(); });
     }
     const snap = useIde.getState().checkpoints.find((c) => c.id === ck);
     if (snap) {
       const changes = snapshotDiff(snap.files, useIde.getState().files);
       useIde.getState().setChatChanges(changes);
       const st = useIde.getState();
-      if (!parked && shouldTestAfterRound(changes, st.files, st.chat.at(-1)?.steps)) {
-        await testAfterRound();
+      if (!parked && shouldTestAfterRound(changes, st.files, st.chat.at(-1)?.steps, result.verification)) {
+        await testAfterRound(run);
+        run.assertCurrent();
       }
     }
 
+    run.assertCurrent();
     void brainDistill(work, result.reply);
     {
       const st = useIde.getState();
@@ -701,25 +731,25 @@ export async function sendChat(
         if (lastWritten) current.openFile(lastWritten);
       }
       void brainReview(result.files.map((f) => ({ path: f.path, before: s.files[f.path] ?? "", after: f.content }))).then((t) => {
-        if (t && my === agentGen()) addAgentStep({ name: "Helfer-Hinweis", detail: t, status: "ok" });
+        if (t && run.current()) addAgentStep({ name: "Helfer-Hinweis", detail: t, status: "ok" });
       });
     }
     if (!parked) void brainFollowups(work, result.reply);
     if (!parked && result.runPaths?.length) {
       const st = useIde.getState();
       const already = result.tools?.includes("run_file") && result.verification?.state !== "stale";
-      if (st.autoRunAgent && !already) {
+      if (st.autoRunAgent && !already && !result.workflow) {
         await (async () => {
-            if (my !== agentGen()) return;
+            if (!run.current()) return;
             const html = result.runPaths!.some((p) => /\.html?$/i.test(p));
             const cur = useIde.getState();
             if (html || cur.runInWindow) {
-              void import("@/lib/run-window").then((m) => m.openRunWindow({ agent: true }));
+              void import("@/lib/run-window").then((m) => { if (!run || run.current()) m.openRunWindow({ agent: true }); });
               cur.setPreviewOpen(false);
             } else {
               if (cur.openOutputOnRun) cur.revealOutput();
               cur.setPreviewOpen(true);
-              void import("@/lib/run-window").then((m) => m.agentOpenedPreview());
+              void import("@/lib/run-window").then((m) => { if (!run || run.current()) m.agentOpenedPreview(); });
             }
             setRunning(true);
             try {
@@ -730,8 +760,8 @@ export async function sendChat(
                 const started = planStart("run_file", useIde.getState().chat.at(-1)?.plan, { path: p });
                 if (started) useIde.getState().setChatPlan(started);
                 useIde.getState().setRunPath(p);
-                const r = await runFile(p, latest);
-                if (my !== agentGen()) return;
+                const r = await runFile(p, latest, { run });
+                if (!run.current()) return;
                 pushOutput(r);
                 if (!r.ok) ok = false;
                 const finished = planFromTool("run_file", useIde.getState().chat.at(-1)?.plan, !r.ok, { path: p }, r);
@@ -742,21 +772,24 @@ export async function sendChat(
               if (executable.length) {
                 roundVerification = automaticRunVerification(roundVerification, ok, latest === useIde.getState().files);
                 if (!ok) requestPhase(my, "error");
-                finalizeAssistant(verifiedReply(result.modelReply ?? result.reply, roundVerification, !roundStopReason), result.tools, { replace: true, incompleteReason: roundStopLabel });
+                const acceptance=result.acceptance?acceptanceResult(result.acceptance,{verification:roundVerification}):undefined;
+                const reply=verifiedReply(result.modelReply ?? result.reply, roundVerification, !roundStopReason);
+                finalizeAssistant(acceptance?acceptanceReply(reply,acceptance,s.locale):reply, result.tools, { replace: true, incompleteReason: roundStopLabel });
+                if(acceptance){const st=useIde.getState();useIde.setState({chat:st.chat.map(m=>m.id===asstId?{...m,acceptance}:m)});}
               }
               skillOutcome(ok ? "ok" : "fail");
               if (!ok) useLearn.getState().track("fail", result.runPaths![0]);
             } finally {
-              setRunning(false);
-              void import("@/lib/run-window").then((m) => m.releaseAgentUi());
+              if (run.current()) setRunning(false);
+              void import("@/lib/run-window").then((m) => { if (run.current()) m.releaseAgentUi(); });
             }
         })();
       }
     }
   } catch (err) {
-    if (my !== agentGen()) {
+    if (!run.current()) {
       const last = useIde.getState().chat.at(-1);
-      if (last && last.id === asstId && last.role === "assistant" && !(last.content || "").trim()) {
+      if (!useIde.getState().agentBusy && useIde.getState().workspaceEpoch === workspaceEpoch && last && last.id === asstId && last.role === "assistant" && !(last.content || "").trim()) {
         finalizeAssistant("Der Auftrag wurde unterbrochen. Sende eine weitere Nachricht, um ihn fortzusetzen.");
       }
       return;
@@ -766,7 +799,7 @@ export async function sendChat(
     if (isAbortLike(err)) {
       const last = useIde.getState().chat.at(-1);
       void brainStopNote(last?.steps ?? []).then((note) => {
-        if (my !== agentGen()) return;
+        if (!run.current()) return;
         const cur = useIde.getState().chat.at(-1);
         if (!cur || cur.role !== "assistant" || cur.id !== last?.id) return;
         const body = (cur.content || "").trim();
@@ -780,20 +813,21 @@ export async function sendChat(
     }
   } finally {
     if (diskCheckpointId) {
-      try { await sealProjectCheckpoint(diskCheckpointId); }
-      catch (error) { useIde.getState().setNotice(`Projektsicherung nicht abgeschlossen: ${String(error)}`); }
+      try { await sealProjectCheckpoint(diskCheckpointId, run); }
+      catch (error) { if (run.current()) useIde.getState().setNotice(`Projektsicherung nicht abgeschlossen: ${String(error)}`); }
     }
-    const live = my === agentGen();
+    const live = run.current();
     const busy = useIde.getState().agentBusy;
     if (live) {
       resetLiveWrite();
       if (!parked) {
-        useIde.getState().setAgentJob(null);
         const last = useIde.getState().chat.at(-1);
         const failed = Boolean(roundStopReason) || ["error", "stopped"].includes(useRequestState.getState().phase) || /^(HTTP \d{3}|Gestoppt|Abgebrochen|Unterbrochen)/i.test(
           (last?.content || "").trim(),
         );
         const proved = roundVerification?.state === "passed";
+        const currentJob = useIde.getState().agentJob;
+        useIde.getState().setAgentJob(failed && currentJob?.workflow ? { ...currentJob, status: "paused", ask: null } : null);
         const fin = planFinish(last?.plan, failed, proved && !failed, Boolean(last?.content?.trim()));
         if (fin) useIde.getState().setChatPlan(fin);
         const final = useIde.getState();
@@ -807,17 +841,17 @@ export async function sendChat(
       const phase = useRequestState.getState().phase;
       appLog("agent", `R${my} ${parked ? "wartet auf Rückfrage" : phase === "error" ? "fehlgeschlagen" : phase === "stopped" ? "gestoppt" : "abgeschlossen"}`);
       if (!parked) useIde.getState().setRunning(false);
-      if (!parked && !holdUi) void import("@/lib/run-window").then((m) => m.releaseAgentUi());
+      if (!parked && !holdUi) void import("@/lib/run-window").then((m) => { if (run.current()) m.releaseAgentUi(); });
       else if (!parked) {
         window.setTimeout(() => {
-          if (useIde.getState().agentBusy) return;
-          void import("@/lib/run-window").then((m) => m.releaseAgentUi());
+          if (!run.current() || useIde.getState().agentBusy) return;
+          void import("@/lib/run-window").then((m) => { if (run.current()) m.releaseAgentUi(); });
         }, 8000);
       }
-      queueMicrotask(() => document.getElementById("anvil-chat")?.focus());
-    } else if (!busy) {
+      queueMicrotask(() => { if (run.current()) document.getElementById("anvil-chat")?.focus(); });
+    } else if (!busy && useIde.getState().workspaceEpoch === workspaceEpoch && useIde.getState().chat.at(-1)?.id === asstId) {
       useIde.getState().setRunning(false);
-      void import("@/lib/run-window").then((m) => m.releaseAgentUi());
+      void import("@/lib/run-window").then((m) => { if (run.current()) m.releaseAgentUi(); });
     }
   }
 }

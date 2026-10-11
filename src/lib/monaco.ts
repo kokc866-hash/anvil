@@ -385,9 +385,14 @@ export function wireNav(monaco: MonacoNS) {
         if (!position) return null;
         const path = pathOf(model);
         const offset = model.getOffsetAt(position);
-        const files = { ...filesOf(), [path]: model.getValue() };
-        return import("./lsp-compile").then((c) => c.tsQuickInfo(files, path, offset, openOf())).then((info) => {
-          const md = info ?? hoverFor(files, path, model.getValue(), offset);
+        const source = model.getValue();
+        const files = { ...filesOf(), [path]: source };
+        const locale = requireStore().useIde.getState().locale;
+        const info = /\.[cm]?[jt]sx?$/i.test(path)
+          ? import("./lsp-compile").then((c) => c.tsQuickInfo(files, path, offset, openOf())).catch(() => null)
+          : Promise.resolve(null);
+        return info.then((info) => {
+          const md = info ?? hoverFor(files, path, source, offset, locale);
           return md ? { contents: [{ value: md }] } : null;
         }).catch(() => null);
       },
@@ -445,6 +450,7 @@ function requireStore(): {
     getState: () => {
       files: Record<string, string>;
       openPaths: string[];
+      locale?: "de" | "en";
       setContent: (path: string, content: string) => void;
     };
   };

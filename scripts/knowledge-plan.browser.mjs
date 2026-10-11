@@ -61,7 +61,7 @@ try{
  result.ok=true;await page.evaluate(id=>window.anvilNative.agentJob('dismiss',{id}),state.id);
 }catch(error){result.ok=false;result.error=String(error.stack||error);await page?.screenshot({path:path.join(fixture,'failure.png')}).catch(()=>{});throw error;}
 finally{
- if(app){const timer=setTimeout(()=>app.process()?.kill(),10000);try{await app.close();}catch{}clearTimeout(timer);}
+ if(app){const timer=setTimeout(()=>app.process()?.kill(),10000);try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(timer);}
  server.closeAllConnections();await new Promise(r=>server.close(r));
  await writeFile(path.join(fixture,'result.json'),JSON.stringify(result,null,2));await writeFile(path.join(base,'latest-result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }

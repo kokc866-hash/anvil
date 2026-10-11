@@ -63,6 +63,52 @@ export type LspPack = {
 export const DEFAULT_COMPANION = "http://127.0.0.1:7845";
 export const DEFAULT_ENGINE_MCP = "http://127.0.0.1:7845/mcp";
 
+export type LanguageUpdateItem = {
+  id: string;
+  label: string;
+  kind: "runtime" | "language-server";
+  provider: string;
+  installed: string | null;
+  latest: string | null;
+  location: "anvil" | "system" | "missing";
+  path?: string | null;
+  backup?: boolean;
+  channel?: string;
+  managedBy?: string;
+  source?: string;
+  checkedAt: number;
+  status: "update" | "new-series" | "current" | "newer-installed" | "unknown" | "bundled" | "provider-reference" | "not-installed" | "error";
+  error?: string;
+};
+
+export type LanguageUpdateState = {
+  home: string;
+  automatic: boolean;
+  checking: boolean;
+  intervalHours: number;
+  checkedAt: number;
+  lastAttemptAt: number;
+  nextCheckAt: number | null;
+  updateCount: number;
+  errorCount: number;
+  incomplete?: boolean;
+  items: LanguageUpdateItem[];
+  error?: string;
+};
+
+export async function companionLanguageUpdates(base = DEFAULT_COMPANION,
+  action?: { action: "check"; manual?: boolean } | { action: "configure"; automatic: boolean }): Promise<LanguageUpdateState> {
+  const response = await fetch(`${base.replace(/\/$/, "")}/v1/language-updates`, {
+    method: action ? "POST" : "GET", headers: headers(), ...(action ? { body: JSON.stringify(action) } : {}),
+    signal: AbortSignal.timeout(action?.action === "check" ? 150000 : 8000),
+  });
+  const data = await response.json();
+  if (response.status === 404) throw new Error("Der verbundene Companion unterstützt die Update-Prüfung noch nicht. Aktualisiere den Companion und prüfe erneut.");
+  if (!response.ok || data.ok !== true || !Array.isArray(data.items))
+    throw new Error(data.error || "Sprachupdates konnten nicht geladen werden. Companion aktualisieren und erneut prüfen.");
+  return data as LanguageUpdateState;
+}
+
 export type EnginePaths = { godot: string; unity: string; unreal: string };
 export async function companionEnginePaths(base = DEFAULT_COMPANION, configured?: EnginePaths): Promise<{configured: EnginePaths; bins: Record<string, string | null>}> {
   const r = await fetch(`${base.replace(/\/$/, "")}/v1/engines`, {
@@ -118,12 +164,13 @@ export function pairCompanion(base = DEFAULT_COMPANION): Promise<string> {
   });
 }
 
-export async function companionPing(base = DEFAULT_COMPANION): Promise<CompanionInfo> {
+export async function companionPing(base = DEFAULT_COMPANION, signal?: AbortSignal): Promise<CompanionInfo> {
   try {
+    signal?.throwIfAborted();
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/ping`, {
       method: "GET",
       headers: headers(),
-      signal: AbortSignal.timeout(8000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
     });
     const j = (await r.json()) as CompanionInfo;
     if (r.status === 401) return { ok: false, needToken: true, error: j.error || "Token fehlt" };
@@ -137,12 +184,14 @@ export async function companionPing(base = DEFAULT_COMPANION): Promise<Companion
 export async function companionRun(
   body: { cwd?: string; cmd: string; action?: "play" | "check" | "editor" | "test"; timeoutMs?: number },
   base = DEFAULT_COMPANION,
+  signal: AbortSignal = withAgentTimeout(0),
 ): Promise<CompanionJob> {
+  signal.throwIfAborted();
   const r = await fetch(`${base.replace(/\/$/, "")}/v1/run`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify(body),
-    signal: withAgentTimeout(Math.min(120000, Math.max(8000, body.timeoutMs ?? 90000))),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(Math.min(120000, Math.max(8000, body.timeoutMs ?? 90000)))]),
   });
   if (!r.ok) {
     const t = await r.text();
@@ -414,13 +463,16 @@ export async function companionGit(
   action: string,
   body: Record<string, unknown> = {},
   base = DEFAULT_COMPANION,
+  signal?: AbortSignal,
 ): Promise<GitStatus> {
   try {
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(action === "push" || action === "pull" || action === "clone" ? 180000 : 20000);
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/git`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ action, ...body }),
-      signal: AbortSignal.timeout(action === "push" || action === "pull" || action === "clone" ? 180000 : 20000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
     return (await r.json()) as GitStatus;
   } catch (e) {
@@ -428,13 +480,14 @@ export async function companionGit(
   }
 }
 
-export async function companionWorkspace(cwd: string, base = DEFAULT_COMPANION): Promise<{ ok: boolean; cwd?: string; error?: string }> {
+export async function companionWorkspace(cwd: string, base = DEFAULT_COMPANION, signal?: AbortSignal): Promise<{ ok: boolean; cwd?: string; error?: string }> {
   try {
+    signal?.throwIfAborted();
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/workspace`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ cwd }),
-      signal: AbortSignal.timeout(8000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
     });
     return (await r.json()) as { ok: boolean; cwd?: string; error?: string };
   } catch (e) {
@@ -546,34 +599,39 @@ export type DebugSnap = {
   stderr?: string;
   eval?: string;
   pause?: DebugPause | null;
+  uncertain?: boolean;
 };
 
 export async function companionDebug(
   action: "start" | "cmd" | "poll" | "stop",
   body: Record<string, unknown> = {},
   base = DEFAULT_COMPANION,
+  signal?: AbortSignal,
 ): Promise<DebugSnap> {
   try {
+    signal?.throwIfAborted();
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/debug`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ action, ...body }),
-      signal: AbortSignal.timeout(action === "start" ? 15000 : 8000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(action === "start" ? 15000 : 8000)]) : AbortSignal.timeout(action === "start" ? 15000 : 8000),
     });
     return (await r.json()) as DebugSnap;
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Debug nicht erreichbar" };
+    return { ok: false, error: e instanceof Error ? e.message : "Debug nicht erreichbar", ...(action === "start" ? { uncertain: true } : {}) };
   }
 }
 
-export async function companionRunStatus(id: string, base = DEFAULT_COMPANION): Promise<CompanionJob> {
+export async function companionRunStatus(id: string, base = DEFAULT_COMPANION, run?: import("./agent-run").AgentRun): Promise<CompanionJob> {
   const { withCompanion } = await import("./companion-life");
+  run?.assertCurrent();
   return withCompanion(async () => {
-    const r = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(5000) });
+    run?.assertCurrent();
+    const r = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?id=${encodeURIComponent(id)}`, { headers: headers(), signal: run?.timeout(5000) ?? AbortSignal.timeout(5000) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     return j as CompanionJob;
-  }, base);
+  }, base, undefined, run);
 }
 
 export async function companionReadFiles(paths: string[], cwd: string, base = DEFAULT_COMPANION): Promise<Record<string, string | null>> {

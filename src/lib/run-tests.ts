@@ -1,5 +1,6 @@
 import { runFile } from "./run-client";
-import { throwIfAborted } from "./abort";
+import { throwIfAborted, agentGen } from "./abort";
+import type { AgentRun } from "./agent-run";
 import { discoverTests, isTestFile, isTestExt, parseTests, pruneTestMap, fileHasInlineTests, type TestHit } from "./test-parse";
 import { prepared } from "./test-wrap";
 import { useIde, type RunResult } from "@/store/ide";
@@ -47,12 +48,14 @@ function withTimeout(p: Promise<RunResult>, ms: number, label: string): Promise<
   });
 }
 
-export async function runTestFiles(paths: string[], onlyName?: string): Promise<RunResult> {
+export async function runTestFiles(paths: string[], onlyName?: string, run?: AgentRun): Promise<RunResult> {
   const st = useIde.getState();
-  const current = () => useIde.getState().workspaceEpoch === st.workspaceEpoch;
+  const current = () => useIde.getState().workspaceEpoch === st.workspaceEpoch && (!run || run.current());
   const assertCurrent = () => {
+    run?.assertCurrent();
     if (!current()) throw new Error("Projekt inzwischen gewechselt. Testergebnis gehört zum vorherigen Projekt.");
   };
+  assertCurrent();
   if (st.testsRunning) {
     return { ok: false, stdout: "", stderr: "Tests laufen schon.", duration: 0, label: "tests" };
   }
@@ -78,11 +81,12 @@ export async function runTestFiles(paths: string[], onlyName?: string): Promise<
       return r;
     }
     for (const g of suiteGroups(list)) {
+      assertCurrent();
       throwIfAborted();
       ran.push(...g.members);
       const scope: Record<string, string> = {};
       for (const p of g.members) scope[p] = st.files[p] ?? "";
-      const r = await withTimeout(runFile(g.entry, prepared(st.files, g.entry, onlyName), { asTest: true }), FILE_MS, g.entry);
+      const r = await withTimeout(runFile(g.entry, prepared(st.files, g.entry, onlyName), { asTest: true, run }), FILE_MS, g.entry);
       assertCurrent();
       parts.push(`${r.ok ? "PASS" : "FAIL"} ${g.entry}\n${[r.stdout, r.stderr].filter(Boolean).join("\n")}`.trim());
       if (!r.ok) ok = false;
@@ -112,6 +116,7 @@ export async function runTestFiles(paths: string[], onlyName?: string): Promise<
         );
       }
     }
+    assertCurrent();
     const prev = pruneTestMap(useIde.getState().testResults, useIde.getState().files, ran);
     useIde.setState({ testResults: prev });
     st.mergeTestResults(allHits);
@@ -136,12 +141,13 @@ export async function runTestFiles(paths: string[], onlyName?: string): Promise<
     if (current()) useIde.getState().pushOutput(result);
     return result;
   } finally {
-    if (current()) useIde.getState().setTestsRunning(false);
+    // A replacement request owns its own UI; stopAgent releases a stopped flag.
+    if (useIde.getState().workspaceEpoch === st.workspaceEpoch && (!run || run.generation === agentGen())) useIde.getState().setTestsRunning(false);
   }
 }
 
-export function runAllTests(onlyName?: string): Promise<RunResult> {
-  return runTestFiles(testFilesOf(useIde.getState().files), onlyName);
+export function runAllTests(onlyName?: string, run?: AgentRun): Promise<RunResult> {
+  return runTestFiles(testFilesOf(useIde.getState().files), onlyName, run);
 }
 
 export function runFailedTests(): Promise<RunResult> {

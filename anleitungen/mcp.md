@@ -4,6 +4,14 @@ Verfügbar ab Anvil 1.3.20. Bestehende HTTP-Konfigurationen bleiben verwendbar. 
 
 ## Verbindung einrichten
 
+Der MCP-Bereich hat drei Ansichten:
+
+- **Verbindungen** zeigt eingerichtete Einträge mit Typ, Aktivierung und Katalogstatus. Dienste mit Anmeldung, der Anvil-Companion, lokale Programme und Server über Adresse stehen in getrennten Gruppen. Suche nach Name, Programm oder Adresse. Öffne einen Eintrag, um Einstellungen und Aktionen zu sehen; neue Server öffnen sich direkt zur Einrichtung.
+- **Werkzeuge** enthält die Werkzeugauswahl, Eingaben, Ressourcen und Ergebnisse. Mit **Werkzeuge von** beschränkst du die Liste auf eine Verbindung. Die Auswahl in dieser Ansicht ändert nicht die Arbeitsfläche des Agenten.
+- **Verlauf** zeigt protokollierte Werkzeugaufrufe samt zugehöriger Verbindung.
+
+**Zugriff des Agenten** enthält die Arbeitsflächen-Einstellung und den Modus **Brücke**. Unter **Verbindungsvorlagen** kannst du das GitHub-Lesepaket hinzufügen. Es ist eine vorbereitete Serververbindung; Anleitungen für Arbeitsabläufe findest du separat unter **Erweiterungen → Aufgabenpakete**.
+
 Füge im Bereich **MCP** einen Server hinzu, aktiviere ihn und wähle **Werkzeuge laden**. Die Statusanzeige nennt die Anzahl der geladenen Werkzeuge und Ressourcen. Ein geladener Katalog bestätigt noch keinen erfolgreichen Werkzeugaufruf.
 
 Für verwaltete OAuth-Verbindungen unter **Erweiterungen → Dienste** ist der Ablauf einfacher: Bereits angemeldete und aktive Dienste laden ihre Werkzeuge seit 1.3.26 nach einem Neustart automatisch. **Werkzeuge laden** bleibt für eine sofortige zusätzliche Prüfung verfügbar. Freigaben werden erhalten; neue Werkzeuge bleiben ausgeschaltet. Details: [Externe Dienste](dienste.md).
@@ -15,6 +23,10 @@ Für verwaltete OAuth-Verbindungen unter **Erweiterungen → Dienste** ist der A
 | OAuth über HTTP | OAuth auswählen und **Anmelden** drücken. Der Browser öffnet die Anmeldung des Anbieters. Anvil empfängt den Rücksprung auf einer lokalen Adresse mit zufälligem Statuswert und PKCE. Eine vorab registrierte Client-ID kann angegeben werden; sonst muss der Server dynamische Registrierung unterstützen. |
 
 Programme für stdio müssen auf dem Rechner verfügbar sein. Einen Arbeitsordner für einen externen Server legst du ausdrücklich fest. Der lokale Anvil-Projektordner wird fremden Werkzeugen nicht automatisch als `cwd` übermittelt.
+
+HTTPS-Verbindungen verwenden unter Windows zusätzlich die dort bereits vertrauenswürdigen Zertifizierungsstellen. Das gilt auch für MCP im Hintergrundagenten. Vorhandene Standardzertifikate bleiben erhalten; Zertifikatskette und Servername werden weiterhin geprüft. Für private LAN-Server mit eigener Zertifizierungsstelle muss diese unter Windows bereits vertrauenswürdig eingerichtet sein. Eine Anmeldung ist davon unabhängig: Wenn der Server keine verlangt, bleibt das Bearer-Feld leer.
+
+Für eine lokale CAD-Verbindung gibt es eine eigene [FreeCAD-Einrichtungsanleitung](freecad.md) mit Addon-Installation, Anvil-Eingaben, automatischem Start und Funktionstest.
 
 OAuth-Zugangsdaten werden mit dem Betriebssystem-Schlüsselspeicher verschlüsselt und an Serveradresse, Client-ID und OAuth-Aussteller gebunden. Ein gesperrter Speicher wird als Fehler gemeldet und nicht überschrieben. **Abmelden** entfernt die lokal gespeicherten Zugangsdaten; eine gegebenenfalls zusätzliche serverseitige Widerrufsfunktion des Anbieters bleibt davon unabhängig. Bearer und stdio-Umgebung bleiben in Anvils Schlüsselspeicher, getrennt von den normalen Einstellungen. Nach einer URL-Änderung muss ein vorhandener Bearer für die neue Adresse erneut eingetragen werden.
 

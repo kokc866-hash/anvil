@@ -12,7 +12,7 @@ import {
   type McpTool,
   type McpResource,
 } from "./mcp-parse";
-import { loadSecrets, saveSecrets } from "./secrets";
+import { flushSecrets, loadSecrets, saveSecrets } from "./secrets";
 import { mcpArguments } from "./mcp-schema";
 import { forgetMcpOutputs, modelMcpResult, readMcpOutput } from "./mcp-results";
 import { withCompanion } from "./companion-life";
@@ -411,7 +411,8 @@ async function rpc(
   const timeout = AbortSignal.timeout(Math.min(600000, Math.max(8000, s.timeoutMs || 120000)));
   const combined = AbortSignal.any([entry.controller.signal, timeout, ...(signal ? [signal] : [])]);
   if (hasMcpNative()) return nativeRpc(s, method, params, combined, onChunk);
-  if (s.transport === "stdio" || s.auth === "oauth")
+  if (s.service === "sorceress") throw new Error("Der Sorceress-API-Adapter benötigt die Anvil-Desktop-App.");
+  if (s.transport === "stdio" || s.auth === "oauth" || s.service === "sorceress")
     throw new Error("MCP über stdio und OAuth benötigt die Anvil-Desktop-App.");
   const url = parseMcpUrl(s.url),
     session = sessions.get(s.id);
@@ -563,11 +564,25 @@ function withServer<T>(s: McpServer, fn: () => Promise<T>, cwd?: string) {
 }
 function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
-  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason);
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    // Always observe the shared request, including an abort during changed().
+    // Throwing before attaching handlers would orphan its later rejection.
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
     signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) abort();
   });
 }
 export async function mcpProbe(
@@ -793,6 +808,7 @@ export async function mcpLogin(
 ) {
   if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
   validateService(s);
+  if (s.auth === "bearer") throw new Error("Für diesen Dienst den API-Schlüssel speichern und die Verbindung prüfen.");
   await mcpClose(s);
   return nativeRpc(s, "oauth/login", {}, signal || AbortSignal.timeout(660000), onProgress);
 }
@@ -805,6 +821,11 @@ export async function mcpAuthStatus(
   signal?: AbortSignal,
 ): Promise<{ authenticated: boolean }> {
   if (!hasMcpNative()) throw new Error("Dienst-Anmeldung benötigt die Anvil-Desktop-App.");
+  if (s.auth === "bearer") {
+    validateService(s);
+    signal?.throwIfAborted();
+    return { authenticated: Boolean(credentials(s).authorization) };
+  }
   const value = await nativeRpc(s, "oauth/status", {}, signal || AbortSignal.timeout(8000));
   return {
     authenticated: Boolean((value as { authenticated?: boolean } | undefined)?.authenticated),
@@ -813,6 +834,12 @@ export async function mcpAuthStatus(
 export async function mcpLogout(s: McpServer) {
   if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
   await mcpClose(s);
+  if (s.auth === "bearer") {
+    await nativeRpc(s, "bearer/logout", {}, AbortSignal.timeout(8000));
+    saveSecrets({ keys: { [`mcp:${s.id}`]: "", [`mcp-target:${s.id}`]: "" } });
+    await flushSecrets();
+    return { authenticated: false };
+  }
   return nativeRpc(s, "oauth/logout", {}, AbortSignal.timeout(8000));
 }
 export function newMcpId() {

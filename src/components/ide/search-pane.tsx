@@ -23,7 +23,7 @@ export function SearchPane() {
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [ask, setAsk] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; path: string; text: string } | null>(null);
-  const opts: SearchOpts = { regex, case: cs, word };
+  const opts = useMemo<SearchOpts>(() => ({ regex, case: cs, word }), [regex, cs, word]);
 
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [more, setMore] = useState(false);
@@ -41,7 +41,7 @@ export function SearchPane() {
       }).catch((e) => { if (!control.signal.aborted) setSearchError(e.message); });
     }, 180);
     return () => { clearTimeout(timer); control.abort(); applyControl.current?.abort(); };
-  }, [files, q, regex, cs, word]);
+  }, [files, q, opts]);
 
   const symbols = useMemo(() => {
     const needle = q.trim();

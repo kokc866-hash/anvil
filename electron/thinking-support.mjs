@@ -62,7 +62,14 @@ export function thinkingModes(provider, model, cli = null) {
     if (/grok-3-mini/.test(m)) return ['auto', 'low', 'high'];
     return ['auto'];
   }
-  if (provider === 'deepseek' && /deepseek-v4/.test(m)) return ['off', 'auto', 'low', 'high', 'max'];
+  if (provider === 'deepseek' && /^(?:deepseek-flash|deepseek-v4)/.test(m)) return ['off', 'auto', 'low', 'high', 'max'];
+  if (provider === 'qwen') {
+    if (/^qwen3\.8-(?:max|flash|omni-flash|27b|2\.4t-a95b)(?:-|$)/.test(m))
+      return [...(/2\.4t-a95b/.test(m) ? [] : /** @type {ThinkingMode[]} */ (['off'])), 'auto', 'low', 'medium', 'xhigh'];
+    if (/^(?:qwq|qvq)|^qwen3\.7-max-(?:preview|2026-05-17)$/.test(m)) return ['auto', ...BASIC];
+    if (/^qwen3\.[567]-(?:max|plus|flash)(?:-|$)|^qwen-(?:plus|flash)(?:-|$)|^qwen3-(?:\d|vl)/.test(m)) return [...LOCAL];
+    return ['auto'];
+  }
   if (provider === 'openrouter') {
     const slash = m.indexOf('/');
     if (slash > 0) {

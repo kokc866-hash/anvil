@@ -6,7 +6,7 @@ Der Hintergrundbetrieb bleibt ein **zuschaltbarer Testmodus**. Der bisherige Age
 
 1. Die aktuelle lokale Desktop-Testversion mit `test.bat` starten. Eine ältere geöffnete Version vorher normal schließen.
 2. **Einstellungen → Agent → Hintergrundbetrieb (Test)** einschalten.
-3. Eine lokale API-Verbindung wählen, beispielsweise Ollama oder LM Studio, oder eine bereits eingerichtete CLI-Verbindung (Codex, Claude Code oder Copilot).
+3. Eine lokale API-Verbindung wählen, beispielsweise Ollama oder LM Studio, einen eingerichteten [Qwen-AI- oder DeepSeek-API-Zugang](qwen-und-deepseek.md) oder eine bereits eingerichtete CLI-Verbindung (Codex, Claude Code oder Copilot).
 4. Einen Auftrag senden. Beispiel: „Lies main.py, korrigiere den Fehler und führe die Datei zur Prüfung aus.“ Bildanhänge sind ebenfalls möglich, wenn das gewählte Modell Bilder versteht.
 
 Bei lokalen API-Verbindungen übernimmt der Agent Modell, Kontext, Thinking, Temperatur, Antwortlimit, Werkzeugformat, Versuche, Compacting und automatische Fortsetzung. Auch To-do-Modus, gesperrte Checklisten sowie die eingestellten Run-, Test-, Graph- und Engine-Prüfungen werden übernommen. Die Anzeige unter dem Chat zeigt während des Auftrags dessen übernommene Einstellungen; spätere Änderungen gelten für den nächsten Auftrag. CLI-Verbindungen übernehmen Modell und unterstütztes Thinking wie im bisherigen Betrieb; ihr eigenes Modellfenster, Temperatur und Antwortlimit verwaltet die CLI. Das harte Zeitlimit gilt pro Modellanfrage einschließlich ihrer Wiederholungsversuche.

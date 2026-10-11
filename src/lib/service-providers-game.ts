@@ -2,6 +2,17 @@ import type { ServiceProvider } from "./service-providers";
 
 export const GAME_SERVICE_PROVIDERS: ServiceProvider[] = [
   {
+    id: "sorceress",
+    name: "Sorceress",
+    url: "https://sorceress.games/api/v1",
+    auth: "bearer",
+    category: "Spiele & 3D",
+    description:
+      "Bilder, Sprites, 3D-Modelle, Animationen, Musik und Sprache als Agentenwerkzeuge nutzen.",
+    source: "https://sorceress.games/account/api-keys",
+    note: "API-Schlüssel von Sorceress erforderlich. Anvils eingebauter Adapter verbindet die REST-API mit der Werkzeugbrücke. Generierungen können Credits kosten. Für Medienaufträge zusätzlich sorceress_job_get freigeben; Preise und Modelloptionen liefert sorceress_tool_info. Dies ist kein Chatmodell-Anbieter.",
+  },
+  {
     id: "ai-game-developer",
     name: "AI Game Developer · Unity, Unreal & Godot",
     url: "https://ai-game.dev/mcp",

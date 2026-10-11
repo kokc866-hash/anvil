@@ -24,7 +24,7 @@ try {
   let ready = false;
   for (let i = 0; i < 150; i++) {
     if (server.exitCode !== null) throw Error(log);
-    try { ready = (await fetch(origin)).ok; } catch {}
+    try { ready = (await fetch(origin)).ok; } catch { /* Retry while the production server is starting. */ }
     if (ready) break;
     await new Promise(r => setTimeout(r, 200));
   }

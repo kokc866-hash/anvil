@@ -3,6 +3,51 @@ import { test } from "node:test";
 import { applyLlmOptions, applyResponsesStore, clampMaxOut, needsCompletionTokens, normalizeThinking, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
 import { effectiveThinking, thinkingModes } from "../../electron/thinking-support.mjs";
 
+test("Qwen cloud uses documented effort levels and never sends mutually exclusive reasoning controls", () => {
+  assert.deepEqual(thinkingModes("qwen", "qwen3.8-flash"), ["off", "auto", "low", "medium", "xhigh"]);
+  assert.equal(thinkingModes("qwen", "qwen3.8-2.4t-a95b").includes("off"), false);
+  assert.deepEqual(thinkingModes("qwen", "qwen3-coder-next"), ["auto"]);
+  assert.deepEqual(thinkingModes("qwen", "unknown-future"), ["auto"]);
+  const make = (model: string, thinking: "off" | "auto" | "low" | "medium" | "high" | "xhigh") => applyLlmOptions({ stream: true }, { provider: "qwen", model, thinking, context: 131072 });
+  const modern = make("qwen3.8-flash", "medium");
+  assert.equal(modern.reasoning_effort, "medium");
+  assert.equal(modern.thinking_budget, undefined);
+  assert.equal(modern.enable_thinking, true);
+  assert.deepEqual(modern.stream_options, { include_usage: true });
+  assert.equal(make("qwen3.8-max", "off").enable_thinking, false);
+  assert.equal(make("qwen3.8-max", "auto").reasoning_effort, undefined);
+  assert.equal(make("qwen3.8-max", "auto").enable_thinking, undefined);
+  const legacy = make("qwen3.5-plus", "high");
+  assert.equal(legacy.enable_thinking, true);
+  assert.ok(Number(legacy.thinking_budget) > 0);
+  assert.equal(legacy.reasoning_effort, undefined);
+  const unknown = make("unknown-future", "high");
+  assert.equal(unknown.enable_thinking, undefined);
+  assert.equal(unknown.reasoning_effort, undefined);
+});
+
+test("DeepSeek current aliases expose off, auto and the native low/high/max effort", () => {
+  assert.deepEqual(thinkingModes("deepseek", "deepseek-flash"), ["off", "auto", "low", "high", "max"]);
+  const p = applyLlmOptions({}, { provider: "deepseek", model: "deepseek-flash", thinking: "max", context: 131072 });
+  assert.deepEqual(p.thinking, { type: "enabled" });
+  assert.equal(p.reasoning_effort, "max");
+  assert.equal(p.temperature, undefined, "temperature is ignored in DeepSeek thinking mode");
+});
+
+test("cloud tool histories preserve reasoning_content separately, without changing messages or other providers", () => {
+  const messages = [{ role: "assistant", content: "", reasoning: "fixture reasoning", tool_calls: [{ id: "c", type: "function", function: { name: "read_file", arguments: "{}" } }] }, { role: "tool", tool_call_id: "c", content: "fixture" }];
+  const before = JSON.stringify(messages);
+  for (const provider of ["qwen", "deepseek"]) {
+    const payload = applyLlmOptions({ messages }, { provider, model: "unknown", thinking: "auto", context: 32768 }, { tools: true });
+    const wire = payload.messages as Record<string, unknown>[];
+    assert.equal(wire[0].reasoning_content, "fixture reasoning");
+    assert.equal(wire[0].reasoning, undefined);
+    assert.equal(wire[0].content, "");
+  }
+  assert.equal(JSON.stringify(messages), before);
+  assert.equal(applyLlmOptions({ messages }, { provider: "ollama", model: "qwen3.8", thinking: "auto", context: 32768 }).messages, messages);
+});
+
 test("Fable explicit effort uses adaptive thinking, never a legacy budget", () => {
   const p = applyLlmOptions({}, { provider: "anthropic", model: "claude-fable-5", context: 200000, thinking: "high" });
   assert.deepEqual(p.thinking, { type: "adaptive", display: "summarized" });
@@ -342,6 +387,14 @@ test("explicit local output is not capped to a percentage of context", () => {
     assert.equal((payload.options as { num_predict: number }).num_predict, 16384);
     assert.equal(payload.stream_options, undefined);
   }
+});
+
+test("DeepSeek represents absent prior reasoning explicitly without inventing or copying answer text", () => {
+  const messages = [{ role: "assistant", content: "An earlier plain-text summary." }];
+  const p = applyLlmOptions({ messages, tools: [] }, { provider: "deepseek", model: "deepseek-flash", context: 131072, thinking: "auto" });
+  assert.equal((p.messages as Record<string, unknown>[])[0].reasoning_content, "");
+  assert.equal((p.messages as Record<string, unknown>[])[0].content, messages[0].content);
+  assert.equal(Object.hasOwn(messages[0], "reasoning_content"), false);
 });
 
 test("request streamed usage on OpenAI without changing Anthropic or legacy local wire formats", () => {

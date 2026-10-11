@@ -18,4 +18,4 @@ try{
  await writeFile(path.join(output,'result.json'),JSON.stringify({ok:true,fixture,result},null,2));
  console.log('BACKGROUND_REMAINING_DESKTOP_OK',result);
 }catch(error){await page?.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});await writeFile(path.join(output,'failure.json'),JSON.stringify({fixture,error:String(error)},null,2));throw error;}
-finally{if(app){const timer=setTimeout(()=>proc?.kill(),8000);try{await app.close();}catch{}clearTimeout(timer);}}
+finally{if(app){const timer=setTimeout(()=>proc?.kill(),8000);try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(timer);}}

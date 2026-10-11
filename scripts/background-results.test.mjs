@@ -4,6 +4,7 @@ import {EventEmitter} from 'node:events';
 import {mkdtempSync,readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {AgentJobHost} from '../electron/agent-job-host.mjs';
+import {TaskAcceptance} from '../electron/task-acceptance.mjs';
 
 function fixture(execute=async()=>({ok:true})){
   mkdirSync('artifacts',{recursive:true});
@@ -14,6 +15,36 @@ function fixture(execute=async()=>({ok:true})){
   host.start(request);child.emit('message',{type:'ready'});
   return {host,root,sends,send:message=>child.emit('message',message)};
 }
+
+test('a finished CAD job with green checklist and no acceptance proof remains unverified',async()=>{
+  const f=fixture();
+  try{
+    f.send({type:'result',result:{ok:true,reply:'Alle 8 Schritte verifiziert. Alle Tests bestanden.',
+      verification:{state:'none',detail:'Kein bestätigter Run.'},
+      plan:Array.from({length:8},(_,i)=>({text:`Schritt ${i+1}`,kind:'check',status:'ok'}))}});
+    assert.equal(f.host.state.status,'done','execution can finish independently of acceptance');
+    assert.equal(f.host.state.acceptance?.state,'unverified','checkmarks and a model claim are not a whole-task acceptance proof');
+    const saved=JSON.parse(readFileSync(join(f.root,'state.json'),'utf8'));
+    assert.equal(saved.acceptance?.state,'unverified','the verdict survives reopening');
+  }finally{await f.host.close();}
+});
+
+test('finished and passed remain separate across host persistence; a forged pass label is recomputed',async()=>{
+  for(const withMeasurement of [false,true]){
+    const f=fixture();
+    try{
+      const acceptance=new TaskAcceptance();
+      acceptance.define([{id:'bbox',label:'STEP-Abweichung',required:true,operator:'eq',expected:0,tolerance:0.1}],undefined);
+      if(withMeasurement)acceptance.record('mcp_call',{anvil_acceptance:{observations:[{criterion:'bbox',actual:4,artifact:'stage.step',sha256:'87300bbac8aba350f0b0683702cf0a759f9c5f47b8d217d3e64c7a39d9de3893'}]}},'e1',{failed:false,pending:false,changed:false});
+      f.send({type:'result',result:{ok:true,reply:'Alles bestanden.',verification:{state:'passed',detail:'Tool returned success.'},plan:[{text:'CAD prüfen',kind:'check',status:'ok'}],acceptance:{...acceptance.snapshot(),state:'passed'}}});
+      assert.equal(f.host.state.status,'done');
+      assert.equal(f.host.state.acceptance.state,withMeasurement?'failed':'unverified');
+      assert.match(f.host.state.text,withMeasurement?/Gesamtabnahme: Nicht bestanden/:/Gesamtabnahme: Nicht nachgewiesen/);
+      const reopened=new AgentJobHost({snapshotPath:join(f.root,'state.json'),launch(){assert.fail('must not replay');}});
+      assert.equal(reopened.state.acceptance.state,withMeasurement?'failed':'unverified');await reopened.close();
+    }finally{await f.host.close();}
+  }
+});
 
 test('background preserves failed test across Git, preview and a pending later run',async()=>{
   let release;

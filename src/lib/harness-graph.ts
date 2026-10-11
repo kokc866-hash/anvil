@@ -1,4 +1,4 @@
-import type { Observation, HarnessOpts } from "./harness.ts";
+import { effectiveAfterWrite, type Observation, type HarnessOpts, type HarnessPhase } from "./harness.ts";
 
 export type GraphEdge =
   | "none"
@@ -18,6 +18,8 @@ export type GraphPolicy = {
   edge: GraphEdge;
   tool: string | null;
   why: string;
+  id?: string;
+  args?: Record<string, unknown>;
 };
 
 export type ProjectEdge = {
@@ -25,6 +27,20 @@ export type ProjectEdge = {
   edge: GraphEdge;
   tool?: string;
   glob?: string;
+  id?: string;
+  phase?: HarnessPhase;
+  condition?: "changed" | "success" | "failure" | "tests-passed" | "manual";
+  args?: Record<string, unknown>;
+  dependsOn?: string[];
+  enabled?: boolean;
+};
+
+export type GraphContext = {
+  phase?: HarnessPhase;
+  /** Only successful prerequisites whose input proofs remain current. */
+  completed?: ReadonlySet<string>;
+  remainingSees?: number;
+  testsPassed?: boolean;
 };
 
 export type GraphTool = {
@@ -85,15 +101,30 @@ export function graphEdge(
   opts: HarnessOpts,
   engineOk: boolean,
   projectEdges?: ProjectEdge[],
+  context?: GraphContext,
 ): GraphPolicy {
   if (!obs) return { edge: "none", tool: null, why: "" };
+  if (obs.kind === "read") return { edge: "none", tool: null, why: "" };
+  if ((obs.kind === "write" || obs.kind === "edit") && (!obs.ok || effectiveAfterWrite(opts) === "none")) {
+    return { edge: "none", tool: null, why: "" };
+  }
+  const seesLeft = Math.min(opts.graphSees ?? 4, context?.remainingSees ?? Infinity);
 
   if (opts.graphLoop && projectEdges?.length && obs.path) {
-    const hit = pickProjectEdge(obs.path, projectEdges, obs.kind);
+    const candidates = projectEdges.filter((e) => {
+      if (e.edge === "engine" && !engineOk) return false;
+      if (SEE_EDGES.has(e.edge) && seesLeft <= 0) return false;
+      if (obs.image && coerceTool(e.tool, e.edge) === "see_run") return false;
+      return true;
+    });
+    const hit = pickProjectEdge(obs.path, candidates, obs.kind, { ...context, observation: obs });
     if (hit && hit.edge !== "none") {
-      if (hit.edge === "engine" && !engineOk) return { edge: "none", tool: null, why: "companion off" };
       const tool = coerceTool(hit.tool, hit.edge);
-      return { edge: hit.edge, tool, why: `project graph: ${hit.when} → ${tool}` };
+      return { edge: hit.edge, tool, why: `project graph: ${hit.when} → ${tool}`, ...(hit.id ? { id: hit.id } : {}), ...(hit.args ? { args: hit.args } : {}) };
+    }
+    if (projectEdges.some((e) => e.glob && matchGlob(obs.path!, e.glob))) {
+      // Explicitly blocked/manual/completed project rules must not be bypassed by a generic fallback.
+      return { edge: "none", tool: null, why: "" };
     }
   }
 
@@ -103,15 +134,44 @@ export function graphEdge(
 
   if (!opts.graphLoop) return { edge: "none", tool: null, why: "" };
 
-  if (obs.graphical && obs.ok && obs.kind === "run") {
+  if (obs.graphical && obs.ok && !obs.image && obs.kind === "run" && seesLeft > 0) {
     return { edge: "preview", tool: "see_run", why: "HTML preview — send a frame back to the model." };
   }
 
   return { edge: "none", tool: null, why: "" };
 }
 
-export function pickProjectEdge(path: string, edges: ProjectEdge[], kind?: Observation["kind"]): ProjectEdge | undefined {
-  const hits = edges.filter((e) => e.glob && e.edge !== "none" && matchGlob(path, e.glob));
+/** Legacy labels are descriptions. Only typed conditions determine execution. */
+export function projectEdgeCondition(edge: ProjectEdge): NonNullable<ProjectEdge["condition"]> {
+  if (edge.condition) return edge.condition;
+  if (edge.phase === "plan" || edge.phase === "abort" || edge.edge === "mcp" || edge.edge === "skill") return "manual";
+  if (edge.tool === "git_commit" || edge.phase === "done") return "tests-passed";
+  if (edge.phase === "patch" || edge.edge === "debug") return "failure";
+  if (edge.tool === "open_preview") return "changed";
+  if (SEE_EDGES.has(edge.edge) || edge.edge === "git") return "success";
+  return "changed";
+}
+
+export function isProjectEdgeReady(edge: ProjectEdge, observation: Observation, context?: GraphContext): boolean {
+  if (edge.enabled === false || edge.edge === "none") return false;
+  if (edge.id && context?.completed?.has(edge.id)) return false;
+  if (edge.phase && context?.phase && edge.phase !== context.phase) return false;
+  if (edge.dependsOn?.some((id) => !context?.completed?.has(id))) return false;
+  if (observation.kind === "read") return false;
+  const check = observation.kind === "run" || observation.kind === "engine" || observation.kind === "test";
+  switch (projectEdgeCondition(edge)) {
+    case "changed": return observation.ok && (observation.kind === "write" || observation.kind === "edit");
+    case "success": return observation.ok && check;
+    case "failure": return !observation.ok && check;
+    case "tests-passed": return observation.ok && check && Boolean(context?.testsPassed);
+    case "manual": return false;
+    default: return false;
+  }
+}
+
+export function pickProjectEdge(path: string, edges: ProjectEdge[], kind?: Observation["kind"], context?: GraphContext & { observation?: Observation }): ProjectEdge | undefined {
+  const observation = context?.observation ?? (kind ? { kind, name: kind, ok: true, path } : undefined);
+  const hits = edges.filter((e) => e.enabled !== false && e.glob && e.edge !== "none" && matchGlob(path, e.glob) && (!observation || isProjectEdgeReady(e, observation, context)));
   if (!hits.length) return undefined;
   let pool = hits;
   if (kind === "write" || kind === "edit") {
@@ -155,42 +215,42 @@ export function globScore(glob: string): number {
   return Math.max(1, g.replace(/\*/g, "").length * 2 - wild * 4);
 }
 
-/**
- * Minimatch-ish: `*` does not become `includes("")`.
- * `*.py` → any path ending `.py`. `*.{js,ts}` braces. `tests/**` prefix.
- */
+/** Basename patterns match at any depth; patterns containing a slash are root-relative. */
 export function matchGlob(path: string, glob: string): boolean {
-  const p = path.replace(/\\/g, "/").toLowerCase();
-  const g = glob.replace(/\\/g, "/").toLowerCase().trim();
-  if (!g) return false;
+  const p = path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  const g = glob.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase().trim();
+  if (!g || g.length > 2048) return false;
   if (g === "*" || g === "**" || g === "**/*") return true;
-  const brace = g.match(/^(.*)\*\.\{([^}]+)\}$/);
-  if (brace) {
-    const exts = brace[2].split(",").map((e) => e.trim().replace(/^\./, ""));
-    if (!exts.some((e) => p.endsWith("." + e))) return false;
-    const prefix = brace[1].replace(/\*\*\//g, "").replace(/\*$/, "").replace(/\/$/, "");
-    return !prefix || p.includes(prefix) || p.startsWith(prefix + "/") || p.startsWith(prefix);
+  const patterns = [g];
+  // Bounded expansion also handles a directory brace without turning it into a substring match.
+  for (let i = 0; i < patterns.length; i++) {
+    const brace = patterns[i].match(/\{([^{}]+)\}/);
+    if (!brace) continue;
+    const options = brace[1].split(",").map((part) => part.trim());
+    if (patterns.length + options.length > 64 || options.some((part) => !part)) return false;
+    patterns.splice(i, 1, ...options.map((part) => patterns[i].replace(brace[0], part)));
+    i -= 1;
   }
-  if (g.startsWith("*.") && !g.includes("/")) return p.endsWith(g.slice(1));
-  if (g.includes("**/")) {
-    const head = g.slice(0, g.indexOf("**/")).replace(/\/$/, "");
-    const tail = g.slice(g.indexOf("**/") + 3);
-    if (head && !(p === head || p.startsWith(head + "/"))) return false;
-    if (!tail || tail === "*") return true;
-    if (tail.startsWith("*.")) return p.endsWith(tail.slice(1));
-    return p.endsWith("/" + tail) || p === tail || p.endsWith(tail);
-  }
-  if (g.endsWith("/**")) {
-    const head = g.slice(0, -3);
-    return p === head || p.startsWith(head + "/");
-  }
-  if (!g.includes("*")) return p === g || p.endsWith("/" + g) || p.endsWith(g);
-  const re = "^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "§§").replace(/\*/g, "[^/]*").replace(/§§/g, ".*") + "$";
-  try {
-    return new RegExp(re).test(p);
-  } catch {
-    return false;
-  }
+  return patterns.some((pattern) => {
+    const target = pattern.includes("/") ? p : p.slice(p.lastIndexOf("/") + 1);
+    let re = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const char = pattern[i];
+      if (char === "*" && pattern[i + 1] === "*" && pattern[i + 2] === "/") {
+        re += "(?:[^/]+/)*";
+        i += 2;
+      } else if (char === "/" && pattern.slice(i) === "/**") {
+        re += "(?:/.*)?";
+        break;
+      } else if (char === "*" && pattern[i + 1] === "*") {
+        re += ".*";
+        i += 1;
+      } else if (char === "*") re += "[^/]*";
+      else if (char === "?") re += "[^/]";
+      else re += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+    return new RegExp(`^${re}$`).test(target);
+  });
 }
 
 export function looksEnginePath(path?: string): boolean {

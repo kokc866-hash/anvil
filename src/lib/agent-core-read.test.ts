@@ -40,7 +40,7 @@ test("pack tells the model to continue, not rewrite", () => {
   });
   assert.match(packed, /start_line=2/);
   assert.doesNotMatch(packed, /abgeschnitten/);
-  assert.match(packed, /    1\|hello/);
+  assert.match(packed, / {4}1\|hello/);
 });
 
 test("small pack has no truncate note", () => {

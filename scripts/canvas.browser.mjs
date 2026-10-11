@@ -183,7 +183,9 @@ try {
         g.alpha(0.1, () => {
           throw Error("alpha fixture");
         });
-      } catch {}
+      } catch (error) {
+        if (error.message !== "alpha fixture") throw error;
+      }
       const alpha = Math.abs(g.ctx.globalAlpha - 0.7) < 0.01;
       const raf = window.requestAnimationFrame,
         cancel = window.cancelAnimationFrame;

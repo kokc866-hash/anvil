@@ -8,6 +8,7 @@ import { useIde } from "@/store/ide";
 
 import { useT } from "@/lib/i18n";
 import { useBackgroundAgent,backgroundRunning,backgroundProject } from '@/lib/background-agent';
+import { SkillStatus } from "./skill-status";
 
 function Chip({ children, title, tone }: { children: ReactNode; title?: string; tone?: "ok" | "warn" | "live" }) {
   return (
@@ -110,6 +111,7 @@ export function ContextBar() {
           {c.node}
         </Chip>
       ))}
+      <SkillStatus />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import type { PersistStorage, StorageValue } from "zustand/middleware";
-import { formatBytes, rankPaths, skipPath } from "./ws-skip.ts";
+import { formatBytes, isImportedPluginPath, rankPaths, skipPath } from "./ws-skip.ts";
 import { isSecretPath, isRefPath } from "./ref.ts";
 import {
   loadArchive,
@@ -9,6 +9,8 @@ import {
   type ArchiveSnapshot,
 } from "./persist-db.ts";
 import { persistChat } from "./session.ts";
+import type { Checkpoint } from "@/store/ide-types";
+import { prepareCheckpointArchive } from "./checkpoint-archive.ts";
 
 export const PERSIST_TOTAL = 96_000_000;
 export const PERSIST_EACH = 3_000_000;
@@ -25,14 +27,14 @@ export function shrinkFiles(
   let used = 0;
   const order = rankPaths(
     Object.keys(files).filter(
-      (p) => (!skipPath(p) && !isSecretPath(p)) || prefer.includes(p) || isRefPath(p),
+      (p) => isImportedPluginPath(p) ? !isSecretPath(p) : (!skipPath(p) && !isSecretPath(p)) || prefer.includes(p) || isRefPath(p),
     ),
     [...prefer, ...Object.keys(files).filter(isRefPath)],
   );
   for (const path of order) {
     const c = files[path];
     if (c == null) continue;
-    const cap = isRefPath(path) || prefer.includes(path) ? 8_000_000 : PERSIST_EACH;
+    const cap = isImportedPluginPath(path) ? 16 * 1024 * 1024 : isRefPath(path) || prefer.includes(path) ? 8_000_000 : PERSIST_EACH;
     if (c.length > cap) continue;
     if (used + c.length > budget) continue;
     out[path] = c;
@@ -49,6 +51,29 @@ export function persistDropped(
 }
 
 type Slice = { files?: Record<string, string>; [k: string]: unknown };
+
+function projectScope(state?: Slice): string {
+  const cwd = typeof state?.workspaceCwd === "string" ? state.workspaceCwd.trim().replace(/\\/g, "/").replace(/\/$/, "") : "";
+  // A remote Companion may expose the same path on a different machine.
+  return JSON.stringify(cwd ? [cwd, state?.companionUrl ?? ""] : [state?.workspaceMemoryId ?? state?.memoryWorkspace ?? ""]);
+}
+
+type FileRecovery = { schema: 2; savedAt: number; scope: string; complete: boolean; baseSavedAt: number; files: Record<string, string>; removed: string[]; unavailable: string[] };
+function fileRecovery(files: Record<string, string>, previous: ArchiveSnapshot, savedAt: number, scope: string): FileRecovery {
+  const size = Object.entries(files).reduce((n, [path, text]) => n + path.length + text.length + 6, 2);
+  if (size < LS_FILES) return { schema: 2, savedAt, scope, complete: true, baseSavedAt: previous.savedAt ?? 0, files, removed: [], unavailable: [] };
+  const baseline = projectScope(previous.state) === scope ? previous.files ?? {} : {};
+  let used = 0;
+  const changed: Record<string, string> = {}, unavailable: string[] = [];
+  for (const [path, text] of Object.entries(files)) {
+    if (baseline[path] === text) continue;
+    const count = JSON.stringify([path, text]).length;
+    if (used + count > LS_FILES - 20_000) unavailable.push(path);
+    else { changed[path] = text; used += count; }
+  }
+  return { schema: 2, savedAt, scope, complete: false, baseSavedAt: previous.savedAt ?? 0, files: changed,
+    removed: Object.keys(baseline).filter((p) => !(p in files)), unavailable };
+}
 
 const LLM_SNAP = "anvil-llm";
 const LLM_KEYS = [
@@ -91,8 +116,10 @@ function readLlm(): Record<string, unknown> | null {
 }
 
 const mem = new Map<string, string>();
+const volatile = new Set<string>();
 
 function lsGet(key: string): string | null {
+  if (volatile.has(key)) return mem.get(key) ?? null;
   try {
     const v = localStorage.getItem(key);
     if (v != null) {
@@ -109,6 +136,7 @@ function writeLs(name: string, raw: string) {
   mem.set(name, raw);
   try {
     localStorage.setItem(name, raw);
+    volatile.delete(name);
     return true;
   } catch {
     try {
@@ -118,8 +146,10 @@ function writeLs(name: string, raw: string) {
       const slim = JSON.stringify(parsed);
       mem.set(name, slim);
       localStorage.setItem(name, slim);
+      volatile.delete(name);
       return true;
     } catch {
+      volatile.add(name);
       return false;
     }
   }
@@ -151,6 +181,7 @@ function persistenceError(name: string, error: unknown) {
   if (name === "anvil-intern") return;
   const detail = error instanceof Error ? error.message : "Speicher voll oder gesperrt.";
   void import("./intern").then((m) => m.note("persist", `Sicherung unvollständig: ${detail}`));
+  if (name === "anvil-ide") window.dispatchEvent(new CustomEvent("anvil-persistence", { detail: { error: detail } }));
 }
 
 export function idePersistStorage(): PersistStorage<unknown> | undefined {
@@ -168,6 +199,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
     deadline = 0;
   let tail: Promise<void> = Promise.resolve();
   let dropNoted = false;
+  let lastSavedAt = 0;
 
   function enqueue(work: () => Promise<void>) {
     const next = tail.catch(() => undefined).then(work);
@@ -193,10 +225,15 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           const state = { ...((value.state as Slice) ?? {}) };
           const source = state.files;
           const chat = Array.isArray(state.chat) ? (state.chat as ArchiveMessage[]) : undefined;
+          const checkpoints = Array.isArray(state.checkpoints) ? state.checkpoints as Checkpoint[] : undefined;
+          const history = checkpoints ? await prepareCheckpointArchive(checkpoints) : undefined;
+          if ((generations.get(name) ?? 0) !== generation) continue;
+          const previous = written.get(name) ?? {};
           delete state.files;
-          const savedAt = Date.now();
+          const savedAt = lastSavedAt = Math.max(Date.now(), lastSavedAt + 1, (previous.savedAt ?? 0) + 1);
           const archiveState = name === "anvil-ide" || name === "anvil-learn" ? { ...state } : undefined;
-          if (archiveState) { delete archiveState.chat; delete archiveState.pendingDiffs; delete archiveState.editBases; }
+          if (archiveState) { delete archiveState.chat; delete archiveState.pendingDiffs; delete archiveState.editBases; delete archiveState.checkpoints; }
+          if (history) state.checkpoints = history.summaries;
           // Complete inactive sessions live in IndexedDB, not the small recovery copy.
           delete state.workspaceSessions;
           const recovery = Array.isArray(state.pendingDiffs) ? {
@@ -220,7 +257,6 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
               }),
             }));
           if (name === "anvil-ide") snapLlm(state);
-          const localOk = writeLs(name, JSON.stringify({ ...value, state, savedAt }));
           let files: Record<string, string> | undefined;
           if (source) {
             const onDisk =
@@ -230,7 +266,8 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
             const cached = fileCache.get(name);
             if (cached?.source === source && cached.preference === preference) files = cached.files;
             else {
-              files = shrinkFiles(source, onDisk ? 12_000_000 : PERSIST_TOTAL, prefer);
+              const hasPackages = Object.keys(source).some(isImportedPluginPath);
+              files = shrinkFiles(source, onDisk && !hasPackages ? 12_000_000 : PERSIST_TOTAL, prefer);
               const dropped = persistDropped(source, files);
               if (dropped && !dropNoted) {
                 dropNoted = true;
@@ -242,29 +279,17 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
                 );
               }
               fileCache.set(name, { source, preference, files });
-              // Do not stringify a large workspace merely to discover it exceeds this limit.
-              const size = Object.entries(files).reduce(
-                (n, [path, content]) => n + path.length + content.length + 6,
-                2,
-              );
-              const blob = size < LS_FILES ? JSON.stringify(files) : "";
-              if (blob && blob.length < LS_FILES) writeLs(`${name}:files`, blob);
-              else {
-                mem.delete(`${name}:files`);
-                try {
-                  localStorage.removeItem(`${name}:files`);
-                } catch {
-                  /* unavailable */
-                }
-              }
             }
           }
-          if (files || chat || recovery || archiveState) {
-            const snapshot = { files, chat, recovery, state: archiveState, savedAt };
-            const previous = written.get(name) ?? {};
-            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat || snapshot.recovery !== previous.recovery || snapshot.state !== previous.state)
+          // Both compact records carry one generation; mismatches after a partial local write are rejected on load.
+          if (files) writeLs(`${name}:files`, JSON.stringify(fileRecovery(files, previous, savedAt, projectScope(state))));
+          const localOk = writeLs(name, JSON.stringify({ ...value, state, savedAt }));
+          if (files || chat || recovery || checkpoints || archiveState) {
+            const snapshot = { files, chat, recovery, checkpoints, state: archiveState, savedAt };
+            if (snapshot.files !== previous.files || snapshot.chat !== previous.chat || snapshot.recovery !== previous.recovery || snapshot.checkpoints !== previous.checkpoints || snapshot.state !== previous.state)
               await saveArchive(name, snapshot, previous);
             written.set(name, snapshot);
+            if (name === "anvil-ide") window.dispatchEvent(new CustomEvent("anvil-persistence", { detail: { error: "" } }));
           }
           if (!localOk && !archiveState) throw new Error("Einstellungen konnten nicht gespeichert werden.");
         } catch (error) {
@@ -309,7 +334,7 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
         }
         const archive = await loadArchive(name).catch((error) => {
           if (name === "anvil-ide") persistenceError(name, error);
-          return { files: null, chat: null, recovery: null, state: undefined, savedAt: 0 };
+          return { files: null, chat: null, checkpoints: null, recovery: null, state: undefined, savedAt: 0 };
         });
         const llm = name === "anvil-ide" ? readLlm() : null;
         if (!parsed && archive.files === null && archive.chat === null && !archive.state && !llm) {
@@ -317,22 +342,65 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
           return bag.get(name) ?? null;
         }
         parsed ??= { state: {} };
-        let files = archive.files;
-        if (files === null) {
-          const backup = lsGet(`${name}:files`);
+        lastSavedAt = Math.max(lastSavedAt, parsed.savedAt ?? 0, archive.savedAt ?? 0);
+        const local = parsed.state;
+        let localNewer = !archive.state || (parsed.savedAt ?? 0) > (archive.savedAt ?? 0);
+        const sameProject = !archive.state || projectScope(local) === projectScope(archive.state);
+        let files: Record<string, string> | null = localNewer && !sameProject ? null : archive.files;
+        let localFilesComplete = Boolean(local.files);
+        let rejectedLocal = false;
+        let recoveryWarning = "";
+        if (localNewer || files === null) {
           try {
-            files = backup ? (JSON.parse(backup) as Record<string, string>) : null;
+            const rawFiles = lsGet(`${name}:files`);
+            const backup = rawFiles ? JSON.parse(rawFiles) as FileRecovery | Record<string, string> : null;
+            if (backup?.schema === 2) {
+              const copy = backup as FileRecovery;
+              if (copy.savedAt === parsed.savedAt && copy.scope === projectScope(local)) {
+                const baseline = sameProject && copy.baseSavedAt === (archive.savedAt ?? 0) ? archive.files : null;
+                files = copy.complete ? copy.files : { ...baseline, ...copy.files };
+                for (const path of [...copy.removed, ...copy.unavailable]) delete files[path];
+                localFilesComplete = copy.complete || Boolean(baseline) && !copy.unavailable.length;
+                if (copy.unavailable.length) {
+                  recoveryWarning = "Einige neuere Dateiinhalte fehlen in der Notfallsicherung. Prüfe die gespeicherten Projektdateien, bevor du weiterarbeitest.";
+                  persistenceError(name, new Error(recoveryWarning));
+                }
+              }
+            } else if (backup && (sameProject || archive.files === null)) { files = backup as Record<string, string>; localFilesComplete = true; }
           } catch {
-            /* legacy recovery */
+            /* Recover from the coherent primary generation if the compact file copy is damaged. */
           }
+          if (local.files) files = local.files;
         }
-        files ??= parsed.state?.files ?? {};
-        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined, recovery: archive.recovery ?? undefined, state: archive.state, savedAt: archive.savedAt });
-        const metadata = (parsed.savedAt ?? 0) > (archive.savedAt ?? 0)
-          ? { ...archive.state, ...parsed.state } : { ...parsed.state, ...archive.state };
+        if (localNewer && name === "anvil-ide" && !localFilesComplete && archive.state && archive.files !== null) {
+          // Preserve the rejected newer metadata for diagnosis, but never pair it with older project files.
+          if (raw) writeLs(`${name}:incomplete-recovery`, raw);
+          recoveryWarning = "Die neuere Notfallsicherung enthält keinen vollständigen passenden Dateistand. Der letzte vollständige Archivstand wurde geladen; die neuere Metadatenkopie bleibt separat erhalten.";
+          persistenceError(name, new Error(recoveryWarning));
+          localNewer = false;
+          rejectedLocal = true;
+          files = archive.files;
+        }
+        files ??= {};
+        // Inline v3 history has no content revisions yet: force one migration on the next save.
+        written.set(name, { files: archive.files ?? undefined, chat: archive.chat ?? undefined,
+          checkpoints: archive.checkpoints?.every((c) => c.archiveRevision) ? archive.checkpoints : undefined,
+          recovery: archive.recovery ?? undefined, state: archive.state, savedAt: archive.savedAt });
+        const metadata = localNewer ? { ...(sameProject ? archive.state : {}), ...local } : { ...(sameProject && !rejectedLocal ? local : {}), ...archive.state };
         parsed.state = { ...(llm ?? {}), ...metadata, ...(name === "anvil-ide" || archive.files !== null ? { files } : {}) };
-        if (archive.recovery) Object.assign(parsed.state, archive.recovery);
-        if (archive.chat !== null) parsed.state.chat = archive.chat;
+        if (name === "anvil-ide" && recoveryWarning) parsed.state.persistenceWarning = recoveryWarning;
+        if (archive.recovery && (!localNewer || sameProject)) {
+          for (const [key, value] of Object.entries(archive.recovery)) if (!localNewer || !Object.hasOwn(local, key)) parsed.state[key] = value;
+        }
+        if (archive.chat !== null && (!localNewer || sameProject && !Object.hasOwn(local, "chat"))) parsed.state.chat = archive.chat;
+        if (localNewer && Array.isArray(local.checkpoints)) {
+          const primary = new Map(archive.checkpoints?.map((c) => [c.id, c]));
+          parsed.state.checkpoints = (local.checkpoints as Checkpoint[]).map((c) => {
+            if (!c.archiveMissing || !sameProject) return c;
+            const full = primary.get(c.id);
+            return full?.archiveRevision === c.archiveRevision ? full : c;
+          });
+        } else if (archive.checkpoints !== null) parsed.state.checkpoints = archive.checkpoints;
         seen.add(name);
         return parsed as StorageValue<unknown>;
       } catch {
@@ -362,8 +430,13 @@ export function idePersistStorage(): PersistStorage<unknown> | undefined {
         fileCache.delete(name);
         mem.delete(name);
         mem.delete(`${name}:files`);
+        volatile.delete(name);
+        volatile.delete(`${name}:files`);
+        mem.delete(`${name}:incomplete-recovery`);
+        volatile.delete(`${name}:incomplete-recovery`);
         localStorage.removeItem(name);
         localStorage.removeItem(`${name}:files`);
+        localStorage.removeItem(`${name}:incomplete-recovery`);
       }).catch((error) => {
         persistenceError(name, error);
         throw error;

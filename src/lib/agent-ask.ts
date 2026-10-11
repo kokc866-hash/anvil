@@ -1,3 +1,5 @@
+import type { WorkflowSnapshot } from "./agent-workflow";
+import { validWorkflowSnapshot } from "../../electron/workflow-validation.mjs";
 export type JobAskChoice = { id: string; label: string };
 
 export type JobAsk = {
@@ -18,6 +20,7 @@ export type AgentJob = {
   ask: JobAsk | null;
   at: number;
   mode?: "ask" | "agent";
+  workflow?: WorkflowSnapshot;
 };
 
 const LETTERS = "ABCDE";
@@ -138,14 +141,15 @@ export function normalizeJob(raw: unknown, opts?: { revive?: boolean }): AgentJo
   const o = raw as Record<string, unknown>;
   const status = o.status === "ask" || o.status === "paused" || o.status === "run" ? o.status : null;
   if (!status) return null;
-  if (opts?.revive && status === "run") return null;
+  if (opts?.revive && status === "run" && !validWorkflowSnapshot(o.workflow)) return null;
   const ask = status === "ask" ? normalizeAsk(o.ask) : null;
   if (opts?.revive && status === "ask" && !ask) return null;
   const goal = str(o.goal).slice(0, 240);
   const id = str(o.id).slice(0, 40) || `job-${Date.now().toString(36)}`;
   const rounds = typeof o.rounds === "number" && Number.isFinite(o.rounds) ? Math.max(0, Math.round(o.rounds)) : 0;
   const at = typeof o.at === "number" && Number.isFinite(o.at) ? o.at : Date.now();
-  return { id, status: opts?.revive && status === "ask" ? "ask" : status, goal, rounds, ask, at,
+  return { id, status: opts?.revive && status === "run" ? "paused" : status, goal, rounds, ask, at,
     ...(o.mode === "ask" || o.mode === "agent" ? { mode: o.mode } : {}),
+    ...(validWorkflowSnapshot(o.workflow) ? { workflow: o.workflow as WorkflowSnapshot } : {}),
   };
 }

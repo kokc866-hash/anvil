@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { estimateTokens, formatTokens } from "@/lib/tokens";
@@ -20,6 +20,8 @@ import { t, useT } from "@/lib/i18n";
 import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { AgentPulse } from "./agent-pulse";
 import { finishedHarness } from "@/lib/chat-finalize";
+import { AcceptanceSummary } from "./acceptance-summary";
+import { acceptanceResult, workflowAcceptance } from "../../../electron/task-acceptance.mjs";
 import { checkpointRestorePlan } from "@/lib/restore-plan";
 import { requestCheckpointRestore } from "@/lib/restore-request";
 import { useBackgroundAgent, backgroundRunning, restoreBackgroundFiles, applyBackgroundDrafts } from '@/lib/background-agent';
@@ -56,11 +58,13 @@ export function ThinkBlock({
   const cap = () => Math.round(window.innerHeight * 0.8);
   const size = fill ? (height ?? 180) : h;
   const shown = opened ?? open;
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
 
-  function setOpenBoth(v: boolean) {
+  const setOpenBoth = useCallback((v: boolean) => {
     setOpen(v);
-    onOpen?.(v);
-  }
+    onOpenRef.current?.(v);
+  }, []);
 
   useEffect(() => {
     if (live && !pinned) setOpenBoth(true);
@@ -70,7 +74,7 @@ export function ThinkBlock({
       return () => window.clearTimeout(t);
     }
     wasLive.current = Boolean(live);
-  }, [live, pinned]);
+  }, [live, pinned, setOpenBoth]);
 
   useEffect(() => {
     if (shown && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
@@ -221,7 +225,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
   const hasRun = Boolean(run?.path || run?.running || run?.stdout || run?.stderr);
   const labelOf = (name: string) => stepLabel(name, locale);
   const harness = m.backgroundContinued ? (locale==='en'?'Continued in the next task':'Im nächsten Auftrag fortgesetzt') : m.backgroundWaiting ? (locale==='en'?'Waiting for your answer':'Wartet auf deine Antwort') : live ? m.harness : finishedHarness(m.harness, m.plan, /^Stop(?:ped)?\b/.test(m.harness || ""), locale,m.incompleteReason);
-  if (!steps.length && !hasRun && !frames.length && !m.lastTests && !hasRound && !m.harness && !live) {
+  if (!steps.length && !hasRun && !frames.length && !m.lastTests && !hasRound && !m.harness && !m.acceptance && !m.workflow && !live) {
     if (fill) return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-bg px-2.5 py-2" />;
     return <HelperLaneBits />;
   }
@@ -229,6 +233,7 @@ export function Trail({ m, live, liveTools = true, fill }: { m: ChatMsg; live: b
   const body = (
     <>
       {fill ? null : <HelperLaneBits />}
+      {(m.acceptance || m.workflow) && <AcceptanceSummary value={m.acceptance || acceptanceResult(workflowAcceptance(m.workflow))} en={locale === 'en'} />}
       <div className="mb-1 flex min-w-0 items-start gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-medium tracking-wide text-subtle uppercase">{t("trail")}</p>

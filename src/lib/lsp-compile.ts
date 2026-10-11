@@ -1,28 +1,36 @@
 import type { LspHit } from "./lsp";
+import { hasTsSource, isTsSource } from "./compiler-files.ts";
 const OPEN_MAX = 1_000_000, CLOSED_MAX = 200_000;
 function hit(path: string, line: number, col: number, message: string, source: string): LspHit { return { path, line, col, message, source, severity: "error" }; }
 let engine: typeof import("./compiler-engine.ts") | null = null;
 const local = async () => engine ??= await import("./compiler-engine.ts");
-const useWorker = () => typeof window !== "undefined" && typeof Worker !== "undefined";
-export async function ensureTs(files: Record<string, string>, open: string[] = []) { return (await local()).ensureTs(files, open); }
+const workerAvailable = () => typeof window !== "undefined" && typeof Worker !== "undefined";
+export async function ensureTs(files: Record<string, string>, open: string[] = []) {
+  if (!hasTsSource(files, open)) { disposeTs(); return null; }
+  return (await local()).ensureTs(files, open);
+}
 export function disposeTs() { engine?.disposeTs(); }
 export function tsChecked() { return engine?.tsChecked() ?? []; }
 export function tsQuickInfoSync(path: string, offset: number) { return engine?.tsQuickInfoSync(path, offset) ?? null; }
 export function tsDefinitionSync(path: string, offset: number) { return engine?.tsDefinitionSync(path, offset) ?? []; }
 export async function tscWorkspace(files: Record<string, string>, open: string[] = []): Promise<LspHit[]> {
-  if (useWorker()) return (await import("./compiler-client").then((c) => c.compilerJob("lint", files, open))).hits as LspHit[];
+  if (workerAvailable()) return (await import("./compiler-client").then((c) => c.compilerJob("lint", files, open))).hits as LspHit[];
+  if (!hasTsSource(files, open)) { disposeTs(); return []; }
   return (await local()).tscWorkspace(files, open);
 }
 export async function tsQuickInfo(files: Record<string, string>, path: string, offset: number, open: string[] = []): Promise<string | null> {
-  if (useWorker()) return (await import("./compiler-client").then((c) => c.compilerJob("hover", files, open, { path, offset }))).value as string | null;
+  if (!isTsSource(path, files[path] ?? "", open.includes(path))) return null;
+  if (workerAvailable()) return (await import("./compiler-client").then((c) => c.compilerJob("hover", files, open, { path, offset }))).value as string | null;
   await ensureTs(files, open); return tsQuickInfoSync(path, offset);
 }
 export async function tsDefinition(files: Record<string, string>, path: string, offset: number, open: string[] = []): Promise<ReturnType<typeof tsDefinitionSync>> {
-  if (useWorker()) return (await import("./compiler-client").then((c) => c.compilerJob("definition", files, open, { path, offset }))).value as ReturnType<typeof tsDefinitionSync>;
+  if (!isTsSource(path, files[path] ?? "", open.includes(path))) return [];
+  if (workerAvailable()) return (await import("./compiler-client").then((c) => c.compilerJob("definition", files, open, { path, offset }))).value as ReturnType<typeof tsDefinitionSync>;
   await ensureTs(files, open); return tsDefinitionSync(path, offset);
 }
 export async function tsRename(files: Record<string, string>, path: string, offset: number, nextName: string, open: string[] = []): Promise<Record<string, string>> {
-  if (useWorker()) return (await import("./compiler-client").then((c) => c.compilerJob("rename", files, open, { path, offset, nextName }))).value as Record<string, string>;
+  if (!isTsSource(path, files[path] ?? "", true)) return {};
+  if (workerAvailable()) return (await import("./compiler-client").then((c) => c.compilerJob("rename", files, open, { path, offset, nextName }))).value as Record<string, string>;
   return (await local()).tsRename(files, path, offset, nextName, open);
 }
 

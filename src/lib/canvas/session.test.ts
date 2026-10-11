@@ -133,8 +133,7 @@ test("abort during startup terminates the document and rejects the original load
 });
 test("native snapshot is discarded if its document changes during capture", async () => {
   const f = fixture();
-  let owner: ReturnType<typeof registerCanvasFrame>;
-  owner = registerCanvasFrame(f.el, {
+  const owner = registerCanvasFrame(f.el, {
     scope: "test",
     capture: async () => {
       await owner.load(html + "new", true);

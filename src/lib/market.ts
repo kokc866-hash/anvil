@@ -1,3 +1,36 @@
+import { ARCHIVE_MAX_COMPRESSED } from "./archive-codec.ts";
+
+function requestSignal(signal: AbortSignal | undefined, milliseconds: number): AbortSignal {
+  const deadline = AbortSignal.timeout(milliseconds);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
+async function boundedBody(response: Response, max: number, signal: AbortSignal): Promise<Uint8Array> {
+  signal.throwIfAborted();
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > max) { await response.body?.cancel(); throw new Error("Download überschreitet die Größenbegrenzung."); }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let length = 0;
+  const abort = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) break;
+      length += chunk.value.length;
+      if (length > max) { await reader.cancel(); throw new Error("Download überschreitet die Größenbegrenzung."); }
+      chunks.push(chunk.value);
+    }
+  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }
+  return result;
+}
+
 export type MarketItem = {
   id: string;
   name: string;
@@ -46,11 +79,12 @@ type SearchHit = {
 
 export async function resolveVsixUrl(url: string, signal?: AbortSignal): Promise<string> {
   if (/\.vsix(\?|#|$)/i.test(url)) return url;
-  const r = await fetch(url, { signal: signal ?? AbortSignal.timeout(8000) });
+  const deadline = requestSignal(signal, 8000);
+  const r = await fetch(url, { signal: deadline });
   if (!r.ok) throw new Error(`Markt: HTTP ${r.status}`);
   const ct = (r.headers.get("content-type") || "").toLowerCase();
   if (ct.includes("json") || ct.includes("text") || !ct.includes("octet") && !ct.includes("zip") && !ct.includes("vsix")) {
-    const j = (await r.json()) as {
+    const j = JSON.parse(new TextDecoder().decode(await boundedBody(r, 1024 * 1024, deadline))) as {
       files?: { download?: string };
       version?: string;
       namespace?: string;
@@ -68,9 +102,10 @@ export async function resolveVsixUrl(url: string, signal?: AbortSignal): Promise
 export async function searchMarket(q: string, signal?: AbortSignal): Promise<MarketItem[]> {
   const query = q.trim() || "snippets";
   const url = `${OPEN}/-/search?query=${encodeURIComponent(query)}&size=16&sortBy=relevance`;
-  const r = await fetch(url, { signal: signal ?? AbortSignal.timeout(8000) });
+  const deadline = requestSignal(signal, 8000);
+  const r = await fetch(url, { signal: deadline });
   if (!r.ok) throw new Error(`Markt: HTTP ${r.status}`);
-  const j = (await r.json()) as { extensions?: SearchHit[] };
+  const j = JSON.parse(new TextDecoder().decode(await boundedBody(r, 1024 * 1024, deadline))) as { extensions?: SearchHit[] };
   return (j.extensions ?? []).map((e) => {
     const ns = e.namespace || "unknown";
     const name = e.name || "ext";
@@ -89,8 +124,10 @@ export async function searchMarket(q: string, signal?: AbortSignal): Promise<Mar
 }
 
 export async function downloadVsix(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
-  const resolved = await resolveVsixUrl(url, signal);
-  const r = await fetch(resolved, { signal: signal ?? AbortSignal.timeout(60000) });
+  const deadline = requestSignal(signal, 60000);
+  const resolved = await resolveVsixUrl(url, deadline);
+  deadline.throwIfAborted();
+  const r = await fetch(resolved, { signal: deadline });
   if (!r.ok) throw new Error(`Download: HTTP ${r.status}`);
-  return r.arrayBuffer();
+  return Uint8Array.from(await boundedBody(r, ARCHIVE_MAX_COMPRESSED, deadline)).buffer;
 }

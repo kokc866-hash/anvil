@@ -1,9 +1,10 @@
 # Agent und Chat
 
-Chat-Verhalten in Release Anvil 1.3.29. Anbieterabhängige Bild- und Antwortmöglichkeiten stehen unter [Verbindungen](05-verbindungen.md).
+Chat-Verhalten im lokalen Quellstand 1.3.35 vom 4. Oktober 2026. Anbieterabhängige Bild- und Antwortmöglichkeiten stehen unter [Verbindungen](05-verbindungen.md). Die aktuellen Änderungen an Auftragserhalt, Abbruch und Wiederherstellung erklärt [Optimierungen und Abnahme](optimierungen-2026-10.md).
 
 - Links über den Einstellungen öffnen das Checklisten-Symbol **Geführte Aufgaben** und das Kabel-Symbol **Verbindung und unterstützte Eingaben**. Die Bereiche belegen keinen Platz mehr über der Texteingabe. Erneutes Anklicken schließt den Bereich. Eine Aufgabenauswahl öffnet den Chat und setzt den Fokus in den bearbeitbaren Entwurf.
 - Das Texteingabefeld wächst bei langen Entwürfen nach oben, bis etwa zur halben Chathöhe (höchstens 360 Pixel). Noch längere Texte bleiben scrollbar. Beim Kürzen, Leeren oder Absenden schrumpft das Feld automatisch. Enter sendet, Shift+Enter fügt eine neue Zeile ein.
+- Zum Einfügen ins Eingabefeld klicken und **Strg+V** drücken oder im Kontextmenü **Einfügen** wählen. Seit der lokalen Korrektur vom 6. Oktober 2026 unterstützt der Desktop-Zugriff die aktualisierte Electron-Schnittstelle für Text und Bilder. Falls dieser Zugriff fehlschlägt, versucht das Menü zusätzlich den Browser-Leseweg. Ein verweigerter Zugriff wird von einer leeren Zwischenablage unterschieden; vorhandener Entwurf und Textauswahl bleiben erhalten. Ein später Leseabschluss wird nach einem Projektwechsel nicht in das neue Projekt eingefügt.
 
 - Die laufende Anfrage zeigt ihren Status rechts neben der Zeit an der Agentenblase. Die frühere feste Statusleiste entfällt. Lange Angaben bleiben per Tooltip vollständig lesbar, auch am Fensterrand. Escape, Scrollen oder eine Größenänderung schließen den Tooltip.
 - „Neuer Chat“ beendet den laufenden Agentenauftrag und leert auch dessen Warteschlange, ausstehende Übergabe, Entwurf und ausgewählte Rückfrage. Der Befehl verhält sich über die Schaltfläche, das Kontextmenü und die Befehlspalette gleich.

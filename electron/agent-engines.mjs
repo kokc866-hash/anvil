@@ -13,7 +13,7 @@ export class AgentEngines {
     if(this.jobs.size)throw new Error('Vorherige Engine wird noch beendet. Kurz warten.');
     this.root='';this.last=null;
     if(isAbsolute(request.project||'')){
-      try{if(lstatSync(request.project).isDirectory())this.root=realpathSync(resolve(request.project));}catch{}
+      try{if(lstatSync(request.project).isDirectory())this.root=realpathSync(resolve(request.project));}catch{ /* An inaccessible project stays unset and is rejected on run. */ }
     }
   }
   status() {

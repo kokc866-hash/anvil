@@ -15,7 +15,7 @@ test('real background worker reports pending context and confirmed usage through
  await buildAgentRuntime(build); // Never replace the worker of a running user test.
  let requests=0,release;
  const api=httpServer(async(req,res)=>{
-  for await(const chunk of req){};
+  for await(const _chunk of req){ /* Drain the fixture body before returning a response. */ }
   const n=++requests;
   if(n===1)await new Promise(r=>release=r);
   const delta=n===1?{tool_calls:[{index:0,id:'read',function:{name:'read_file',arguments:'{"path":"notes.txt"}'}}]}:{content:'Gelesen.'};

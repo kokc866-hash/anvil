@@ -1,5 +1,6 @@
 import { chatUsage, resolvedUsage, withRequestTokens, type TokenUsage, type RequestTokens } from "./token-usage";
-import { modelSeesImages } from "./ref";
+import { verifyForegroundArtifacts } from "./acceptance-artifacts";
+import { modelSeesImages, ingestModelInputs } from "./ref";
 import { ToolSession, toolTargetKey, toolCompatibility } from "./tool-compat";
 import { ToolLearningSession } from "./tool-learning";
 import { grokRound } from "./agent";
@@ -16,13 +17,13 @@ import {
 import { stripPayload, shrinkTools, prepareTextTools } from "./tool-fallback";
 import { runAgentShell } from "./agent-shell";
 import { agentDebug } from "./debug-engine";
-import { agentLearn, useLearn } from "./learn";
+import { agentLearn, useLearn, foregroundKnowledgePermissions } from "./learn";
 import { stripZipRoot, unzipFiles } from "./archive";
 import { formatCode } from "./format";
 import { cloneGithub, pushGithub } from "./github";
 import { applyLlmOptions, patchResponses400, responsesBody, toResponsesTools, usesResponsesApi, type ThinkingMode } from "./llm-options";
 import { parseResponsesSse } from "./responses-parse";
-import { fitMessages, isContextError, isVramError, prepChatPayload, shrinkLocalCtx, type CompactMode } from "./compact";
+import { fitMessages, isContextError, isVramError, prepChatPayload, shrinkLocalCtx, USER_REQUEST_MARK, type CompactMode } from "./compact";
 import { isPrivateHost } from "./net-guard";
 import { proxyLlm, toAnthropicMessages } from "./llm-proxy";
 import { readSseChat, readSseResponses, readSseAnthropic, StreamStallError } from "./sse";
@@ -41,7 +42,8 @@ export { normalizeBaseUrl } from "./connection";
 import { lanFetch, hasLlmTransport } from "./lan-fetch";
 import { localChatUrl, sanitizeLocalPayload, wrapOllamaResponse } from "./local-wire";
 import { anthropicHeaders, pipeHeaders, responsesNative } from "./llm-headers";
-import { throwIfAborted, AgentAbortError, agentBeat, withAgentTimeout, agentAborted, agentGen, isAbortLike, explainAbort, raceAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
+import { AgentAbortError, agentBeat, agentGen, isAbortLike, explainAbort, hardStopMs, cloudStopMs, shouldRetryLocalLlm } from "./abort";
+import { bindAgentRun, captureAgentRun, type AgentRun } from "./agent-run";
 import { useIde } from "@/store/ide";
 import { ANVIL_SURFACE, toolsAllowed } from "./surface";
 import { surfaceNote } from "./surface-context";
@@ -112,15 +114,24 @@ export async function listModels(opts: {
     opts.signal?.throwIfAborted();
     const context = await import("./model-context");
     for (const row of result.rows) context.ingestModelRow(row);
+    ingestModelInputs(spec.id, base, result.rows);
     return result.ids;
   }
   const r = await proxyLlm({ data: { action: "models", provider: spec.id, baseUrl: opts.baseUrl || spec.baseUrl, model: "", apiKey: opts.apiKey }, signal: opts.signal });
   opts.signal?.throwIfAborted();
   if (!r.ok) throw new Error(r.error || "Modelle fehlgeschlagen");
+  if (r.modelRows) {
+    const rows = JSON.parse(r.modelRows) as Record<string, unknown>[];
+    const context = await import("./model-context");
+    for (const row of rows) context.ingestModelRow(row);
+    ingestModelInputs(spec.id, normalizeBaseUrl(opts.baseUrl || spec.baseUrl), rows);
+  }
   return r.models ?? [];
 }
 
 export async function chatWithProvider(opts: {
+  authMode?: "key" | "abo";
+  run?: AgentRun;
   provider: LlmProvider | string;
   baseUrl: string;
   model: string;
@@ -141,6 +152,9 @@ export async function chatWithProvider(opts: {
   canReplacePlan?: () => boolean;
   onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
   onHarness?: (bar: string) => void;
+  workflow?: import("./agent-workflow").WorkflowSnapshot;
+  workflowId?: string;
+  onWorkflow?: (snapshot: import("./agent-workflow").WorkflowSnapshot) => void | Promise<void>;
   runLoop?: boolean;
   graphLoop?: boolean;
   testLoop?: boolean;
@@ -157,9 +171,13 @@ export async function chatWithProvider(opts: {
   locale?: "de" | "en";
   observeOnly?: boolean;
 }): Promise<AgentResult> {
-  const run = agentGen();
+  const epoch = useIde.getState().workspaceEpoch;
+  const authMode = opts.authMode ?? useIde.getState().llmAuthMode;
+  const scope = opts.run ?? captureAgentRun(() => useIde.getState().workspaceEpoch === epoch);
+  const run = scope.generation;
+  scope.assertCurrent();
   const original = opts;
-  opts = {
+  opts = bindAgentRun(scope, {
     ...original,
     onDelta: (chunk, kind) => {
       requestPhase(run, kind === "think" ? "thinking" : "answering");
@@ -167,11 +185,11 @@ export async function chatWithProvider(opts: {
     },
     onToolStart: (info) => { requestPhase(run, "tool", info.name); original.onToolStart?.(info); },
     onTool: (info) => { original.onTool?.(info); requestPhase(run, "preparing"); },
-  };
+  });
   const spec = providerOf(opts.provider);
-  const surface = await surfaceNote();
-  throwIfAborted();
-  if (run !== agentGen()) throw new AgentAbortError("Anfrage ersetzt");
+  const grokApiKey = spec.id === "grok" ? (opts.apiKey || keyForProvider("xai")).trim() : "";
+  const surface = await surfaceNote(scope);
+  scope.assertCurrent();
   const mcpCatalog = surface.text;
   if (spec.id === "grok") {
     const complete = async (
@@ -179,10 +197,10 @@ export async function chatWithProvider(opts: {
       useTools: boolean | "required",
       onDelta?: (s: string, kind?: "text" | "think") => void,
     ): Promise<LlmChoice> => {
-      throwIfAborted();
+      scope.assertCurrent();
       requestPhase(run, "waiting");
       const stop = cloudStopMs(useIde.getState().llmHardStopMin);
-      const key = (opts.apiKey || keyForProvider("xai")).trim();
+      const key = grokApiKey;
       if (key) {
         try {
           const payload = applyLlmOptions(
@@ -199,28 +217,30 @@ export async function chatWithProvider(opts: {
             payload.tool_choice = useTools === "required" ? "required" : "auto";
           }
           prepChatPayload(payload, Number(opts.context) || 131072);
-          const res = await lanFetch("https://api.x.ai/v1/chat/completions", {
+          const res = await scope.wait(lanFetch("https://api.x.ai/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: `Bearer ${key}` },
             body: JSON.stringify(payload),
-            signal: withAgentTimeout(stop),
-          });
+            signal: scope.timeout(stop),
+          }));
           if (res.ok) {
             if (payload.stream) return withRequestTokens(await readSseChat(res, onDelta), payload, opts.context ?? 131072);
             const json = (await res.json()) as { choices: { message: LlmChoice }[]; usage?: unknown };
             const choice = json.choices[0]?.message;
             if (choice) choice.usage = chatUsage(json.usage);
             if (!choice) throw new Error("Leere Antwort vom Modell");
+            if (!choice.reasoning && typeof choice.reasoning_content === "string") choice.reasoning = choice.reasoning_content;
             if (choice.reasoning) onDelta?.(choice.reasoning, "think");
             if (choice.content) onDelta?.(choice.content, "text");
             return withRequestTokens(choice, payload, opts.context ?? 131072);
           }
         } catch (err) {
           if (err instanceof AgentAbortError) throw err;
-          if (agentAborted()) throw new AgentAbortError(explainAbort(err));
+          scope.assertCurrent();
         }
       }
-      const r = await raceAbort(grokRound({ data: { messages, useTools: Boolean(useTools) } }), stop);
+      scope.assertCurrent();
+      const r = await scope.wait(grokRound({ data: { messages, useTools: Boolean(useTools) }, signal: scope.signal }), stop);
       if (!r.ok || !r.choice) throw new Error(r.error || "Keine Antwort vom Modell");
       if (r.choice.reasoning) onDelta?.(r.choice.reasoning, "think");
       if (r.choice.content && !r.choice.tool_calls?.length) onDelta?.(r.choice.content, "text");
@@ -243,9 +263,10 @@ export async function chatWithProvider(opts: {
         prefer: opts.prefer,
         locale: opts.locale,
         observeOnly: opts.observeOnly,
+        workflow: opts.workflow, workflowId: opts.workflowId, autoRunAgent: !opts.observeOnly && useIde.getState().autoRunAgent,
       },
       complete,
-      { ...clientTools(opts), onHarness: opts.onHarness, onUsage: opts.onUsage },
+      { ...clientTools(opts, scope), run: scope, onHarness: opts.onHarness, onUsage: opts.onUsage, onWorkflow: opts.onWorkflow, capabilities: toolsForCall(opts.observeOnly).map(t => t.function.name) },
     );
   }
   if (spec.id === "brain") {
@@ -257,7 +278,7 @@ export async function chatWithProvider(opts: {
   }
   const model = opts.model.trim() || spec.model;
   if (!model) return { ok: false, reply: "Bitte ein Modell wählen.", error: "no model" };
-  const cliKind = cliKindFor(spec.id, useIde.getState().llmAuthMode);
+  const cliKind = cliKindFor(spec.id, authMode);
   if (!cliKind && spec.needsKey && !opts.apiKey.trim()) {
     return { ok: false, reply: `API-Key für ${spec.label} unter Einstellungen eintragen.`, error: "no key" };
   }
@@ -275,21 +296,24 @@ export async function chatWithProvider(opts: {
   const transport = cliKind
     ? async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void) => {
         const offered = useTools ? toolsForCall(opts.observeOnly) : [];
-        const choice = await completeViaCli(cliKind, model, messages, offered, hardStopMs(useIde.getState().llmHardStopMin), onDelta, opts.thinking ?? "auto");
+        scope.assertCurrent();
+        const choice = await completeViaCli(cliKind, model, messages, offered, hardStopMs(useIde.getState().llmHardStopMin), onDelta, opts.thinking ?? "auto", scope.signal);
+        scope.assertCurrent();
         choice.usage = resolvedUsage(choice, messages, offered);
         return choice;
       }
     : isBrowserTarget(spec, opts.baseUrl)
-    ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession)
-    : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession);
+    ? makeLocalComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession, scope)
+    : makeProxyComplete(spec, opts.baseUrl, model, opts.apiKey, opts.context, opts.thinking, opts.observeOnly, toolSession, scope);
 
   let modelRound = 0;
   const complete: typeof transport = async (messages, tools, onDelta) => {
-    throwIfAborted();
+    scope.assertCurrent();
     requestPhase(run, "waiting");
     const round = ++modelRound;
     const choice = await transport(messages, tools, onDelta);
     const { appLog } = await import("./app-log");
+    scope.assertCurrent();
     appLog("agent", `R${run} Antwort ${round} · text=${choice.content?.length ?? 0} think=${choice.reasoning?.length ?? 0} Werkzeugaufrufe=${choice.tool_calls?.length ?? 0} finish=${choice.finish_reason || "-"}`);
     if (toolSession) {
       choice.toolContract = { ...toolSession.contract, names: [...toolSession.contract.names] };
@@ -316,9 +340,11 @@ export async function chatWithProvider(opts: {
         prefer: opts.prefer,
         locale: opts.locale,
         observeOnly: opts.observeOnly,
+        workflow: opts.workflow, workflowId: opts.workflowId, autoRunAgent: !opts.observeOnly && useIde.getState().autoRunAgent,
       },
       complete,
-      { ...clientTools(opts), onHarness: opts.onHarness, onUsage: opts.onUsage,
+      { ...clientTools(opts, scope), run: scope, onHarness: opts.onHarness, onUsage: opts.onUsage,
+        onWorkflow: opts.onWorkflow, capabilities: toolsForCall(opts.observeOnly).map(t => t.function.name),
         toolLearning,
         selectTools: toolSession ? (names) => toolSession.select(names) : undefined,
         tryTextFallback: toolSession ? () => toolSession.tryTextFallback() : undefined,
@@ -375,20 +401,23 @@ function clientTools(opts: {
   onToolStart?: (info: { name: string; args: Record<string, unknown> }) => void;
   getPlan?: () => import("@/store/ide").PlanStep[] | undefined;
   canReplacePlan?: () => boolean;
-}) {
+}, scope: AgentRun) {
   const mcpStart = useIde.getState();
-  const mcpGeneration = agentGen();
-  const mcpSignal = withAgentTimeout(0);
+  const mcpGeneration = scope.generation;
+  const mcpSignal = scope.signal;
   const mcpScope = new Set((mcpStart.mcpServers || []).filter((s) => mcpStart.surfaceMode === "bridge" || !mcpStart.activeSurfaceId || mcpStart.activeSurfaceId === ANVIL_SURFACE || s.id === mcpStart.activeSurfaceId).map((s) => s.id));
-  const mcpCurrent = () => { mcpSignal.throwIfAborted(); if (agentGen() !== mcpGeneration) throw new AgentAbortError("Anfrage ersetzt"); };
+  const mcpCurrent = scope.assertCurrent;
   const tools = {
+    verifyArtifacts: (result: Record<string, unknown>) => verifyForegroundArtifacts(result, mcpStart.workspaceCwd || '', scope),
     onNotice: (kind: string, text: string) => {
-      if (kind === "agent") void import("./intern").then((m) => m.note("agent", text));
-      else void import("./app-log").then((m) => m.appLog(kind, text));
+      if (kind === "agent") void import("./intern").then((m) => { if (scope.current()) m.note("agent", text); });
+      else void import("./app-log").then((m) => { if (scope.current()) m.appLog(kind, text); });
     },
     verify: async (paths: string[]) => {
       const { refreshProblems } = await import("./problems");
+      scope.assertCurrent();
       const result = await refreshProblems();
+      scope.assertCurrent();
       if (!result.current) return { ok: false, detail: "Dateien während der Diagnose geändert. Prüfung ist überholt." };
       const hits = result.hits.filter((h) => !paths.length || paths.includes(h.path));
       const errors = hits.filter((h) => h.severity === "error");
@@ -406,13 +435,14 @@ function clientTools(opts: {
     getPlan: opts.getPlan,
     canReplacePlan: opts.canReplacePlan,
     fetchUrl: async (url: string) => {
-      const r = await fetchWeb({ data: { url } });
+      const r = await scope.wait(fetchWeb({ data: { url }, signal: scope.signal }));
       if (!r.ok) throw new Error(r.text);
       return r.text;
     },
     formatFile: (path: string, content: string) => formatCode(path, content),
     gitStatus: async () => {
       const { useIde } = await import("@/store/ide");
+      scope.assertCurrent();
       const st = useIde.getState();
       const cwd = st.workspaceCwd?.trim();
       const ram = {
@@ -423,7 +453,8 @@ function clientTools(opts: {
       };
       if (!cwd) return { ok: false, error: "Kein Projektordner. Companion koppeln für echtes git.", ...ram };
       const { companionGit } = await import("./companion");
-      const live = await companionGit("status", { cwd });
+      scope.assertCurrent();
+      const live = await scope.wait(companionGit("status", { cwd }, st.companionUrl || undefined, scope.signal));
       if (!live.ok) return { ...live, ...ram };
       return {
         ok: true,
@@ -436,34 +467,42 @@ function clientTools(opts: {
     },
     gitCommit: async (message: string) => {
       const { useIde } = await import("@/store/ide");
+      scope.assertCurrent();
       const st = useIde.getState();
       const cwd = st.workspaceCwd?.trim();
       if (!cwd) return { ok: false, error: "Kein Projektordner. Commit wäre nur Sitzung — Companion koppeln." };
       const { flushDiskSync } = await import("./disk-sync");
+      scope.assertCurrent();
       await flushDiskSync();
       const { companionGit } = await import("./companion");
-      return companionGit("commit", { cwd, message });
+      scope.assertCurrent();
+      return scope.wait(companionGit("commit", { cwd, message }, st.companionUrl || undefined, scope.signal));
     },
     gitClone: async (url: string) => {
-      const r = await cloneGithub({ data: { url, token: opts.githubToken } });
+      const r = await scope.wait(cloneGithub({ data: { url, token: opts.githubToken }, signal: scope.signal }));
       const raw = atob(r.zipB64);
       const buf = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
       const pack = stripZipRoot(await unzipFiles(buf.buffer));
+      scope.assertCurrent();
       return Object.entries(pack).map(([path, content]) => ({ path, content }));
     },
     gitPush: async (message: string, files: Record<string, string>) => {
       const { useIde } = await import("@/store/ide");
+      scope.assertCurrent();
       const cwd = useIde.getState().workspaceCwd?.trim();
       if (cwd) {
         const { flushDiskSync } = await import("./disk-sync");
+        scope.assertCurrent();
         await flushDiskSync();
         const { companionGit } = await import("./companion");
-        const c = await companionGit("commit", { cwd, message });
-        const p = await companionGit("push", { cwd });
+        scope.assertCurrent();
+        const url = useIde.getState().companionUrl || undefined;
+        const c = await scope.wait(companionGit("commit", { cwd, message }, url, scope.signal));
+        const p = await scope.wait(companionGit("push", { cwd }, url, scope.signal));
         if (p.ok) return { sha: "git", repo: cwd, via: "companion" as const };
         if (c.ok === false && /nothing to commit|nichts zu/i.test(String(c.error || c.stdout || ""))) {
-          const p2 = await companionGit("push", { cwd });
+          const p2 = await scope.wait(companionGit("push", { cwd }, url, scope.signal));
           if (p2.ok) return { sha: "git", repo: cwd, via: "companion" as const };
         }
         if (!opts.githubToken) return { sha: "", repo: cwd, error: p.error || c.error || "git push fehlgeschlagen" };
@@ -472,20 +511,23 @@ function clientTools(opts: {
       const token = opts.githubToken?.trim() ?? "";
       if (!repo || !token) throw new Error("GitHub-Repo und Token unter Einstellungen eintragen — oder Projektordner koppeln.");
       const { isSecretPath } = await import("./ref");
+      scope.assertCurrent();
       const safe: Record<string, string> = {};
       for (const [p, c] of Object.entries(files)) if (!isSecretPath(p)) safe[p] = c;
-      return pushGithub({ data: { repo, token, message, files: safe } });
+      return scope.wait(pushGithub({ data: { repo, token, message, files: safe }, signal: scope.signal }));
     },
-    shell: (command: string, files: Record<string, string>) => runAgentShell(command, files),
-    debug: (action: string, args: Record<string, unknown>) => agentDebug(action, args),
+    shell: (command: string, files: Record<string, string>) => runAgentShell(command, files, scope),
+    debug: (action: string, args: Record<string, unknown>) => agentDebug(action, args, scope),
     learn: (action: string, args: Record<string, unknown>) => agentLearn(action, args),
     summarize: async (blob: string) => {
       const { brainCompact, brainReady } = await import("./brain");
+      scope.assertCurrent();
       const cut = blob.slice(0, 8000);
       if (!brainReady()) return cut;
       try {
-        return await brainCompact(blob);
+        return await scope.wait(brainCompact(blob, scope.signal));
       } catch {
+        scope.assertCurrent();
         return cut;
       }
     },
@@ -509,20 +551,20 @@ function clientTools(opts: {
           ? await mcpReadResource(servers, want, name || "", mcpSignal)
           : await mcpCall(servers, want, name ?? "", args,
             st.mcpStream ? (chunk) => {
-              if (mcpSignal.aborted || agentGen() !== mcpGeneration) return;
+              if (!scope.current()) return;
               agentBeat();
               const prev = useIde.getState().mcpView[sid]?.text ?? "";
               useIde.getState().setMcpView(sid, { text: (prev + chunk).slice(-8000), at: Date.now() });
-              void import("./live-write").then((m) => { if (!mcpSignal.aborted && agentGen() === mcpGeneration) m.applyMcpLive(sid, name ?? "", args, chunk); });
+              void import("./live-write").then((m) => { if (scope.current()) m.applyMcpLive(sid, name ?? "", args, chunk); });
             } : undefined, { cwd: mcpStart.workspaceCwd || undefined, signal: mcpSignal });
         mcpCurrent();
         const rec = raw && typeof raw === "object" ? raw as { text?: string; image?: string; images?: string[]; isError?: boolean } : null;
         const text = rec?.text || (typeof raw === "string" ? raw : JSON.stringify(raw));
         st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: !rec?.isError, detail: String(text).slice(0, 400), image: rec?.image });
         st.setMcpView(sid, { text: String(text), image: rec?.image, images: rec?.images, at: Date.now() });
-        return modelMcpResult(sid, raw, { images: modelSeesImages(mcpStart.llmProvider, mcpStart.llmModel) });
+        return modelMcpResult(sid, raw, { images: modelSeesImages(mcpStart.llmProvider, mcpStart.llmModel, normalizeBaseUrl(mcpStart.llmBaseUrl || providerOf(mcpStart.llmProvider).baseUrl)) });
       } catch (error) {
-        if (!mcpSignal.aborted && agentGen() === mcpGeneration) st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: false, detail: String(error instanceof Error ? error.message : error).slice(0, 400) });
+        if (scope.current()) st.pushMcpLog({ at: t0, server: sid, name: name ?? "", ok: false, detail: String(error instanceof Error ? error.message : error).slice(0, 400) });
         throw error;
       } finally {
         if (st.mcpStream) (await import("./live-write")).finishLiveWrite(mcpGeneration);
@@ -545,8 +587,9 @@ function clientTools(opts: {
       };
       current();
       const { withCompanion } = await import("./companion-life");
+      current();
       if (args?.detect || action === "status") {
-        const ping = await withCompanion(() => companionPing(url), url, st.workspaceCwd);
+        const ping = await withCompanion(() => { current(); return companionPing(url, scope.signal); }, url, st.workspaceCwd, scope);
         current();
         st.setEngineLink(hit ? { label: hit.label, ok: engineReady(hit, ping) } : null);
         const engines = hits.map((engine) => ({ ...engine, installed: engineReady(engine, ping) }));
@@ -556,24 +599,28 @@ function clientTools(opts: {
       if (!st.workspaceCwd.trim()) return { ok: false, error: "Für die Engine zuerst einen lokalen Projektordner öffnen. Ein Projekt nur in Anvils Sitzung reicht nicht." };
       const plan = planEngineRun(hits, args);
       const { saveNow } = await import("./save");
+      current();
       if (!await saveNow({ all: true, format: false })) return { ok: false, error: "Projekt konnte nicht vollständig gespeichert werden. Änderungen zuerst abgleichen." };
       current();
       const job = await withCompanion(() => {
         current();
-        return companionRun({ cmd: plan.cmd, action: plan.action, cwd: st.workspaceCwd, timeoutMs: Number(args?.timeoutMs) || 90000 }, url);
-      }, url, st.workspaceCwd);
+        return companionRun({ cmd: plan.cmd, action: plan.action, cwd: st.workspaceCwd, timeoutMs: Number(args?.timeoutMs) || 90000 }, url, scope.signal);
+      }, url, st.workspaceCwd, scope);
       current();
       st.pushOutput({ ...job, duration: job.duration / 1000, label: `${plan.hit?.label || "Engine"} · ${plan.action}` });
       st.revealOutput();
       return { ...job, engineId: plan.hit?.id, engine: plan.hit?.label, projectRoot: plan.hit?.root,
         ...(job.running ? { status: "Engine läuft. Das bestätigt den Start, keinen erfolgreichen Build oder Test." } : {}) };
     },
-    runFile: async (path: string, files: Record<string, string>) => {
+    runFile: async (path: string, files: Record<string, string>, asTest = false) => {
       const { runLoopFile } = await import("./run-loop");
+      const { prepared } = await import("./test-wrap");
       const { useIde } = await import("@/store/ide");
+      scope.assertCurrent();
       const st = useIde.getState();
       st.setRunPath(path);
-      const r = await runLoopFile(path, files, { graph: st.graphLoop, tries: st.runLoop ? st.loopTries : 1 });
+      const r = await runLoopFile(path, asTest ? prepared(files, path) : files, { graph: st.graphLoop, tries: st.runLoop ? st.loopTries : 1, run: scope });
+      scope.assertCurrent();
       st.pushOutput({
         ok: r.ok,
         stdout: r.stdout,
@@ -593,10 +640,11 @@ function clientTools(opts: {
     play: async (keys: string[], hold?: number) => {
       const { playLoop } = await import("./run-loop");
       const { useIde } = await import("@/store/ide");
+      scope.assertCurrent();
       const st = useIde.getState();
       if (!st.runHtml) return { ok: false, error: "HTML-Run aus (Einstellungen → Ausgabe)." };
       if (!st.graphLoop) return { ok: false, error: "Graph-Schleife aus" };
-      const shot = await playLoop(keys, hold);
+      const shot = await playLoop(keys, hold, scope);
       return { ok: shot.ok === true, error: shot.error, state: shot.state, keys, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
     see: async () => {
@@ -604,13 +652,15 @@ function clientTools(opts: {
       const { useIde } = await import("@/store/ide");
       const { previewFor } = await import("./preview-doc");
       const { openRunWindow, keepAgentRun } = await import("./run-window");
+      scope.assertCurrent();
       const st = useIde.getState();
       keepAgentRun();
       const last = [...st.output].reverse().find((o) => o.stdout || o.stderr || o.html);
       if (last?.stage?.id && last.stage.kind !== "html") {
         st.revealOutput();
         const { companionRunStatus } = await import("./companion");
-        const current = await companionRunStatus(last.stage.id, st.companionUrl || undefined);
+        scope.assertCurrent();
+        const current = await scope.wait(companionRunStatus(last.stage.id, st.companionUrl || undefined, scope));
         return { ok: current.ok, running: current.running, stage: current.stage?.kind,
           out: current.stage?.out, stdout: current.stdout, stderr: current.stderr,
           note: current.running ? "Natives Programm läuft im eigenen Fenster/Terminal. Tasten dort eingeben." : "Native Ausführung beendet; dies ist das tatsächliche Prozessergebnis." };
@@ -638,6 +688,7 @@ function clientTools(opts: {
       } else {
         st.setPreviewOpen(true);
         const { agentOpenedPreview } = await import("./run-window");
+        scope.assertCurrent();
         agentOpenedPreview();
       }
       const path = htmlPath;
@@ -645,9 +696,10 @@ function clientTools(opts: {
       let html = src;
       if (path && src) {
         const view = await previewFor(path, src, st.files, st.output.at(-1), st.inputMap, st.runHtml);
+        scope.assertCurrent();
         if (view.kind === "iframe") html = view.srcDoc;
       }
-      const shot = await shotLoop(html || undefined);
+      const shot = await shotLoop(html || undefined, undefined, scope);
       if (!shot.image) {
         if (last && !last.html) {
           return {
@@ -662,13 +714,14 @@ function clientTools(opts: {
       return { ok: shot.ok === true, error: shot.error, state: shot.state, logs: shot.logs, size: shot.w ? `${shot.w}×${shot.h}` : undefined, image: shot.image };
     },
   };
-  return {
-    ...tools,
-    gitStatus: () => withCompanion(tools.gitStatus),
-    gitCommit: (...args: Parameters<typeof tools.gitCommit>) => withCompanion(() => tools.gitCommit(...args)),
-    gitPush: (...args: Parameters<typeof tools.gitPush>) => withCompanion(() => tools.gitPush(...args)),
-    engine: (...args: Parameters<typeof tools.engine>) => withCompanion(() => tools.engine(...args)),
-  };
+  const guarded = bindAgentRun(scope, tools);
+  return bindAgentRun(scope, {
+    ...guarded,
+    gitStatus: () => withCompanion(guarded.gitStatus, undefined, undefined, scope),
+    gitCommit: (...args: Parameters<typeof tools.gitCommit>) => withCompanion(() => guarded.gitCommit(...args), undefined, undefined, scope),
+    gitPush: (...args: Parameters<typeof tools.gitPush>) => withCompanion(() => guarded.gitPush(...args), undefined, undefined, scope),
+    engine: (...args: Parameters<typeof tools.engine>) => withCompanion(() => guarded.engine(...args), undefined, undefined, scope),
+  });
 }
 
 function toolsForCall(observeOnly = false, session?: ToolSession) {
@@ -683,7 +736,13 @@ function toolsForCall(observeOnly = false, session?: ToolSession) {
     debug: compatible || Boolean(st.debug.paused) || Object.values(st.breakpoints).some((b) => b.length),
     git: compatible || Boolean(st.workspaceCwd?.trim()),
   });
-  const allowed = picked.filter((t) => toolsAllowed(st.activeSurfaceId, st.surfaceMode, t.function.name));
+  const knowledge = foregroundKnowledgePermissions();
+  const allowed = picked.filter((t) => {
+    const name = t.function.name;
+    if (name.startsWith("memory_") && !knowledge.memoryEnabled) return false;
+    if (name.startsWith("skill_") && (!knowledge.skillsEnabled || !knowledge.skillBodies && ["skill_read", "skill_run", "skill_debug"].includes(name))) return false;
+    return toolsAllowed(st.activeSurfaceId, st.surfaceMode, name);
+  });
   return session ? session.tools(allowed) : allowed;
 }
 
@@ -705,6 +764,7 @@ function makeLocalComplete(
   thinking: ThinkingMode = "auto",
   observeOnly = false,
   session?: ToolSession,
+  scope: AgentRun = captureAgentRun(),
 ) {
   const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
   const chatUrl = localChatUrl(spec.id, base);
@@ -713,7 +773,7 @@ function makeLocalComplete(
     Accept: "text/event-stream",
     ...(apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}),
   };
-  const localFetch = (url: string, init: RequestInit) => lanFetch(url, init, spec.id === "custom" ? normalizeBaseUrl(baseUrl || spec.baseUrl) : "");
+  const localFetch = bindAgentRun(scope, { send: (url: string, init: RequestInit) => lanFetch(url, init, spec.id === "custom" ? normalizeBaseUrl(baseUrl || spec.baseUrl) : "") }).send;
   return async (
     messages: Record<string, unknown>[],
     useTools: boolean | "required",
@@ -749,11 +809,11 @@ function makeLocalComplete(
     applyCapToPayload(payload, cap0, Boolean(tools));
     let last: unknown;
     let stripped = false;
-    let current = model;
+    const current = model;
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
-    const gen = agentGen();
+    const gen = scope.generation;
     for (let attempt = 1; attempt <= tries; attempt++) {
-      throwIfAborted();
+      scope.assertCurrent();
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
       try {
         payload.model = current;
@@ -763,10 +823,11 @@ function makeLocalComplete(
           method: "POST",
           headers,
           body: JSON.stringify(wirePayload),
-          signal: withAgentTimeout(hardStopMs(useIde.getState().llmHardStopMin)),
+          signal: scope.timeout(hardStopMs(useIde.getState().llmHardStopMin)),
         });
         if (!res.ok) {
           const body = await res.text();
+          scope.assertCurrent();
           if (isVramError(body) && attempt < tries && wireCtx > 4096) {
             wireCtx = shrinkLocalCtx(wireCtx);
             setWireCtx(payload, wireCtx);
@@ -849,6 +910,7 @@ function makeLocalComplete(
         }
         if (spec.id === "ollama" || (onDelta && (res.headers.get("content-type")?.includes("text/event-stream") || payload.stream))) {
           const choice = await readSseChat(spec.id === "ollama" ? wrapOllamaResponse(chatUrl, res) : res, onDelta);
+          scope.assertCurrent();
           if (!choice.content && !choice.reasoning && !choice.tool_calls?.length) {
             throw new StreamStallError("Leere Antwort");
           }
@@ -868,7 +930,7 @@ function makeLocalComplete(
       } catch (err) {
         last = err;
         if (err instanceof AgentAbortError) throw err;
-        if (agentAborted() || agentGen() !== gen) {
+        if (!scope.current()) {
           throw new AgentAbortError(explainAbort(err));
         }
         const retry = shouldRetryLocalLlm(err);
@@ -889,17 +951,19 @@ function makeProxyComplete(
   thinking: ThinkingMode = "auto",
   observeOnly = false,
   session?: ToolSession,
+  scope: AgentRun = captureAgentRun(),
 ) {
+  const send = bindAgentRun(scope, { send: (url: string, init: RequestInit) => lanFetch(url, init) }).send;
   return async (messages: Record<string, unknown>[], useTools: boolean | "required", onDelta?: (s: string, kind?: "text" | "think") => void): Promise<LlmChoice> => {
     const key = apiKey.trim();
     const nativeHttp = hasLlmTransport();
     const tries = Math.min(8, Math.max(1, useIde.getState().llmRetries || 3));
     let last: unknown;
-    const gen = agentGen();
+    const gen = scope.generation;
     const stop = cloudStopMs(useIde.getState().llmHardStopMin);
     const base = normalizeBaseUrl(baseUrl || spec.baseUrl);
     for (let attempt = 1; attempt <= tries; attempt++) {
-      throwIfAborted();
+      scope.assertCurrent();
       if (agentGen() !== gen) throw new AgentAbortError("replaced");
       const learnedCap = getCap(spec.id, model, base);
       const cap = session?.text && learnedCap.tools !== "off" ? { ...learnedCap, tools: "text" as const } : learnedCap;
@@ -944,15 +1008,16 @@ function makeProxyComplete(
             }));
           }
           const sendAnt = () =>
-            lanFetch(`${base}/messages`, {
+            send(`${base}/messages`, {
               method: "POST",
               headers: anthropicHeaders(key),
               body: JSON.stringify(body),
-              signal: withAgentTimeout(stop),
+              signal: scope.timeout(stop),
             });
           let res = await sendAnt();
           if (!res.ok && res.status === 400) {
             const errText = await res.text();
+            scope.assertCurrent();
             const learned = learnFromError(spec.id, model, res.status, errText, base);
             if (learned && attempt < tries) { last = new Error(learned.note); continue; }
             const think = body.thinking as Record<string, unknown> | undefined;
@@ -983,11 +1048,11 @@ function makeProxyComplete(
               body.tools = toResponsesTools(offered);
               body.tool_choice = "auto";
             }
-            const res = await lanFetch(`${host.origin}/openai/v1/responses`, {
+            const res = await send(`${host.origin}/openai/v1/responses`, {
               method: "POST",
               headers: { ...hdrs, Accept: "text/event-stream" },
               body: JSON.stringify(body),
-              signal: withAgentTimeout(stop),
+              signal: scope.timeout(stop),
             });
             if (res.ok) return withRequestTokens(await readSseResponses(res, onDelta), chatPayload, context);
             throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 180)}`);
@@ -1002,13 +1067,13 @@ function makeProxyComplete(
             payload.tool_choice = "auto";
           }
           prepChatPayload(payload, context);
-          const res = await lanFetch(
+          const res = await send(
             `${host.origin}/openai/deployments/${encodeURIComponent(model)}/chat/completions?api-version=2024-10-21`,
             {
               method: "POST",
               headers: hdrs,
               body: JSON.stringify(payload),
-              signal: withAgentTimeout(stop),
+              signal: scope.timeout(stop),
             },
           );
           if (res.ok) return withRequestTokens(await readSseChat(res, onDelta), payload, context);
@@ -1029,22 +1094,24 @@ function makeProxyComplete(
             body.tools = toResponsesTools(offered);
             body.tool_choice = useTools === "required" && (!session || session.mode === "standard") && !cap.noRequired ? "required" : "auto";
           }
-          let res = await lanFetch(`${base}/responses`, {
+          let res = await send(`${base}/responses`, {
             method: "POST",
             headers: { ...hdrs, Accept: "text/event-stream" },
             body: JSON.stringify(body),
-            signal: withAgentTimeout(stop),
+            signal: scope.timeout(stop),
           });
           if (!res.ok) {
             let errText = await res.text();
+            scope.assertCurrent();
             if (res.status === 400 && patchResponses400(body, errText)) {
-              res = await lanFetch(`${base}/responses`, {
+              res = await send(`${base}/responses`, {
                 method: "POST",
                 headers: { ...hdrs, Accept: "text/event-stream" },
                 body: JSON.stringify(body),
-                signal: withAgentTimeout(stop),
+                signal: scope.timeout(stop),
               });
               if (!res.ok) errText = await res.text();
+              scope.assertCurrent();
             }
             if (res.ok) {
               /* continue below */
@@ -1066,6 +1133,7 @@ function makeProxyComplete(
             const ct = res.headers.get("content-type") || "";
             if (/event-stream|text\/plain/i.test(ct) || body.stream) return withRequestTokens(await readSseResponses(res, onDelta), chatPayload, context);
             const raw = await res.text();
+            scope.assertCurrent();
             const choice = parseResponsesSse(raw);
             if (choice.reasoning) onDelta?.(choice.reasoning, "think");
             if (choice.content) onDelta?.(choice.content, "text");
@@ -1091,11 +1159,11 @@ function makeProxyComplete(
           if (useTools && cap.tools === "text") prepareTextTools(payload, offered);
           applyCapToPayload(payload, cap, wantTools);
           prepChatPayload(payload, context);
-          const res = await lanFetch(`${base}/chat/completions`, {
+          const res = await send(`${base}/chat/completions`, {
             method: "POST",
             headers: hdrs,
             body: JSON.stringify(payload),
-            signal: withAgentTimeout(stop),
+            signal: scope.timeout(stop),
           });
           if (res.ok) {
             if (payload.stream) return withRequestTokens(await readSseChat(res, onDelta), payload, context);
@@ -1103,11 +1171,13 @@ function makeProxyComplete(
             const choice = json.choices[0]?.message;
             if (choice) choice.usage = chatUsage(json.usage);
             if (!choice) throw new Error("Leere Antwort vom Modell.");
+            if (!choice.reasoning && typeof choice.reasoning_content === "string") choice.reasoning = choice.reasoning_content;
             if (choice.reasoning) onDelta?.(choice.reasoning, "think");
             if (choice.content) onDelta?.(choice.content, "text");
             return withRequestTokens(choice, payload, context);
           }
           const body = await res.text();
+          scope.assertCurrent();
           const learned = learnFromError(spec.id, model, res.status, body, base);
           if (learned && attempt < tries) {
             last = new Error(learned.note || `HTTP ${res.status}`);
@@ -1121,7 +1191,7 @@ function makeProxyComplete(
           last = new Error(`HTTP ${res.status}: ${body.slice(0, 280)}`);
         }
         if (nativeHttp) throw last instanceof Error ? last : new Error("Keine Antwort vom Modell.");
-        const r = await raceAbort(
+        const r = await scope.wait(
           proxyLlm({
             data: {
               action: "chat",
@@ -1139,6 +1209,7 @@ function makeProxyComplete(
               maxOut: useIde.getState().llmMaxOut,
               caps: cap,
             },
+            signal: scope.signal,
           }),
           stop,
         );
@@ -1164,7 +1235,7 @@ function makeProxyComplete(
       } catch (err) {
         last = err;
         if (err instanceof AgentAbortError) throw err;
-        if (agentAborted() || agentGen() !== gen) {
+        if (!scope.current()) {
           throw new AgentAbortError(explainAbort(err));
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -1182,6 +1253,7 @@ function makeProxyComplete(
 
 export async function completeLocal(opts: {
   prompt: string;
+  run?: AgentRun;
   provider: LlmProvider | string;
   baseUrl: string;
   model: string;
@@ -1189,26 +1261,35 @@ export async function completeLocal(opts: {
   images?: string[];
   onUsage?: (usage: TokenUsage, request?: RequestTokens) => void;
 }): Promise<string> {
+  const epoch = useIde.getState().workspaceEpoch;
+  const scope = opts.run ?? captureAgentRun(() => useIde.getState().workspaceEpoch === epoch);
+  scope.assertCurrent();
+  opts = bindAgentRun(scope, opts);
+  const prompt = opts.prompt.startsWith(USER_REQUEST_MARK) ? opts.prompt : USER_REQUEST_MARK + opts.prompt;
   const spec = providerOf(opts.provider);
   const model = opts.model.trim() || spec.model;
   if (spec.id === "brain") {
     const { loadBrain, brainGenerate, brainReady, brainSystem } = await import("./brain");
+    scope.assertCurrent();
     if (!brainReady()) await loadBrain();
-    return brainGenerate({
+    scope.assertCurrent();
+    return scope.wait(brainGenerate({
       onUsage: opts.onUsage,
+      signal: scope.signal,
       messages: [
         { role: "system", content: brainSystem("Short answer.") },
         { role: "user", content: opts.prompt },
       ],
-    });
+    }));
   }
   const cli = cliKindFor(spec.id, useIde.getState().llmAuthMode);
   if (cli) {
     const content = opts.images?.length
-      ? [{ type: "text", text: opts.prompt }, ...opts.images.map(url => ({ type: "image_url", image_url: { url } }))]
-      : opts.prompt;
+      ? [{ type: "text", text: prompt }, ...opts.images.map(url => ({ type: "image_url", image_url: { url } }))]
+      : prompt;
     const messages = [{ role: "user", content }];
-    const choice = await completeViaCli(cli, model, messages, [], hardStopMs(useIde.getState().llmHardStopMin));
+    prepChatPayload({ messages, max_tokens: 1200 }, useIde.getState().llmContext || 32768);
+    const choice = await scope.wait(completeViaCli(cli, model, messages, [], hardStopMs(useIde.getState().llmHardStopMin), undefined, "off", scope.signal));
     opts.onUsage?.(resolvedUsage(choice, messages));
     return choice.content?.trim() || "";
   }
@@ -1219,10 +1300,10 @@ export async function completeLocal(opts: {
     const userContent =
       pics.length > 0
         ? [
-            { type: "text", text: opts.prompt.slice(0, 12000) },
+            { type: "text", text: prompt },
             ...pics.map((url) => ({ type: "image_url", image_url: { url } })),
           ]
-        : opts.prompt.slice(0, 12000);
+        : prompt;
     const st = useIde.getState();
     const ctx = Math.max(2048, st.llmContext || 32768);
     const payload = applyLlmOptions(
@@ -1242,33 +1323,38 @@ export async function completeLocal(opts: {
         ...(opts.apiKey.trim() ? { Authorization: `Bearer ${opts.apiKey.trim()}` } : {}),
       },
       body: JSON.stringify(sanitizeLocalPayload(spec.id, payload)),
-      signal: withAgentTimeout(0),
+      signal: scope.signal,
     }, spec.id === "custom" ? base : "");
+    scope.assertCurrent();
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     if (spec.id === "ollama") {
-      const choice = await readSseChat(wrapOllamaResponse(chatUrl, res));
+      const choice = await scope.wait(readSseChat(wrapOllamaResponse(chatUrl, res)));
       if (!choice.content?.trim()) throw new Error("Leere Antwort.");
       withRequestTokens(choice, payload, ctx);
       opts.onUsage?.(resolvedUsage(choice, payload.messages), choice.requestTokens);
       return choice.content.trim();
     }
-    const json = (await res.json()) as { choices: { message: LlmChoice }[]; usage?: unknown };
+    const json = (await scope.wait(res.json())) as { choices: { message: LlmChoice }[]; usage?: unknown };
     const text = json.choices[0]?.message?.content?.trim();
     if (!text) throw new Error("Leere Antwort.");
     const choice = withRequestTokens({ ...json.choices[0].message, usage: chatUsage(json.usage) }, payload, ctx);
     opts.onUsage?.(resolvedUsage(choice, payload.messages), choice.requestTokens);
     return text;
   }
-  const r = await proxyLlm({
+  const r = await scope.wait(proxyLlm({
     data: {
-      action: "complete",
+      action: "chat",
       provider: spec.id,
       baseUrl: opts.baseUrl || spec.baseUrl,
       model,
       apiKey: opts.apiKey.trim(),
-      prompt: opts.prompt,
+      messages: [{ role: "user", content: opts.images?.length
+        ? [{ type: "text", text: prompt }, ...opts.images.filter(url => /^data:image\//i.test(url)).slice(0, 4).map(url => ({ type: "image_url", image_url: { url } }))]
+        : prompt }],
+      useTools: false, context: useIde.getState().llmContext || 32768, thinking: "off", temperature: 0.2, maxOut: 1200,
     },
-  });
+    signal: scope.signal,
+  }));
   if (!r.ok) throw new Error(r.error || "Keine Antwort");
   const text = r.choice?.content?.trim();
   if (!text) throw new Error("Leere Antwort.");

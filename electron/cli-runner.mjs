@@ -1,5 +1,6 @@
 /** Subscription inference is owned by the installed CLI, including login and refresh. */
 import { spawn } from "node:child_process";
+import { stripAnsiCsi } from "./text-controls.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
@@ -153,8 +154,7 @@ export function runProcess(
 }
 
 export function safeCliText(text) {
-  return String(text)
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+  return stripAnsiCsi(String(text))
     .replace(
       /\b(?:sk-[\w-]+|gh[opusr]_[\w]+|github_pat_[\w]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g,
       "[redacted]",
@@ -234,7 +234,7 @@ export const CHOICE_SCHEMA = {
 
 export function completionArgs(kind, model, dir, thinking = "auto", images = []) {
   if (!CLI_KINDS.includes(kind)) throw new Error("Unbekannte CLI.");
-  if (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+\-]{0,199}$/.test(model))
+  if (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,199}$/.test(model))
     throw new Error("Ungültige CLI-Modell-ID.");
   if (!THINKING_MODES.includes(thinking)) throw new Error("Ungültige Thinking-Stufe.");
   const mode = effectiveThinking("", model, thinking, kind);

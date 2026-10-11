@@ -107,7 +107,7 @@ try{
  console.log('BACKGROUND_STAGE4_IMAGES_AND_ENGINES_OK');
 }finally{
  release?.();
- if(app){const deadline=setTimeout(()=>proc?.kill(),8000);try{await app.close();}catch{}clearTimeout(deadline);}
+ if(app){const deadline=setTimeout(()=>proc?.kill(),8000);try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(deadline);}
  server.closeAllConnections();await new Promise(r=>server.close(r));
  if(enginePid)assert.equal(alive(enginePid),false,'engine must not outlive test');
 }

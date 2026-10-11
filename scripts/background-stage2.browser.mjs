@@ -114,9 +114,9 @@ try{
 }finally{
   release?.();
   if(app){
-    try{await app.evaluate(async({BrowserWindow})=>{const wc=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/'))?.webContents;if(wc&&!wc.isCrashed())await wc.executeJavaScript('window.anvilNative.agentJob("stop")');});}catch{}
+    try{await app.evaluate(async({BrowserWindow})=>{const wc=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/'))?.webContents;if(wc&&!wc.isCrashed())await wc.executeJavaScript('window.anvilNative.agentJob("stop")');});}catch{ /* A closed renderer may no longer accept the stop request. */ }
     const deadline=setTimeout(()=>proc?.kill(),8000);
-    try{await app.close();}catch{}clearTimeout(deadline);
+    try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(deadline);
   }
   server.closeAllConnections();await new Promise(r=>server.close(r));
 }

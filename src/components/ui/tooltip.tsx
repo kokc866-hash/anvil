@@ -116,6 +116,12 @@ export function Tip({ label, kbd, side = "bottom", delay = 280, disabled = false
       (children.props as { onMouseDown?: (ev: typeof e) => void }).onMouseDown?.(e);
       hide();
     },
+    onClick: (e: React.MouseEvent<HTMLElement>) => {
+      // A mouse click focuses the control after mousedown. Dismiss the focus
+      // tooltip too, so it does not linger over an opened menu or preview.
+      hide();
+      (children.props as { onClick?: (ev: typeof e) => void }).onClick?.(e);
+    },
   });
 
   return (

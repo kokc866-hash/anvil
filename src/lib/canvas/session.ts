@@ -143,7 +143,7 @@ export async function canvasCommand(
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       remoteReplies.delete(request);
-      error ? reject(error) : resolve(result!);
+      if (error) reject(error); else resolve(result!);
     };
     const abort = () => {
       transport.postMessage({ kind: "cancel", request, target: frame.id });

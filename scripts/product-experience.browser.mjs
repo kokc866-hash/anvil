@@ -8,19 +8,22 @@ import { _electron } from "playwright";
 const root = process.cwd(), output = path.resolve("artifacts/product-experience");
 await mkdir(output, { recursive: true });
 const profile = await mkdtemp(path.join(output, "profile-"));
-const socket = createServer(); await new Promise(r => socket.listen(0, "127.0.0.1", r));
-const port = socket.address().port; await new Promise(r => socket.close(r));
-const env = { ...process.env, ANVIL_PORT: String(port), ANVIL_COMPANION_PORT: "7845", ANVIL_QA_USER_DATA: profile, ANVIL_HOME: path.join(profile, "packages") }; delete env.ELECTRON_RUN_AS_NODE;
+async function freePort() {
+  const socket = createServer(); await new Promise(r => socket.listen(0, "127.0.0.1", r));
+  const port = socket.address().port; await new Promise(r => socket.close(r)); return port;
+}
+const port = await freePort(), companionPort = await freePort();
+const env = { ...process.env, ANVIL_PORT: String(port), ANVIL_COMPANION_PORT: String(companionPort), ANVIL_QA_USER_DATA: profile, ANVIL_HOME: path.join(profile, "packages") }; delete env.ELECTRON_RUN_AS_NODE;
 const server = spawn(process.execPath, [path.join(root, ".output/server/index.mjs")], { cwd: root, windowsHide: true, env: { ...env, PORT: String(port), NITRO_PORT: String(port), HOST: "127.0.0.1", NITRO_HOST: "127.0.0.1" }, stdio: "ignore" });
 let app, page; const errors = [], checks = [];
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break; } catch {} await new Promise(r => setTimeout(r, 250)); }
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break; } catch { /* Retry while the production server is starting. */ } await new Promise(r => setTimeout(r, 250)); }
   app = await _electron.launch({ executablePath: path.join(root, "node_modules/electron/dist/electron.exe"), args: [`--user-data-dir=${profile}`, root], env, timeout: 45000 });
   for (let i = 0; i < 360; i++) { page = app.windows().find(p => p.url() === `http://127.0.0.1:${port}/`); if (page) break; await new Promise(r => setTimeout(r, 125)); }
   assert.ok(page); page.setDefaultTimeout(20000); page.on("pageerror", e => errors.push(e.message));
   await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("/"))?.maximize());
-  await page.evaluate(() => window.__anvilIde.setState({ setupDone: false, autoUpdate: false, autoSaveDisk: false, formatOnSave: false, companionKeep: true, llmBaseUrl: "http://127.0.0.1:1/v1", files: { "my-project.txt": "keep my project" } }));
+  await page.evaluate(companionPort => window.__anvilIde.setState({ setupDone: false, autoUpdate: false, autoHw: false, autoSaveDisk: false, formatOnSave: false, companionKeep: true, companionUrl: `http://127.0.0.1:${companionPort}`, llmBaseUrl: "http://127.0.0.1:1/v1", files: { "my-project.txt": "keep my project" } }), companionPort);
   await page.getByRole("button", { name: "Beispiel ohne KI starten", exact: true }).waitFor();
   const aiSetup = page.locator("summary").filter({ hasText: "KI für Chat und Änderungen verbinden" });
   assert.equal(await page.getByRole("button", { name: "Verbindung testen", exact: true }).isVisible(), false);
@@ -55,18 +58,26 @@ try {
   assert.match(await page.locator("#anvil-chat").inputValue(), /sichtbare Überschrift/);
   await runPage.screenshot({ path: path.join(output, "example-run.png") });
   checks.push("no-KI example starts and works; existing project preserved; editable next step");
-  for (const [name, mode] of [["Projekt verstehen", "ask"], ["Änderung umsetzen", "agent"], ["Fehler beheben", "agent"], ["Änderung prüfen", "ask"]]) {
+  for (const [name, mode] of [["Projekt verstehen", "ask"], ["Änderung umsetzen", "agent"], ["Fehler beheben", "agent"], ["Änderung prüfen", "ask"], ["Szene bearbeiten", "agent"], ["Bauteil erstellen", "agent"]]) {
     await page.getByRole("button", { name: "Geführte Aufgaben", exact: true }).click();
     await page.getByRole("region", { name: "Geführte Aufgaben", exact: true }).waitFor();
     await page.locator("#anvil-chat").fill("Nur meine Aufgabe");
     await page.getByRole("button", { name: new RegExp(`^${name}`) }).click();
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().agentMode), mode);
-    assert.match(await page.locator("#anvil-chat").inputValue(), /Mein Auftrag: Nur meine Aufgabe$/);
+    assert.match(await page.locator("#anvil-chat").inputValue(), /Mein Auftrag: Nur meine Aufgabe(?:\n\nSkill für diese Aufgabe: \$anvil-[^\n]+)?$/);
     assert.equal(await page.evaluate(() => window.__anvilIde.getState().chat.length), 0, "Selecting a workflow never sends automatically");
     await page.getByRole("region", { name: "Geführte Aufgaben", exact: true }).waitFor({ state: "hidden" });
   }
   await page.screenshot({ path: path.join(output, "workflows.png") });
-  checks.push("four workflows prepare drafts and enforce chosen read/write mode without sending");
+  checks.push("six workflows prepare editable drafts and existing skills, enforcing chosen read/write mode without sending");
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('anvil-persistence', {detail: {error: 'Künstlicher Archivfehler'}})));
+  await page.getByTestId('persistence-warning').waitFor();
+  await page.waitForTimeout(2700);
+  assert.match(await page.getByTestId('persistence-warning').innerText(), /Künstlicher Archivfehler/);
+  await page.getByTestId('persistence-warning').getByRole('button', {name: 'Schließen', exact: true}).click();
+  await page.getByTestId('persistence-warning').waitFor({state: 'hidden'});
+  checks.push('project backup failure stays visible until acknowledgement or a successful backup');
   await page.getByRole("button", { name: "Fragen", exact: true }).click();
   assert.match(await page.getByTestId("chat-mode-hint").innerText(), /Projektdateien bleiben unverändert/);
   await page.getByTitle("Der Agent kann Dateien bearbeiten und Werkzeuge ausführen.", { exact: true }).click();

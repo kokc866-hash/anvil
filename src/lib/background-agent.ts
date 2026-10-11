@@ -23,16 +23,23 @@ import { parseTests } from './test-parse';
 import { contentVersion } from '../../electron/content-version.mjs';
 import {applyBackgroundDebug,type BackgroundDebugState} from './background-debug';
 import {applyBackgroundKnowledge,type BackgroundKnowledgeEvent} from './background-knowledge';
-import {useLearn} from './learn';
+import {useLearn,foregroundKnowledgePermissions} from './learn';
+import {appLog} from './app-log';
 
 export type BackgroundJob = {
+  acceptance?: import('../../electron/task-acceptance.mjs').AcceptanceResult;
+  workflow?: import('./agent-workflow').WorkflowSnapshot;
   id: string;
   resumedFrom?: string;
+  recoveryBlockedActions?: string[];
   revision: number;
+  draftRevision?: number;
   project: string;
   prompt: string;
+  skillSelection?:import('./skill-library').SkillSelection[];
   images?: string[];
   status: string;
+  cancellation?: { local: 'requested' | 'complete'; remote: 'unconfirmed'; at: number };
   startedAt: number;
   text: string;
   thinking: string;
@@ -80,6 +87,7 @@ export type BackgroundJob = {
   services?: { id: string; name: string }[];
   lastService?: { server: string; name: string; ok: boolean; text: string };
   error: string;
+  failure?: import('../../electron/agent-failure.mjs').AgentFailure;
   persistenceError?: string;
   dismissed: boolean;
   requestSequence?: number;
@@ -88,7 +96,8 @@ export type BackgroundJob = {
 };
 type Reply = {
   available?: boolean;
-  state?: BackgroundJob | null;
+  state?: (Omit<BackgroundJob, 'drafts'> & { drafts?: BackgroundJob['drafts'] }) | null;
+  draftsUnchanged?: boolean;
   unchanged?: boolean;
   error?: string;
 };
@@ -101,7 +110,8 @@ export const useBackgroundAgent = create<{
   job: BackgroundJob | null;
   available: boolean;
   error: string;
-}>(() => ({ job: null, available: false, error: "" }));
+  startFailure: {project:string;message:string;at:number} | null;
+}>(() => ({ job: null, available: false, error: "", startFailure:null }));
 export const backgroundRunning = (job = useBackgroundAgent.getState().job) =>
   Boolean(job && ["starting", "running", "stopping"].includes(job.status));
 export const backgroundProject = () =>
@@ -116,36 +126,52 @@ const backgroundSurface = () => ({
   mode: useIde.getState().surfaceMode,
 });
 
-function accept(reply: Reply) {
+function accept(reply: Reply, requestedJobId?: string | null) {
   const currentJob = useBackgroundAgent.getState().job;
+  const currentJobId = currentJob?.id ?? null;
+  // A late status/permission reply cannot replace a job accepted while that
+  // request was in flight. The next poll obtains an authoritative full state.
+  if (requestedJobId !== undefined && requestedJobId !== currentJobId &&
+      reply.state !== undefined && (reply.state?.id ?? null) !== currentJobId)
+    return false;
   if (
     reply.state &&
     currentJob?.id === reply.state.id &&
     reply.state.revision < currentJob.revision
   )
-    return;
+    return true;
+  let job: BackgroundJob | null | undefined;
+  if (reply.state) {
+    if (reply.state.drafts) job = reply.state as BackgroundJob;
+    else {
+      const draftRevision = reply.state.draftRevision;
+      if (reply.draftsUnchanged !== true || !currentJob || currentJob.id !== reply.state.id ||
+          typeof draftRevision !== 'number' || !Number.isSafeInteger(draftRevision) || draftRevision < 0 || currentJob.draftRevision !== draftRevision)
+        return false;
+      job = { ...reply.state, drafts: currentJob.drafts };
+    }
+  } else job = reply.state;
   if (reply.unchanged) {
     useBackgroundAgent.setState({ error: "" });
-    return;
+    return true;
   }
   useBackgroundAgent.setState({
     ...(reply.available !== undefined ? { available: reply.available } : {}),
-    ...(reply.state !== undefined ? { job: reply.state } : {}),
+    ...(job !== undefined ? { job } : {}),
     error: reply.error || "",
   });
-  const job = reply.state;
   const live = Boolean(job&&!job.dismissed&&backgroundRunning(job));
   const wasOwned=ownsBusy;
   if (live || ownsBusy) {
     useIde.getState().setAgentBusy(live);
     ownsBusy = live;
   }
-  if (!job) return;
+  if (!job) return true;
   // Hydration must load the user's durable records before merging native events.
   // onFinishHydration requests a full snapshot below, so early events are replayed.
   if(job.knowledgeEvents&&useLearn.persist.hasHydrated())applyBackgroundKnowledge(job.knowledgeEvents);
-  if(job.dismissed)return;
-  if (job.project !== backgroundProject()) return;
+  if(job.dismissed)return true;
+  if (job.project !== backgroundProject()) return true;
   if(job.lastDebug)applyBackgroundDebug(job.id,job.lastDebug);
   const assistantId=`background-${job.id}`;
   const previousMessage=useIde.getState().chat.find(m=>m.id===assistantId);
@@ -201,7 +227,8 @@ function accept(reply: Reply) {
   if (followPath) useIde.getState().openFile(followPath);
   const state = useIde.getState();
   const found = state.chat.some((message) => message.id === assistantId);
-  const suffix = job.error ? `\n\n${job.error}` : "";
+  const cancellationNote=job.cancellation?.remote==='unconfirmed' ? (state.locale==='en'?"Local task stopped. The model server's internal cancellation is unconfirmed.":"Der Auftrag wurde lokal gestoppt. Ob der Modellserver seine Berechnung beendet hat, ist unbestätigt.") : "";
+  const suffix = [job.error,cancellationNote].filter(Boolean).map(text=>`\n\n${text}`).join("");
   const en=state.locale==='en',waiting=job.status==='waiting-user';
   const statusNote = live||waiting
     ? ""
@@ -231,6 +258,9 @@ function accept(reply: Reply) {
     at: job.startedAt,
     content: `${job.text || (live ? en?'Background task running…':"Hintergrundauftrag läuft …" : waiting?en?'Your answer is needed.':'Deine Antwort wird benötigt.':en?'Background task ended.':"Hintergrundauftrag beendet.")}${suffix}${statusNote}`,
     thinking: job.thinking,
+    workflow: job.workflow,
+    acceptance: job.acceptance,
+    skillSelection: job.skillSelection || previousMessage?.skillSelection,
     steps: [...job.steps,...(previousMessage?.steps||[]).filter(s=>s.id.startsWith('background-helper-'))],
     plan: job.plan,
     ms:live||waiting?undefined:Math.max(0,(job.finishedAt||job.startedAt)-job.startedAt),
@@ -304,6 +334,7 @@ function accept(reply: Reply) {
     detail: live ? "Hintergrund-Test" : "",
     at: job.phase?.since||job.finishedAt||job.startedAt,
   });
+  return true;
 }
 
 export function startBackgroundAgentMonitor() {
@@ -315,23 +346,26 @@ export function startBackgroundAgentMonitor() {
   });
   let closed = false,
     timer: ReturnType<typeof setTimeout>;
+  // The first poll of each connection and every recovery request a full state,
+  // even when this renderer still holds a previous connection's cached job.
+  let fullSnapshotNeeded = true;
   const syncPermissions = () => {
     if(!useLearn.persist.hasHydrated())return;
+    const requestedJobId = useBackgroundAgent.getState().job?.id ?? null;
     try {
-      const learned=useLearn.getState(),prefs=learned.prefs;
       void native()!.agentJob!("permissions", {
         services: backgroundMcpServers(),
         surface: backgroundSurface(),
-        knowledge:{enabled:learned.on&&prefs.inject,skillsEnabled:prefs.skills,skillBodies:prefs.skillBodies,personEnabled:prefs.person,projectEnabled:prefs.project,pluginSkills:prefs.pluginSkills},
+        knowledge:foregroundKnowledgePermissions(),
       })
         .then((reply) => {
-          if (!closed) accept(reply);
+          if (!closed && !accept(reply, requestedJobId)) fullSnapshotNeeded = true;
         })
         .catch(() => {});
     } catch {
       void native()!.agentJob!("stop")
         .then((reply) => {
-          if (!closed) accept(reply);
+          if (!closed && !accept(reply, requestedJobId)) fullSnapshotNeeded = true;
         })
         .catch(() => {});
     }
@@ -348,14 +382,16 @@ export function startBackgroundAgentMonitor() {
       syncPermissions();
   });
   window.addEventListener("anvil-secret-status", syncPermissions);
-  const offLearn=useLearn.subscribe((state,previous)=>{if(state.on!==previous.on||state.prefs!==previous.prefs)syncPermissions();});
+  const offLearn=useLearn.subscribe((state,previous)=>{if(state.on!==previous.on||state.prefs!==previous.prefs||state.disabledSkills!==previous.disabledSkills)syncPermissions();});
   const offHydrate=useLearn.persist.onFinishHydration(()=>syncPermissions());
   const poll = async () => {
     try {
       const job = useBackgroundAgent.getState().job;
-      const reply = await native()!.agentJob!("status", { id: job?.id, revision: job?.revision });
-      if (!closed) accept(reply);
+      const known = fullSnapshotNeeded ? {} : { id: job?.id, revision: job?.revision, draftRevision: job?.draftRevision };
+      const reply = await native()!.agentJob!("status", known);
+      if (!closed) fullSnapshotNeeded = !accept(reply, job?.id ?? null);
     } catch {
+      fullSnapshotNeeded = true;
       if (!closed)
         useBackgroundAgent.setState({
           error:
@@ -387,9 +423,13 @@ export function trySendBackground(
     onAccepted?:()=>void;
   },
   mode?: string,
-  resume?: {id:string;reviewed:boolean;answer?:{askId:string;choiceId?:string;text?:string}},
+  resume?: {id:string;reviewed:boolean;skipUnconfirmed?:boolean;answer?:{askId:string;choiceId?:string;text?:string}},
 ): boolean | Promise<boolean> {
   let st = useIde.getState();
+  if (st.pathOperation) {
+    st.setNotice(st.locale === "en" ? "Project files are being updated. Wait until this finishes. Your draft is kept." : "Die Projektdateien werden gerade geändert. Warte, bis der Vorgang abgeschlossen ist. Dein Entwurf bleibt erhalten.");
+    return true;
+  }
   if (!st.backgroundAgent && !backgroundRunning() && !starting && !resume) return false;
   if (backgroundRunning() || starting) {
     if(!input.onAccepted&&!input.images.length&&(input.preset??input.draft).trim()){
@@ -427,14 +467,15 @@ export function trySendBackground(
   if (
     (!cliKind &&
       (st.llmAuthMode !== "key" ||
-        !["ollama", "lmstudio", "llamacpp", "vllm", "localai", "custom"].includes(st.llmProvider)))
+        !["ollama", "lmstudio", "llamacpp", "vllm", "localai", "custom", "qwen", "deepseek"].includes(st.llmProvider)))
   ) {
     st.setNotice(
-      "Wähle für diesen Hintergrundtest eine lokale API- oder CLI-Verbindung.",
+      "Wähle für den Hintergrundbetrieb eine lokale API, Qwen AI, DeepSeek oder eine CLI-Verbindung.",
     );
     return true;
   }
   starting = true;
+  const project = backgroundProject();
   const generation=++startGeneration;
   const assertActive=()=>{if(generation!==startGeneration)throw new Error(st.locale==='en'?'Start cancelled. Input retained.':'Start abgebrochen. Eingabe bleibt erhalten.');};
   st.setAgentBusy(true);
@@ -442,7 +483,6 @@ export function trySendBackground(
   try {
     // Persist the project identity and the user's input files before the job can
     // outlive this renderer. Reconnection must never attach to a fresh RAM ID.
-    const project = backgroundProject();
     await flushDiskSync();
     assertActive();
     const writeThrough =
@@ -469,11 +509,11 @@ export function trySendBackground(
     if (
       !cliKind &&
       (st.llmAuthMode !== "key" ||
-        !["ollama", "lmstudio", "llamacpp", "vllm", "localai", "custom"].includes(st.llmProvider))
+        !["ollama", "lmstudio", "llamacpp", "vllm", "localai", "custom", "qwen", "deepseek"].includes(st.llmProvider))
     )
       throw new Error("Modellverbindung inzwischen geändert. Auftrag erneut senden.");
     const reply = await native()!.agentJob!(resume?'resume':"start", {
-      resumeId:resume?.id,reviewed:resume?.reviewed,answer:resume?.answer,
+      resumeId:resume?.id,reviewed:resume?.reviewed,skipUnconfirmed:resume?.skipUnconfirmed,answer:resume?.answer,
       services: backgroundMcpServers(true),
       surface: backgroundSurface(),
       project,
@@ -518,6 +558,7 @@ export function trySendBackground(
       },
     });
     if(reply.error||!reply.state)throw new Error(reply.error||'Hintergrundauftrag wurde nicht angenommen.');
+    useBackgroundAgent.setState({startFailure:null});
     if(generation!==startGeneration){accept(reply);accept(await native()!.agentJob!('stop'));assertActive();}
     beginAgent();
     accept(reply);
@@ -529,7 +570,12 @@ export function trySendBackground(
     input.setImages([]);
     input.setMention(null);
   } catch (error) {
-    st.setNotice(error instanceof Error ? error.message : String(error));
+    const message=scrubSecrets(error instanceof Error ? error.message : String(error)).text;
+    if(generation===startGeneration){
+      useBackgroundAgent.setState({startFailure:{project,message,at:Date.now()}});
+      appLog('agent-start',message);
+    }
+    st.setNotice(message);
   } finally {
     starting = false;
     if(!backgroundRunning())useIde.getState().setAgentBusy(false);
@@ -538,10 +584,17 @@ export function trySendBackground(
   })();
 }
 
+export async function reviewBackgroundOperation(operationId:string,outcome:'confirmed'|'not-executed',note:string){
+  const job=useBackgroundAgent.getState().job,project=backgroundProject();
+  if(!job||backgroundRunning(job)||job.project!==project)return;
+  try{accept(await native()!.agentJob!('operation-review',{id:job.id,project,operationId,outcome,note}),job.id);}
+  catch(error){useBackgroundAgent.setState({error:scrubSecrets(error instanceof Error?error.message:String(error)).text});}
+}
+
 export async function resumeBackgroundJob(reviewed=false,answer?:{askId:string;choiceId?:string;text?:string}){
   const job=useBackgroundAgent.getState().job,st=useIde.getState();if(!job||backgroundRunning(job))return;
   if(Object.values(st.dirty).some(Boolean)||st.pendingDiffs.length){st.setNotice('Offene Änderungen zuerst speichern oder verwerfen.');return;}
-  await trySendBackground({draft:job.prompt,images:job.images||[],setDraft:()=>{},setImages:()=>{},setMention:()=>{}},'agent',{id:job.id,reviewed,answer});
+  await trySendBackground({draft:job.prompt,images:job.images||[],setDraft:()=>{},setImages:()=>{},setMention:()=>{}},'agent',{id:job.id,reviewed,skipUnconfirmed:true,answer});
 }
 
 export async function stopBackgroundAgent() {

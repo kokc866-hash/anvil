@@ -106,7 +106,7 @@ export const modelSettingsSchema = z.object({
 }).partial();
 
 const learnPrefs = z.object({
-  inject: bool, person: bool, project: bool, profile: bool, negatives: bool, skills: bool,
+  inject: bool, person: bool, project: bool, profile: bool, negatives: bool, skills: bool, skillAuto: bool,
   skillBodies: bool, distill: bool, adaptIde: bool, pluginSkills: bool,
   factLimit: count(0, 1000), skillLimit: count(0, 1000),
 }).partial();
@@ -116,7 +116,7 @@ const fact = z.object({
   scope: z.enum(["user", "project"]).default("user"), ws: text.optional(),
 });
 const skill = z.object({
-  id: text, name: text, when: text, body: text, file: text.optional(), kind: z.enum(["guide", "plugin"]),
+  id: text, name: text, when: text, body: text, file: text.optional(), builtin: bool.optional(), kind: z.enum(["guide", "plugin"]),
   uses: count(0, Number.MAX_SAFE_INTEGER), at: number(0, Number.MAX_SAFE_INTEGER),
   score: z.number(), wins: count(0, Number.MAX_SAFE_INTEGER), fails: count(0, Number.MAX_SAFE_INTEGER),
   scope: z.enum(["user", "project"]).default("user"), ws: text.optional(),
@@ -129,6 +129,8 @@ export const settingsPackSchema = z.object({
     negs: z.array(z.object({ id: text, path: text, text, ws: text.optional(), at: number(0, Number.MAX_SAFE_INTEGER) })).optional(),
     forgotten: z.array(text).optional(),
     forgottenFacts: z.array(text).optional(),
+    disabledSkills: z.array(text).optional(),
+    pinnedSkills: z.record(text, z.array(text).max(3)).optional(),
   }).optional(),
   intern: z.object({ prefs: z.object({ on: bool, autoHeal: bool, autoSoft: bool }).partial().optional(), appLog: bool.optional() }).optional(),
 });

@@ -29,7 +29,7 @@ export const EMPTY_JOURNAL: SessionJournal = {
 };
 
 const PATH_RE =
-  /(?:^|[\s`\[('"])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][\w]*|[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|cs|php|rb|md|html|css|json|vue|svelte|sql|toml|ya?ml))/g;
+  /(?:^|[\s`[('"])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][\w]*|[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|cs|php|rb|md|html|css|json|vue|svelte|sql|toml|ya?ml))/g;
 const SKIP_FILE = /(^|\/)(node_modules|\.git|\.env|package-lock|pnpm-lock|yarn\.lock)/i;
 const CORRECT_RE = /\b(nicht so|nicht mehr|nicht verwenden|kein[e]? |ohne |statt |don't|do not|never |lass das|no more|nicht [A-ZÄÖÜa-zäöü])/i;
 const OPEN_RE = /\b(todo|offen|noch |fehlt|left to|next:|danach )\b/i;

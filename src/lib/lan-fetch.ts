@@ -49,6 +49,7 @@ async function transportFetch(url: string, init: RequestInit, customBase: string
   const native = nativeApi();
   if (native?.llmPipe) {
     const info = await native.llmPipe();
+    init.signal?.throwIfAborted();
     if (!info?.port || !info.token) throw new Error("Native Modellverbindung nicht bereit. Anvil neu starten.");
     const credentials = info.credentialRefs ? credentialHeaders(headers) : { headers, refs: "" };
     const response = await fetch(`http://127.0.0.1:${info.port}/pipe`, {

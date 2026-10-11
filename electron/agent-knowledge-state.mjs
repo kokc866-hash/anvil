@@ -18,7 +18,7 @@ export function knowledgeVersion(value) {
 export const knowledgeFileVersion = content => knowledgeVersion({text:content});
 /** @param {any} snapshot */
 export function knowledgePermissions(snapshot) {
-  return JSON.stringify([snapshot?.enabled===true,...['personEnabled','projectEnabled','skillsEnabled','skillBodies','pluginSkills'].map(key => snapshot?.[key] !== false)]);
+  return JSON.stringify([snapshot?.enabled===true,...['memoryEnabled','personEnabled','projectEnabled','skillsEnabled','skillBodies','pluginSkills'].map(key => snapshot?.[key] !== false),[...(snapshot?.disabledSkills||[])].sort()]);
 }
 /** Returns a new store fragment; never overwrites concurrently edited/deleted records.
  * @param {{facts:any[],skills:any[],forgotten:string[],forgottenFacts:string[]}} state

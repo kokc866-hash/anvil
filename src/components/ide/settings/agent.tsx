@@ -28,14 +28,14 @@ import { projectSettingsWrites } from "@/lib/project-settings";
 import type { AfterWrite } from "@/lib/harness";
 import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 
-import { providerOf, type LlmProvider } from "@/lib/providers";
+import { modelsForConnection, providerOf, type LlmProvider } from "@/lib/providers";
 
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 
 import { capLabel, getCap, resetCap } from "@/lib/model-caps";
 
-import { cliKindFor, probeCli, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
+import { cliKindFor, probeCli, listCliModels, cliModelsHint, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
 import { ProviderPick } from "../provider-pick";
 import { ConnectionSummary } from "../connection-summary";
 import { connectionProbeSummary } from "@/lib/connection-capabilities";
@@ -93,6 +93,7 @@ export function AgentSection({ q }: { q: string }) {
   const [profileName, setProfileName] = useState("");
   const [subMsg, setSubMsg] = useState("");
   const spec = providerOf(llmProvider);
+  const modelCatalog = modelsForConnection(llmProvider, llmAuthMode);
   const aboKind = cliKindFor(llmProvider, llmAuthMode);
   const aboOn = Boolean(aboKind);
   const thinkModes = thinkingModes(llmProvider, llmModel, aboKind);
@@ -123,9 +124,12 @@ export function AgentSection({ q }: { q: string }) {
     try {
       if (kind) {
         const status = await probeCli(kind, controller.signal);
-        if (current()) {
-          setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
-          setModels([]);
+        if (!current()) return;
+        setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
+        setModels([]);
+        if (status.authenticated !== false) {
+          const ids = await listCliModels(kind, controller.signal);
+          if (current()) setModels(ids);
         }
         return;
       }
@@ -193,6 +197,7 @@ export function AgentSection({ q }: { q: string }) {
       if (current()) {
         setSubMsg(cliStatusText(status));
         setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
+        if (status.authenticated !== false) await probeLocal(true);
       }
     } catch (err) {
       if (current()) setSubMsg(err instanceof Error ? err.message : "CLI-Anmeldung fehlgeschlagen.");
@@ -239,6 +244,9 @@ export function AgentSection({ q }: { q: string }) {
         <p className="pb-2 text-xs text-muted text-pretty">
           {aboKind ? `Nutzt die installierte ${aboKind} CLI und deren Abo-Anmeldung.` : spec.hint}
         </p>
+        {!aboOn && spec.setupUrl ? (
+          <a className="mb-2 inline-block text-xs text-link underline" href={spec.setupUrl} target="_blank" rel="noopener noreferrer">Einrichtung beim Anbieter</a>
+        ) : null}
         {spec.needsUrl && !aboOn ? (
           <Field
             label={spec.id === "azure" ? "Resource-URL" : "API-URL"}
@@ -252,12 +260,14 @@ export function AgentSection({ q }: { q: string }) {
             <Field label="Deployment" value={llmModel} onChange={setLlmModel} placeholder={spec.model || "Deployment"} />
           ) : (
             <ModelPick
-              catalog={spec.models}
+              catalog={modelCatalog}
               live={models}
               value={llmModel}
               onChange={setLlmModel}
               placeholder={spec.model || "Modell-ID"}
               loading={modelsBusy}
+              hint={aboKind ? cliModelsHint(aboKind, models.length, modelsBusy, useIde.getState().locale) : undefined}
+              prefer={aboKind ? modelCatalog : undefined}
             />
           )
         ) : null}
@@ -275,7 +285,7 @@ export function AgentSection({ q }: { q: string }) {
         {spec.id !== "grok" ? (
           <div className="flex items-center gap-2 py-1">
             <Button className="h-8" disabled={modelsBusy || subBusy} onClick={() => void probeLocal()}>
-              {aboOn ? "CLI-Status laden" : "Modellliste laden"}
+              Modellliste aktualisieren
             </Button>
             {probe ? <span className="text-xs text-muted">{probe}</span> : null}
           </div>
@@ -473,7 +483,7 @@ export function AgentSection({ q }: { q: string }) {
         </Vis>
       ) : null}
       <Vis q={q} label="Retry Versuche Abbruch lokal Hintergrund Test Hintergrundbetrieb">
-        <Row label="Hintergrundbetrieb (Test)" hint="Agentenaufträge mit lokalen API- und CLI-Modellen laufen unabhängig vom Editorfenster. Dateien, Compiler, HTML-Vorschau, Engine-Aktionen und freigegebene Dienste bleiben nutzbar. Bildanhänge benötigen ein Modell mit Bildverständnis. Wenn du Anvil beendest, wird der Auftrag gestoppt.">
+        <Row label="Hintergrundbetrieb (Test)" hint="Agentenaufträge mit lokalen APIs, Qwen AI, DeepSeek und CLI-Modellen laufen unabhängig vom Editorfenster. Dateien, Compiler, HTML-Vorschau, Engine-Aktionen und freigegebene Dienste bleiben nutzbar. Bildanhänge benötigen ein Modell mit Bildverständnis. Wenn du Anvil beendest, wird der Auftrag gestoppt.">
           <Toggle on={backgroundAgent} onChange={(backgroundAgent) => useIde.setState({ backgroundAgent })} />
         </Row>
         {backgroundAgent && <Row label="Direkt im Projekt speichern" hint="Speichert Dateiänderungen bereits während des Auftrags im gewählten Projektordner. Vorherige Inhalte werden gesichert. Bei Konflikten hält der Auftrag an. Ist diese Option ausgeschaltet, kannst du die Entwürfe anschließend prüfen.">

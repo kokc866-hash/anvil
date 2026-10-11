@@ -6,7 +6,7 @@ export type SurfaceMode = "exclusive" | "bridge";
 
 type Named = { id: string; name: string };
 
-export const MCP_SIDECAR = new Set(["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output", "set_plan", "ask_user", "select_tools"]);
+export const MCP_SIDECAR = new Set(["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output", "set_plan", "ask_user", "select_tools", "skill_list", "skill_read", "skill_run", "skill_debug", "skill_outcome"]);
 export const ANVIL_WRITE = new Set([
   "write_file",
   "append_file",

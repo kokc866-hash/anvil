@@ -1,6 +1,8 @@
 # Einstellungen
 
-Die beschriebenen Einstellungen gelten für Release Anvil **1.3.29**. Die Bedienung ist für das Desktop-Programm ausgelegt.
+**Erweiterungen → Skills** verwaltet Arbeitsanleitungen unabhängig vom persönlichen Gedächtnis. Automatische Auswahl, ausgeschaltete Skills und Projekt-Anheftungen werden mit den Einstellungen gesichert. Unter **Gedächtnis** entfernt **Gespeicherte Erinnerungen löschen** nur Erinnerungen; die Anleitungen bleiben erhalten. Siehe [Skill-Bibliothek](skills.md).
+
+Die beschriebenen Einstellungen entsprechen dem lokalen Quellstand **1.3.35** vom **4. Oktober 2026**. Die Bedienung ist für das Desktop-Programm ausgelegt. Neue lokale Änderungen benötigen eine gesonderte Veröffentlichung; [aktuelle Abnahme](optimierungen-2026-10.md).
 
 ## Sichern und wiederherstellen
 
@@ -15,6 +17,10 @@ Neue Sicherungen verwenden Format 2. Format 1 und ältere flache Einstellungsdat
 **Bereich zurücksetzen** links unten setzt nur die Einstellungen der ausgewählten Kategorie zurück. **Daten → Nur Einstellungen zurücksetzen** umfasst alle Bedien- und Laufzeiteinstellungen, einschließlich Helfer, Modellbibliothek und Layout.
 
 Benannte Profile, gespeicherte Anbieterzustände, MCP-Verbindungen, gelernte Werkzeugzuordnungen, Zugangsdaten, Projektdateien und Gedächtnisinhalte bleiben dabei erhalten. Beim Zurücksetzen des Agenten werden der aktive Anbieter und seine Einstellungen auf die Standardwerte zurückgesetzt. Das Zurücksetzen eines Projekts bleibt eine eigene Aktion.
+
+## Updates für Sprachwerkzeuge
+
+Im lokalen Entwicklungsstand findest du unter **Companion → Updates für Sprachwerkzeuge** eine tägliche automatische Versionsprüfung. Du kannst sie abschalten oder jederzeit **Jetzt auf Updates prüfen** wählen. Die Ergebnisse bleiben im Pakete-Ordner über Neustarts erhalten. Anvil zeigt verfügbare Versionen an; die Installation startest du selbst. Einzelheiten und die geprüften Werkzeuge stehen in [sprachupdates.md](sprachupdates.md).
 
 ## Modell wechseln
 

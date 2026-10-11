@@ -33,7 +33,7 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
         if (id === "\0product-plan-boundary") return `export async function brainPlanText() { const next=globalThis.__productNextPlan; delete globalThis.__productNextPlan; return next || []; }`;
       },
       transform(code, id) {
-        if (id.replaceAll("\\", "/").endsWith("/src/lib/chat-session.ts")) return 'import { brainPlanText } from "virtual:product-plan-boundary";\n' + code.replace(/  brainPlanText,\r?\n/, '').replace('import { chatWithProvider } from "@/lib/agent-client";', 'import { chatWithProvider } from "virtual:product-model-boundary";').replace('import { runFile } from "@/lib/run-client";', 'import { runFile } from "virtual:product-run-boundary";');
+        if (id.replaceAll("\\", "/").endsWith("/src/lib/chat-session.ts")) return 'import { brainPlanText } from "virtual:product-plan-boundary";\n' + code.replace(/ {2}brainPlanText,\r?\n/, '').replace('import { chatWithProvider } from "@/lib/agent-client";', 'import { chatWithProvider } from "virtual:product-model-boundary";').replace('import { runFile } from "@/lib/run-client";', 'import { runFile } from "virtual:product-run-boundary";');
       },
     }],
   });

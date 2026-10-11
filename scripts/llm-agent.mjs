@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import { isIP } from "node:net";
+import { isQwenCloudHost } from "../electron/qwen-hosts.mjs";
 
 export const LLM_HEADERS = ["content-type", "accept", "authorization", "x-api-key", "api-key", "anthropic-version", "anthropic-beta", "openai-beta", "openai-organization", "openai-project", "x-goog-api-key", "http-referer", "x-title"];
 export function llmHeaders(raw) {
@@ -74,7 +75,7 @@ export function isCloudLlmHost(host) {
   const h = String(host || "")
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
-  if (CLOUD_LLM.has(h)) return true;
+  if (CLOUD_LLM.has(h) || isQwenCloudHost(h)) return true;
   if (h.endsWith(".openai.azure.com") || h.endsWith(".googleapis.com")) return true;
   return false;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityBar } from "./activity-bar";
 import { startBackgroundAgentMonitor } from "@/lib/background-agent";
+import { startLanguageUpdateMonitor } from "@/lib/language-updates";
 import { AgentSupportPane } from "./agent-support-pane";
 import { HelpGuide } from "./help-guide";
 import { useHelpTour } from "@/lib/help-guide";
@@ -26,9 +27,9 @@ import { startIdeSync } from "@/lib/ide-sync";
 import { startServiceAutoconnect } from "@/lib/service-autoconnect";
 import { reloadPlugins } from "@/lib/plugins";
 import { loadVscodeFromWorkspace } from "@/lib/plugins/vscode";
-import { pluginWatchPath, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
+import { pluginContentRevision, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
 import { hasOsFiles, importDropped } from "@/lib/dnd";
-import { restoreLocations, loadSlotAll, hasLocation } from "@/lib/disk";
+import { restoreLocations, loadSlotAll } from "@/lib/disk";
 import { focusOutputWindow, openOutputWindow } from "@/lib/output-window";
 import { openRunWindow } from "@/lib/run-window";
 import { DEMO_PATHS, withoutStaleSeedFiles } from "@/lib/seed-files";
@@ -39,7 +40,7 @@ import { stopAgent } from "@/lib/abort";
 import { gotoFile } from "@/lib/goto";
 import { saveNow, focusAgent } from "@/lib/save";
 import { useIde } from "@/store/ide";
-import { applyLang, t } from "@/lib/i18n";
+import { applyLang } from "@/lib/i18n";
 import { ANVIL_VERSION } from "@/lib/version";
 import { InternPane } from "./intern-pane";
 import { ConfirmHost } from "./confirm-host";
@@ -82,10 +83,10 @@ export function Workspace() {
   const setRunning = useIde((s) => s.setRunning);
   const pushOutput = useIde((s) => s.pushOutput);
   const notice = useIde((s) => s.notice);
+  const persistenceWarning = useIde((s) => s.persistenceWarning);
   const pluginDisabled = useIde((s) => s.pluginDisabled);
   const setNotice = useIde((s) => s.setNotice);
   const showStatusBar = useIde((s) => s.showStatusBar);
-  const autoSaveDisk = useIde((s) => s.autoSaveDisk);
   const boot = useIntern((s) => s.boot);
   const shellRef = useRef<HTMLDivElement>(null);
   const [inner, setInner] = useState(1280);
@@ -104,6 +105,15 @@ export function Workspace() {
   const [starterOpen, setStarterOpen] = useState(false);
 
   useEffect(() => startServiceAutoconnect(), []);
+
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ error: string }>).detail;
+      if (detail && typeof detail.error === "string") useIde.setState({ persistenceWarning: detail.error });
+    };
+    window.addEventListener("anvil-persistence", changed);
+    return () => window.removeEventListener("anvil-persistence", changed);
+  }, []);
 
   useEffect(() => {
     const refresh = () => { void import("@/lib/external-files").then((m) => m.refreshExternalFiles()); };
@@ -139,6 +149,7 @@ export function Workspace() {
     const done = useIde.persist.rehydrate();
     let stopSync: (() => void) | undefined;
     let stopBackground: (() => void) | undefined;
+    let stopLanguageUpdates: (() => void) | undefined;
     let disposed = false;
     void Promise.resolve(done).then(() => {
       if (disposed) return;
@@ -242,10 +253,11 @@ export function Workspace() {
       });
       stopSync = startIdeSync();
       stopBackground = startBackgroundAgentMonitor();
+      stopLanguageUpdates = startLanguageUpdateMonitor();
       void import("@/lib/model-context").then((m) => m.applyCloudContext());
       void import("@/lib/app-update").then((u) => u.bootUpdateCheck());
     });
-    return () => { disposed = true; stopSync?.(); stopBackground?.(); };
+    return () => { disposed = true; stopSync?.(); stopBackground?.(); stopLanguageUpdates?.(); };
   }, []);
 
   useEffect(() => {
@@ -336,16 +348,10 @@ export function Workspace() {
   }, []);
 
   useEffect(() => {
-    const plugSig = (files: Record<string, string>) =>
-      Object.keys(files)
-        .filter((p) => pluginWatchPath(p))
-        .sort()
-        .map((p) => `${p}:${files[p]!.length}`)
-        .join("|");
     let last = "";
     const boot = () => {
       const st = useIde.getState();
-      const sig = `${plugSig(st.files)}#${st.pluginDisabled.join(",")}`;
+      const sig = JSON.stringify([st.workspaceEpoch, st.workspaceCwd, st.companionUrl, pluginContentRevision(st.files), st.pluginDisabled]);
       if (sig === last) return;
       last = sig;
       reloadPlugins(st.files);
@@ -358,7 +364,7 @@ export function Workspace() {
     };
     boot();
     return useIde.subscribe((s, prev) => {
-      if (s.files === prev.files && s.pluginDisabled === prev.pluginDisabled) return;
+      if (s.files === prev.files && s.pluginDisabled === prev.pluginDisabled && s.workspaceEpoch === prev.workspaceEpoch && s.workspaceCwd === prev.workspaceCwd && s.companionUrl === prev.companionUrl) return;
       boot();
     });
   }, [pluginDisabled]);
@@ -720,6 +726,10 @@ export function Workspace() {
       }}
     >
       <FirstRun />
+      {persistenceWarning ? <div role="alert" data-testid="persistence-warning" className="flex shrink-0 items-start gap-2 border-b border-border bg-surface px-3 py-2 text-xs text-warn">
+        <span className="min-w-0 flex-1 break-words">{locale === "en" ? "Project backup is incomplete. " : "Projektsicherung unvollständig. "}{persistenceWarning}</span>
+        <button type="button" onClick={() => useIde.setState({ persistenceWarning: "" })} className="shrink-0 underline">{locale === "en" ? "Dismiss" : "Schließen"}</button>
+      </div> : null}
       {compact ? (
         <div className="flex min-h-0 flex-1">
           <ActivityBar />

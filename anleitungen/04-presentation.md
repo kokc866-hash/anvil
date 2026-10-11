@@ -1,6 +1,6 @@
 # Anvil — Kurzpräsentation
 
-Diese Einführung dauert etwa fünf Minuten. Sie beschreibt den Funktionsstand von Release 1.3.29. Weitere Möglichkeiten und Grenzen erklären die Anleitungen zu [Verbindungen](05-verbindungen.md) und [Editor](editor.md).
+Diese Einführung dauert etwa fünf Minuten. Sie beschreibt den lokalen Quellstand 1.3.35 vom 4. Oktober 2026. Weitere Möglichkeiten und Grenzen erklären die Anleitungen zu [Verbindungen](05-verbindungen.md), [Editor](editor.md) und [aktuellen Optimierungen](optimierungen-2026-10.md). Neue lokale Funktionen benötigen eine gesonderte Veröffentlichung.
 
 ---
 

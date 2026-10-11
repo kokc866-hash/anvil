@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
@@ -8,6 +8,13 @@ import { safeAgentPath } from './agent-project-runtime.mjs';
 import { validateCliImages } from './cli-images.mjs';
 import { planFileAction,applyFileChanges,diskMatches,safePath as filePath } from './agent-file-actions.mjs';
 import { resolveCwd } from '../companion/git.mjs';
+import { withLoadedSkill } from './skill-access.mjs';
+import { validWorkflowSnapshot, workflowJournalPath, writeWorkflowJournal } from './workflow-journal.mjs';
+import { interruptWorkflow } from './workflow-validation.mjs';
+import { captureAgentFailure } from './agent-failure.mjs';
+import { acceptanceResult, acceptanceReply, workflowAcceptance } from './task-acceptance.mjs';
+import { verifyAcceptanceArtifacts } from './acceptance-artifacts.mjs';
+import { uncertainOperation, workflowRecoveryBlocks, nativeRecoveryAction, recoveryVerification } from './agent-recovery.mjs';
 
 const TERMINAL = new Set(['done', 'failed', 'stopped', 'interrupted','waiting-user']);
 const MAX_BYTES = 24 * 1024 * 1024;
@@ -42,8 +49,13 @@ export class AgentJobHost extends EventEmitter {
       if (typeof state.project !== 'string' || !Number.isSafeInteger(state.revision) ||
           !Object.entries(state.drafts).every(([p, draft]) => safePath(p) && draft && (draft.before === null || typeof draft.before === 'string') && (draft.after===null || typeof draft.after === 'string'))) throw new Error('invalid draft');
       this.state = state;
+      if(!validWorkflowSnapshot(state.workflow))delete state.workflow;
+      state.recoveryBlockedActions=[...new Set([...(Array.isArray(state.recoveryBlockedActions)?state.recoveryBlockedActions:[]),...workflowRecoveryBlocks(state.workflow)])];
+      state.acceptance=acceptanceResult(state.acceptance??workflowAcceptance(state.workflow),{verification:recoveryVerification(state),open:state.plan?.some(s=>s.kind!=='report'&&s.status!=='ok')});
+      state.draftRevision = tokenNumber(state.draftRevision) ? state.draftRevision : 0;
       if(state.lastDebug?.active){state.lastDebug={...state.lastDebug,active:false,paused:false,reason:'Debug-Sitzung durch Programmende beendet.'};this.touch();this.persist();}
       if (!TERMINAL.has(state.status)) {
+        if(state.workflow)state.workflow=interruptWorkflow(state.workflow);
         state.status = 'interrupted'; state.error = 'Anvil wurde beendet. Gesicherte Entwürfe bleiben erhalten; der Auftrag wurde nicht erneut ausgeführt.';
         state.finishedAt=Date.now();
         if (state.operation?.status === 'pending') {
@@ -64,7 +76,8 @@ export class AgentJobHost extends EventEmitter {
     return pending;
   }
   async waitForCleanup() { while(this.cleanup)await this.cleanup; }
-  touch(persist = true) {
+  touch(persist = true, draftsChanged = false) {
+    if (draftsChanged) this.state.draftRevision = (this.state.draftRevision || 0) + 1;
     this.state.revision++; this.state.updatedAt = Date.now();
     this.emit('change');
     if (persist && !this.persistTimer) this.persistTimer = setTimeout(() => { this.persistTimer = null; this.persist(); }, 500);
@@ -75,7 +88,8 @@ export class AgentJobHost extends EventEmitter {
       const raw = JSON.stringify(this.state);
       if (Buffer.byteLength(raw) > MAX_BYTES) throw new Error('snapshot too large');
       mkdirSync(dirname(this.snapshotPath), { recursive: true });
-      writeFileSync(this.snapshotPath + '.tmp', raw, { mode: 0o600 });
+      const fd = openSync(this.snapshotPath + '.tmp','w',0o600);
+      try { writeFileSync(fd,raw);fsyncSync(fd); } finally { closeSync(fd); }
       renameSync(this.snapshotPath + '.tmp', this.snapshotPath);
     } catch {
       this.state.persistenceError = 'Hintergrundauftrag konnte nicht gesichert werden. Anvil geöffnet lassen und Entwürfe übernehmen.';
@@ -83,13 +97,21 @@ export class AgentJobHost extends EventEmitter {
       if (this.busy() && !this.controller.signal.aborted) this.stop('Speicherung fehlgeschlagen. Auftrag angehalten.');
     }
   }
-  snapshot(knownId, knownRevision) {
+  snapshot(knownId, knownRevision, knownDraftRevision) {
     if (!this.state) return { state: null, error: this.recoveryError };
     const events=this.runtime?.knowledgeEvents?.()||[];
     if(JSON.stringify(events)!==JSON.stringify(this.state.knowledgeEvents||[])){
       this.state.knowledgeEvents=events;this.touch();
     }
-    if (knownId === this.state.id && knownRevision === this.state.revision) return { unchanged: true };
+    const sameJob = knownId === this.state.id;
+    const sameDrafts = sameJob && tokenNumber(knownDraftRevision) && knownDraftRevision === this.state.draftRevision;
+    // Two-argument callers retain the original whole-state revision protocol.
+    // Omitting drafts requires the newer, explicit draft revision acknowledgement.
+    if (sameJob && knownRevision === this.state.revision && (knownDraftRevision === undefined || sameDrafts)) return { unchanged: true };
+    if (sameDrafts) {
+      const { drafts: _drafts, ...state } = this.state;
+      return { state: structuredClone(state), draftsUnchanged: true };
+    }
     return { state: structuredClone(this.state) };
   }
   start(request) {
@@ -103,24 +125,28 @@ export class AgentJobHost extends EventEmitter {
       try{validateCliImages(message.images);}catch(error){throw new Error(String(error.message).replaceAll('CLI','Hintergrund'));}
     }
     const files = Object.fromEntries(Object.entries(request.files).filter(([p, c]) => safePath(p) && typeof c === 'string'));
-    // Project harness may enable UI tools; this test lane has a fixed capability set.
-    delete files['.anvil/harness.json']; delete files['.anvil/graph.json'];
+    // Project workflow rules are data. Worker and host capabilities remain fixed.
     const id = randomUUID();
     if (request.execution && !this.runtime) throw new Error('Hintergrund-Ausführung fehlt.');
     if (request.writeThrough && !request.execution) throw new Error('Direktes Speichern benötigt die zweite Hintergrundstufe.');
     this.runtime?.begin({ ...request, files }, id);
+    this.skillRecords=request.knowledge?.skills||[];
     this.controller = new AbortController(); this.lastOperation = null;
     this.base = files;
     this.dirs=new Set((request.dirs||[]).filter(filePath));
     for(const p of Object.keys(files)){const parts=p.split('/');while(parts.length>1){parts.pop();this.dirs.add(parts.join('/'));}}
-    this.state = { schema: 1, id, revision: 0, project: String(request.project || ''), execution: request.execution === true, writeThrough: request.writeThrough === true,
+    this.state = { schema: 1, id, revision: 0, draftRevision: 0, project: String(request.project || ''), execution: request.execution === true, writeThrough: request.writeThrough === true,
       prompt: String(request.userPrompt ?? request.messages.at(-1)?.content ?? ''), images: request.userImages ?? request.messages.at(-1)?.images ?? [], status: 'starting', startedAt: Date.now(),
       locale:request.locale==='en'?'en':'de',modelTarget:{provider:request.model.provider,model:request.model.model,baseUrl:request.model.baseUrl},effectiveSettings:request.effectiveSettings,
       toolLearningInitial:structuredClone(request.toolLearning||{rules:[]}),
+      skillSelection:structuredClone(request.skillSelection||[]),
       text: '', thinking: '', steps: [], plan: request.resumePlan||request.plan||[], planLocked:request.planLocked===true, blockedMutations:request.blockedMutations||[], mutationLedger:[], directoryChanges:{}, drafts: {}, harness: '', error: '', dismissed: false,
       phase:{phase:'preparing',since:Date.now()},runAttempts:0,runMax:Math.max(1,Math.min(5,Number(request.automation?.loopTries)||3)),
       requestSequence:0,usageSequence:0,requestTokens:null,usage:{prompt:0,completion:0,estimated:false} };
-    this.state.connection = request.model.cliKind ? `${request.model.cliKind} CLI` : 'Lokale API';
+    if(validWorkflowSnapshot(request.workflow))this.state.workflow=structuredClone(request.workflow);
+    this.state.recoveryBlockedActions=[...new Set([...(request.recoveryBlockedActions||[]),...workflowRecoveryBlocks(this.state.workflow)])];
+    this.state.acceptance=acceptanceResult(workflowAcceptance(request.workflow),{verification:recoveryVerification(this.state)});
+    this.state.connection = request.model.cliKind ? `${request.model.cliKind} CLI` : request.model.provider==='qwen' ? 'Qwen AI API' : request.model.provider==='deepseek' ? 'DeepSeek API' : 'Lokale API';
     this.state.services = (request.services||[]).map(s=>({id:s.id,name:s.name}));
     this.touch(); this.persist();
     if (this.state.persistenceError) { this.state.status = 'failed';this.state.finishedAt=Date.now(); this.touch(); return this.snapshot(); }
@@ -146,8 +172,8 @@ export class AgentJobHost extends EventEmitter {
       if (this.state.status !== 'starting') return;
       clearTimeout(this.killTimer); this.state.status = 'running';
       // Service credentials remain in the app process. The worker only needs IDs.
-      const knowledge=request.knowledge&&!request.knowledge.skillBodies?{...request.knowledge,skills:(request.knowledge.skills||[]).map(({body,...skill})=>skill)}:request.knowledge;
-      this.child.send({ type: 'start', request: { ...request, knowledge,services:this.state.services, files } });
+      const knowledge=request.knowledge&&!request.knowledge.skillBodies?{...request.knowledge,skills:(request.knowledge.skills||[]).map(({body,resourceContents,...skill})=>skill)}:request.knowledge;
+      this.child.send({ type: 'start', request: { ...request, workflowId:this.state.id,knowledge,services:this.state.services, files } });
     } else if (message.type === 'request-tokens') {
       if(!Number.isSafeInteger(message.sequence)||message.sequence<1||message.sequence<(this.state.requestSequence||0)||message.sequence<=(this.state.usageSequence||0)||!validRequestTokens(message.requestTokens))return;
       this.state.requestSequence=message.sequence;this.state.requestTokens=message.requestTokens;
@@ -156,6 +182,9 @@ export class AgentJobHost extends EventEmitter {
       if(message.sequence!==this.state.requestSequence||message.sequence<=(this.state.usageSequence||0)||!u||!tokenNumber(u.prompt)||!tokenNumber(u.completion)||typeof u.estimated!=='boolean'||!validRequestTokens(message.requestTokens))return;
       if(u.prompt<(this.state.usage?.prompt||0)||u.completion<(this.state.usage?.completion||0))return;
       this.state.usageSequence=message.sequence;this.state.usage=u;this.state.requestTokens=message.requestTokens;
+    } else if(message.type==='skill-loaded'){
+      const skill=this.skillRecords?.find(skill=>skill.id===message.id);
+      if(skill&&request.knowledge?.skillsEnabled&&request.knowledge?.skillBodies&&['skill_read','skill_run'].includes(message.tool))this.state.skillSelection=withLoadedSkill(this.state.skillSelection||[],skill,message.tool);
     } else if(message.type==='phase'){
       if(!PHASES.has(message.phase)||this.state.phase?.phase===message.phase)return;
       this.state.phase={phase:message.phase,since:Date.now()};
@@ -191,34 +220,42 @@ export class AgentJobHost extends EventEmitter {
       this.state.textTruncated=String(message.result?.reply||'').length>500000;
       if (Array.isArray(message.result?.plan)) this.state.plan = message.result.plan;
       const result=message.result||{};
-      if(result.verification&&['none','passed','failed','stale'].includes(result.verification.state))this.state.verification={state:result.verification.state,detail:String(result.verification.detail||'').slice(0,16000)};
+      if(result.verification&&['none','passed','failed','stale'].includes(result.verification.state))this.state.verification={state:result.verification.state,detail:String(result.verification.detail||'').slice(0,16000),...(typeof result.verification.tests==='boolean'?{tests:result.verification.tests}:{})};
       if(['round-limit','no-progress','tool-limit'].includes(result.stopReason))this.state.stopReason=result.stopReason;
       this.state.compacted=result.compacted===true;
       this.state.tools=Array.isArray(result.tools)?result.tools.filter(v=>typeof v==='string').slice(-200):[];
       if(result.capabilities&&typeof result.capabilities==='object')this.state.capabilities=result.capabilities;
       if(result.toolLearning&&typeof result.toolLearning==='object')this.state.toolLearning=result.toolLearning;
+      this.state.acceptance=acceptanceResult(result.acceptance??workflowAcceptance(this.state.workflow)??this.state.acceptance,{verification:recoveryVerification(this.state),open:this.state.plan?.some(s=>s.kind!=='report'&&s.status!=='ok')});
       if(result.parked&&result.ask&&typeof result.ask.prompt==='string'&&Array.isArray(result.ask.choices)){
         this.state.ask=result.ask;this.state.parked=true;this.state.parkedAt=Date.now();
         return this.finish('waiting-user');
       }
+      this.state.text=acceptanceReply(this.state.text,this.state.acceptance,this.state.locale);
       return this.finish(message.result?.ok ? 'done' : 'failed', String(message.result?.error || ''));
-    } else if (message.type === 'failure') return this.finish(message.stopped ? 'stopped' : 'failed', String(message.error || 'Auftrag fehlgeschlagen.'));
+    } else if (message.type === 'failure') {
+      this.state.failure=captureAgentFailure(message.failure?.error || new Error(String(message.error || 'Auftrag fehlgeschlagen.')), {
+        phase:this.state.phase?.phase,requestSequence:this.state.requestSequence,jobId:this.state.id,
+        transport:message.failure?.transport,secrets:[request.model.apiKey] });
+      return this.finish(message.stopped ? 'stopped' : 'failed', this.state.failure.error.message);
+    }
     // Streaming text stays in the app process. Do not rewrite multi-MB file
     // drafts on every token during an hours-long model response.
-    this.touch(message.type !== 'delta' && message.type !== 'harness');
+    this.touch(message.type !== 'delta' && message.type !== 'harness', message.type === 'file');
     if (message.type === 'file') this.persist();
   }
   perform(message) {
     if(this.manualOperation){const child=this.child;void this.manualOperation.finally(()=>{if(child===this.child&&!this.controller.signal.aborted)this.perform(message);}).catch(()=>{});return;}
     const op = message.operation, id = message.id;
-    if (!Number.isSafeInteger(id) || id < 1 || !op || !this.state.execution || !this.runtime) return this.finish('failed', 'Ungültige Hintergrundaktion.');
-    const fingerprint = JSON.stringify(op,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]])):value);
+    if (!Number.isSafeInteger(id) || id < 1 || !op || op.kind!=='workflow'&&(!this.state.execution || !this.runtime)) return this.finish('failed', 'Ungültige Hintergrundaktion.');
+    const fingerprint = createHash('sha256').update(JSON.stringify(op,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]])):value)).digest('hex');
     const mutation=/^(shell|git)$/.test(op.kind)&&op.action!=='status'||op.kind==='mcp'&&op.action==='call'||op.kind==='knowledge'&&['add','forget','write','patch','run','outcome'].includes(op.action)||op.kind==='debug'&&['start','continue','step','eval','watch'].includes(op.action);
     // Exit expectations change validation, not the command's external effects.
     const effectOp=op.kind==='shell'?Object.fromEntries(Object.entries(op).filter(([key])=>key!=='expectedExitCode')):op;
     const effectFingerprint=JSON.stringify(effectOp,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]])):value);
     const digest=createHash('sha256').update(effectFingerprint).digest('hex');
-    if(mutation&&(this.state.blockedMutations?.includes(digest)||this.state.blockedMutations?.includes(createHash('sha256').update(JSON.stringify(op)).digest('hex'))))return this.finish('failed','Diese Aktion wurde vor der Wiederaufnahme bereits gestartet. Prüfe zunächst ihr Ergebnis. Sie wird nicht automatisch wiederholt.');
+    const recoveryBlocked=this.state.recoveryBlockedActions?.some(rule=>rule===nativeRecoveryAction(op)||rule===`${op.kind}:*`);
+    if(!recoveryBlocked&&mutation&&(this.state.blockedMutations?.includes(digest)||this.state.blockedMutations?.includes(createHash('sha256').update(JSON.stringify(op)).digest('hex'))))return this.finish('failed','Diese Aktion wurde vor der Wiederaufnahme bereits gestartet. Prüfe zunächst ihr Ergebnis. Sie wird nicht automatisch wiederholt.');
     if (this.lastOperation?.id === id) {
       if (this.lastOperation.fingerprint !== fingerprint) return this.finish('failed', 'Aktions-ID wurde verändert.');
       if (this.lastOperation.reply) this.child?.send(this.lastOperation.reply);
@@ -227,6 +264,24 @@ export class AgentJobHost extends EventEmitter {
     if (this.operation || id !== (this.lastOperation?.id || 0) + 1) return this.finish('failed', 'Hintergrundaktionen außerhalb der Reihenfolge.');
     this.lastOperation = { id, fingerprint };
     const child = this.child;
+    if(op.kind==='workflow') {
+      try {
+        if(!validWorkflowSnapshot(op.snapshot))throw Error('Ungültiger Ablaufzustand.');
+        const path=workflowJournalPath(join(dirname(this.snapshotPath),'workflows'),this.state.project,op.snapshot.id);
+        writeWorkflowJournal(path,op.snapshot);
+        this.state.workflow=op.snapshot;
+        this.state.acceptance=acceptanceResult(workflowAcceptance(op.snapshot),{verification:recoveryVerification(this.state)});
+        this.touch();this.persist();
+        if(this.state.persistenceError)throw Error('Ablaufzustand konnte nicht gesichert werden.');
+        const reply={type:'operation-result',id,result:{ok:true}};this.lastOperation.reply=reply;child.send(reply);
+      }catch(error){this.finish('failed',error.message);}
+      return;
+    }
+    if(recoveryBlocked){
+      const error='Dieses Werkzeug bleibt gesperrt, weil die Rückmeldung einer früheren Aktion fehlt. Prüfe den aktuellen Stand mit anderen Lesewerkzeugen. Die frühere Aktion wurde nicht wiederholt.';
+      const reply={type:'operation-result',id,result:{ok:false,isError:true,error,text:error,definitelyNotExecuted:true}};
+      this.lastOperation.reply=reply;child.send(reply);return;
+    }
     const before = this.base[op.path] ?? null;
     let filePlan;
     if(['write','rename','delete','mkdir'].includes(op.kind)){
@@ -248,36 +303,50 @@ export class AgentJobHost extends EventEmitter {
       this.state.drafts=next;
     }
     if(filePlan)for(const [paths,after]of [[filePlan.create,true],[filePlan.remove,false]])for(const p of paths){const old=this.state.directoryChanges[p];this.state.directoryChanges[p]={before:old?old.before:this.dirs.has(p),after,applied:false};}
-    this.state.operation = { id, kind: op.kind, path: op.path, server:op.server, name:op.name, digest:mutation?digest:undefined, status: 'pending' };
+    this.state.operation = { id, kind: op.kind, action:op.action, path: op.path, server:op.server, name:op.name, digest:mutation?digest:undefined, status: 'pending' };
     const execution=op.kind==='run'||op.kind==='shell'||op.kind==='engine'&&op.action==='run';
     if(execution)this.state.pendingRun={path:String(op.path||op.command||op.args?.action||'Engine'),attempt:++this.state.runAttempts,max:this.state.runMax,running:true,startedAt:Date.now()};
     if(mutation){this.state.mutationLedger.push(digest);if(this.state.mutationLedger.length>2048)return this.finish('failed','Zu viele externe Aktionen für eine sichere Wiederaufnahme.');}
-    this.touch(); this.persist();
+    this.touch(true, Boolean(filePlan && Object.keys(filePlan.changes).length)); this.persist();
     if (this.controller.signal.aborted || this.state.persistenceError) return;
     // The pending record is durable before any external side effect. After an
     // app restart it remains interrupted and is never automatically replayed.
     const backupPath = join(dirname(this.snapshotPath), 'backups', this.state.id, (op.kind==='write'?createHash('sha256').update(String(op.path || '')).digest('hex'):`action-${id}`) + '.json');
+    const artifactProject=this.state.writeThrough?this.state.project:'',artifactSignal=this.controller.signal;
     this.operation = Promise.resolve().then(() => this.runtime.execute(op, { before, filePlan,operationId:`${this.state.id}:${id}`, changedPaths:Object.keys(this.state.drafts).filter(p=>this.state.drafts[p].applied&&this.state.drafts[p].before!==this.state.drafts[p].after), files: { ...this.base }, signal: this.controller.signal, backupPath,
       emit:text=>{if(this.child===child&&!this.controller.signal.aborted)child.send({type:'operation-delta',id,text:String(text)});},
     }))
+      .then(result=>['mcp','shell','run','engine'].includes(op.kind)?verifyAcceptanceArtifacts(result,artifactProject,artifactSignal):result)
       .then(result => {
         if (this.child !== child || this.controller.signal.aborted) return;
         if(Buffer.byteLength(JSON.stringify(result) || '')>8*1024*1024)throw new Error('Hintergrundantwort zu groß. Aktion nicht automatisch wiederholen.');
+        let draftsChanged = false;
         if (filePlan) {
-          for(const [p,c]of Object.entries(filePlan.changes)){if(c.after===null)delete this.base[p];else this.base[p]=c.after;this.state.drafts[p].applied=result.applied===true;}
-          for(const p of filePlan.create){this.dirs.add(p);this.state.directoryChanges[p].applied=result.applied===true;}
-          for(const p of filePlan.remove){this.dirs.delete(p);this.state.directoryChanges[p].applied=result.applied===true;}
+          const applied = result.applied === true;
+          for(const [p,c]of Object.entries(filePlan.changes)){if(c.after===null)delete this.base[p];else this.base[p]=c.after;draftsChanged ||= this.state.drafts[p].applied !== applied;this.state.drafts[p].applied=applied;}
+          // Directory changes travel in every metadata reply, independently of
+          // the large draft contents and their revision.
+          for(const p of filePlan.create){this.dirs.add(p);this.state.directoryChanges[p].applied=applied;}
+          for(const p of filePlan.remove){this.dirs.delete(p);this.state.directoryChanges[p].applied=applied;}
         }
         if(execution){this.state.lastRun={...this.state.pendingRun,...result,id:String(result.id||result.stage?.id||id),eventId:`${this.state.id}:run:${id}`,image:undefined,running:result.running===true,finishedAt:Date.now()};delete this.state.pendingRun;}
         if(['see','play'].includes(op.kind))this.state.lastPreview={...result,image:undefined,action:op.kind,finishedAt:Date.now()};
         if(op.kind==='git')this.state.lastGit={...result,action:op.action,finishedAt:Date.now()};
         if(op.kind==='verify')this.state.lastDiagnostics={...result,paths:op.paths,finishedAt:Date.now()};
         if(op.kind==='debug')this.state.lastDebug={...result,finishedAt:Date.now()};
-        if(op.kind==='knowledge')this.state.knowledgeEvents=this.runtime.knowledgeEvents?.()||result.knowledgeEvents||[];
+        if(op.kind==='knowledge'){
+          this.state.knowledgeEvents=this.runtime.knowledgeEvents?.()||result.knowledgeEvents||[];
+          if(['run','read'].includes(op.action)&&typeof result.body==='string'&&!result.error){
+            const skill=(result.knowledgeEvents||[]).find(event=>event.collection==='skills'&&event.action==='run')?.after
+              ||this.skillRecords?.find(skill=>skill.id===op.args?.name||skill.name===op.args?.name);
+            this.state.skillSelection=withLoadedSkill(this.state.skillSelection||[],skill,`skill_${op.action}`);
+          }
+        }
         if (op.kind === 'engine') this.state.lastEngine = op.action==='status' ? result.lastRun : result;
         if(op.kind==='mcp')this.state.lastService={server:op.server||'',name:op.name||'Katalog',ok:!result?.isError,text:String(result?.text||'').slice(0,4000)};
+        if(op.kind==='shell'&&Number.isInteger(result.code)&&!result.running&&!result.aborted&&!result.timedOut&&!result.interrupted&&result.code!==0&&result.exitExpectationMatched!==true)this.state.mutationLedger=this.state.mutationLedger.filter(value=>value!==digest);
         this.state.operation.status = 'done';
-        this.touch(); this.persist();
+        this.touch(true, draftsChanged); this.persist();
         if (this.controller.signal.aborted) return;
         const reply = { type: 'operation-result', id, result };
         this.lastOperation.reply = reply;
@@ -298,6 +367,8 @@ export class AgentJobHost extends EventEmitter {
     if(status!=='done'&&this.state.operation?.kind==='mcp'&&this.state.operation.status==='pending')error+=' Die Aktion wurde beim Dienst möglicherweise bereits ausgeführt. Prüfe dort das Ergebnis, bevor du sie erneut startest.';
     clearTimeout(this.killTimer); this.killTimer = null;
     this.state.status = status === 'stopped' && this.operation ? 'stopping' : status; this.state.error = error;
+    if(status!=='done'&&status!=='waiting-user'&&this.state.workflow)this.state.workflow=interruptWorkflow(this.state.workflow);
+    if(status==='stopped')this.state.cancellation={local:this.operation?'requested':'complete',remote:'unconfirmed',at:Date.now()};
     if(TERMINAL.has(this.state.status)&&this.state.status!=='waiting-user')this.state.finishedAt=Date.now();
     for (const step of this.state.steps) if (step.status === 'run') {step.status='err';step.ms=Math.max(0,Date.now()-(step.at||Date.now()));}
     if(this.state.pendingRun)this.state.pendingRun={...this.state.pendingRun,running:false,interrupted:true};
@@ -355,13 +426,41 @@ export class AgentJobHost extends EventEmitter {
     for(const [p,c]of Object.entries(changes))this.state.drafts[p]={...this.state.drafts[p],...c,applied:true,...(changedOnDisk.has(p)?{version:this.state.revision+1,eventId:`${this.state.id}:${action}:${p}:${this.state.revision+1}`}:{})};
     for(const p of [...create,...remove]){const d=this.state.directoryChanges[p];this.state.directoryChanges[p]={before:restore?d.after:d.before,after:create.includes(p),applied:true};}
     if(restore)this.state.restored=true;
-    this.touch();this.persist();return this.snapshot();
+    this.touch(true, Boolean(Object.keys(changes).length));this.persist();return this.snapshot();
+  }
+  reviewOperation(id,project,operationId,outcome,note){
+    const job=this.state;
+    if(this.busy())throw Error('Eine laufende Aktion kann erst im angehaltenen Auftrag geklärt werden.');
+    if(id!==job?.id||job.dismissed)throw Error('Der Auftrag ist nicht mehr aktuell.');
+    if(project!==job.project)throw Error('Öffne zuerst das zugehörige Projekt.');
+    if(!['confirmed','not-executed'].includes(outcome)||typeof note!=='string'||note.trim().length<12||note.length>1000)throw Error('Ein konkretes Prüfergebnis mit mindestens 12 und höchstens 1000 Zeichen angeben.');
+    if(!validWorkflowSnapshot(job.workflow))throw Error('Kein gültiges Ablaufjournal für diesen Auftrag.');
+    const workflow=structuredClone(job.workflow),op=workflow.operations.find(op=>op.id===operationId);
+    if(!op?.external||op.status!=='unclear'||op.resolution)throw Error('Diese Aktion ist nicht mehr unbestätigt.');
+    const oldBlocks=workflowRecoveryBlocks(workflow);
+    delete op.recovery;
+    op.resolution={outcome,note:note.trim(),at:Math.max(Date.now(),op.at)};
+    op.status=outcome==='confirmed'?'confirmed':'failed';
+    writeWorkflowJournal(workflowJournalPath(join(dirname(this.snapshotPath),'workflows'),job.project,workflow.id),workflow);
+    job.workflow=workflow;
+    job.recoveryBlockedActions=[...new Set([...(job.recoveryBlockedActions||[]).filter(key=>!oldBlocks.includes(key)),...workflowRecoveryBlocks(workflow)])];
+    job.acceptance=acceptanceResult(workflowAcceptance(workflow),{verification:recoveryVerification(job)});
+    this.touch();this.persist();
+    if(job.persistenceError)throw Error('Das Prüfergebnis konnte nicht dauerhaft gesichert werden. Nicht fortsetzen.');
+    return this.snapshot();
   }
   resume(id,request,reviewed=false){
     const previous=this.state;
     if(this.busy()||id!==previous?.id||previous.status==='done')throw Error('Nur angehaltene Aufträge können fortgesetzt werden.');
+    if(previous.persistenceError)throw Error('Der Auftragsstand ist noch nicht zuverlässig gespeichert. Den Speicherfehler vor dem Fortsetzen beheben.');
     if(request.project!==previous.project)throw Error('Öffne zuerst das Projekt, zu dem dieser Auftrag gehört.');
-    if(previous.operation?.digest&&previous.operation.status!=='done'&&!reviewed)throw Error('Prüfe und bestätige zuerst das Ergebnis der noch unbestätigten Aktion.');
+    const workflow=validWorkflowSnapshot(previous.workflow)?structuredClone(previous.workflow):undefined;
+    const uncertain=workflow?.operations.filter(uncertainOperation)||[];
+    if(uncertain.some(op=>!op.recovery)&&request.skipUnconfirmed!==true)throw Error('Es gibt noch unbestätigte externe Aktionen. Den Stand prüfen und ohne Wiederholung fortsetzen oder den Ausgang einzeln klären.');
+    const pending=previous.operation?.digest&&previous.operation.status!=='done'&&!reviewed;
+    if(pending&&request.skipUnconfirmed!==true)throw Error('Prüfe und bestätige zuerst das Ergebnis der noch unbestätigten Aktion.');
+    for(const op of uncertain)if(request.skipUnconfirmed===true||op.recovery){op.status='unclear';op.recovery={mode:'skip',at:Math.max(Date.now(),op.at)};}
+    const recoveryBlockedActions=[...new Set([...(previous.recoveryBlockedActions||[]),...workflowRecoveryBlocks(workflow),...(pending?[nativeRecoveryAction(previous.operation)].filter(Boolean):[])])];
     let answer='';
     if(previous.status==='waiting-user'){
       const reply=request.answer,ask=previous.ask;
@@ -384,16 +483,17 @@ export class AgentJobHost extends EventEmitter {
     const current=contextMessages.findLast(m=>m.role==='user');
     const images=[...new Set([...(previous.images||[]),...(current?.images||[])])].slice(0,4);
     if(current)delete current.images; // Current attachments accompany the final continuation prompt once.
-    const summary=`Kontrollierte Wiederaufnahme. Bisherige Aktionen nicht wiederholen. Prüfe den aktuellen Dateistand und erledige nur offene Punkte. Externe Aktionen können bereits ausgeführt worden sein.\nUrsprünglicher Auftrag: ${previous.prompt}\nBisherige Antwort: ${previous.text.slice(-16000)}\nCheckliste: ${JSON.stringify(previous.plan)}\nLetzte Aktionen: ${JSON.stringify(previous.steps.slice(-30))}\nUnterbrechung: ${previous.error}${answer}`;
+    const recovery=recoveryBlockedActions.length?`\nSTAND PRÜFEN UND FORTSETZEN: Lies zuerst den aktuellen Projekt- und Dienststand. Der Nutzer kennt den Ausgang der früheren Aktion nicht und muss ihn nicht erraten. Unbestätigte Aktionen bleiben unbekannt und ihre Werkzeuge gesperrt: ${JSON.stringify(recoveryBlockedActions)}. Wiederhole sie auch nicht mit anderen Argumenten oder über einen Umweg. Nutze verfügbare Lesewerkzeuge und arbeite nur an belegbar offenen Punkten weiter. Kannst du eine Aufgabe dadurch nicht erledigen, erkläre konkret, was fehlt. Ein fehlender Ausgang ist weder Erfolg noch Beleg für bestandene Abnahmeprüfungen.`:'';
+    const summary=`Kontrollierte Wiederaufnahme. Bisherige Aktionen nicht wiederholen. Prüfe den aktuellen Dateistand und erledige nur offene Punkte. Externe Aktionen können bereits ausgeführt worden sein.${recovery}\nUrsprünglicher Auftrag: ${previous.prompt}\nBisherige Antwort: ${previous.text.slice(-16000)}\nCheckliste: ${JSON.stringify(previous.plan)}\nLetzte Aktionen: ${JSON.stringify(previous.steps.slice(-30))}\nVom Nutzer einzeln geprüfte Aktionen (keine Geometrieabnahme und keine Wiederholung): ${JSON.stringify(previous.workflow?.operations.filter(op=>op.resolution).slice(-8)||[])}\nUnterbrechung: ${previous.error}${answer}`;
     const archive=join(dirname(this.snapshotPath),'history',previous.id+'.json');mkdirSync(dirname(archive),{recursive:true});writeFileSync(archive,JSON.stringify(previous),{mode:0o600});
     previous.dismissed=true;
     try{
-      const result=this.start({...request,knowledgeResumeFrom:previous.id,files,dirs:[...dirs],writeThrough:previous.writeThrough,resumePlan:previous.plan,planLocked:previous.planLocked,blockedMutations:[...new Set([...(previous.blockedMutations||[]),...(previous.mutationLedger||[])])],messages:[...contextMessages,{role:'user',content:summary,images}]});
+      const result=this.start({...request,workflow,recoveryBlockedActions,knowledgeResumeFrom:previous.id,files,dirs:[...dirs],writeThrough:previous.writeThrough,resumePlan:previous.plan,planLocked:previous.planLocked,blockedMutations:[...new Set([...(previous.blockedMutations||[]),...(previous.mutationLedger||[])])],messages:[...contextMessages,{role:'user',content:summary,images}]});
       this.state.resumedFrom=previous.id;
       this.state.prompt=previous.prompt;
       this.state.drafts=structuredClone(previous.drafts);this.state.directoryChanges=structuredClone(previous.directoryChanges||{});
       for(const field of ['lastRun','lastDiagnostics','lastPreview','lastGit','lastEngine','runAttempts'])if(previous[field]!==undefined)this.state[field]=structuredClone(previous[field]);
-      this.touch();this.persist();return this.snapshot();
+      this.touch(true, true);this.persist();return this.snapshot();
     }catch(e){this.state=previous;previous.dismissed=false;this.persist();throw e;}
   }
   close() {

@@ -10,11 +10,27 @@ export default tseslint.config(
   {
     ignores: [
       "dist/**",
+      "dist-test/**",
+      "dist-win/**",
+      "ui-build/**",
+      "agent-build/**",
       ".output/**",
       ".vercel/**",
       ".nitro/**",
+      ".tanstack/**",
+      ".vinxi/**",
+      ".turbo/**",
+      ".cache/**",
+      "artifacts/**",
+      "screenshots/**",
+      "runs/**",
+      "**/.anvil/runs/**",
+      "anvil-test/**",
+      "attachments/**",
+      "data/**",
       "node_modules/**",
       "src/routeTree.gen.ts",
+      "src/lib/anvil-skills.generated.ts",
     ],
   },
   js.configs.recommended,
@@ -41,6 +57,21 @@ export default tseslint.config(
       ],
       "@typescript-eslint/no-explicit-any": "off",
     },
+  },
+  {
+    // These callbacks execute in isolated iframe fixtures where the canvas
+    // runtime installs window.Anvil; the Node test driver has no such global.
+    files: ["scripts/canvas.browser.mjs", "scripts/reported-problems.browser.mjs"],
+    languageOptions: { globals: { Anvil: "readonly" } },
+  },
+  {
+    files: ["public/python-check-worker.js"],
+    languageOptions: { globals: globals.worker },
+  },
+  {
+    // Electron loads this sandboxed preload as CommonJS, including require("electron").
+    files: ["electron/preload.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   // Disable rules that conflict with Prettier formatting.
   prettier,

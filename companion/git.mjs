@@ -1,5 +1,6 @@
 /** Real git + source tree on a registered workspace folder. Token-gated by the server. */
-import { fileBytes, sameBytes } from "../scripts/file-content.mjs";
+import { fileContent, fileBytes, sameBytes } from "../scripts/file-content.mjs";
+import { hasAsciiControl } from "../electron/text-controls.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync, renameSync, realpathSync, lstatSync } from "node:fs";
 import path from "node:path";
@@ -87,6 +88,25 @@ const IMG_MIME = {
 export const TREE_FILES = 4000;
 export const TREE_EACH = 1_500_000;
 export const TREE_TOTAL = 96_000_000;
+
+// Keep in step with ws-skip.isImportedPluginPath and ref.isSecretPath. This
+// runtime must remain plain JavaScript so packaged Companion needs no TS loader.
+function importedPluginPath(rel) {
+  if (rel.split("/").some(part => !part || part === "." || part === "..") || rel.includes(":") || hasAsciiControl(rel)) return false;
+  return /^\.anvil\/skills\/package-[a-z0-9-]+(?:\/|$)/.test(rel)
+    || /^\.anvil\/plugin-imports\/[a-z0-9-]+\.json$/.test(rel);
+}
+
+function pluginSecretPath(rel) {
+  const base = rel.split("/").pop() || "";
+  if (/\.env\.(example|sample|template)$/i.test(base)) return false;
+  if (/(^|\/)\.env($|\.(?!example|sample|template))/i.test(rel)
+    || /(^|\/)(\.git-credentials|id_rsa|credentials)$/i.test(rel)
+    || /\.(pem|p12|pfx)$/i.test(base)) return true;
+  if (/\.(md|ts|tsx|js|jsx|mjs|cjs|py|go|rs)$/i.test(base)) return false;
+  return /^(secrets?|password|token)(\.|$)/i.test(base) || /api[_-]?key/i.test(base)
+    || /(^|\/)(secrets?|vault)(\.|\/|$)/i.test(rel);
+}
 
 function which(bin) {
   const env = process.env.PATH || "";
@@ -332,13 +352,15 @@ function walk(dir, prefix, acc) {
       acc.skipped += 1;
       continue;
     }
-    if (e.name.startsWith(".") && !KEEP_DOT.has(e.name) && !/^\.(eslint|prettier)/i.test(e.name)) continue;
-    if (SKIP.has(e.name)) continue;
     const full = path.join(dir, e.name);
     if (path.resolve(full) === path.resolve(runRoot())) continue;
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
     const relPosix = rel.replace(/\\/g, "/");
-    if (/(^|\/)\.anvil\/(work|out)(\/|$)/i.test(relPosix) || relPosix === ".anvil/work" || relPosix === ".anvil/out") continue;
+    const imported = importedPluginPath(relPosix);
+    if (imported && pluginSecretPath(relPosix)) { acc.skipped += 1; continue; }
+    if (!imported && e.name.startsWith(".") && !KEEP_DOT.has(e.name) && !/^\.(eslint|prettier)/i.test(e.name)) continue;
+    if (!imported && SKIP.has(e.name)) continue;
+    if (!imported && /(^|\/)\.anvil\/(work|out)(\/|$)/i.test(relPosix)) continue;
     if (e.isDirectory()) {
       acc.dirs.push(relPosix);
       walk(full, relPosix, acc);
@@ -350,6 +372,16 @@ function walk(dir, prefix, acc) {
       st = statSync(full);
     } catch {
       acc.skipped += 1;
+      continue;
+    }
+    if (acc.bytes + st.size > TREE_TOTAL) { acc.skipped += 1; continue; }
+    if (imported) {
+      if (st.size > 16 * 1024 * 1024) { acc.skipped += 1; continue; }
+      try {
+        acc.files[relPosix] = fileContent(readFileSync(full));
+        acc.n += 1;
+        acc.bytes += st.size;
+      } catch { acc.skipped += 1; }
       continue;
     }
     if (st.size > TREE_EACH && !IMG_MIME[e.name.split(".").pop()?.toLowerCase() || ""]) {
@@ -385,7 +417,7 @@ function walk(dir, prefix, acc) {
       continue;
     }
     try {
-      acc.files[relPosix] = readFileSync(full, "utf8");
+      acc.files[relPosix] = fileContent(readFileSync(full));
       acc.n += 1;
       acc.bytes += st.size;
     } catch {
@@ -432,7 +464,7 @@ export function writeRel(cwd, rel, content, expected) {
 export function moveRel(cwd, from, to) {
   const root = realpathSync(resolveCwd(cwd));
   const resolve = (rel) => {
-    if (typeof rel !== "string" || !rel || /[:\\\x00-\x1f]/.test(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
+    if (typeof rel !== "string" || !rel || /[:\\]/.test(rel) || hasAsciiControl(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
     const full = path.join(root, rel);
     if (!insideRoot(root, full) || full === root) throw new Error("Pfad ungültig.");
     let parent = path.dirname(full);
@@ -491,13 +523,13 @@ export async function gitDispatch(action, body) {
 export function readRelFiles(cwd, paths) {
   const root = realpathSync(resolveCwd(cwd)), files = {};
   for (const rel of paths.slice(0, 64)) {
-    if (typeof rel !== "string" || !rel || /[:\\\x00-\x1f]/.test(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
+    if (typeof rel !== "string" || !rel || /[:\\]/.test(rel) || hasAsciiControl(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
     const full = path.join(root, rel);
     if (!insideRoot(root, full)) throw new Error("Pfad ungültig.");
     if (!existsSync(full)) { files[rel] = null; continue; }
     if (!insideRoot(root, realpathSync(full))) throw new Error("Pfad verlässt den Workspace.");
     const stat = statSync(full);
-    if (stat.isFile() && stat.size <= 1_500_000) files[rel] = readFileSync(full, "utf8");
+    if (stat.isFile() && stat.size <= 1_500_000) files[rel] = fileContent(readFileSync(full));
   }
   return { ok: true, files };
 }

@@ -140,7 +140,14 @@ export function bindMcpIpc(isTrusted) {
       const config = mcpConfig(request.server);
       state.jobs.set(id, { controller, server: config.id });
       let value;
-      if (
+      if (request.method === "bearer/logout") {
+        if (config.auth !== "bearer") throw new Error("Dieser Dienst verwendet keinen API-Schlüssel.");
+        for (const owner of owners.values())
+          for (const [jobId, job] of owner.jobs)
+            if (job.server === config.id && !(owner === state && jobId === id)) job.controller.abort();
+        await Promise.allSettled([...owners.values()].map(owner => owner.host.close(config.id)));
+        value = { authenticated: false };
+      } else if (
         ["oauth/login", "oauth/logout", "oauth/status", "oauth/reopen"].includes(request.method)
       ) {
         if (config.transport !== "http") throw new Error("OAuth benötigt HTTP.");

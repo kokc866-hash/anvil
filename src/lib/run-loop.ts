@@ -1,5 +1,6 @@
 import { runFile } from "./run-client";
-import { throwIfAborted, withAgentTimeout } from "./abort";
+import { withAgentTimeout } from "./abort";
+import { captureAgentRun, type AgentRun } from "./agent-run";
 import { useIde } from "@/store/ide";
 import { canvasCommand, findCanvasFrame } from "./canvas/session";
 import { canvasScope } from "./canvas/scope";
@@ -26,11 +27,16 @@ export async function loadLoop(html: string): Promise<void> {
   const r = await canvasCommand(frame, "load", { html, restart: true }, signal());
   if (!r.ok) throw new Error(r.error || "Canvas-Start fehlgeschlagen.");
 }
-export async function shotLoop(html?: string, expectedSession?: string): Promise<LoopShot> {
+export async function shotLoop(html?: string, expectedSession?: string, run?: AgentRun): Promise<LoopShot> {
+  const abort = run?.signal ?? signal();
   try {
-    const frame = await findCanvasFrame(canvasScope(useIde.getState()), 5000, signal());
-    if (html) await canvasCommand(frame, "load", { html, restart: false }, signal());
-    const shot = await canvasCommand(frame, "shot", { expectedSession }, signal());
+    run?.assertCurrent();
+    const frame = await findCanvasFrame(canvasScope(useIde.getState()), 5000, abort);
+    run?.assertCurrent();
+    if (html) await canvasCommand(frame, "load", { html, restart: false }, abort);
+    run?.assertCurrent();
+    const shot = await canvasCommand(frame, "shot", { expectedSession }, abort);
+    run?.assertCurrent();
     return { ...shot, image: shot.image || null };
   } catch (error) {
     return {
@@ -62,15 +68,19 @@ function wait(ms: number, signal?: AbortSignal) {
     else signal?.addEventListener("abort", abort, { once: true });
   });
 }
-export async function playLoop(keys: string[], holdMs = 90): Promise<LoopShot> {
+export async function playLoop(keys: string[], holdMs = 90, run?: AgentRun): Promise<LoopShot> {
   const seq = mapKeys(keys),
-    abort = signal();
+    abort = run?.signal ?? signal();
   if (!seq.length) return { ok: false, image: null, logs: [], error: "Keine Tasten angegeben." };
   try {
+    run?.assertCurrent();
     const frame = await findCanvasFrame(canvasScope(useIde.getState()), 1000, abort);
+    run?.assertCurrent();
     const current = await canvasCommand(frame, "ready", {}, abort);
+    run?.assertCurrent();
     if (!current.ok) throw new Error(current.error || "Programm ist nicht bereit.");
     for (const key of seq) {
+      run?.assertCurrent();
       try {
         const reply = await canvasCommand(
           frame,
@@ -90,6 +100,7 @@ export async function playLoop(keys: string[], holdMs = 90): Promise<LoopShot> {
       await wait(40, abort);
     }
     const shot = await canvasCommand(frame, "shot", { expectedSession: current.session }, abort);
+    run?.assertCurrent();
     return { ...shot, image: shot.image || null };
   } catch (error) {
     return {
@@ -103,15 +114,19 @@ export async function playLoop(keys: string[], holdMs = 90): Promise<LoopShot> {
 export async function runLoopFile(
   path: string,
   files: Record<string, string>,
-  opts?: { graph?: boolean; tries?: number },
+  opts?: { graph?: boolean; tries?: number; run?: AgentRun },
 ) {
-  throwIfAborted();
-  const r = await runFile(path, files);
+  const epoch = useIde.getState().workspaceEpoch;
+  const run = opts?.run ?? captureAgentRun(() => useIde.getState().workspaceEpoch === epoch);
+  run.assertCurrent();
+  const r = await runFile(path, files, { run });
+  run.assertCurrent();
   const shot =
     opts?.graph !== false && r.html && r.ok
-      ? await shotLoop(undefined, r.stage?.id)
+      ? await shotLoop(undefined, r.stage?.id, run)
       : ({ image: null, logs: [] } as LoopShot);
   const ok = r.ok && shot.state !== "failed";
+  run.assertCurrent();
   const budget = noteLoopFail(ok, Math.min(5, Math.max(1, opts?.tries ?? 3)));
   return {
     ...r,

@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, rmdirSync, readdirSync, renameSync, openSync, fsyncSync, closeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { hasAsciiControl } from "../electron/text-controls.mjs";
 import path from "node:path";
 import { fileBytes } from "../scripts/file-content.mjs";
 
@@ -7,7 +8,7 @@ const inside = (root, name) => { const rel = path.relative(root, name); return r
 
 /** All paths are relative, exact files; links and recursive deletes are deliberately excluded. */
 function target(root, rel) {
-  if (typeof rel !== "string" || !rel || /[:\\\x00-\x1f]/.test(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
+  if (typeof rel !== "string" || !rel || /[:\\]/.test(rel) || hasAsciiControl(rel) || rel.split("/").some((p) => !p || p === "." || p === "..")) throw new Error("Pfad ungültig.");
   const full = path.resolve(root, rel);
   if (!inside(root, full) || full === root) throw new Error("Pfad verlässt den Workspace.");
   let parent = full;

@@ -5,7 +5,7 @@ import { downloadFile, helperModelId, hfAllowed, MAX_JOB_FILES } from "./hf-get.
 import { readFileSync, createReadStream } from "node:fs";
 
 export function helperFilePath(root, rel) {
-  if (typeof rel !== "string" || !rel || /[\\\x00:]/.test(rel) || rel.split("/").some((x) => !x || x === "." || x === "..")) throw new Error("Modell-Dateipfad ungültig");
+  if (typeof rel !== "string" || !rel || /[\\:]/.test(rel) || rel.includes("\0") || rel.split("/").some((x) => !x || x === "." || x === "..")) throw new Error("Modell-Dateipfad ungültig");
   const dest = join(root, rel);
   if (isAbsolute(rel) || relative(root, dest).startsWith("..")) throw new Error("Modell-Dateipfad ungültig");
   return dest;

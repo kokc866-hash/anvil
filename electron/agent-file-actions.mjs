@@ -1,8 +1,9 @@
 import { existsSync,lstatSync,readdirSync,readFileSync,writeFileSync,mkdirSync,renameSync,unlinkSync,rmdirSync } from 'node:fs';
 import { join,dirname,resolve,relative,isAbsolute } from 'node:path';
+import { hasAsciiControl } from './text-controls.mjs';
 import { fileBytes,sameBytes } from '../scripts/file-content.mjs';
 
-export const safePath=p=>typeof p==='string'&&p.length>0&&p.length<512&&!/[\\:\x00-\x1f]/.test(p)&&!p.split('/').some(x=>!x||['.','..','__proto__','constructor','prototype'].includes(x))&&!/(^|\/)(?:\.git|\.env(?:\..*)?|secrets?)(\/|$)/i.test(p);
+export const safePath=p=>typeof p==='string'&&p.length>0&&p.length<512&&!/[\\:]/.test(p)&&!hasAsciiControl(p)&&!p.split('/').some(x=>!x||['.','..','__proto__','constructor','prototype'].includes(x))&&!/(^|\/)(?:\.git|\.env(?:\..*)?|secrets?)(\/|$)/i.test(p);
 export function diskPath(root,p){
   if(!safePath(p))throw Error('Ungültiger Projektpfad.');
   const full=resolve(root,p),rel=relative(resolve(root),full);

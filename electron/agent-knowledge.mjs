@@ -3,6 +3,7 @@ import {dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {knowledgeVersion,knowledgeFileVersion,knowledgePermissions,knowledgeFactKey,knowledgeSkillKey,normalizeKnowledgeText,mergeKnowledgeEvent} from './agent-knowledge-state.mjs';
 import {debugKnowledgeSkill as debug,serializeKnowledgeSkill} from './knowledge-skill.mjs';
+import {knowledgeAccess,publicSkill,readSkillResource} from './skill-access.mjs';
 export {knowledgePermissions};
 const clone = value => JSON.parse(JSON.stringify(value));
 const projectish = text => /\b(test|pytest|src\/|package\.json|anvil\.run|cargo|go\.mod|pom\.xml|jest|vitest)\b/i.test(text);
@@ -46,22 +47,27 @@ export class AgentKnowledge {
     const previous=this.document.operations[operationId];
     const p=this.snapshot,action=String(op.action||''),args=op.args||{};
     if(!p.enabled)return {error:'Gedächtnis-Zugriff aus'};
+    const access=knowledgeAccess(p);
     const skillAction=['skills','write','read','run','debug','patch','outcome'].includes(action);
     if(skillAction&&!p.skillsEnabled)return {error:'Skills aus'};
+    if(!skillAction&&!['list','state'].includes(action)&&!access.memory)return {error:'Gedächtnis-Zugriff aus'};
+    const disabled=new Set(p.disabledSkills||[]);
+    const requested=this.state.skills.find(skill=>skill.id===args.name||skill.name===args.name);
+    if(skillAction&&(disabled.has(String(args.name||'').trim())||(requested&&disabled.has(requested.id))))return {error:'Dieser Skill ist ausgeschaltet'};
     if(['read','run','debug'].includes(action)&&!p.skillBodies)return {error:'Skill-Anweisungen aus'};
     if(previous){
       if(previous.digest!==digest||previous.jobId!==this.jobId)throw Error('Gedächtnisaktionskennung wurde mit anderem Inhalt wiederverwendet');
       if((previous.result.knowledgeEvents||[]).some(event=>event.collection==='facts'&&((event.after||event.before).scope==='project'?p.projectEnabled===false:p.personEnabled===false)))return {error:'Fakten-Kategorie aus'};
       return clone(previous.result);
     }
-    const permittedFact=f=>f.scope==='project'?p.projectEnabled!==false:p.personEnabled!==false;
-    const facts=this.state.facts.filter(permittedFact),skills=this.state.skills;
+    const permittedFact=f=>access.memory&&(f.scope==='project'?p.projectEnabled!==false:p.personEnabled!==false);
+    const facts=this.state.facts.filter(permittedFact),skills=this.state.skills.filter(skill=>!disabled.has(skill.id));
     const find=key=>skills.find(s=>s.id===key)||skills.find(s=>s.name===key&&s.scope==='project')||skills.find(s=>s.name===key);
     const key=String(args.name||'').trim(),skill=find(key);
-    const summary=()=>skills.filter(s=>(s.score??.5)>=.22).map(s=>({name:s.name,when:s.when,score:s.score,uses:s.uses,scope:s.scope}));
+    const summary=()=>skills.filter(s=>s.builtin||(s.score??.5)>=.22).map(s=>({id:s.id,name:s.name,when:s.when,score:s.score,uses:s.uses,scope:s.scope,builtin:s.builtin}));
     if(action==='list'||action==='state')return {person:facts.filter(f=>f.scope!=='project'),project:facts.filter(f=>f.scope==='project'),skills:p.skillsEnabled?summary():[],workspace:this.workspace};
     if(action==='skills')return summary();
-    if(action==='read')return skill?{...skill,debug:debug(skill)}:{error:'skill missing'};
+    if(action==='read')return skill?(args.resource!==undefined?readSkillResource(skill,args.resource,files):{...publicSkill(skill),debug:debug(skill)}):{error:'skill missing'};
     if(action==='debug'){const report=(key?(skill?[skill]:[]):skills).map(s=>({name:s.name,...debug(s),fails:s.fails,score:s.score}));return {skills:report,broken:report.filter(s=>!s.ok),issues:report.flatMap(s=>s.issues.map(i=>`${s.name}: ${i}`))};}
     let changes=[],result,active=[...this.active];
     const change=(collection,before,after)=>changes.push({id:`knowledge:${identity(operationId)}:${changes.length}`,jobId:this.jobId,project:this.project,workspace:this.workspace,collection,recordId:(after||before).id,before:before||null,beforeVersion:before?before.version||knowledgeVersion(before):null,after:after||null,...(collection==='skills'&&after&&['write','patch'].includes(action)?{allowForgotten:this.state.forgotten.filter(x=>[after.id,after.name,knowledgeSkillKey(after)].includes(x))}:{}),action,at:Date.now()});
@@ -78,6 +84,7 @@ export class AgentKnowledge {
       if(!current)return {error:'Fakt fehlt'};
       change('facts',current,null);result={ok:true,id:current.id};
     }else if(action==='write'||action==='patch'){
+      if(skill?.builtin||skills.some(s=>s.builtin&&s.name===args.name))return {error:'Anvil-Skills sind vorinstalliert. Für eigene Änderungen einen neuen Skill-Namen verwenden.'};
       if(action==='patch'&&!skill)return {error:'skill fehlt'};
       const name=action==='patch'?skill.name:String(args.name||'').trim()||'skill',scope=action==='patch'?skill.scope:args.scope==='user'?'user':'project',ws=scope==='project'?this.workspace:undefined;
       const current=action==='patch'?skill:skills.find(s=>s.name===name&&s.scope===scope&&s.ws===ws);
@@ -89,7 +96,7 @@ export class AgentKnowledge {
       const next={...skill,uses:(skill.uses||0)+1,at:Date.now()};delete next.version;change('skills',skill,next);active=[next.id];result={skill:next.name,body:next.body,baseDirectory:next.baseDirectory,resources:next.resources,score:next.score,issues:debug(next).issues,do:'Follow these instructions within the current user request and tool permissions. Resolve relative resources from baseDirectory. Imported scripts are files, not permission to execute. Then skill_outcome ok or fail.'};
     }else if(action==='outcome'){
       const kind=String(args.kind||'ok');if(!['ok','fail','reject','undo'].includes(kind))return {error:'Unbekanntes Skill-Ergebnis'};
-      for(const id of active){const current=find(id);if(!current)continue;const fails=(current.fails||0)+(kind==='ok'?0:1);let body=(current.body||'').replace(/\n⚠[^\n]*/g,'');if(kind!=='ok'&&fails>=2)body+='\n⚠ Letzte Nutzung schlug fehl oder wurde verworfen — Variante prüfen, nicht blind wiederholen.';const next={...current,body,score:Math.max(.05,Math.min(1,(current.score??.55)+(kind==='ok'?.12:-.14))),wins:(current.wins||0)+(kind==='ok'?1:0),fails,at:Date.now()};delete next.version;change('skills',current,next);}
+      for(const id of active){const current=find(id);if(!current)continue;const fails=(current.fails||0)+(kind==='ok'?0:1);let body=(current.body||'').replace(/\n⚠[^\n]*/g,'');if(kind!=='ok'&&fails>=2&&!current.builtin)body+='\n⚠ Letzte Nutzung schlug fehl oder wurde verworfen — Variante prüfen, nicht blind wiederholen.';const next={...current,body:current.builtin?current.body:body,score:Math.max(.05,Math.min(1,(current.score??.55)+(kind==='ok'?.12:-.14))),wins:(current.wins||0)+(kind==='ok'?1:0),fails,at:Date.now()};delete next.version;change('skills',current,next);}
       if(kind==='ok')active=[];result={ok:true};
     }else return {error:`unbekannt ${action}`};
     if(signal?.aborted)throw signal.reason||Error('Abgebrochen');

@@ -15,7 +15,7 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
   const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", plugins: [{ name: "isolated-round-archive", transform(code, id) {
     if (id.endsWith("/src/lib/persist-db.ts")) return `
       export async function saveArchive(name, next) { globalThis.roundRestoreArchive.set(name, structuredClone(next)); }
-      export async function loadArchive(name) { const a = globalThis.roundRestoreArchive.get(name) || {}; return { ...a, files: a.files ?? null, chat: a.chat ?? null, recovery: a.recovery ?? null }; }
+      export async function loadArchive(name) { const a = globalThis.roundRestoreArchive.get(name) || {}; return { ...a, files: a.files ?? null, chat: a.chat ?? null, checkpoints: a.checkpoints ?? null, recovery: a.recovery ?? null }; }
       export async function removeArchive(name) { globalThis.roundRestoreArchive.delete(name); }
     `;
   } }] });
@@ -47,7 +47,7 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
   globalThis.fetch = async (url, opts) => {
     if (String(url).endsWith("/v1/workspace")) return Response.json({ ok: true });
     if (String(url).endsWith("/v1/restore")) {
-      assert.ok(archive.get("anvil-ide")?.state.checkpoints.some((c) => c.restoreIntent), "exact recovery intent is durable before file mutations");
+      assert.ok(archive.get("anvil-ide")?.checkpoints.some((c) => c.restoreIntent), "exact recovery intent is durable in the separate history before file mutations");
       if (interrupt) {
         interrupt = false;
         const request = JSON.parse(opts.body);
@@ -94,7 +94,7 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
   assert.equal(await useIde.getState().restoreCheckpoint("restart"), false);
   assert.equal(existsSync(path.join(cwd, "restart-a.txt")), false);
   assert.equal(existsSync(path.join(cwd, "restart-b.txt")), true);
-  assert.ok(archive.get("anvil-ide").state.checkpoints[0].restoreIntent);
+  assert.ok(archive.get("anvil-ide").checkpoints[0].restoreIntent);
   await persist.flushPersistence();
   server.moduleGraph.invalidateAll();
   const { useIde: fresh } = await server.ssrLoadModule("/src/store/ide.ts");
@@ -103,7 +103,7 @@ test("round restoration is complete, conflict checked, durable, and isolated", a
   assert.equal(await fresh.getState().restoreCheckpoint("restart"), true, fresh.getState().notice);
   assert.deepEqual(fresh.getState().files, {});
   assert.equal(existsSync(path.join(cwd, "restart-b.txt")), false);
-  assert.equal(archive.get("anvil-ide").state.checkpoints[0].restoreIntent, undefined);
+  assert.equal(archive.get("anvil-ide").checkpoints[0].restoreIntent, undefined);
 
   fresh.setState({ workspaceCwd: "", files: { "own.txt": "round before" }, dirs: [], checkpoints: [], chat: [] });
   const sealed = fresh.getState().pushCheckpoint("seal once per message");

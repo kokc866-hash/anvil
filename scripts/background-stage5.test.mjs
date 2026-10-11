@@ -113,5 +113,5 @@ test('a completed process does not hang when a helper inherits its output pipes'
  const started=Date.now();
  const result=await spawnRun(process.execPath,['-e',script],root,12000,process.env);
  try{assert.equal(result.ok,true,result.stderr);assert.ok(Date.now()-started<5000,'Return after parent exits, before inherited pipe closes');}
- finally{const pid=Number(result.stdout.trim());if(Number.isInteger(pid)&&pid>0)try{process.kill(pid);}catch{}}
+ finally{const pid=Number(result.stdout.trim());if(Number.isInteger(pid)&&pid>0)try{process.kill(pid);}catch{ /* The fixture child may already have exited. */ }}
 });

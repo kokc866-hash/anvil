@@ -21,6 +21,7 @@ export type ProviderId =
   | "together"
   | "fireworks"
   | "mistral"
+  | "qwen"
   | "deepseek"
   | "openrouter"
   | "xai"
@@ -46,6 +47,7 @@ export type ProviderSpec = {
   needsUrl: boolean;
   needsSub?: "codex" | "claude" | "copilot";
   hint: string;
+  setupUrl?: string;
 };
 
 export const PROVIDERS: ProviderSpec[] = [
@@ -200,7 +202,7 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "openai",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4.1-mini",
-    models: ["gpt-6-astra", "gpt-5.5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "o3", "o4-mini"],
+    models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "o3", "o4-mini"],
     needsKey: true,
     needsUrl: false,
     hint: "API-Key von platform.openai.com",
@@ -212,7 +214,9 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "openai",
     baseUrl: "",
     model: "gpt-5.6-terra",
-    models: ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"],
+    // Fallback suggestions; CLI catalogs can lag the current rollout.
+    // Neither this list nor a CLI catalog confirms account entitlement.
+    models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5"],
     needsKey: false,
     needsUrl: false,
     needsSub: "codex",
@@ -225,7 +229,7 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "anthropic",
     baseUrl: "https://api.anthropic.com",
     model: "claude-sonnet-4-5",
-    models: ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+    models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
     needsKey: true,
     needsUrl: false,
     needsSub: "claude",
@@ -292,16 +296,30 @@ export const PROVIDERS: ProviderSpec[] = [
     hint: "console.mistral.ai",
   },
   {
+    id: "qwen",
+    label: "Qwen AI",
+    kind: "cloud",
+    api: "openai",
+    baseUrl: "",
+    model: "",
+    models: [],
+    needsKey: true,
+    needsUrl: true,
+    hint: "Alibaba Model Studio: API-Schlüssel und OpenAI-kompatible API-URL aus deiner Konsole eintragen. Region und Workspace müssen zum Schlüssel passen. Für den Coding Plan dessen eigenen Schlüssel und API-URL verwenden. Modelle werden beim Anbieter abgefragt.",
+    setupUrl: "https://www.alibabacloud.com/help/en/model-studio/first-api-call-to-qwen",
+  },
+  {
     id: "deepseek",
     label: "DeepSeek",
     kind: "cloud",
     api: "openai",
     baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
-    models: ["deepseek-chat", "deepseek-reasoner"],
+    model: "",
+    models: [],
     needsKey: true,
     needsUrl: false,
-    hint: "platform.deepseek.com",
+    hint: "API-Schlüssel von platform.deepseek.com. Die verfügbare Modellliste wird direkt bei DeepSeek geladen. Die Anmeldung der DeepSeek-Webseite ersetzt keinen API-Schlüssel.",
+    setupUrl: "https://api-docs.deepseek.com/",
   },
   {
     id: "openrouter",
@@ -394,7 +412,8 @@ export const PROVIDERS: ProviderSpec[] = [
     api: "openai",
     baseUrl: "",
     model: "gpt-4.1",
-    models: ["gpt-4.1", "claude-sonnet-4-5"],
+    // Copilot uses dotted Claude versions; Anthropic's API uses hyphens.
+    models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "claude-sonnet-5.5", "claude-opus-5.5", "claude-haiku-5.5", "gemini-3.8-flash", "gpt-5.3-codex", "gpt-4.1", "claude-sonnet-4-5"],
     needsKey: false,
     needsUrl: false,
     needsSub: "copilot",
@@ -445,6 +464,7 @@ export const PROVIDER_GROUPS: { id: ProviderKind | "other"; label: string; ids: 
       "together",
       "fireworks",
       "mistral",
+      "qwen",
       "deepseek",
       "openrouter",
       "xai",
@@ -472,6 +492,13 @@ export function connectionMode(provider: string, wanted?: string): "abo" | "key"
 }
 export function connectionSlot(provider: string, mode?: string): string {
   return `${provider}:${connectionMode(provider, mode)}`;
+}
+/** CLI aliases follow its current model family; never send them to an API. */
+export function modelsForConnection(provider: string, mode?: string): string[] {
+  const models = providerOf(provider).models;
+  return provider === "anthropic" && connectionMode(provider, mode) === "abo"
+    ? ["sonnet", "opus", "haiku", "fable", ...models]
+    : models;
 }
 export function connectionDefaults(provider: string, _mode?: string) {
   const spec = providerOf(provider);

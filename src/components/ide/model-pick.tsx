@@ -51,12 +51,13 @@ export function ModelPick({
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const all = useMemo(() => uniq([...prefer, ...live, ...catalog, value]), [prefer, live, catalog, value]);
   const pref = useMemo(() => new Map(prefer.map((id, i) => [id, i])), [prefer]);
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
-    const filtering = s.length > 0 && s !== value.trim().toLowerCase();
+    const filtering = editing && s.length > 0;
     return all
       .map((id) => ({ id, n: filtering ? score(id, q) : score(id, "") }))
       .filter((r) => r.n < 99)
@@ -68,7 +69,7 @@ export function ModelPick({
         }
         return a.n - b.n || a.id.localeCompare(b.id);
       });
-  }, [all, q, value, pref]);
+  }, [all, q, editing, pref]);
   const shown = rows.slice(0, 400);
   const liveSet = useMemo(() => new Set(live), [live]);
   const label = (id: string) => labelOf?.(id) || id;
@@ -84,6 +85,7 @@ export function ModelPick({
         className="mt-1 h-9 w-full rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
         onFocus={() => {
           setQ(value);
+          setEditing(false);
           setOpen(true);
         }}
         onBlur={() => {
@@ -91,6 +93,7 @@ export function ModelPick({
         }}
         onChange={(e) => {
           setQ(e.target.value);
+          setEditing(true);
           onChange(e.target.value);
           setOpen(true);
         }}

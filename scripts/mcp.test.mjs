@@ -168,6 +168,23 @@ test("MCP catalog lifecycle, scoped calls and cancellation", async (t) => {
       },
     );
     await t.test(
+      "canceling a new catalog before its waiter attaches is handled and can be retried",
+      async () => {
+        const c = { ...a, id: "cancel-on-catalog-change" }, controller = new AbortController();
+        useIde.getState().setMcpServers([c]);
+        const unsubscribe = mcp.mcpSubscribe(() => controller.abort());
+        try {
+          await assert.rejects(mcp.mcpProbe(c, [c], controller.signal), { name: "AbortError" });
+        } finally { unsubscribe(); }
+        // Node's test runner fails on any orphaned rejection from the canceled
+        // native request, even though the caller already handled its own abort.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await mcp.mcpProbe(c, [c]);
+        assert.ok(mcp.mcpSnapshot([c]).ready.has(c.id));
+        assert.equal(mcp.mcpSnapshot([c]).tools.length, 18);
+      },
+    );
+    await t.test(
       "agent resource/output tools route correctly and MCP images carry no Graph instructions",
       async () => {
         const { beginAgent } = await vite.ssrLoadModule("/src/lib/abort.ts");

@@ -8,6 +8,9 @@ import { matchGlob } from "@/lib/harness-graph";
 import { useIde } from "@/store/ide";
 import { clearPluginHooks, onPlugin, type PluginEvent } from "./events";
 import { isWorkspacePluginPath, pluginTrustFromHead, prunePluginIds } from "./util";
+import { confirmApp } from "../confirm";
+import { diskWorkspaceHandle } from "../disk";
+import { approvalProject, hasStoredApproval, revokeStoredApproval, storeApproval } from "./approvals";
 
 export type PluginCommand = {
   id: string;
@@ -24,6 +27,8 @@ export type PluginInfo = {
   category?: string;
   version?: string;
   path?: string;
+  /** The helper API's @trust flag is not a JavaScript isolation boundary. */
+  trustApi?: boolean;
 };
 
 export type PluginApi = {
@@ -69,16 +74,66 @@ const listeners = new Set<() => void>();
 const unhooks: Array<() => void> = [];
 let reloading = false;
 let apiGeneration = 0;
+type Consent = { code: string; trust: boolean; epoch: number; project: string | null; handle: FileSystemDirectoryHandle | null };
+const consents = new Map<string, Consent>();
+const restoringConsent = new Map<string, Consent>();
+
+function consentFor(code: string): Consent {
+  const st = useIde.getState();
+  return { code, trust: pluginTrustFromHead(code), epoch: st.workspaceEpoch,
+    project: approvalProject(st.workspaceCwd, st.companionUrl), handle: diskWorkspaceHandle() };
+}
+
+function sameConsent(consent: Consent, code: string): boolean {
+  const now = consentFor(code);
+  return consent.code === code && consent.trust === now.trust && consent.epoch === now.epoch
+    && consent.project === now.project && consent.handle === now.handle;
+}
 
 function bump() {
   version += 1;
   for (const l of listeners) l();
 }
 
-function isEnabled(id: string): boolean {
+export function isPluginEnabled(id: string): boolean {
   const st = useIde.getState();
-  if (id.startsWith("ws:")) return st.pluginKnown.includes(id) && !st.pluginDisabled.includes(id);
+  if (id.startsWith("ws:")) {
+    const consent = consents.get(id), code = st.files[id.slice(3)];
+    return code !== undefined && Boolean(consent && sameConsent(consent, code)) && !st.pluginDisabled.includes(id);
+  }
   return !st.pluginDisabled.includes(id);
+}
+
+/** All renderer JavaScript requires full trust, even when its helper API lacks @trust. */
+export async function requestToggleWorkspacePlugin(id: string): Promise<boolean> {
+  const path = id.slice(3), before = useIde.getState(), code = before.files[path];
+  if (!id.startsWith("ws:") || !isWorkspacePluginPath(path) || code === undefined || before.agentBusy || before.pathOperation) return false;
+  const project = approvalProject(before.workspaceCwd, before.companionUrl);
+  if (isPluginEnabled(id)) {
+    consents.delete(id);
+    restoringConsent.delete(id);
+    revokeStoredApproval(project, path);
+    before.setPluginDisabled([...new Set([...before.pluginDisabled, id])]);
+    reloadPlugins();
+    return true;
+  }
+  const expected = consentFor(code), en = before.locale === "en";
+  const body = en
+    ? `${path}\n\nThis JavaScript runs inside Anvil without a sandbox. It can read and change project files, access saved credentials through the desktop bridge, use the network, run programs and start paid model calls. Only enable code you fully trust.\n\n${expected.trust ? "@trust also enables all anvil helper APIs." : "Without @trust, some anvil helper APIs are restricted; the JavaScript still has full renderer access."}\n\n${project ? "Approval is saved for this project and this exact code and permissions. Changes require new approval." : "Approval lasts for this project session. The browser folder or unsaved project has no stable project path."}`
+    : `${path}\n\nDieses JavaScript läuft in Anvil ohne Sandbox. Es kann Projektdateien lesen und ändern, über die Desktop-Brücke gespeicherte Zugangsdaten lesen, das Netzwerk nutzen, Programme ausführen und kostenpflichtige Modellaufrufe starten. Gib nur Code frei, dem du vollständig vertraust.\n\n${expected.trust ? "@trust aktiviert zusätzlich alle anvil-Helfer-APIs." : "Ohne @trust sind einige anvil-Helfer-APIs eingeschränkt; das JavaScript hat trotzdem vollen Renderer-Zugriff."}\n\n${project ? "Die Freigabe wird für dieses Projekt und genau diesen Code samt Berechtigungen gespeichert. Änderungen brauchen eine neue Freigabe." : "Die Freigabe gilt für diese Projektsitzung. Der Browserordner oder das ungespeicherte Projekt hat keinen eindeutigen dauerhaften Projektpfad."}`;
+  if (!await confirmApp(body, { title: en ? "Trust and enable plugin" : "Plugin vertrauen und aktivieren", ok: en ? "Trust and enable" : "Vertrauen und aktivieren", danger: true })) return false;
+  const unchanged = () => sameConsent(expected, useIde.getState().files[path] ?? "") && !useIde.getState().agentBusy && !useIde.getState().pathOperation;
+  if (!unchanged()) return false;
+  const saved = await storeApproval(project, path, code);
+  if (!unchanged()) { revokeStoredApproval(project, path); return false; }
+  consents.set(id, expected);
+  restoringConsent.delete(id);
+  const st = useIde.getState();
+  st.setPluginKnown([...new Set([...st.pluginKnown, id])]);
+  st.setPluginDisabled(st.pluginDisabled.filter(value => value !== id));
+  reloadPlugins();
+  if (project && !saved) st.setNotice(en ? "Enabled for this session. Approval could not be saved." : "Für diese Sitzung aktiviert. Die Freigabe konnte nicht gespeichert werden.");
+  return true;
 }
 
 function noticeErr(label: string, err: unknown) {
@@ -108,7 +163,7 @@ function makeApi(plugin: string, trust = true): PluginApi {
   const live = () =>
     generation === apiGeneration &&
     epoch === useIde.getState().workspaceEpoch &&
-    !useIde.getState().pluginDisabled.includes(plugin);
+    isPluginEnabled(plugin);
   return {
     command: (cmd) => {
       if (!live()) return;
@@ -349,16 +404,37 @@ function ingestWorkspace(files: Record<string, string>) {
             .join("\n")
             .match(/^\/\/\s*(.+)/)?.[1]
             ?.trim() ||
-          "Workspace-Plugin") + (trust ? "" : " (lesen)"),
+          "Workspace-Plugin"),
       builtin: false,
       category: "workspace",
       path,
+      trustApi: trust,
     });
-    if (!known.includes(id)) {
-      known = [...known, id];
-      if (trust && !disabled.includes(id)) disabled = [...disabled, id];
+    if (!known.includes(id)) known = [...known, id];
+    const consent = consents.get(id);
+    if (consent && !sameConsent(consent, code)) {
+      consents.delete(id);
+      // A project switch revokes live handles, not that other project's saved grant.
+      if (consent.epoch === st0.workspaceEpoch && consent.project === approvalProject(st0.workspaceCwd, st0.companionUrl)) revokeStoredApproval(consent.project, path);
     }
-    if (disabled.includes(id)) continue;
+    if (!consents.has(id)) {
+      if (!disabled.includes(id)) disabled = [...disabled, id];
+      const expected = consentFor(code), pending = restoringConsent.get(id);
+      if (!pending || !sameConsent(pending, code)) {
+        restoringConsent.set(id, expected);
+        void hasStoredApproval(expected.project, path, code).then(approved => {
+          if (restoringConsent.get(id) !== expected) return;
+          restoringConsent.delete(id);
+          if (!approved || !sameConsent(expected, useIde.getState().files[path] ?? "")) return;
+          consents.set(id, expected);
+          const current = useIde.getState();
+          current.setPluginDisabled(current.pluginDisabled.filter(value => value !== id));
+          reloadPlugins();
+        }).catch(() => { if (restoringConsent.get(id) === expected) restoringConsent.delete(id); });
+      }
+      continue;
+    }
+    if (disabled.includes(id) || !isPluginEnabled(id)) continue;
     try {
       const fn = new Function(
         "anvil",
@@ -374,6 +450,8 @@ function ingestWorkspace(files: Record<string, string>) {
   const st = useIde.getState();
   if (nextKnown.join("\0") !== st.pluginKnown.join("\0")) st.setPluginKnown(nextKnown);
   if (nextDisabled.join("\0") !== st.pluginDisabled.join("\0")) st.setPluginDisabled(nextDisabled);
+  for (const id of consents.keys()) if (!live.includes(id)) { consents.delete(id); revokeStoredApproval(approvalProject(st.workspaceCwd, st.companionUrl), id.slice(3)); }
+  for (const id of restoringConsent.keys()) if (!live.includes(id)) restoringConsent.delete(id);
 }
 
 /** Drop hooks, re-activate enabled builtins, then workspace plugins. One entry so file-change cannot leak `anvil.on`. */
@@ -388,7 +466,7 @@ export function reloadPlugins(files?: Record<string, string>) {
     commands = [];
     extra.length = 0;
     for (const b of builtins) {
-      if (!isEnabled(b.id)) continue;
+      if (!isPluginEnabled(b.id)) continue;
       try {
         b.activate(makeApi(b.id, true));
       } catch (err) {
@@ -415,7 +493,7 @@ export function listPlugins(): PluginInfo[] {
 }
 
 export function listCommands(): PluginCommand[] {
-  return commands.filter((c) => isEnabled(c.plugin));
+  return commands.filter((c) => isPluginEnabled(c.plugin));
 }
 
 export function subscribePlugins(fn: () => void) {
@@ -430,7 +508,8 @@ export function pluginSnapshot() {
 }
 
 export const PLUGIN_TEMPLATE = `// @desc Mein Plugin
-// @trust  — ohne diese Zeile nur lesen/Status. Mit @trust: schreiben, Agent, Netz.
+// @trust — volle Helfer-API. Jede JavaScript-Datei braucht vollständiges Vertrauen.
+// Anvil aktiviert dieses Plugin erst nach deiner ausdrücklichen Freigabe.
 function activate(anvil) {
   anvil.command({
     id: "beispiel.zeit",
@@ -465,8 +544,10 @@ problems([{path, line, text}])  — merget je Plugin
 on(event, fn)  save | open | run | change | debug | agent
 
 Workspace: plugins/*.js mit activate(anvil)
-  Ohne @trust in den ersten 8 Zeilen: nur lesen.
-  Mit // @trust: voll. Neue @trust-Plugins starten aus, Schalter an = opt-in.
+  Alle starten aus und brauchen ausdrückliche Freigabe pro Projekt, Inhalt und Rechten.
+  JavaScript läuft im Renderer ohne Sandbox, mit Zugriff auf Desktop-Brücke und Netzwerk.
+  Ohne @trust in den ersten 8 Zeilen sind nur die Helfer-APIs eingeschränkt.
+  Mit // @trust: volle Helfer-API. Änderungen widerrufen die Freigabe.
 VS Code: .vsix / plugins/*/package.json / .vscode/*.code-snippets
   — contributes.snippets, languages, Kommentare, tmLanguage-Keywords.
   Kein vscode-Modul, kein Language-Server.

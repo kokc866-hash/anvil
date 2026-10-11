@@ -32,11 +32,18 @@ function waitEval(id, ms = 4000) {
 }
 
 describe("native python debug", () => {
-  it("pauses and continues when python exists", async () => {
+  it("pauses and continues when python exists", async (t) => {
     if (!pythonBin()) return;
     const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-pydbg-"));
     let id = "";
-    try {
+    t.after(() => {
+      if (id) debugStop(id);
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch (e) {
+        if (!e || !/EBUSY|EPERM|ENOTEMPTY/i.test(String(e.code || e.message))) throw e;
+      }
+    });
       writeFileSync(path.join(dir, "app.py"), "x = 1\ny = x + 1\nprint(y)\n");
       const start = debugStart({ cwd: dir, path: "app.py", pauseOnEntry: true, breakpoints: { "app.py": [2] } });
       assert.equal(start.ok, true);
@@ -54,13 +61,5 @@ describe("native python debug", () => {
       }
       assert.equal(end.done, true);
       debugStop(id);
-    } finally {
-      if (id) debugStop(id);
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch (e) {
-        if (!e || !/EBUSY|EPERM|ENOTEMPTY/i.test(String(e.code || e.message))) throw e;
-      }
-    }
   });
 });

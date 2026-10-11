@@ -28,8 +28,10 @@ import {
   type BoardWire,
   BOARD_PATH,
 } from "@/lib/harness-board";
-import { GRAPH_TOOLS, graphToolOf } from "@/lib/harness-graph";
+import { GRAPH_TOOLS, graphToolOf, projectEdgeCondition } from "@/lib/harness-graph";
+import type { WorkflowNode, WorkflowStatus } from "@/lib/agent-workflow";
 import { GRAPH_PATH, guessProjectHarness, loadProjectGraph, loadProjectHarness } from "@/lib/harness-project";
+import { buildWorkflowRecipe, importWorkflowRecipe, recipeTargets, WORKFLOW_RECIPES, type WorkflowRecipeId } from "@/lib/workflow-recipes";
 import { useIde } from "@/store/ide";
 import { CtxMenu, type CtxItem } from "./ctx-menu";
 
@@ -39,6 +41,7 @@ export function HarnessBoard() {
   const snap = useIde((s) => s.harnessBoardSnap);
   const motion = useIde((s) => s.motion);
   const live = useIde((s) => s.chat.at(-1)?.harness ?? "");
+  const execution = useIde((s) => s.chat.at(-1)?.workflow);
   const busy = useIde((s) => s.agentBusy);
   const setOpen = useIde((s) => s.setHarnessBoardOpen);
   const setGrid = useIde((s) => s.setHarnessBoardGrid);
@@ -55,6 +58,8 @@ export function HarnessBoard() {
   const [board, setBoard] = useState<Board>(() => load(files, settings));
   const [sel, setSel] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [recipeId, setRecipeId] = useState<WorkflowRecipeId>("code-tests");
+  const [recipeTarget, setRecipeTarget] = useState("");
   const [drag, setDrag] = useState<{ id?: string; px: number; py: number; ox: number; oy: number } | null>(null);
   const [link, setLink] = useState<{ from: string; x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; node?: string; wire?: string } | null>(null);
@@ -66,7 +71,7 @@ export function HarnessBoard() {
   boardRef.current = board;
   dirtyRef.current = dirty;
 
-  const livePhase = live.split("·")[0]?.trim().toLowerCase() ?? "";
+  const livePhase = execution?.phase || live.split("·")[0]?.trim().toLowerCase() || "";
 
   const commit = useCallback((next: Board, hist = true) => {
     if (hist) {
@@ -104,15 +109,15 @@ export function HarnessBoard() {
 
   useEffect(() => {
     setBoard((b) => applySettings(b, settings));
-  }, [settings.runLoop, settings.graphLoop, settings.afterWrite, settings.engineLoop]);
+  }, [settings]);
 
+  const boardSource = files[BOARD_PATH];
   useEffect(() => {
     if (dirty) return;
-    const raw = files[BOARD_PATH];
-    if (!raw) return;
-    const parsed = parseBoard(raw);
+    if (!boardSource) return;
+    const parsed = parseBoard(boardSource);
     if (parsed) setBoard(applySettings(parsed, settings));
-  }, [files[BOARD_PATH]]);
+  }, [boardSource, dirty, settings]);
 
   useEffect(() => {
     return () => {
@@ -408,6 +413,9 @@ export function HarnessBoard() {
   const selectedWire = board.wires.find((w) => w.id === sel);
   const pct = Math.round(board.cam.z * 100);
   const routes = useMemo(() => routeAll(board), [board]);
+  const targets = useMemo(() => recipeTargets(recipeId, files), [recipeId, files]);
+  const selectedTarget = targets.some(target => target.id === recipeTarget) ? recipeTarget : recipeId === "engine-check" && targets.length > 1 ? "" : targets[0]?.id || "";
+  const recipe = useMemo(() => buildWorkflowRecipe(recipeId, files, selectedTarget || undefined), [recipeId, files, selectedTarget]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
@@ -498,11 +506,46 @@ export function HarnessBoard() {
                 live={liveHits(n, livePhase)}
                 pulse={busy && liveHits(n, livePhase) && motion !== "off"}
                 linking={Boolean(link)}
+                execution={execution?.nodes.find(node => node.id === n.id)}
               />
             ))}
           </div>
         </div>
         <aside className="w-60 shrink-0 overflow-auto border-l border-border bg-surface p-3">
+          {execution ? <div className="mb-4 border-b border-border pb-3" aria-label="Gesicherter Ablauf">
+            <p className="text-xs font-medium text-fg">Aktueller Auftrag</p>
+            <p className="mt-1 text-[11px] text-subtle">Prüfungen gelten für den bestätigten Dateistand. Änderungen können eine erneute Prüfung erfordern.</p>
+            {execution.nodes.length ? <ul className="mt-2 space-y-2">{execution.nodes.slice(-12).map(node => <li key={node.id} className="text-[11px]">
+              <button type="button" className="text-left text-fg hover:text-accent" onClick={() => { if (board.nodes.some(n => n.id === node.id)) setSel(node.id); }}>{node.label}</button>
+              <span className={cn("ml-1", node.status === "failed" ? "text-danger" : "text-muted")}>{STATUS_TEXT[node.status]}</span>
+              <p className="mt-0.5 break-words text-subtle">{node.path ? `${node.path} · ` : ""}{node.reason}</p>
+            </li>)}</ul> : <p className="mt-2 text-[11px] text-muted">Noch keine Ausführungsprüfung.</p>}
+            {execution.operations.some(op => op.status === "unclear") ? <p className="mt-2 text-[11px] text-danger">Ein Aktionsabschluss ist unbestätigt. Vor dem Wiederholen zuerst das Ergebnis prüfen.</p> : null}
+          </div> : null}
+          <div className="mb-4 border-b border-border pb-3" aria-label="Ablaufvorlagen">
+            <label htmlFor="workflow-recipe" className="text-xs font-medium text-fg">Ablaufvorlage</label>
+            <select id="workflow-recipe" className="mt-2 w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg" value={recipeId} onChange={event => { setRecipeId(event.target.value as WorkflowRecipeId); setRecipeTarget(""); }}>
+              {WORKFLOW_RECIPES.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.label}</option>)}
+            </select>
+            {targets.length ? <>
+              <label htmlFor="workflow-recipe-target" className="mt-2 block text-[11px] text-muted">Projektziel</label>
+              <select id="workflow-recipe-target" className="mt-1 w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg" value={selectedTarget} onChange={event => setRecipeTarget(event.target.value)}>
+                {!selectedTarget ? <option value="">Ziel auswählen</option> : null}
+                {targets.map(target => <option key={target.id} value={target.id}>{target.label}</option>)}
+              </select>
+            </> : null}
+            <p className="mt-2 text-[11px] text-muted">Version {recipe.recipe.version} · {recipe.recipe.description}</p>
+            <p className="mt-1 text-[11px] text-subtle">{recipe.recipe.requires}</p>
+            {recipe.notes.map(note => <p key={note} className="mt-1 text-[11px] text-subtle">{note}</p>)}
+            <Button className="mt-2 h-8 w-full" variant="quiet" disabled={!selectedTarget || !recipe.graph.edges?.some(edge => edge.enabled !== false)} onClick={() => {
+              const next = importWorkflowRecipe(boardRef.current, recipe);
+              commit(next);
+              setSel(recipe.graph.edges?.find(edge => edge.enabled !== false)?.id || null);
+              setNotice(`Vorlage „${recipe.recipe.label}“ (Version ${recipe.recipe.version}) ergänzt. Die bestehenden Freigaben und Einstellungen gelten weiter.`);
+            }}>
+              Vorlage ergänzen
+            </Button>
+          </div>
           <Inspector
             board={board}
             node={selectedNode}
@@ -549,10 +592,12 @@ function liveHits(n: BoardNode, phase: string) {
     fertig: "done",
     stop: "abort",
   };
-  return map[phase] === n.phase;
+  return (map[phase] || phase) === n.phase;
 }
 
-function NodeEl({ n, sel, live, pulse, linking }: { n: BoardNode; sel: boolean; live: boolean; pulse: boolean; linking?: boolean }) {
+const STATUS_TEXT: Record<WorkflowStatus, string> = { ready: "Bereit", running: "Läuft", passed: "Bestätigt", failed: "Fehlgeschlagen", waiting: "Wartet auf Nachweis", disabled: "Nicht verfügbar", stale: "Erneut prüfen" };
+
+function NodeEl({ n, sel, live, pulse, linking, execution }: { n: BoardNode; sel: boolean; live: boolean; pulse: boolean; linking?: boolean; execution?: WorkflowNode }) {
   const tool = n.kind === "edge" ? n.edge?.tool : undefined;
   const ports = [
     { k: "t", x: NODE_W / 2, y: 0 },
@@ -574,7 +619,7 @@ function NodeEl({ n, sel, live, pulse, linking }: { n: BoardNode; sel: boolean; 
       style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H }}
     >
       <p className="truncate text-sm text-fg">{n.label}</p>
-      {tool ? <p className="truncate font-mono text-[10px] text-subtle">{tool}</p> : null}
+      {tool ? <p className="truncate font-mono text-[10px] text-subtle" title={execution?.reason}>{execution ? STATUS_TEXT[execution.status] : tool}</p> : null}
       {ports.map((p) => (
         <button
           key={p.k}
@@ -762,13 +807,20 @@ function Inspector({
       <Phasen />
       <p className="text-xs text-muted">Graph-Kante</p>
       <label className="block text-[11px] text-subtle">
-        Bedingung
+        Beschreibung
         <input
           value={e.when}
           className="mt-0.5 h-8 w-full rounded-md border border-border bg-bg px-2 text-xs text-fg"
           onChange={(ev) => onNode({ ...node, edge: { ...e, when: ev.target.value } })}
         />
       </label>
+      <label className="block text-[11px] text-subtle">
+        Auslöser
+        <select value={projectEdgeCondition(e)} className="mt-0.5 h-8 w-full rounded-md border border-border bg-bg px-2 text-xs text-fg" onChange={ev => onNode({ ...node, edge: { ...e, condition: ev.target.value as typeof e.condition } })}>
+          <option value="changed">Nach Dateiänderung</option><option value="success">Nach erfolgreicher Ausführung</option><option value="failure">Nach fehlgeschlagener Prüfung</option><option value="tests-passed">Nach bestandenen Tests</option><option value="manual">Nur auf Auftrag des Agenten</option>
+        </select>
+      </label>
+      <p className="text-[11px] text-subtle">Die Beschreibung erteilt keine Freigabe. Dienste, Git und Interaktionen benötigen einen ausdrücklichen Werkzeugaufruf.</p>
       <label className="block text-[11px] text-subtle">
         Dateimuster
         <input
@@ -836,7 +888,7 @@ function load(files: Record<string, string>, s: ReturnType<typeof useBoardSettin
   let b = applySettings(parsed ?? defaultBoard(s), s);
   b = tidyWires(b);
   const g = loadProjectGraph(files);
-  if (g?.edges?.length && !parsed) b = rebuildBoardFromGraph(g.edges, s);
+  if (g?.edges?.length && !parsed) b = rebuildBoardFromGraph(g.edges, s, g);
   const h = loadProjectHarness(files);
   if (h) {
     b = applySettings(b, {

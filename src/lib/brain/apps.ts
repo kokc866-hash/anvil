@@ -486,7 +486,7 @@ export async function brainSecretWarn(text: string): Promise<string> {
     const raw = await brainGenerate({
       messages: [
         { role: "system", content: brainSystem("One warning line or NO. Do not repeat values.") },
-        { role: "user", content: `Treffer: ${hits.length}\n${text.slice(0, 400).replace(/[A-Za-z0-9_\-]{12,}/g, "…")}` },
+        { role: "user", content: `Treffer: ${hits.length}\n${text.slice(0, 400).replace(/[A-Za-z0-9_-]{12,}/g, "…")}` },
       ],
       maxTokens: 28,
       temperature: 0,

@@ -1,3 +1,5 @@
+import { hasAsciiControl } from "../../electron/text-controls.mjs";
+
 export type EngineId = "godot" | "unity" | "unreal" | "bevy" | "defold" | "love" | "gms";
 
 export type EngineHit = {
@@ -32,7 +34,7 @@ function workspacePath(path: string): string | null {
 // Commands run from the workspace directory on both Windows and POSIX shells.
 // Double quotes alone do not stop variable/command expansion in these shells.
 function quotePath(path: string): string | null {
-  return /["$`%!\x00-\x1f]/.test(path) ? null : `"${path || "."}"`;
+  return /["$`%!]/.test(path) || hasAsciiControl(path) ? null : `"${path || "."}"`;
 }
 
 function named(path: string, name: string): boolean {

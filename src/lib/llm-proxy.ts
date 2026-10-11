@@ -3,7 +3,7 @@ import { AGENT_TOOLS as TOOL_REGISTRY } from "./agent-tools";
 import { createServerFn } from "@tanstack/react-start";
 import { sameOriginMiddleware } from "@/lib/auth/middleware";
 import { AGENT_TOOLS, asToolCall, stampToolCalls, type LlmChoice, type ToolCall } from "./agent-core";
-import { isContextError, prepChatPayload } from "./compact";
+import { isContextError, prepChatPayload, USER_REQUEST_MARK } from "./compact";
 import { applyLlmOptions, patchResponses400, responsesBody, toResponsesTools, usesResponsesApi, type ThinkingMode } from "./llm-options";
 import { parseResponses, parseResponsesSse } from "./responses-parse";
 import { shrinkTools, stripPayload, prepareTextTools } from "./tool-fallback";
@@ -12,6 +12,7 @@ import { isPrivateHost } from "./net-guard";
 import { providerOf } from "./providers";
 import { anthropicHeaders } from "./llm-headers";
 import { fetchModels, normalizeBaseUrl } from "./connection";
+import { isQwenCloudHost } from "../../electron/qwen-hosts.mjs";
 
 const CLOUD_HOSTS = new Set([
   "api.openai.com",
@@ -42,7 +43,7 @@ function assertUrl(raw: string, providerId: string): URL {
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new Error("Ungültige API-URL.");
   if (isPrivateHost(url.hostname)) throw new Error("Lokale URLs laufen im Browser, nicht über den Server.");
   const allowed =
-    CLOUD_HOSTS.has(url.hostname) ||
+    CLOUD_HOSTS.has(url.hostname) || isQwenCloudHost(url.hostname) ||
     url.hostname.endsWith(".openai.azure.com") ||
     url.hostname.endsWith(".googleapis.com");
   if (!allowed) throw new Error(`Host nicht erlaubt: ${url.hostname}. Lokal im Browser (Ollama), nicht über den Server.`);
@@ -100,13 +101,19 @@ export const proxyLlm = createServerFn({ method: "POST" })
     if (spec.id === "codex" || spec.id === "github") return { ok: false as const, error: "Dieses Abo läuft ausschließlich über die Desktop-CLI." };
     if (spec.needsKey && !key) return { ok: false as const, error: `API-Key für ${spec.label} fehlt.` };
     try {
+      const { requestTransport } = await import("./request-abort.server");
+      const { signal, send } = requestTransport();
+      signal.throwIfAborted();
       if (data.action === "models") {
-        const ids = await listModels(spec.id, data.baseUrl, key);
-        return { ok: true as const, models: ids };
+        const catalog = await listModels(spec.id, data.baseUrl, key, send);
+        signal.throwIfAborted();
+        // Provider metadata is JSON; keep the server-function transport's
+        // serializable contract without pretending arbitrary fields are typed.
+        return { ok: true as const, models: catalog.ids, modelRows: JSON.stringify(catalog.rows) };
       }
       const messages =
         data.action === "complete"
-          ? [{ role: "user", content: (data.prompt ?? "").slice(0, 12000) }]
+          ? [{ role: "user", content: USER_REQUEST_MARK + (data.prompt ?? "") }]
           : (data.messages ?? []);
       const rt = {
         provider: spec.id,
@@ -127,10 +134,11 @@ export const proxyLlm = createServerFn({ method: "POST" })
       }
       const choice =
         spec.api === "anthropic"
-          ? await anthropicChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools)
+          ? await anthropicChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools, send)
           : spec.api === "azure"
-            ? await azureChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools)
-            : await openaiChat(spec.id, data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools);
+            ? await azureChat(data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools, send)
+            : await openaiChat(spec.id, data.baseUrl, data.model, key, messages, useTools, rt, cap, selectedTools, send);
+      signal.throwIfAborted();
       return { ok: true as const, choice };
     } catch (err) {
       return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
@@ -167,6 +175,7 @@ async function postOpenAi(
   cap?: ModelCap,
   kind = "",
   selectedTools = AGENT_TOOLS,
+  sendRequest: typeof fetch = fetch,
 ): Promise<LlmChoice> {
   let tools = useTools ? selectedTools : null;
   if (tools) {
@@ -179,7 +188,7 @@ async function postOpenAi(
   prepChatPayload(payload, wireCtx);
   const hdr = withUa(headers);
   const send = () =>
-    fetch(endpoint, {
+    sendRequest(endpoint, {
       method: "POST",
       redirect: "error",
       headers: hdr,
@@ -236,7 +245,7 @@ async function postOpenAi(
   }
   if (allowResponses && res.status === 400 && tools && /reasoning_effort/i.test(body) && /function tools|tool/i.test(body)) {
     const alt = endpoint.replace(/\/chat\/completions.*$/, "/responses");
-    return postResponses(alt, headers, payload, true, kind, selectedTools, wireCtx);
+    return postResponses(alt, headers, payload, true, kind, selectedTools, wireCtx, sendRequest);
   }
   httpFail(res.status, body, kind);
 }
@@ -249,6 +258,7 @@ async function postResponses(
   kind = "",
   selectedTools = AGENT_TOOLS,
   context = 32768,
+  sendRequest: typeof fetch = fetch,
 ): Promise<LlmChoice> {
   if (useTools) payload.tools = selectedTools;
   prepChatPayload(payload, context);
@@ -258,7 +268,7 @@ async function postResponses(
     body.tool_choice = "auto";
   }
   const send = (b: Record<string, unknown>) =>
-    fetch(endpoint, {
+    sendRequest(endpoint, {
       method: "POST",
       redirect: "error",
       headers: withUa({ ...headers, ...(b.stream ? { Accept: "text/event-stream" } : {}) }),
@@ -303,6 +313,7 @@ async function openaiChat(
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   cap?: ModelCap,
   selectedTools = AGENT_TOOLS,
+  sendRequest: typeof fetch = fetch,
 ): Promise<LlmChoice> {
   const spec = providerOf(providerId);
   const url = assertUrl(normalizeBaseUrl(baseUrl || spec.baseUrl), providerId);
@@ -322,14 +333,14 @@ async function openaiChat(
     const endpoint = `${host.toString().replace(/\/+$/, "")}/chat/completions`;
     if (usesResponsesApi(rt, useTools)) {
       const respUrl = endpoint.replace(/\/chat\/completions$/, "/responses");
-      return postResponses(respUrl, headers, payload, useTools, providerId, selectedTools, rt.context).catch((err: unknown) => {
+      return postResponses(respUrl, headers, payload, useTools, providerId, selectedTools, rt.context, sendRequest).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (!/HTTP 404|not found/i.test(msg)) throw err;
         delete payload.reasoning_effort;
-        return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, providerId, selectedTools);
+        return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, providerId, selectedTools, sendRequest);
       });
     }
-    return postOpenAi(endpoint, headers, payload, useTools, true, rt.context, cap, providerId, selectedTools);
+    return postOpenAi(endpoint, headers, payload, useTools, true, rt.context, cap, providerId, selectedTools, sendRequest);
   };
 
   return talk(url);
@@ -344,6 +355,7 @@ async function azureChat(
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   cap?: ModelCap,
   selectedTools = AGENT_TOOLS,
+  sendRequest: typeof fetch = fetch,
 ): Promise<LlmChoice> {
   const url = assertUrl(baseUrl, "azure");
   const endpoint = `${url.origin}/openai/deployments/${encodeURIComponent(model)}/chat/completions?api-version=2024-10-21`;
@@ -351,9 +363,9 @@ async function azureChat(
   const headers = { "Content-Type": "application/json", "api-key": apiKey };
   if (usesResponsesApi({ ...rt, api: "azure" }, useTools)) {
     const resp = `${url.origin}/openai/v1/responses`;
-    return postResponses(resp, headers, { ...payload, model }, useTools, "azure", selectedTools, rt.context);
+    return postResponses(resp, headers, { ...payload, model }, useTools, "azure", selectedTools, rt.context, sendRequest);
   }
-  return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, "azure", selectedTools);
+  return postOpenAi(endpoint, headers, payload, useTools, false, rt.context, cap, "azure", selectedTools, sendRequest);
 }
 
 async function anthropicChat(
@@ -365,6 +377,7 @@ async function anthropicChat(
   rt: { provider: string; model: string; api?: "openai" | "anthropic" | "azure"; context: number; thinking: ThinkingMode; temperature?: number; maxOut?: number },
   _cap?: ModelCap,
   selectedTools = AGENT_TOOLS,
+  sendRequest: typeof fetch = fetch,
 ): Promise<LlmChoice> {
   const url = assertUrl(baseUrl || "https://api.anthropic.com", "anthropic");
   const fitted = applyLlmOptions({ messages: [...messages], ...(useTools ? { tools: selectedTools } : {}) }, { ...rt, api: "anthropic" });
@@ -396,7 +409,7 @@ async function anthropicChat(
   const headers = anthropicHeaders(apiKey);
   const hdr = withUa(headers);
   const send = (h: Record<string, string>) =>
-    fetch(`${url.origin}/v1/messages`, {
+    sendRequest(`${url.origin}/v1/messages`, {
       method: "POST",
       redirect: "error",
       headers: h,
@@ -430,6 +443,21 @@ async function anthropicChat(
     tool_calls: tool_calls.length ? tool_calls : undefined,
     usage: anthropicUsage(json.usage),
   }, fitted, rt.context);
+}
+
+function anthropicContent(content: unknown): unknown {
+  if (!Array.isArray(content)) return String(content ?? "");
+  return content.map(part => {
+    if (typeof part === "string") return { type: "text", text: part };
+    if (!part || typeof part !== "object") return { type: "text", text: String(part ?? "") };
+    const value = part as Record<string, unknown>;
+    if (value.type !== "image_url") return value;
+    const url = String((value.image_url as { url?: unknown } | undefined)?.url ?? "");
+    const data = url.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([\s\S]+)$/i);
+    if (data) return { type: "image", source: { type: "base64", media_type: data[1].toLowerCase(), data: data[2] } };
+    if (/^https?:\/\//i.test(url)) return { type: "image", source: { type: "url", url } };
+    throw new Error("Ungültiger Bildanhang für Anthropic. PNG, JPEG, WebP oder GIF verwenden.");
+  });
 }
 
 export function toAnthropicMessages(messages: Record<string, unknown>[]): Record<string, unknown>[] {
@@ -466,15 +494,15 @@ export function toAnthropicMessages(messages: Record<string, unknown>[]): Record
       continue;
     }
     if (role === "user" || role === "assistant") {
-      out.push({ role, content: String(m.content ?? "") });
+      out.push({ role, content: anthropicContent(m.content) });
     }
   }
   return out;
 }
 
-async function listModels(providerId: string, baseUrl: string, apiKey: string): Promise<string[]> {
+async function listModels(providerId: string, baseUrl: string, apiKey: string, sendRequest: typeof fetch = fetch) {
   const spec = providerOf(providerId);
   assertUrl(baseUrl || spec.baseUrl, providerId);
-  const result = await fetchModels({ provider: providerId, baseUrl, apiKey }, (url, init) => fetch(url, { ...init, redirect: "error" }));
-  return result.ids;
+  const result = await fetchModels({ provider: providerId, baseUrl, apiKey }, (url, init) => sendRequest(url, { ...init, redirect: "error" }));
+  return result;
 }

@@ -21,7 +21,7 @@ export function LearnSection({ q }: { q: string }) {
         {facts.length} Fakten · {skills.length} Skills · {negs.length} Einschränkungen · {events.length} Protokolleinträge
       </p>
       <Vis q={q} label="Lernen merken an aus">
-        <Row label="Gedächtnis verwenden" hint="Wenn ausgeschaltet, speichert Anvil kein neues Wissen und gibt keine Gedächtnisinhalte an den Agenten weiter.">
+        <Row label="Gedächtnis verwenden" hint="Wenn ausgeschaltet, speichert Anvil keine neuen Erinnerungen und gibt keine persönlichen oder projektbezogenen Gedächtnisinhalte an den Agenten weiter. Skills bleiben unabhängig davon einstellbar.">
           <Toggle on={on} onChange={(v) => useLearn.getState().setOn(v)} />
         </Row>
       </Vis>
@@ -51,9 +51,15 @@ export function LearnSection({ q }: { q: string }) {
           <Toggle on={p.negatives} onChange={(v) => setPref("negatives", v)} />
         </Row>
       </Vis>
+      <Head>Skills · unabhängig vom Gedächtnis</Head>
       <Vis q={q} label="Skills Liste Prompt">
-        <Row label="Verfügbare Skills nennen" hint="Teilt dem Agenten Namen und Einsatzzwecke der Skills mit, damit er passende Anleitungen verwenden kann.">
+        <Row label="Skills verwenden" hint="Stellt dem Agenten Anvil-Skills und freigegebene Projekt-Skills zur Verfügung. Die Bibliothek findest du unter Erweiterungen → Skills.">
           <Toggle on={p.skills} onChange={(v) => setPref("skills", v)} />
+        </Row>
+      </Vis>
+      <Vis q={q} label="Skills automatisch auswählen">
+        <Row label="Passende Skills automatisch auswählen" hint="Wählt höchstens zwei Anleitungen anhand des Auftrags. Angeheftete Skills und ausdrückliche Aufrufe mit $skill-name funktionieren auch ohne Automatik.">
+          <Toggle on={p.skillAuto} onChange={(v) => setPref("skillAuto", v)} />
         </Row>
       </Vis>
       <Vis q={q} label="Skill Body Anweisung Tokens">
@@ -109,8 +115,8 @@ export function LearnSection({ q }: { q: string }) {
           <Button className="h-8" onClick={() => useLearn.getState().clearLog()}>
             Protokoll leeren
           </Button>
-          <Button className="h-8" onClick={() => useLearn.getState().clear()}>
-            Gespeichertes Wissen löschen
+          <Button className="h-8" onClick={() => useLearn.getState().clearMemories()}>
+            Gespeicherte Erinnerungen löschen
           </Button>
           <Button className="h-8" onClick={() => useLearn.getState().resetPrefs()}>
             Einstellungen zurücksetzen

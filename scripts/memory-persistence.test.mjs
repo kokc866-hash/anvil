@@ -16,7 +16,7 @@ test("memory persistence recovers complete state beyond localStorage", async t =
   const server = await createServer({ configFile: false, root: process.cwd(), resolve: { alias: { "@": path.resolve("src") } }, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", plugins: [{ name: "archive-adapter", transform(code, id) {
     if (id.endsWith("/src/lib/persist-db.ts")) return `
       export async function saveArchive(name, next) { if (globalThis.failMemoryArchiveFixture()) throw new Error('archive unavailable'); globalThis.memoryArchiveFixture.set(name, structuredClone(next)); }
-      export async function loadArchive(name) { const a = globalThis.memoryArchiveFixture.get(name) || {}; return { ...a, files: a.files ?? null, chat: a.chat ?? null, recovery: a.recovery ?? null }; }
+      export async function loadArchive(name) { const a = globalThis.memoryArchiveFixture.get(name) || {}; return { ...a, files: a.files ?? null, chat: a.chat ?? null, checkpoints: a.checkpoints ?? null, recovery: a.recovery ?? null }; }
       export async function removeArchive(name) { globalThis.memoryArchiveFixture.delete(name); }
     `;
     if (id.endsWith("/src/lib/intern.ts")) return "export function note() {}";

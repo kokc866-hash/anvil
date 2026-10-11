@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { runLint, lintBins } from "./lint.mjs";
 import { listLsp, pullLsp, checkLsp } from "./lsp.mjs";
+import { languageUpdates } from "./language-updates.mjs";
 import { installBin, installerKind, refreshPath } from "./install.mjs";
 import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, toolchainProgress, toolHome, toolEnv } from "./toolchain.mjs";
 import { compileLang } from "./compile-run.mjs";
@@ -313,7 +314,7 @@ if(send) send.onclick=function(){
   if(window.opener) window.opener.postMessage({anvilPair:1,token:${JSON.stringify(TOKEN)}}, ${JSON.stringify(target)});
   this.textContent="Gesendet — Tab zu";
 };
-<\/script></body>`;
+</script></body>`;
 }
 
 function lanTarget(raw, customBase = "") {
@@ -372,6 +373,22 @@ const server = http.createServer(async (req, res) => {
   }
   if (!checkToken(req)) {
     json(req, res, 401, { ok: false, error: "Token fehlt (Header x-anvil-token)." });
+    return;
+  }
+  if (["GET", "POST"].includes(req.method) && url.pathname === "/v1/language-updates") {
+    try {
+      let result;
+      if (req.method === "GET") result = languageUpdates.status();
+      else {
+        const body = await readBody(req);
+        if (body.action === "configure") result = languageUpdates.configure(body.automatic);
+        else if (body.action === "check") {
+          if (body.manual != null && typeof body.manual !== "boolean") throw new Error("manual must be a boolean.");
+          result = await languageUpdates.check({ manual: body.manual === true });
+        } else throw new Error("Unbekannte Updateaktion.");
+      }
+      json(req, res, 200, { ok: true, ...result });
+    } catch (error) { json(req, res, 400, { ok: false, error: error.message }); }
     return;
   }
   if (["GET", "POST"].includes(req.method) && url.pathname === "/v1/engines") {

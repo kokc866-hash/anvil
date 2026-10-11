@@ -1,3 +1,5 @@
+import { hasAsciiControl } from "../../electron/text-controls.mjs";
+
 export const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
@@ -79,6 +81,14 @@ export function keepDotName(name: string): boolean {
 
 export function keepBareFile(name: string): boolean {
   return BARE_KEEP.test(name);
+}
+
+/** Only the importer's reserved package storage; never widen ordinary workspace scans. */
+export function isImportedPluginPath(path: string): boolean {
+  const norm = path.replace(/\\/g, "/");
+  if (norm.split("/").some(part => !part || part === "." || part === "..") || norm.includes(":") || hasAsciiControl(norm)) return false;
+  return /^\.anvil\/skills\/package-[a-z0-9-]+(?:\/|$)/.test(norm)
+    || /^\.anvil\/plugin-imports\/[a-z0-9-]+\.json$/.test(norm);
 }
 
 export function skipPath(path: string): boolean {

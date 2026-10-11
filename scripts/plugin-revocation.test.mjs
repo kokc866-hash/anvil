@@ -78,6 +78,11 @@ test("removal revokes retained plugin APIs and delayed command/model/network con
   const { useIntern } = await server.ssrLoadModule("/src/lib/intern.ts");
   useIntern.getState().setPrefs({ on: false, autoHeal: false });
   const host = await server.ssrLoadModule("/src/lib/plugins/host.ts");
+  const { subscribeConfirm } = await server.ssrLoadModule("/src/lib/confirm.ts");
+  const approveFixture = async (id) => {
+    const stop = subscribeConfirm(slot => { if (slot) queueMicrotask(() => slot.resolve(true)); });
+    try { assert.equal(await host.requestToggleWorkspacePlugin(id), true); } finally { stop(); }
+  };
   const { removeWorkspacePlugin } = await server.ssrLoadModule("/src/lib/plugins/remove.ts");
   const { emitPlugin } = await server.ssrLoadModule("/src/lib/plugins/events.ts");
   const { flushDiskSync } = await server.ssrLoadModule("/src/lib/disk-sync.ts");
@@ -122,6 +127,7 @@ test("removal revokes retained plugin APIs and delayed command/model/network con
   });
   window.addEventListener("anvil-run", () => globalThis.__pluginCalls.run++);
   host.reloadPlugins();
+  await approveFixture(id);
   const stale = globalThis.__revokedApi,
     oldCommand = host.listCommands().find((command) => command.plugin === id);
   stale.config.set("live", true);
@@ -176,6 +182,7 @@ test("removal revokes retained plugin APIs and delayed command/model/network con
     pluginDisabled: [],
   });
   host.reloadPlugins();
+  await approveFixture(id);
   const fresh = globalThis.__revokedApi;
   stale.status("bad");
   fresh.status("fresh");

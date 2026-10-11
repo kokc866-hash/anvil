@@ -41,9 +41,9 @@ test("native fitting includes window chrome, stays on its monitor and rejects ot
     getBounds() { return bounds; } getContentBounds() { return content; }
     setBounds(next) { fitted = next; }
   }
-  let child;
+  const children = [];
   const Original = BrowserWindow;
-  const Factory = class extends Original { constructor(...args) { super(...args); child = this; } };
+  const Factory = class extends Original { constructor(...args) { super(...args); children.push(this); } };
   const moduleSource = readFileSync("electron/child.mjs", "utf8");
   const functionStart = moduleSource.indexOf("export function bindChildWindows(");
   assert.ok(functionStart >= 0, "The fixture must execute the real child-window binder");
@@ -54,6 +54,7 @@ test("native fitting includes window chrome, stays on its monitor and rejects ot
     { getDisplayMatching: () => ({ workArea: { x: 1920, y: 0, width: 1920, height: 1040 } }) },
     (name, fn) => handlers.set(name, fn), () => ({}), () => url => url.startsWith("http://127.0.0.1:8080/"), new Map());
   const manager = bind({ port: 8080 }); manager.createChild("/run");
+  const child = children.at(-1);
   const fit = handlers.get("child-fit-run");
   const event = { sender: child.webContents, senderFrame: child.webContents.mainFrame };
   assert.equal(fit(event, { width: 1200, height: 700 }), true);

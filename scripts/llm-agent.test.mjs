@@ -18,6 +18,11 @@ test("cloud llm hosts for electron pipe", () => {
   assert.equal(isLlmTargetHost("example.com"), false);
 });
 
+test("Qwen allows documented Model Studio and Coding Plan hosts without allowing unrelated Alibaba or lookalike hosts", () => {
+  for (const host of ["dashscope-intl.aliyuncs.com", "dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com", "coding.dashscope.aliyuncs.com", "qa-workspace.eu-central-1.maas.aliyuncs.com", "workspace.ap-southeast-1.maas.aliyuncs.com"]) assert.equal(isCloudLlmHost(host), true, host);
+  for (const host of ["anything.aliyuncs.com", "evil.dashscope-intl.aliyuncs.com", "dashscope-intl.aliyuncs.com.evil.example", "workspace.invalid-region.maas.aliyuncs.com", "workspace.eu-central-1.maas.aliyuncs.com.evil.example"]) assert.equal(isCloudLlmHost(host), false, host);
+});
+
 test("noTimeout", () => {
   const s = createServer();
   noTimeout(s);

@@ -96,7 +96,7 @@ export const AGENT_TOOLS = [
     text: { type: "string" },
   }, ["text"]),
   tool("memory_forget", "Delete a learned fact. id from Gelerntes [id], or the fact text.", { id: { type: "string" } }, ["id"]),
-  tool("skill_list", "List skills the agent wrote (reusable workflows).", {}),
+  tool("skill_list", "List available Anvil, project and imported skills. Skills are instructions, not additional tool permissions.", {}),
   tool("skill_write", "Create or update a skill. Use after a reusable multi-step workflow succeeded. Default scope: current project.", {
     scope: { type: "string", enum: ["user", "project"] },
     name: { type: "string" },
@@ -104,7 +104,7 @@ export const AGENT_TOOLS = [
     body: { type: "string", description: "Concrete steps" },
     kind: { type: "string", description: "guide or plugin" },
   }, ["name", "when", "body"]),
-  tool("skill_read", "Read a skill body.", { name: { type: "string" } }, ["name"]),
+  tool("skill_read", "Read a skill body. For a bundled reference, pass its exact relative resource path from resources. Read only references needed for the task.", { name: { type: "string" }, resource: { type: "string" } }, ["name"]),
   tool("skill_run", "Activate a skill and follow its body now with tools.", { name: { type: "string" } }, ["name"]),
   tool("skill_debug", "Validate a skill (or all). Returns issues to fix with skill_write/skill_patch.", {
     name: { type: "string" },
@@ -118,6 +118,12 @@ export const AGENT_TOOLS = [
     kind: { type: "string" },
   }, ["kind"]),
   tool("set_plan", "Create checklist with steps/kinds; update status with updates and evidence IDs. Reconcile before final answer. Use 3-7 steps in the user's language, kinds read/edit/run/check/service/report. Keep checking and launching separate. Updates preserve existing steps, including locked user checklists. Completion needs matching successful tool evidence from the current checklist context.", {
+    criteria: { type: "array", minItems: 1, maxItems: 64, description: "Define binding acceptance criteria BEFORE changes or execution. Use JSON numbers for counts and booleans for existence, not quoted strings. A completed checklist does not pass these checks. Executed checkers must emit anvil_acceptance.observations containing criterion, actual, artifact (real report file in the owning project) and sha256 (computed SHA-256 of its saved bytes). No invented digests or placeholder labels. Existing criteria cannot be removed or relaxed.", items: { type: "object", properties: {
+      id: { type: "string" }, label: { type: "string" }, required: { type: "boolean", default: true },
+      operator: { type: "string", enum: ["eq", "lte", "gte"] }, expected: { type: ["number", "boolean", "string"], description: "Exact JSON type is binding: 1 is a number, true is boolean; quoted values are text." },
+      tolerance: { type: "number", minimum: 0, description: "Absolute tolerance, numeric eq only." }, unit: { type: "string" },
+    }, required: ["id", "label", "operator", "expected"] } },
+    criteria_change_reason: { type: "string", description: "Required for an amendment proposal. The proposal is recorded visibly; original limits remain binding for this task." },
     steps: { type: "array", items: { type: "string" } },
     kinds: { type: "array", items: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"] } },
     updates: { type: "array", maxItems: 10, items: { type: "object", properties: {
@@ -171,11 +177,16 @@ export const AGENT_TOOLS = [
     testLoop: { type: "boolean" },
     engineLoop: { type: "boolean" },
   }, ["name"]),
-  tool("graph_write", "Rebuild .anvil/graph.json from the workspace (HTML/Python/tests/engine). Pass edges only to replace the whole graph, never append. fromSources:true ignores old edges.", {
+  tool("graph_write", "Rebuild .anvil/graph.json from workspace sources, or replace the whole graph with edges (an empty array clears it). fromSources:true ignores old edges. when is a description only; phase, condition and dependsOn are typed metadata. Never grants tools or enables automatic execution. Preserve recipe id/version when using a versioned recipe.", {
     name: { type: "string" },
+    version: { type: "integer", enum: [1] },
+    recipes: {
+      type: "array", maxItems: 64,
+      items: { type: "object", properties: { id: { type: "string" }, version: { type: "integer", minimum: 1 } }, required: ["id", "version"], additionalProperties: false },
+    },
     fromSources: { type: "boolean" },
     edges: {
-      type: "array",
+      type: "array", maxItems: 256,
       items: {
         type: "object",
         properties: {
@@ -183,7 +194,14 @@ export const AGENT_TOOLS = [
           edge: { type: "string" },
           tool: { type: "string" },
           glob: { type: "string" },
+          id: { type: "string", description: "Unique stable node id." },
+          phase: { type: "string", enum: ["plan", "act", "observe", "patch", "see", "engine", "done", "abort"] },
+          condition: { type: "string", enum: ["changed", "success", "failure", "tests-passed", "manual"] },
+          args: { type: "object", additionalProperties: true },
+          dependsOn: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Existing node ids whose current results must be confirmed; cycles are rejected." },
+          enabled: { type: "boolean" },
         },
+        required: ["when", "edge"],
       },
     },
   }),

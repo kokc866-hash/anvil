@@ -32,7 +32,7 @@ export function HelperPrompts({ where }: { where: "chat" | "output" }) {
   const shown = prompts.slice(0, 2);
   if (!on || !job || !shown.length) return null;
 
-  function usePrompt(text: string) {
+  function applyPrompt(text: string) {
     const st = useIde.getState();
     st.setPanels({ ...st.panels, agent: true });
     if (where === "chat") st.setAgentDraft(text);
@@ -93,7 +93,7 @@ export function HelperPrompts({ where }: { where: "chat" | "output" }) {
                     type="button"
                     className="mt-2 rounded-md border border-border px-2 py-1 text-muted hover:bg-hover hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg"
                     onClick={() => {
-                      usePrompt(p);
+                      applyPrompt(p);
                       popup.current?.hidePopover();
                     }}
                   >
@@ -116,7 +116,7 @@ export function HelperPrompts({ where }: { where: "chat" | "output" }) {
           type="button"
           title={p}
           className="shrink-0 text-[11px] text-subtle hover:text-fg hover:underline"
-          onClick={() => usePrompt(p)}
+          onClick={() => applyPrompt(p)}
         >
           {labelOf(p)}
         </button>

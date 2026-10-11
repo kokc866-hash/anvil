@@ -25,6 +25,41 @@ describe("git cwd", () => {
 });
 
 describe("tree", () => {
+  it("reopens imported package manifests and complete binary resources only within reserved storage", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-package-tree-"));
+    try {
+      const root = ".anvil/skills/package-test/";
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255]);
+      const large = Buffer.alloc(4_000_001, 255);
+      const resources = {
+        [root + ".codex-plugin/plugin.json"]: '{"name":"test"}',
+        [root + ".cursor-plugin/plugin.json"]: '{"name":"test"}',
+        [root + ".mcp.json"]: '{"mcpServers":{}}',
+        [root + "dist/worker.js"]: "export {};",
+        [root + "node_modules/tool/package.json"]: "{}",
+        [root + "assets/picture.png"]: png,
+        [root + "assets/audio.dat"]: large,
+        [root + ".env"]: "TOKEN=test",
+        [root + "key.pem"]: "fake-private-key",
+        ".anvil/plugin-imports/test.json": '{"schema":1}',
+        "src/.codex-plugin/plugin.json": "{}",
+        "src/picture.png": png,
+        "src/node_modules/tool/index.js": "no",
+      };
+      for (const [file, content] of Object.entries(resources)) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), content);
+      }
+      const { files } = listTree(dir);
+      for (const file of [".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", ".mcp.json", "dist/worker.js", "node_modules/tool/package.json"])
+        assert.equal(files[root + file], resources[root + file]);
+      assert.equal(files[root + "assets/picture.png"], `data:application/octet-stream;base64,${png.toString("base64")}`);
+      assert.equal(files[root + "assets/audio.dat"], `data:application/octet-stream;base64,${large.toString("base64")}`);
+      assert.equal(files[".anvil/plugin-imports/test.json"], '{"schema":1}');
+      for (const file of [root + ".env", root + "key.pem", "src/.codex-plugin/plugin.json", "src/picture.png", "src/node_modules/tool/index.js"])
+        assert.equal(file in files, false, file);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it("skips node_modules and keeps source", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-tree-"));
     try {

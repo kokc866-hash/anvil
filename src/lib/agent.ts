@@ -13,14 +13,16 @@ import {
 import { shrinkTools, stripPayload } from "./tool-fallback";
 import { applyLlmOptions } from "./llm-options";
 import { readWebPage } from "./web-fetch";
+import { captureAgentRun } from "./agent-run";
 import { foldChatMessages } from "./chat-roles";
-import { isContextError, prepChatPayload } from "./compact";
+import { isContextError, prepChatPayload, USER_REQUEST_MARK } from "./compact";
 
 export type { AgentFile, AgentMessage, AgentResult };
 
 async function grokChat(
   apiKey: string,
   body: Record<string, unknown>,
+  sendRequest: typeof fetch = fetch,
 ): Promise<LlmChoice> {
   let payload = applyLlmOptions(
     { ...body },
@@ -39,7 +41,7 @@ async function grokChat(
   let wireCtx = 131072;
   prepChatPayload(payload, wireCtx);
   const send = (p: Record<string, unknown>) =>
-    fetch("https://api.x.ai/v1/chat/completions", {
+    sendRequest("https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -97,6 +99,9 @@ export const grokRound = createServerFn({ method: "POST" })
     const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) return { ok: false, error: "AI is not available" };
     try {
+      const { requestTransport } = await import("./request-abort.server");
+      const { signal, send } = requestTransport();
+      signal.throwIfAborted();
       const choice = await grokChat(apiKey, {
         model: "grok-4.5",
         temperature: 0.3,
@@ -104,7 +109,8 @@ export const grokRound = createServerFn({ method: "POST" })
         tools: data.useTools ? AGENT_TOOLS : undefined,
         tool_choice: data.useTools ? "auto" : undefined,
         messages: data.messages,
-      });
+      }, send);
+      signal.throwIfAborted();
       return { ok: true, choice };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -125,6 +131,9 @@ export const chatWithAgent = createServerFn({ method: "POST" })
       };
     }
     try {
+      const { requestTransport } = await import("./request-abort.server");
+      const { signal, send } = requestTransport();
+      signal.throwIfAborted();
       return await runAgentLoop(
         data,
         async (messages, useTools, onDelta) => {
@@ -135,13 +144,14 @@ export const chatWithAgent = createServerFn({ method: "POST" })
             tools: useTools ? AGENT_TOOLS : undefined,
             tool_choice: useTools === "required" ? "required" : useTools ? "auto" : undefined,
             messages,
-          });
+          }, send);
           if (choice.content && onDelta && !choice.tool_calls?.length) onDelta(choice.content);
           return choice;
         },
         {
+          run: captureAgentRun(() => true, signal),
           fetchUrl: async (url) => {
-            const r = await readWebPage(url);
+            const r = await readWebPage(url, signal);
             if (!r.ok) throw new Error(r.text);
             return r.text;
           },
@@ -163,12 +173,16 @@ export const completePrompt = createServerFn({ method: "POST" })
     const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) return { ok: false, text: "", error: "AI is not available" };
     try {
+      const { requestTransport } = await import("./request-abort.server");
+      const { signal, send } = requestTransport();
+      signal.throwIfAborted();
       const choice = await grokChat(apiKey, {
         model: "grok-4.5",
         temperature: 0.2,
         max_tokens: 1200,
-        messages: [{ role: "user", content: data.prompt.slice(0, 12000) }],
-      });
+        messages: [{ role: "user", content: USER_REQUEST_MARK + data.prompt }],
+      }, send);
+      signal.throwIfAborted();
       return { ok: true, text: choice.content?.trim() || "", usage: choice.usage, requestTokens: choice.requestTokens };
     } catch (err) {
       return {

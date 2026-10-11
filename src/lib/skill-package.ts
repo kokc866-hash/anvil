@@ -1,12 +1,13 @@
 import { parseSkillMd } from "./learn-parse.ts";
 import { parseInteractionScenarios } from "./interaction-checks.ts";
+import { hasAsciiControl } from "../../electron/text-controls.mjs";
 
 export const SKILL_PACKAGE_MAX_BYTES = 8_000_000;
 export const SKILL_PACKAGE_MAX_FILES = 100;
 
 function safePath(path: string): string {
   const normalized = path.replaceAll("\\", "/");
-  if (!normalized || normalized.startsWith("/") || normalized.split("/").some(part => !part || part === "." || part === ".." || /[\x00-\x1f<>:"|?*]/.test(part))) throw new Error(`Ungültiger Paketpfad: ${path}`);
+  if (!normalized || normalized.startsWith("/") || normalized.split("/").some(part => !part || part === "." || part === ".." || /[<>:"|?*]/.test(part) || hasAsciiControl(part))) throw new Error(`Ungültiger Paketpfad: ${path}`);
   return normalized;
 }
 

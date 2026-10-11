@@ -42,7 +42,7 @@ try {
     server = spawn(process.execPath, [path.join(root, ".output/server/index.mjs")], { cwd: root, windowsHide: true, env: { ...env, PORT: String(port), NITRO_PORT: String(port), HOST: "127.0.0.1", NITRO_HOST: "127.0.0.1" }, stdio: "ignore" });
     let ready = false;
     for (let i = 0; i < 120; i++) {
-      try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) { ready = true; break; } } catch {}
+      try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) { ready = true; break; } } catch { /* Retry while the production server is starting. */ }
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     assert.ok(ready, "Built UI server starts");

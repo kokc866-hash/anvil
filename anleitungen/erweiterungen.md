@@ -1,8 +1,14 @@
 # Erweiterungen in Anvil
 
-Stand: 13. September 2026. Die beschriebenen Erweiterungen gehören zum veröffentlichten Release 1.3.26.
+Lokaler Entwicklungsstand: 4. Oktober 2026, Quellcode 1.3.35. Historische Abnahmen am Ende beziehen sich auf ihren damaligen Stand.
 
 Die erste Ausbaustufe aus der [Erweiterungsanalyse](erweiterungsanalyse.md) ist umgesetzt. Die vorhandenen Bereiche bleiben erhalten. Die neuen Funktionen sind dort ergänzt, wo man sie verwendet.
+
+## Ausführbare Projekt-Plugins freigeben
+
+JavaScript unter `plugins/*.js` startet grundsätzlich ausgeschaltet. Vor der Ausführung zeigt Anvil die vollen Rechte des Renderer-Codes an. Eine eingeschränkte Helfer-API ist keine Sandbox. Die Freigabe ist an Projekt, Dateiinhalte und Helferrechte gebunden; eine Änderung oder später ergänztes `@trust` benötigt eine neue Freigabe. Projektdateien können diese Zustimmung nicht selbst erteilen. Native Desktop- und Companion-Projekte speichern sie im Anvil-Profil; Browserordner und ungespeicherte Projekte nur für die Sitzung.
+
+ZIP- und VSIX-Importe werden lokal und mit Größen-, Pfad-, Projektwechsel- und Kollisionsprüfungen verarbeitet. Vorhandene Dateien werden nicht still überschrieben. Erst nach bestätigter Speicherung gilt ein Paket als installiert. Der lokale Archivcodec braucht keine CDN-Verbindung.
 
 ## Eigene Plugins entfernen
 
@@ -13,6 +19,8 @@ Nach der Bestätigung entfernt Anvil die zugehörige Datei, die Registrierung, B
 Noch laufende alte Plugin-Befehle verlieren den Zugriff auf Anvils Plugin-API. Bereits ausgeführte externe Aktionen werden dadurch nicht rückgängig gemacht. Das ist keine Betriebssystem-Isolation beliebigen JavaScript-Codes.
 
 ## Skills und das Web-Aufgabenpaket
+
+Unter **Erweiterungen → Skills** findest du Anvils eigene Bibliothek mit 16 vollständigen Arbeitsanleitungen. Du kannst die automatische Auswahl ausprobieren, einzelne Skills ausschalten, Anleitungen pro Projekt anheften und eigene bearbeitbare Kopien erstellen. Skills funktionieren unabhängig vom persönlichen Gedächtnis. Die Anzeige **Skills** am Chat erklärt, welche Anleitungen für den Auftrag geladen wurden. Einrichtung, Verwendung und Grenzen: [Skill-Bibliothek](skills.md).
 
 Unter **Erweiterungen → Aufgabenpakete**:
 

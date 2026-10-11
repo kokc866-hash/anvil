@@ -6,7 +6,7 @@ import {mergeKnowledgeEvent} from '../../electron/agent-knowledge-state.mjs';
 export type BackgroundKnowledgeEvent={id:string;jobId:string;project:string;workspace:string;collection:'facts'|'skills';recordId:string;beforeVersion:string|null;before:LearnFact|LearnSkill|null;after:LearnFact|LearnSkill|null;action:string;at:number};
 /** Consume native acknowledged mutations once, without overwriting a user's newer edits. */
 export function applyBackgroundKnowledge(events:BackgroundKnowledgeEvent[]=[]){
- let current=useLearn.getState();const ids=new Set(current.backgroundKnowledgeEvents||[]),conflicts:string[]=[];
+ const current=useLearn.getState();const ids=new Set(current.backgroundKnowledgeEvents||[]),conflicts:string[]=[];
  let next={facts:current.facts,skills:current.skills,forgotten:current.forgotten,forgottenFacts:current.forgottenFacts};
  for(const event of events){
    if(ids.has(event.id))continue;

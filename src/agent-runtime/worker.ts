@@ -14,12 +14,12 @@ import type { CompactMode } from '../lib/compact';
 import type { SessionJournal } from '../lib/session';
 import { toolCode, toolDetail } from '../lib/llm-options';
 import { ToolLearningSession, sanitizeToolLearning, type ToolLearning } from '../lib/tool-learning';
-import { automaticRunVerification, verifiedReply } from '../lib/agent-evidence';
-import { isExecutablePath, selectRunTarget } from '../lib/run-target';
 import { formatBackgroundFile, type BackgroundFormat } from './format';
 import { readBackgroundKnowledge, type BackgroundKnowledge } from './knowledge';
+import { toolResultFailed } from '../lib/agent-evidence';
+import { captureAgentFailure } from '../../electron/agent-failure.mjs';
 
-const port = (process as unknown as { parentPort?: { on: Function; postMessage: (v: unknown) => void } }).parentPort;
+const port = (process as unknown as { parentPort?: { on: (type: string, callback: (event: { data: unknown }) => void) => void; postMessage: (v: unknown) => void } }).parentPort;
 const send = (value: unknown) => port ? port.postMessage(value) : process.send?.(value);
 const receive = (fn: (value: any) => void) => port ? port.on("message", (event: { data: unknown }) => fn(event.data)) : process.on("message", fn);
 const allowed = new Set(["list_files", "read_file", "grep", "write_file", "append_file", "edit_file", "set_plan", "select_tools", "ask_user", "format_file"]);
@@ -39,13 +39,14 @@ receive(async (message) => {
   const request = message.request as { services?: {id:string;name:string}[]; surface?: {id:string;mode:'bridge'|'exclusive'}; execution?: boolean; writeThrough?: boolean; files: Record<string, string>; messages: AgentMessage[]; model: RuntimeModel; maxRounds: number; autoContinue: boolean; locale: "de" | "en";
     compact?:CompactMode; journal?:SessionJournal; memory?:string; prefer?:string[]; plan?:PlanStep[]; planLocked?:boolean; toolLearning?:ToolLearning;
     format?:BackgroundFormat;knowledge?:BackgroundKnowledge;
+    workflow?:import('../lib/agent-workflow').WorkflowSnapshot;workflowId?:string;
     automation?:{runLoop?:boolean;graphLoop?:boolean;testLoop?:boolean;engineLoop?:boolean;loopTries?:number;afterWrite?:'run'|'engine'|'preview'|'none';graphSees?:number;autoRunAgent?:boolean};
   };
   if (request.execution) for (const name of ['run_file', 'see_run', 'play', 'engine_detect', 'engine_status', 'engine_run','delete_file','rename','mkdir','shell','git_status','git_commit','fetch_url','debug_start','debug_continue','debug_step','debug_stop','debug_breakpoint','debug_eval','debug_state','debug_watch']) allowed.add(name);
   if(request.services?.length)for(const name of ['mcp_list','mcp_call','mcp_read_resource','mcp_read_output'])allowed.add(name);
-  if(request.knowledge?.enabled){allowed.add('memory_list');if(request.knowledge.skillsEnabled)for(const name of ['skill_list',...(request.knowledge.skillBodies?['skill_read','skill_debug']:[])])allowed.add(name);}
+  if(request.knowledge?.enabled){if(request.knowledge.memoryEnabled!==false)allowed.add('memory_list');if(request.knowledge.skillsEnabled)for(const name of ['skill_list',...(request.knowledge.skillBodies?['skill_read','skill_debug']:[])])allowed.add(name);}
   if(request.execution&&request.knowledge?.enabled){
-    for(const name of ['memory_add','memory_forget'])allowed.add(name);
+    if(request.knowledge.memoryEnabled!==false)for(const name of ['memory_add','memory_forget'])allowed.add(name);
     if(request.knowledge.skillsEnabled)for(const name of ['skill_write','skill_patch','skill_outcome',...(request.knowledge.skillBodies?['skill_run']:[])])allowed.add(name);
   }
   const runtimeFiles={...request.files};
@@ -59,9 +60,7 @@ receive(async (message) => {
   const learningKey=toolTargetKey(request.model.provider,request.model.model,request.model.baseUrl);
   let learned:ToolLearning=sanitizeToolLearning({[learningKey]:request.toolLearning})[learningKey]||{rules:[]};
   const toolLearning=request.model.cliKind?undefined:new ToolLearningSession({get:()=>learned,update:fn=>{learned=fn(learned);},contract:()=>session.contract,compatibility:session.mode,locale:request.locale});
-  let workspaceRevision=0;
-  const changed=new Set<string>(),runRevisions=new Map<string,number>();
-  const runFile=async(path:string)=>{const revision=workspaceRevision;const out=await operation({kind:'run',path});runRevisions.set(path,revision);return out;};
+  const runFile=async(path:string,_files?:Record<string,string>,asTest=false)=>operation({kind:'run',path,asTest});
   const diagnosticSources=new Map<string,Set<string>>();
   for(const match of (request.messages.filter(m=>m.role==='user').at(-1)?.content||'').matchAll(/^(.+?):\d+ \[([^\]]+)\]/gm)){
     const source=match[2].split('·').at(-1)!.trim().toLowerCase().replace(/^background:/,''),sources=diagnosticSources.get(match[1])||new Set<string>();
@@ -86,6 +85,7 @@ receive(async (message) => {
       files: Object.entries(request.files).map(([path, content]) => ({ path, content })),
       dirs:(request as typeof request & {dirs?:string[]}).dirs,
       messages: request.messages, context: request.model.context, locale: request.locale,
+      workflow:request.workflow,workflowId:request.workflowId,autoRunAgent:automation?.autoRunAgent,
       surfaceId:request.surface?.id,surfaceMode:request.surface?.mode,
       maxRounds: request.maxRounds, autoContinueRounds: request.autoContinue,
       compact:request.compact,journal:request.journal,prefer:request.prefer,
@@ -119,6 +119,8 @@ receive(async (message) => {
         usage={prompt:usage.prompt+current.prompt,completion:usage.completion+current.completion,estimated:usage.estimated||current.estimated};
         send({type:'token-usage',sequence:requestSequence,usage,requestTokens});
       },
+      capabilities:tools.map(tool=>tool.function.name),
+      onWorkflow:async(snapshot)=>{const saved=await operation({kind:'workflow',snapshot}) as {ok?:boolean};if(saved?.ok!==true)throw Error('Ablaufzustand konnte nicht gesichert werden.');},
       onDelta: (text, kind) => send({ type: "delta", text, kind }),
       onWorkspace: async (event) => {
         // gitCommit has already completed and been journaled by the host.
@@ -126,8 +128,7 @@ receive(async (message) => {
         if (request.execution) await operation({ ...event,kind:event.op });
         else if(event.op==='write')send({ type: "file", path: event.path, content: event.content });
         else throw new Error('Dateiaktion benötigt Hintergrund-Ausführung.');
-        if(['write','rename','delete','mkdir'].includes(event.op))workspaceRevision++;
-        if(event.op==='write'){changed.add(event.path);runtimeFiles[event.path]=event.content;}
+        if(event.op==='write')runtimeFiles[event.path]=event.content;
         if(event.op==='delete')for(const path of Object.keys(runtimeFiles))if(path===event.path||path.startsWith(event.path+'/'))delete runtimeFiles[path];
         if(event.op==='rename')for(const path of Object.keys(runtimeFiles))if(path===event.from||path.startsWith(event.from+'/')){runtimeFiles[event.to+path.slice(event.from.length)]=runtimeFiles[path];delete runtimeFiles[path];}
       },
@@ -158,7 +159,14 @@ receive(async (message) => {
         if(!out.ok||typeof out.content!=='string')throw Error(out.error||'Formatierung fehlgeschlagen.');
         return out.content;
       },
-      learn:async(action,args)=>request.execution?operation({kind:'knowledge',action,args}):readBackgroundKnowledge(request.knowledge,action,args),
+      learn:async(action,args)=>{
+        const result=await (request.execution?operation({kind:'knowledge',action,args}):readBackgroundKnowledge(request.knowledge,action,args,runtimeFiles));
+        if(['read','run'].includes(action)&&result&&typeof result==='object'&&'body' in result&&!('error' in result)){
+          const skill=request.knowledge?.skills.find(skill=>skill.id===args?.name||skill.name===args?.name);
+          if(skill)send({type:'skill-loaded',id:skill.id,tool:`skill_${action}`});
+        }
+        return result;
+      },
       toolLearning,
       onNativeToolSuccess:()=>{
         if(session.contract.transport!=='native')return;
@@ -174,33 +182,17 @@ receive(async (message) => {
       },
       onTool: (info) => {
         const result = info.result as { ok?: boolean; error?: unknown; isError?:boolean; plan?: PlanStep[]; image?:string; frame?:string } | undefined;
-        const failed=result?.ok===false||Boolean(result?.error)||result?.isError===true;
+        const failed=Boolean(result&&toolResultFailed(result));
         if (result?.plan) plan = result.plan;
         else plan=planFromTool(info.name,plan,failed,info.args,result)||plan;
         send({ type: "tool", name:info.name,detail:toolDetail(info.name,info.args,result),...toolCode(info.name,info.args),image:result?.image||result?.frame,ok:!failed,plan });
       },
       onHarness: (value) => send({ type: "harness", value }),
     });
-    if(automation?.autoRunAgent&&!result.parked&&!controller.signal.aborted&&changed.size&&result.verification?.state!=='passed'){
-      const present=new Set(result.files?.map(f=>f.path)||[]);
-      const candidates=(result.runPaths?.length?result.runPaths:[selectRunTarget([...changed])]).filter(path=>present.has(path)&&isExecutablePath(path));
-      for(const path of candidates){
-        // A failed current run is still a completed attempt. Do not replay it at finalization.
-        if(runRevisions.get(path)===workspaceRevision)continue;
-        setPhase('tool');send({type:'tool-start',name:'run_file',detail:path});
-        const out=await runFile(path) as {ok?:boolean;error?:unknown};
-        const ok=out?.ok===true&&!out.error;
-        send({type:'tool',name:'run_file',detail:path,ok,plan});
-        result.verification=automaticRunVerification(result.verification,ok,true);
-        result.ok=result.ok&&ok;
-        if(!ok)result.error=result.verification.detail;
-        result.tools=[...(result.tools||[]),'run_file'];
-        result.reply=verifiedReply(result.modelReply??result.reply,result.verification,!result.stopReason);
-      }
-    }
     send({ type: "result", result: { ...result, capabilities:request.model.capabilities,toolLearning:learned, plan:result.parked?result.plan:planFinish(result.plan,!result.ok,false,Boolean(result.reply?.trim()))||result.plan, files: undefined } });
   } catch (error) {
-    send({ type: "failure", stopped: controller.signal.aborted, error: error instanceof Error ? error.message : String(error) });
+    const failure = captureAgentFailure(error, { phase, requestSequence, jobId: request.workflowId, secrets: [request.model.apiKey] });
+    send({ type: "failure", stopped: controller.signal.aborted, error: failure.error.message, failure });
   }
 });
 send({ type: "ready" });

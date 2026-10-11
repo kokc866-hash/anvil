@@ -1,5 +1,6 @@
 import { handleOnce } from "./ipc.mjs";
 import { CLI_KINDS, completeCli, loginCli, probeCli } from "./cli-runner.mjs";
+import { listCliModels } from "./cli-models.mjs";
 
 const active = new Map();
 
@@ -45,9 +46,11 @@ export function bindCliIpc(isTrusted) {
       const value =
         action === "run"
           ? await completeCli(request, options)
-          : action === "login"
-            ? await loginCli(kind, options)
-            : await probeCli(kind, controller.signal);
+          : action === "models"
+            ? await listCliModels(kind, options)
+            : action === "login"
+              ? await loginCli(kind, options)
+              : await probeCli(kind, controller.signal);
       return { ok: true, value };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "CLI fehlgeschlagen." };
@@ -58,6 +61,7 @@ export function bindCliIpc(isTrusted) {
     }
   }
   handleOnce("cli-probe", (e, r) => job(e, r, "probe"));
+  handleOnce("cli-models", (e, r) => job(e, r, "models"));
   handleOnce("cli-login", (e, r) => job(e, r, "login"));
   handleOnce("cli-run", (e, r) => job(e, r, "run"));
   handleOnce("cli-cancel", (e, id) => {

@@ -1,5 +1,6 @@
 import type { PlanStep } from "@/store/ide";
 import { parseTestCommand } from "./test-parse.ts";
+import { toolResultFailed, toolResultPending } from "./agent-evidence.ts";
 
 type Locale = "de" | "en";
 
@@ -94,6 +95,40 @@ function serviceStep(text: string, operation: string, explicit = false): boolean
   return explicit || /mcp|fremd|fläche|surface|dienst|service|verbindung|connection|werkzeug|tool/i.test(text);
 }
 
+/** MCP is a transport, not an action kind. Arbitrary code needs the model's
+ * explicit evidence attribution: its successful execution alone never checks
+ * geometry or proves that every requested edit was made. */
+export function mcpStepMatches(step: PlanStep, args: ToolArgs, explicit = false): boolean {
+  const operation = String(args.name ?? "").replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  if (!step.kind) return serviceStep(step.text, operation);
+  if (step.kind === "report") return false;
+  if (/(?:^|[._-])(?:execute_code(?:_async|_headless)?|run_code|execute_script|run_script|execute_python|run_python|get_async_status)$/.test(operation))
+    return explicit || (step.kind === "service" && serviceStep(step.text, operation, true));
+  if (step.kind === "service") return serviceStep(step.text, operation, true);
+  if (step.kind === "check" && /verbindung|connection|erreichbar|health|version/i.test(step.text)
+    && /(?:^|[._-])(?:ping|health|(?:get_)?(?:status|version))$/.test(operation)) return true;
+  const kind = /(?:^|[._-])(?:create|insert|add|update|edit|write|patch|delete|remove|rename|move|mkdir)(?:[._-]|$)/.test(operation) ? "edit"
+    : /(?:^|[._-])(?:check|verify|validate|test)(?:[._-]|$)/.test(operation) ? "check"
+    : /(?:^|[._-])(?:read|get|list|fetch|search|query|find)(?:[._-]|$)/.test(operation) ? "read" : undefined;
+  return step.kind === kind && (kind !== "edit" || serviceStep(step.text, operation, true));
+}
+
+export function mcpPlanStatus(row: ToolArgs, args: ToolArgs): ToolArgs {
+  // Only protocol-level structured/JSON results supply execution state. Never
+  // interpret prose or arbitrary nested document fields as a passed check.
+  const values: ToolArgs[] = [row];
+  if (row.structuredContent && typeof row.structuredContent === "object") values.push(row.structuredContent as ToolArgs);
+  if (Array.isArray(row.content)) for (const block of row.content) {
+    if (block?.type !== "text" || typeof block.text !== "string" || block.text.length > 24000) continue;
+    try { const value = JSON.parse(block.text); if (value && typeof value === "object" && !Array.isArray(value)) values.push(value); } catch { /* prose is not state */ }
+  }
+  const pending = values.some(toolResultPending);
+  const failed = values.some(toolResultFailed);
+  const asyncUnconfirmed = /(?:^|_)async$|(?:^|_)get_async_status$/.test(String(args.name))
+    && !values.some(value => /^(completed|done|success|succeeded)$/i.test(String(value.status)));
+  return { ...row, ...(pending || asyncUnconfirmed ? { pending: true } : {}), ...(failed ? { isError: true } : {}) };
+}
+
 const knowledgeReads = new Set(["memory_list", "skill_list", "skill_read"]);
 const knowledgeEdits = new Set(["memory_add", "memory_forget", "skill_write", "skill_patch"]);
 const knowledgeTools = new Set([...knowledgeReads, ...knowledgeEdits, "skill_run", "skill_outcome"]);
@@ -151,6 +186,15 @@ function apply(name: string, next: PlanStep[], status: PlanStep["status"], args:
     return;
   }
   const pending = result && typeof result === "object" && "running" in result && result.running === true;
+  if (name === "mcp_call") {
+    const state = mcpPlanStatus(result && typeof result === "object" ? result as ToolArgs : {}, args);
+    if (status === "ok" && (toolResultPending(state) || state.truncated || state.already_executed)) return;
+    if (status === "ok" && toolResultFailed(state)) status = "err";
+    if (next.some(s => s.kind)) {
+      mark(next, s => knowledgeRequirements(s.text) === undefined && mcpStepMatches(s, args), status);
+      return;
+    }
+  }
   const kind: PlanStep["kind"] = /^(read_file|list_files|grep)$/.test(name) ? "read"
     : /^(write_file|edit_file|append_file|delete_file|rename|mkdir|format_file)$/.test(name) ? "edit"
     : name === "mcp_call" ? "service"

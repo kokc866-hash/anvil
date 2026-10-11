@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, realpathSync, readFileSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { resolve, join, dirname, isAbsolute, extname } from 'node:path';
+import { hasAsciiControl } from './text-controls.mjs';
 import { compileLang } from '../companion/compile-run.mjs';
 import { fileBytes, sameBytes } from '../scripts/file-content.mjs';
 import { applyFileChanges } from './agent-file-actions.mjs';
@@ -10,7 +11,7 @@ import { AgentDebugger } from './agent-debugger.mjs';
 import { formatAgentFile } from './agent-format.mjs';
 
 export const safeAgentPath = p => typeof p === 'string' && p.length > 0 && p.length < 512 &&
-  !/[\\:\x00-\x1f]/.test(p) && !p.split('/').some(x => !x || ['.', '..', '__proto__', 'constructor', 'prototype'].includes(x)) &&
+  !/[\\:]/.test(p) && !hasAsciiControl(p) && !p.split('/').some(x => !x || ['.', '..', '__proto__', 'constructor', 'prototype'].includes(x)) &&
   !/(^|\/)(?:\.git|\.env(?:\..*)?|secrets?)(\/|$)/i.test(p);
 
 function target(root, rel) {
@@ -56,15 +57,16 @@ export class AgentProjectRuntime {
       if(!this.connections)throw new Error('Hintergrund-Verbindungen nicht verfügbar.');
       return await this.connections.execute(op,{signal,emit});
     }
+    if(op.kind==='knowledge'){
+      if(!this.knowledge)throw new Error('Dauerhaftes Hintergrundgedächtnis fehlt.');
+      if(this.surface?.id&&this.surface.id!=='anvil'&&this.surface.mode!=='bridge'&&!['list','state','skills','read','run','debug','outcome'].includes(op.action))throw new Error('Schreibende Anvil-Wissenswerkzeuge sind nur im Modus Brücke verfügbar.');
+      return this.knowledge.execute(op,{files,signal,operationId});
+    }
     if(this.surface?.id && this.surface.id!=='anvil' && this.surface.mode!=='bridge')throw new Error('Anvil-Dateien und Run sind nur im Modus Brücke verfügbar.');
     if(op.kind==='debug')return this.debugger.execute(op,{files,signal});
     if(op.kind==='format'){
       if(!safeAgentPath(op.path)||!Object.hasOwn(files,op.path))throw new Error('Formatierdatei fehlt.');
       return formatAgentFile({path:op.path,content:files[op.path],options:op.options},{signal});
-    }
-    if(op.kind==='knowledge'){
-      if(!this.knowledge)throw new Error('Dauerhaftes Hintergrundgedächtnis fehlt.');
-      return this.knowledge.execute(op,{files,signal,operationId});
     }
     if(op.kind==='verify')return verifyAgentSnapshot(files,op.paths,{signal});
     if(op.kind==='fetch')return readAgentWeb(op.url,{signal});
@@ -102,6 +104,7 @@ export class AgentProjectRuntime {
     }
     if (op.kind === 'run') {
       if (!safeAgentPath(op.path) || !Object.hasOwn(files, op.path)) throw new Error('Startdatei fehlt.');
+      if(op.asTest===true){const {prepared}=await import('../agent-build/service-contract.mjs');signal.throwIfAborted();files=prepared(files,op.path);}
       if (/\.html?$/i.test(op.path)) {
         if (!this.preview) throw new Error('HTML-Vorschau nicht verfügbar.');
         return await this.preview.run(op.path, files, signal, this.vision, this.inputMap);

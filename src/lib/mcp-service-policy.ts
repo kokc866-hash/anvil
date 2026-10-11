@@ -22,10 +22,10 @@ export function serviceAddress(value: string) {
 }
 export function validateService(s: McpServer) {
   if (!isMcpService(s)) return;
-  if (!s.service || s.auth !== "oauth" || s.transport !== "http")
+  const provider = SERVICE_PROVIDERS.find((p) => p.id === s.service);
+  if (!s.service || s.auth !== (provider?.auth || "oauth") || s.transport !== "http")
     throw new Error("Ungültige Dienstverbindung. Neu hinzufügen.");
   const url = serviceAddress(s.url);
-  const provider = SERVICE_PROVIDERS.find((p) => p.id === s.service);
   if ((s.service !== "custom" && !provider) || (provider && url !== provider.url))
     throw new Error("Die Anbieteradresse wurde verändert. Dienst neu hinzufügen.");
   if (

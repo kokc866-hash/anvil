@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { afterLine, applyHits, findInFiles } from "./search.ts";
+import { afterLine, applyHits, findInFiles, replaceInFiles, searchableFiles } from "./search.ts";
 
 const files = {
   "a.ts": "foo bar\nFoo baz\nkeep foo foo\n",
@@ -27,5 +27,15 @@ describe("search", () => {
     const hits = findInFiles({ "a.ts": "foo foo\n" }, "foo");
     const one = applyHits({ "a.ts": "foo foo\n" }, [hits[0]!], "foo", "bar", {});
     assert.equal(one["a.ts"], "bar foo\n");
+  });
+  it("keeps binary, oversized, secret and vendor files out of search and replacements", () => {
+    const excluded = { ".env": "foo", "node_modules/a.js": "foo", "a.png": "foo", "raw.txt": "foo\0",
+      "encoded.txt": "DATA:application/octet-stream;base64,Zm9v", "large.ts": "foo" + "x".repeat(1_500_000) };
+    const sources = { ...excluded, "a.ts": "foo\r\nfoo\n" };
+    assert.deepEqual(searchableFiles(sources), { "a.ts": sources["a.ts"] });
+    const hits = findInFiles(sources, "foo");
+    assert.deepEqual(hits.map((h) => [h.path, h.line, h.col]), [["a.ts", 1, 1], ["a.ts", 2, 1]]);
+    assert.deepEqual(replaceInFiles(sources, "foo", "bar"), { patched: { "a.ts": "bar\r\nbar\n" }, total: 2 });
+    assert.deepEqual(applyHits(sources, [{ path: ".env", line: 1, col: 1, end: 4, text: "foo", match: "foo" }], "foo", "bar", {}), {});
   });
 });

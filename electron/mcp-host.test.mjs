@@ -217,6 +217,27 @@ test("native stdio runs a local server with literal args and returns resources",
   );
 });
 
+test("missing stdio program reports the start failure rather than AbortError", async (t) => {
+  const host = new McpHost();
+  t.after(() => host.stop());
+  await assert.rejects(
+    host.request({ id: "missing-program", transport: "stdio", command: "anvil-missing-mcp-program-9f8bd2" }, "tools/list"),
+    (error) => /anvil-missing-mcp-program-9f8bd2/.test(error.message) && !/AbortError/.test(error.message),
+  );
+  assert.equal(host.sessions.size, 0);
+});
+
+test("stdio startup preserves the server's diagnostic output", async (t) => {
+  const host = new McpHost();
+  t.after(() => host.stop());
+  await assert.rejects(
+    host.request({ id: "failed-start", transport: "stdio", command: process.execPath,
+      args: ["-e", "process.stderr.write('MCP fixture: required dependency missing\\n'); process.exit(1)"] }, "tools/list"),
+    (error) => /required dependency missing/.test(error.message) && !/AbortError/.test(error.message),
+  );
+  assert.equal(host.sessions.size, 0);
+});
+
 test("OAuth completes PKCE, rejects wrong callback state and binds tokens to target and issuer", async (t) => {
   let base,
     challenge = "",

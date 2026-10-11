@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Puzzle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,6 +8,8 @@ import {
   listPlugins,
   pluginSnapshot,
   subscribePlugins,
+  isPluginEnabled,
+  requestToggleWorkspacePlugin,
 } from "@/lib/plugins";
 import { importVsix, listVsPacks, vsPackFilePaths } from "@/lib/plugins/vscode";
 import { vsPackPluginId } from "@/lib/plugins/util";
@@ -16,21 +18,26 @@ import { cn } from "@/lib/cn";
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { requestRemoveWorkspacePlugin } from "@/lib/plugins/remove";
+import { assertImportTarget, captureImportTarget, commitImportedFiles, commitImportedPatch } from "@/lib/plugins/import";
+import { ARCHIVE_MAX_COMPRESSED } from "@/lib/archive";
 import { AcpPreview } from "./acp-preview";
 import { TaskPackages } from "./task-packages";
 import { ServicesPane } from "./services-pane";
+import { AgentPluginPackages } from "./agent-plugin-packages";
+import { SkillLibrary } from "./skill-library";
+import { useLearn } from "@/lib/learn";
 
-const TAB_IDS = ["all", "services", "tasks", "core", "edit", "web", "tools", "workspace", "market", "api"] as const;
+type ExtensionTab = "all" | "services" | "skills" | "tasks" | "core" | "edit" | "web" | "tools" | "workspace" | "market" | "api";
 
 export function ExtensionsPane() {
   const t = useT();
   const disabled = useIde((s) => s.pluginDisabled);
   const busy = useIde((s) => s.agentBusy || Boolean(s.pathOperation));
+  const epoch = useIde((s) => s.workspaceEpoch);
   const en = useIde((s) => s.locale === "en");
   const files = useIde((s) => s.files);
   const togglePlugin = useIde((s) => s.togglePlugin);
   const writeFile = useIde((s) => s.writeFile);
-  const deleteFile = useIde((s) => s.deleteFile);
   const openFile = useIde((s) => s.openFile);
   const setSidebar = useIde((s) => s.setSidebar);
   useSyncExternalStore(subscribePlugins, pluginSnapshot, pluginSnapshot);
@@ -38,9 +45,14 @@ export function ExtensionsPane() {
   const commands = listCommands();
   const packs = listVsPacks();
   const [filter, setFilter] = useState("");
-  const [tab, setTab] = useState<(typeof TAB_IDS)[number]>("all");
+  const [tab, setTab] = useState<ExtensionTab>("all");
+  const libraryRequested = useLearn(state => state.libraryRequested);
+  useEffect(() => { if (libraryRequested) { setTab("skills"); useLearn.setState({ libraryRequested: false }); } }, [libraryRequested]);
   const [market, setMarket] = useState<MarketItem[]>(FEATURED);
   const [marketMsg, setMarketMsg] = useState("");
+  const [installing, setInstalling] = useState(false);
+  const importController = useRef<AbortController | null>(null);
+  useEffect(() => () => importController.current?.abort(), [epoch]);
   const q = filter.toLowerCase();
 
   const shown = useMemo(() => {
@@ -73,30 +85,41 @@ export function ExtensionsPane() {
   }, [filter, tab, t]);
 
   async function installItem(item: MarketItem) {
-    if (!item.vsix) return;
+    if (!item.vsix || installing) return;
     setMarketMsg(t("extLoadingName", { name: item.name }));
+    setInstalling(true);
+    const controller = new AbortController();
+    importController.current = controller;
     try {
-      const buf = await downloadVsix(item.vsix);
-      const slug = item.id.replace(/[^\w.\-]+/g, "-");
-      const got = await importVsix(buf, `plugins/${slug}`);
-      for (const [p, c] of Object.entries(got.files)) writeFile(p, c);
+      const target = captureImportTarget();
+      const buf = await downloadVsix(item.vsix, controller.signal);
+      assertImportTarget(target);
+      const slug = item.id.replace(/[^\w.-]+/g, "-");
+      const got = await importVsix(buf, `plugins/${slug}`, { signal: controller.signal });
+      assertImportTarget(target);
+      if (!Object.keys(got.files).length) throw new Error(en ? "This package has no supported editor contributions." : "Das Paket enthält keine unterstützten Editor-Beiträge.");
+      await commitImportedFiles(target, got.files);
       useIde.getState().setNotice(`${item.name}: ${Object.keys(got.files).length} ${t("extFiles")}`);
       setMarketMsg(t("extInstalled", { name: item.name }));
     } catch (err) {
       setMarketMsg(err instanceof Error ? err.message : t("extDownloadFail"));
+    } finally {
+      if (importController.current === controller) { importController.current = null; setInstalling(false); }
     }
   }
 
-  function uninstallPack(path: string) {
-    const st = useIde.getState();
-    const gone = vsPackFilePaths(st.files, path);
-    for (const p of gone) deleteFile(p);
-    st.setNotice(t("extRemoved", { n: gone.length }));
+  async function uninstallPack(path: string) {
+    try {
+      const target = captureImportTarget(), gone = vsPackFilePaths({ ...target.files }, path);
+      await commitImportedPatch(target, {}, gone);
+      useIde.getState().setNotice(t("extRemoved", { n: gone.length }));
+    } catch (error) { useIde.getState().setNotice(error instanceof Error ? error.message : t("extDownloadFail")); }
   }
 
-  const tabs: { id: (typeof TAB_IDS)[number]; label: string }[] = [
+  const tabs: { id: ExtensionTab; label: string }[] = [
     { id: "all", label: t("extAll") },
     { id: "services", label: en ? "Services" : "Dienste" },
+    { id: "skills", label: "Skills" },
     { id: "tasks", label: en ? "Task packages" : "Aufgabenpakete" },
     { id: "core", label: t("extCore") },
     { id: "edit", label: t("extEdit") },
@@ -141,15 +164,17 @@ export function ExtensionsPane() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
-        {tab !== "services" && tab !== "api" && tab !== "market" ? <p className="mb-3 px-1 text-xs leading-relaxed text-muted">
+        {tab !== "services" && tab !== "skills" && tab !== "api" && tab !== "market" ? <p className="mb-3 px-1 text-xs leading-relaxed text-muted">
           {tab === "tasks"
             ? (en ? "Task packages give the agent instructions for specific work. External accounts connect under Services." : "Aufgabenpakete geben dem Agenten Anleitungen für bestimmte Arbeiten. Externe Konten verbindest du unter „Dienste“.")
             : (en ? "Plugins extend Anvil's features. To connect accounts such as Notion or Linear, choose Services above." : "Plugins erweitern Anvils Funktionen. Um Konten wie Notion oder Linear zu verbinden, wähle oben „Dienste“.")}
         </p> : null}
-        {tab === "services" ? <ServicesPane /> : tab === "tasks" ? <TaskPackages /> : tab === "api" ? (
+        {tab === "services" ? <ServicesPane /> : tab === "skills" ? <SkillLibrary query={filter} /> : tab === "tasks" ? <TaskPackages /> : tab === "api" ? (
           <><AcpPreview /><pre className="whitespace-pre-wrap px-1 font-mono text-[11px] leading-5 text-muted">{PLUGIN_API_DOC}</pre></>
         ) : tab === "market" ? (
           <div>
+            <AgentPluginPackages query={filter} onServices={() => setTab("services")} />
+            <h3 className="mb-2 mt-4 px-1 text-sm font-semibold">{en ? "Editor extensions" : "Editor-Erweiterungen"}</h3>
             <p className="mb-2 px-1 text-[11px] text-muted">{t("extMarketHint")}</p>
             {marketMsg ? <p className="mb-2 px-1 text-[11px] text-subtle">{marketMsg}</p> : null}
             {market.map((item) => (
@@ -159,7 +184,7 @@ export function ExtensionsPane() {
                   <span className="ml-1.5 font-mono text-[10px] text-subtle">{item.publisher}</span>
                 </p>
                 <p className="text-xs text-muted text-pretty">{item.description}</p>
-                <Button className="mt-1 h-7 px-2 text-[11px]" onClick={() => void installItem(item)}>
+                <Button disabled={busy || installing} className="mt-1 h-7 px-2 text-[11px]" onClick={() => void installItem(item)}>
                   {t("extInstall")}
                 </Button>
               </div>
@@ -167,7 +192,7 @@ export function ExtensionsPane() {
           </div>
         ) : (
           shown.map((p) => {
-            const on = !disabled.includes(p.id);
+            const on = isPluginEnabled(p.id);
             const cmds = commands.filter((c) => c.plugin === p.id);
             return (
               <div key={p.id} className="mb-2 rounded-md border border-border px-2 py-2">
@@ -182,6 +207,10 @@ export function ExtensionsPane() {
                       </span>
                     </p>
                     <p className="text-xs text-muted text-pretty">{p.description}</p>
+                    {!p.builtin ? <p className="mt-1 text-[11px] text-muted">
+                      {en ? "Full trust required: files, credentials, network, programs and model calls. No sandbox." : "Vollständiges Vertrauen nötig: Dateien, Zugangsdaten, Netzwerk, Programme und Modellaufrufe. Keine Sandbox."}
+                      {p.trustApi ? " @trust: " + (en ? "full helper API." : "volle Helfer-API.") : ""}
+                    </p> : null}
                     {cmds.length ? <p className="mt-1 text-[10px] text-subtle">{t("extCmdsN", { n: cmds.length })}</p> : null}
                   </div>
                   <button
@@ -192,7 +221,8 @@ export function ExtensionsPane() {
                       "relative h-7 w-11 shrink-0 rounded-full border",
                       on ? "border-accent bg-accent" : "border-border bg-bg",
                     )}
-                    onClick={() => togglePlugin(p.id)}
+                    disabled={!p.builtin && busy}
+                    onClick={() => p.builtin ? togglePlugin(p.id) : void requestToggleWorkspacePlugin(p.id)}
                   >
                     <span
                       className={cn(
@@ -242,24 +272,40 @@ export function ExtensionsPane() {
           </>
         ) : null}
       </div>
-      {tab !== "services" ? <div className="border-t border-border p-2">
+      {tab !== "services" && tab !== "skills" ? <div className="border-t border-border p-2">
         <p className="mb-2 px-0.5 text-[11px] text-muted">{t("extVsixHint")}</p>
         <Button
+          disabled={busy || installing}
           className="mb-1.5 h-8 w-full text-xs"
           onClick={() => {
+            let target: ReturnType<typeof captureImportTarget>;
+            try { target = captureImportTarget(); }
+            catch (error) { useIde.getState().setNotice(error instanceof Error ? error.message : t("extDownloadFail")); return; }
             const input = document.createElement("input");
             input.type = "file";
             input.accept = ".vsix,.zip";
             input.onchange = () => {
               const f = input.files?.[0];
               if (!f) return;
-              void f.arrayBuffer().then(async (buf) => {
-                const slug = f.name.replace(/\.(vsix|zip)$/i, "").replace(/[^\w.\-]+/g, "-") || "ext";
-                const got = await importVsix(buf, `plugins/${slug}`);
-                const st = useIde.getState();
-                for (const [p, c] of Object.entries(got.files)) st.writeFile(p, c);
-                st.setNotice(`${got.name}: ${Object.keys(got.files).length} ${t("extFiles")}`);
-              });
+              void (async () => {
+                setInstalling(true);
+                const controller = new AbortController();
+                importController.current = controller;
+                try {
+                  assertImportTarget(target);
+                  if (f.size > ARCHIVE_MAX_COMPRESSED) throw new Error(en ? "Archive too large (maximum 64 MiB)." : "Archiv zu groß (höchstens 64 MiB).");
+                  const buf = await f.arrayBuffer();
+                  assertImportTarget(target);
+                  const slug = f.name.replace(/\.(vsix|zip)$/i, "").replace(/[^\w.-]+/g, "-") || "ext";
+                  const got = await importVsix(buf, `plugins/${slug}`, { signal: controller.signal });
+                  assertImportTarget(target);
+                  if (!Object.keys(got.files).length) throw new Error(en ? "No supported editor contributions." : "Keine unterstützten Editor-Beiträge enthalten.");
+                  await commitImportedFiles(target, got.files);
+                  useIde.getState().setNotice(`${got.name}: ${Object.keys(got.files).length} ${t("extFiles")}`);
+                } catch (error) {
+                  useIde.getState().setNotice(error instanceof Error ? error.message : t("extDownloadFail"));
+                } finally { if (importController.current === controller) { importController.current = null; setInstalling(false); } }
+              })();
             };
             input.click();
           }}
@@ -283,7 +329,7 @@ export function ExtensionsPane() {
                     className={cn("h-5 w-8 shrink-0 rounded-full border", on ? "border-accent bg-accent" : "border-border bg-bg")}
                     onClick={() => togglePlugin(pid)}
                   />
-                  <button type="button" className="text-[10px] text-muted hover:text-fg" onClick={() => uninstallPack(p.path)}>
+                  <button disabled={busy || installing} type="button" className="text-[10px] text-muted hover:text-fg disabled:opacity-50" onClick={() => void uninstallPack(p.path)}>
                     {t("extUninstall")}
                   </button>
                 </li>

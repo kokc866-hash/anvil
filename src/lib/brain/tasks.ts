@@ -289,7 +289,8 @@ export async function brainPalette(q: string, labels: string[]): Promise<string 
   return labels.find((l) => l.toLowerCase() === t.toLowerCase()) ?? null;
 }
 
-export async function brainCompact(blob: string): Promise<string> {
+export async function brainCompact(blob: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const cut = blob.slice(0, 8000);
   if (!brainReady() || !useBrain.getState().jobs.compact) return cut;
   try {
@@ -308,6 +309,7 @@ export async function brainCompact(blob: string): Promise<string> {
       stop: ["\n\n\n"],
       pri: 2,
       job: "compact",
+      signal,
       deadlineMs: 2500,
     });
     const clean = raw
@@ -321,7 +323,8 @@ export async function brainCompact(blob: string): Promise<string> {
   }
 }
 
-export async function brainAsk(question: string, onDelta?: (s: string) => void, context = "", onUsage?: (usage: TokenUsage) => void): Promise<string> {
+export async function brainAsk(question: string, onDelta?: (s: string) => void, context = "", onUsage?: (usage: TokenUsage) => void, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const prompt = helperQuestion(question, context);
   if (!brainReady() || !useBrain.getState().jobs.ask) throw new Error("Die lokale Beantwortung von Fragen durch den Helfer ist ausgeschaltet.");
   if (useBrain.getState().jobs.help) {
@@ -342,6 +345,7 @@ export async function brainAsk(question: string, onDelta?: (s: string) => void, 
     temperature: st.temperature,
     stop: ["\n\n\n"],
     job: "ask",
+    signal,
     onDelta,
     onUsage,
   });

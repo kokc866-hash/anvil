@@ -108,6 +108,9 @@ test("workspace plugin removal is durable, scoped, cancellable and conflict chec
   });
   sync.noteDiskContents(useIde.getState().files);
   host.reloadPlugins();
+  const approve = subscribeConfirm(slot => { if (slot) queueMicrotask(() => slot.resolve(true)); });
+  assert.equal(await host.requestToggleWorkspacePlugin(id), true);
+  approve();
   assert.ok(host.listCommands().some((c) => c.plugin === id));
   emitPlugin("change");
   assert.equal(globalThis.__pluginEvents, 1);
