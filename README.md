@@ -25,7 +25,7 @@ Zum Kennenlernen wähle in der Ersteinrichtung **Beispiel ohne KI starten**. Anv
 
 ## Aktueller Stand
 
-Quellcode **1.3.37**. Die [Versionshinweise](anleitungen/releases/v1.3.37.md) beschreiben die Änderungen an Hintergrundaufträgen, Dateiprüfungen und Workspace.
+Quellcode **1.3.38** mit aktualisiertem Better Auth. [Versionshinweise](anleitungen/releases/v1.3.38.md)
 
 Der Praxistest vom 12. September erprobte einen echten Aufgabenplaner über Ollama und Codex CLI. Einstieg ohne KI, geführte Aufgaben, Hilfe, der damalige Bildschutz, Neustart, Speichern und Rundenrücknahme wurden zusätzlich in der gebauten Desktop-Oberfläche geprüft. Diese Nachweise gehören zum damaligen Stand und ersetzen keine gesonderte Abnahme späterer Änderungen oder jedes verfügbaren Modells.
 

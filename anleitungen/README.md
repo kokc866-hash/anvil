@@ -1,6 +1,8 @@
 # Anleitungen
 
-Die [Versionshinweise zu Anvil 1.3.37](releases/v1.3.37.md) fassen die aktuellen Änderungen zusammen. Ältere Praxistests bleiben mit ihrem jeweiligen Prüfdatum gekennzeichnet.
+Das Update auf Anvil 1.3.38 aktualisiert Better Auth. [Versionshinweise zu Anvil 1.3.38](releases/v1.3.38.md)
+
+Ältere Praxistests bleiben mit ihrem jeweiligen Prüfdatum gekennzeichnet.
 
 Windows: [Aktuelle Veröffentlichung](https://github.com/kokc866-hash/anvil/releases/latest) — Setup-EXE oder portable ZIP. ZIP vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Beide Pakete enthalten die Laufzeit; Node.js wird nur für die Arbeit am Quellcode separat benötigt. Die bisherige Auslieferung ist auf Wunsch des Eigentümers unsigniert.
 

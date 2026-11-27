@@ -161,6 +161,12 @@ const grokOAuthPlugin = authConfigured
         authorizationUrl: grokAuthorizationUrl,
         tokenUrl: grokTokenUrl,
         userInfoUrl: grokUserInfoUrl,
+        // Keep the account key used by 1.6 with these static broker endpoints.
+        accountSubject: ({ profile }) => [profile.id, profile.sub].find(
+          (identifier): identifier is string | number =>
+            (typeof identifier === "string" && identifier.trim().length > 0) ||
+            (typeof identifier === "number" && Number.isFinite(identifier)),
+        ) ?? "",
         scopes: ["openid", "profile", "email"],
         // `prompt: "login"` forces the broker to re-authenticate against the
         // upstream on every sign-in instead of silently reusing an existing
