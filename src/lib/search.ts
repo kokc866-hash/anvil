@@ -20,6 +20,15 @@ export function skipSearchPath(path: string): boolean {
   return skipPath(path) || isSecretPath(path) || /\.(png|jpe?g|gif|webp|ico|bmp)$/i.test(path);
 }
 
+export function isSearchableFile(path: string, source: string): boolean {
+  return !skipSearchPath(path) && source.length > 0 && source.length <= 1_500_000
+    && !/^data:/i.test(source) && !source.includes("\0");
+}
+
+export function searchableFiles(files: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(files).filter(([path, source]) => isSearchableFile(path, source)));
+}
+
 
 export function compileSearch(needle: string, opts: SearchOpts): RegExp | null {
   const n = needle;
@@ -44,9 +53,8 @@ export function findInFiles(
   if (!re) return [];
   const out: SearchHit[] = [];
   for (const path of Object.keys(files).sort()) {
-    if (skipSearchPath(path)) continue;
     const src = files[path];
-    if (!src || src.length > 1_500_000 || src.startsWith("data:image/")) continue;
+    if (!isSearchableFile(path, src)) continue;
     const lines = src.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const text = lines[i];
@@ -100,6 +108,7 @@ export function applyHits(
   }
   const out: Record<string, string> = {};
   for (const [path, keys] of wanted) {
+    if (!isSearchableFile(path, files[path] ?? "")) continue;
     const lines = (files[path] ?? "").split("\n");
     for (let i = 0; i < lines.length; i++) {
       const src = lines[i];
@@ -150,7 +159,7 @@ export function replaceInFiles(files: Record<string, string>, needle: string, re
   let total = 0;
   if (!re) return { patched, total };
   for (const [path, source] of Object.entries(files)) {
-    if (skipSearchPath(path) || source.length > 1_500_000 || source.startsWith("data:image/")) continue;
+    if (!isSearchableFile(path, source)) continue;
     const next = source.split("\n").map((line) => {
       re.lastIndex = 0;
       let out = "", last = 0, match: RegExpExecArray | null;

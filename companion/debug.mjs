@@ -1,12 +1,11 @@
 /** Native Python debug via sys.settrace. Token-gated by the server. */
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { resolveCwd } from "./git.mjs";
 import { resolveBin, toolEnv } from "./toolchain.mjs";
-import { rmDir, rmSoon } from "./tmp.mjs";
+import { makeAnvilTemp, rmDir, rmSoon } from "./tmp.mjs";
 
 const sessions = new Map();
 
@@ -281,7 +280,7 @@ export function debugStart(body) {
   const full = path.join(root, ...rel.split("/"));
   if (!existsSync(full)) return { ok: false, error: `Datei fehlt: ${rel}` };
   const id = randomBytes(8).toString("hex");
-  const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-dbg-"));
+  const dir = makeAnvilTemp("dbg");
   const script = path.join(dir, "anvil_dbg.py");
   writeFileSync(script, TRACER, "utf8");
   const pauseOnEntry = body.pauseOnEntry !== false;

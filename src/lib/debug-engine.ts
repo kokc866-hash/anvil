@@ -7,6 +7,8 @@ import { holdCompanion, releaseCompanion } from "./companion-life";
 import { emitPlugin } from "./plugins/events";
 import { backgroundDebugCommand } from './background-debug';
 import { useIde, type DebugFrame } from "@/store/ide";
+import { captureAgentRun, type AgentRun } from "./agent-run";
+import { AgentAbortError, isAbortLike } from "./agent-abort";
 
 export type DebugCmd = "continue" | "step" | "stop" | "eval";
 export function toggleDebugBreakpoint(path:string,line:number,on?:boolean){
@@ -24,10 +26,50 @@ let mode: "run" | "step" | "stop" = "run";
 let entryPause = false;
 let started = false;
 let lastPath = "";
-let firstLock: ((s: unknown) => void) | null = null;
+type DebugOwner = { generation: number; run?: AgentRun; controller: AbortController; signal: AbortSignal; first?: (s: unknown) => void; js?: JsDebugSession };
+let debugGeneration = 0;
+let debugOwner: DebugOwner | undefined;
 let kind: "live" | "replay" = "live";
 let replay: { events: TraceEvent[]; i: number; finish?: () => void } | null = null;
 let jsSession: JsDebugSession | null = null;
+
+function debugCurrent(owner: DebugOwner): boolean {
+  return debugOwner === owner && owner.generation === debugGeneration && !owner.signal.aborted && (!owner.run || owner.run.current()) && !useIde.getState().debug.backgroundJobId;
+}
+function assertDebug(owner: DebugOwner) {
+  owner.run?.assertCurrent();
+  if (!debugCurrent(owner)) throw new AgentAbortError("Debugsitzung beendet oder ersetzt");
+}
+async function waitDebug<T>(owner: DebugOwner, pending: Promise<T>): Promise<T> {
+  assertDebug(owner);
+  let abort = () => {};
+  try {
+    const result = await Promise.race([pending, new Promise<never>((_, reject) => {
+      abort = () => reject(new AgentAbortError("Debug gestoppt"));
+      owner.signal.addEventListener("abort", abort, { once: true });
+    })]);
+    assertDebug(owner);
+    return result;
+  } finally { owner.signal.removeEventListener("abort", abort); }
+}
+function stopOwnedDebug(owner: DebugOwner) {
+  if (debugOwner !== owner) return;
+  debugOwner = undefined;
+  mode = "stop";
+  replay?.finish?.(); replay = null;
+  waiter?.resolve("stop"); waiter = null;
+  evalResultWait?.("Debug gestoppt"); evalResultWait = null;
+  started = false;
+  owner.js?.kill();
+  if (jsSession === owner.js) jsSession = null;
+  owner.first?.({ ok: false, error: "Debug gestoppt" }); owner.first = undefined;
+  owner.controller.abort("Debug gestoppt");
+  if (!useIde.getState().debug.backgroundJobId) {
+    useIde.getState().setDebug({ active: false, paused: false, path: null, line: 0, reason: "", stack: [], locals: {} });
+    useIde.getState().setPluginStatus("");
+    useIde.getState().setRunning(false);
+  }
+}
 
 function bps(): Record<string, number[]> {
   return useIde.getState().breakpoints;
@@ -49,7 +91,8 @@ function applyPause(info: {
   reason: string;
   stack: DebugFrame[];
   locals: Record<string, string>;
-}) {
+}, owner = debugOwner) {
+  if (owner) assertDebug(owner);
   lastPath = info.path;
   useIde.getState().setDebug({
     active: true,
@@ -62,8 +105,8 @@ function applyPause(info: {
   });
   useIde.getState().openFile(info.path);
   useIde.getState().setPluginStatus(`⏸ ${info.path}:${info.line}`);
-  firstLock?.(debugSnapshot());
-  firstLock = null;
+  owner?.first?.(debugSnapshot());
+  if (owner) owner.first = undefined;
   emitPlugin("debug", debugSnapshot());
 }
 
@@ -93,6 +136,7 @@ export function debugStep() {
 
 export function debugStop() {
   if(backgroundDebugCommand('stop'))return;
+  if (debugOwner) { stopOwnedDebug(debugOwner); return; }
   mode = "stop";
   if (kind === "replay") {
     replay?.finish?.();
@@ -139,7 +183,7 @@ function replayAdvance(cmd: "continue" | "step") {
     stack: stackOf(e),
     locals: e.locals,
   });
-  void refreshWatches(e.locals);
+  void refreshWatches(e.locals).catch(() => undefined);
 }
 
 export function debugSnapshot() {
@@ -211,7 +255,8 @@ async function pauseJs(info: {
   reason: string;
   stack: DebugFrame[];
   locals: Record<string, unknown>;
-}): Promise<DebugCmd> {
+}, owner: DebugOwner): Promise<DebugCmd> {
+  if (!debugCurrent(owner)) return "stop";
   const locals: Record<string, string> = {};
   for (const [k, v] of Object.entries(info.locals)) {
     if (k.startsWith("__")) continue;
@@ -221,11 +266,13 @@ async function pauseJs(info: {
       locals[k] = String(v);
     }
   }
-  applyPause({ ...info, locals });
-  await refreshWatches(locals);
+  applyPause({ ...info, locals }, owner);
+  await refreshWatches(locals, owner);
+  if (!debugCurrent(owner)) return "stop";
   let cmd: DebugCmd = "continue";
   for (;;) {
     cmd = await waitCmd();
+    if (!debugCurrent(owner)) return "stop";
     if (cmd !== "eval") break;
     const expr = evalExpr;
     evalExpr = "";
@@ -241,6 +288,7 @@ async function pauseJs(info: {
         out = err instanceof Error ? err.message : String(err);
       }
     }
+    if (!debugCurrent(owner)) return "stop";
     useIde.getState().setDebugEval(out);
     evalResultWait?.(out);
     evalResultWait = null;
@@ -259,14 +307,17 @@ function fmtVal(v: unknown): string {
   return String(v).slice(0, 240);
 }
 
-async function refreshWatches(locals: Record<string, string>) {
+async function refreshWatches(locals: Record<string, string>, owner = debugOwner) {
+  if (owner) assertDebug(owner);
   const watches = useIde.getState().debug.watches;
   if (!watches.length) {
     useIde.getState().setDebugWatches({});
     return;
   }
   if (jsSession) {
-    useIde.getState().setDebugWatches(await jsSession.watches(watches));
+    const values = await jsSession.watches(watches);
+    if (owner) assertDebug(owner);
+    useIde.getState().setDebugWatches(values);
     return;
   }
   const values: Record<string, string> = {};
@@ -338,32 +389,36 @@ const JS_KW = new Set([
   "var", "void", "while", "with", "yield", "await", "async", "of", "from", "as",
 ]);
 
-async function runJsDebug(code: string, path: string): Promise<{ stdout: string; stderr: string }> {
+async function runJsDebug(code: string, path: string, owner: DebugOwner): Promise<{ stdout: string; stderr: string }> {
+  assertDebug(owner);
   if (/^\s*(?:import|export)\b/m.test(code)) {
     return { stdout: "Diese Datei ist ein Modul und wurde nicht im Debugger gestartet. Mit „Ausführen“ öffnest du die HTML-Vorschau.", stderr: "" };
   }
   const logs: string[] = [];
   const src = instrumentJs(code, path);
   const session = startJsDebugIframe(src, {
-    shouldPause: (file, line, reason) => mode === "stop" || reason === "exception" || needPause(file, line),
+    shouldPause: (file, line, reason) => !debugCurrent(owner) || mode === "stop" || reason === "exception" || needPause(file, line),
     onLog: (line) => logs.push(line),
     onPause: async (info) => {
-      if (mode === "stop") return "stop";
-      const cmd = await pauseJs({
+      if (!debugCurrent(owner) || mode === "stop") return "stop";
+      try { const cmd = await pauseJs({
         path: info.path,
         line: info.line,
         reason: info.reason,
         stack: [{ path: info.path, line: info.line, fn: "<module>" }],
         locals: info.locals,
-      });
+      }, owner);
       if (cmd === "stop") return "stop";
       if (cmd === "step") return "step";
       return "continue";
+      } catch (error) { if (!debugCurrent(owner)) return "stop"; throw error; }
     },
   });
+  owner.js = session;
   jsSession = session;
   try {
-    const r = await session.done;
+    const r = await waitDebug(owner, session.done);
+    assertDebug(owner);
     const stdout = [...logs, r.stdout].filter(Boolean).join("\n");
     if (r.stderr && !r.stderr.includes("Debug gestoppt")) {
       const line = Number(/:(\d+)/.exec(r.stderr)?.[1] ?? 0);
@@ -375,7 +430,7 @@ async function runJsDebug(code: string, path: string): Promise<{ stdout: string;
             reason: "exception",
             stack: [{ path, line, fn: "<module>" }],
             locals: {},
-          });
+          }, owner);
         } catch {
           /* stop */
         }
@@ -383,7 +438,7 @@ async function runJsDebug(code: string, path: string): Promise<{ stdout: string;
     }
     return { stdout, stderr: r.stderr.includes("Debug gestoppt") ? "" : r.stderr };
   } finally {
-    jsSession = null;
+    if (jsSession === session) jsSession = null;
     session.kill();
   }
 }
@@ -491,14 +546,16 @@ def __dbg_transform(src):
     return ast.unparse(mod)
 `;
 
-async function runPyDebug(files: Record<string, string>, path: string): Promise<{ stdout: string; stderr: string }> {
+async function runPyDebug(files: Record<string, string>, path: string, owner: DebugOwner): Promise<{ stdout: string; stderr: string }> {
+  assertDebug(owner);
   const py = await getPyodide();
+  assertDebug(owner);
   let stdout = "";
   let stderr = "";
   py.setStdout({ batched: (s) => { stdout += s; } });
   py.setStderr({ batched: (s) => { stderr += s; } });
   const pause = async (file: string, line: number, locals: Record<string, string>) => {
-    if (mode === "stop") return "stop";
+    if (!debugCurrent(owner) || mode === "stop") return "stop";
     if (!needPause(file, line)) return "continue";
     applyPause({
       path: file,
@@ -506,11 +563,13 @@ async function runPyDebug(files: Record<string, string>, path: string): Promise<
       reason: "break",
       stack: [{ path: file, line, fn: "<module>" }],
       locals,
-    });
-    await refreshWatches(locals);
+    }, owner);
+    await refreshWatches(locals, owner);
+    if (!debugCurrent(owner)) return "stop";
     let cmd: DebugCmd = "continue";
     for (;;) {
       cmd = await waitCmd();
+      if (!debugCurrent(owner)) return "stop";
       if (cmd !== "eval") break;
       // python loop handles eval via take_eval; we should not reach here
       // if python called pause() once per loop. We return "eval" and python continues.
@@ -521,17 +580,20 @@ async function runPyDebug(files: Record<string, string>, path: string): Promise<
   py.registerJsModule?.("anvil_dbg", {
     pause,
     take_eval: () => {
+      if (!debugCurrent(owner)) return "";
       const e = evalExpr;
       evalExpr = "";
       return e;
     },
     eval_result: (s: string) => {
+      if (!debugCurrent(owner)) return;
       useIde.getState().setDebugEval(String(s));
       evalResultWait?.(String(s));
       evalResultWait = null;
     },
   });
   try {
+    assertDebug(owner);
     const payload = JSON.stringify(files);
     await py.runPythonAsync(`
 ${PY_BOOT}
@@ -566,28 +628,30 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function runNativePyDebug(path: string, cwd: string): Promise<{ stdout: string; stderr: string } | null> {
-  await holdCompanion();
-  const start = await companionDebug("start", {
-    cwd,
-    path,
-    pauseOnEntry: entryPause,
-    breakpoints: bps(),
-  });
-  if (!start.ok || !start.id) {
-    if (!useIde.getState().companionKeep) await releaseCompanion();
-    return null;
-  }
-  const id = start.id;
+async function runNativePyDebug(path: string, cwd: string, owner: DebugOwner): Promise<{ stdout: string; stderr: string } | null> {
+  const base = useIde.getState().companionUrl || "http://127.0.0.1:7845";
+  let held = false;
+  let id: string | undefined;
   let stdout = "";
   let stderr = "";
   try {
+    held = await holdCompanion(cwd, base, owner.run);
+    assertDebug(owner);
+    const start = await companionDebug("start", { cwd, path, pauseOnEntry: entryPause, breakpoints: bps() }, base, owner.signal);
+    // Keep a returned ID for cleanup even when cancellation raced the response.
+    if (typeof start.id === "string" && start.id.trim()) id = start.id;
+    assertDebug(owner);
+    if (!start.ok || !id) {
+      if (id || (owner.run && (start.uncertain || start.ok))) throw new Error("Debugstart nicht eindeutig bestätigt; keine andere Sitzung übernommen und kein weiterer Start versucht.");
+      return null;
+    }
     for (;;) {
+      assertDebug(owner);
       if (mode === "stop") {
-        await companionDebug("stop", { id });
         return { stdout, stderr };
       }
-      const ev = await companionDebug("poll", { id });
+      const ev = await companionDebug("poll", { id }, base, owner.signal);
+      assertDebug(owner);
       if (!ev.ok) return { stdout, stderr: ev.error || "Debug tot" };
       stdout = ev.stdout || stdout;
       stderr = ev.stderr || stderr;
@@ -599,19 +663,24 @@ async function runNativePyDebug(path: string, cwd: string): Promise<{ stdout: st
           reason: ev.pause.reason || "break",
           stack: ev.pause.stack?.length ? ev.pause.stack : [{ path: ev.pause.path || path, line: ev.pause.line, fn: "<module>" }],
           locals: ev.pause.locals || {},
-        });
-        await refreshWatches(ev.pause.locals || {});
+        }, owner);
+        await refreshWatches(ev.pause.locals || {}, owner);
+        assertDebug(owner);
         let cmd: DebugCmd = "continue";
         for (;;) {
           cmd = await waitCmd();
+          assertDebug(owner);
           if (cmd !== "eval") break;
           const expr = evalExpr;
           evalExpr = "";
-          await companionDebug("cmd", { id, cmd: "eval", expr });
+          await companionDebug("cmd", { id, cmd: "eval", expr }, base, owner.signal);
+          assertDebug(owner);
           let text = "";
           for (let i = 0; i < 25; i++) {
             await sleep(40);
-            const got = await companionDebug("poll", { id });
+            assertDebug(owner);
+            const got = await companionDebug("poll", { id }, base, owner.signal);
+            assertDebug(owner);
             stdout = got.stdout || stdout;
             stderr = got.stderr || stderr;
             if (got.eval) {
@@ -625,24 +694,31 @@ async function runNativePyDebug(path: string, cwd: string): Promise<{ stdout: st
           evalResultWait = null;
         }
         if (cmd === "stop") {
-          await companionDebug("stop", { id });
           return { stdout, stderr };
         }
-        await companionDebug("cmd", { id, cmd, breakpoints: bps() });
+        await companionDebug("cmd", { id, cmd, breakpoints: bps() }, base, owner.signal);
+        assertDebug(owner);
       } else {
         await sleep(50);
       }
     }
   } finally {
-    await companionDebug("stop", { id });
-    if (!useIde.getState().companionKeep) await releaseCompanion();
+    // Cancellation may already have invalidated the run; stop only its known ID.
+    if (id) await companionDebug("stop", { id }, base);
+    if (held) await releaseCompanion().catch(() => undefined);
   }
 }
 
-export async function startDebug(path: string, files: Record<string, string>, opts?: { pauseOnEntry?: boolean }) {
+export async function startDebug(path: string, files: Record<string, string>, opts?: { pauseOnEntry?: boolean; run?: AgentRun; onFirst?: (s: unknown) => void }) {
+  opts?.run?.assertCurrent();
   if(useIde.getState().debug.backgroundJobId&&useIde.getState().debug.active){useIde.getState().setNotice('Zuerst die laufende Hintergrund-Debugsitzung stoppen.');return {ok:false,error:'Hintergrund-Debugsitzung aktiv.'};}
   useIde.getState().setDebug({backgroundJobId:undefined});
   if (started) debugStop();
+  const controller = new AbortController();
+  const owner: DebugOwner = { generation: ++debugGeneration, run: opts?.run, controller, signal: opts?.run ? AbortSignal.any([controller.signal, opts.run.signal]) : controller.signal, first: opts?.onFirst };
+  debugOwner = owner;
+  const onAbort = () => stopOwnedDebug(owner);
+  owner.signal.addEventListener("abort", onAbort, { once: true });
   mode = opts?.pauseOnEntry === false ? "run" : "step";
   entryPause = opts?.pauseOnEntry !== false;
   started = true;
@@ -663,22 +739,26 @@ export async function startDebug(path: string, files: Record<string, string>, op
   const startedAt = performance.now();
   kind = "live";
   replay = null;
+  let failure: { ok: false; error: string } | undefined;
   try {
     let out = { stdout: "", stderr: "" };
     if (lang === "python") {
       const cwd = useIde.getState().workspaceCwd;
       if (cwd) {
-        const native = await runNativePyDebug(path, cwd);
-        out = native ?? (await runPyDebug(files, path));
+        const native = await runNativePyDebug(path, cwd, owner);
+        assertDebug(owner);
+        out = native ?? (await runPyDebug(files, path, owner));
       } else {
-        out = await runPyDebug(files, path);
+        out = await runPyDebug(files, path, owner);
       }
     } else if (lang === "javascript" || lang === "typescript") {
       const src = lang === "typescript" ? await stripTs(files[path] ?? "", path) : (files[path] ?? "");
-      out = await runJsDebug(src, path);
+      assertDebug(owner);
+      out = await runJsDebug(src, path, owner);
     } else if (canDebug(path)) {
       kind = "replay";
-      const trace = await collectRemoteTrace(path, files, true);
+      const trace = await collectRemoteTrace(path, files, true, owner.signal);
+      assertDebug(owner);
       out = { stdout: trace.stdout, stderr: trace.stderr };
       if (trace.events.length) {
         await new Promise<void>((resolve) => {
@@ -693,6 +773,7 @@ export async function startDebug(path: string, files: Record<string, string>, op
     } else {
       out = { stdout: "", stderr: `Debug für ${lang} nicht verfügbar.` };
     }
+    assertDebug(owner);
     useIde.getState().pushOutput({
       ok: !out.stderr,
       stdout: out.stdout,
@@ -701,28 +782,38 @@ export async function startDebug(path: string, files: Record<string, string>, op
       label: `debug ${path}`,
     });
     return { ok: !out.stderr, ...out, ...debugSnapshot() };
+  } catch (error) {
+    failure = { ok: false, error: isAbortLike(error) || owner.signal.aborted ? "Debug gestoppt" : error instanceof Error ? error.message : String(error) };
+    return failure;
   } finally {
-    started = false;
-    waiter = null;
-    useIde.getState().setRunning(false);
-    useIde.getState().setDebug({ active: false, paused: false, reason: "" });
-    useIde.getState().setPluginStatus("");
-    firstLock?.(debugSnapshot());
-    firstLock = null;
+    owner.signal.removeEventListener("abort", onAbort);
+    if (debugOwner === owner) {
+      started = false;
+      waiter = null;
+      if (!useIde.getState().debug.backgroundJobId) {
+        useIde.getState().setRunning(false);
+        useIde.getState().setDebug({ active: false, paused: false, reason: "" });
+        useIde.getState().setPluginStatus("");
+      }
+      owner.first?.(failure ?? (debugCurrent(owner) ? debugSnapshot() : { ok: false, error: "Debug gestoppt" }));
+      owner.first = undefined;
+      debugOwner = undefined;
+    }
   }
 }
 
-export async function agentDebug(action: string, args: Record<string, unknown>): Promise<unknown> {
+export async function agentDebug(action: string, args: Record<string, unknown>, run?: AgentRun): Promise<unknown> {
+  run?.assertCurrent();
   if(action!=='start'){const remote=backgroundDebugCommand(action,args);if(remote)return remote;}
   const st = useIde.getState();
   if (action === "start") {
+    const scope = run ?? captureAgentRun();
     const path = String(args.path ?? st.activePath ?? "");
     if (!path || !st.files[path]) return { error: "Datei fehlt" };
     const got = new Promise((resolve) => {
-      firstLock = resolve;
+      void startDebug(path, st.files, { pauseOnEntry: args.pause_on_entry !== false, run: scope, onFirst: resolve }).then(resolve, error => resolve({ ok: false, error: String(error) }));
     });
-    void startDebug(path, st.files, { pauseOnEntry: args.pause_on_entry !== false });
-    return got;
+    return scope.wait(got);
   }
   if (action === "continue") {
     debugContinue();

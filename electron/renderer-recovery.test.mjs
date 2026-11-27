@@ -4,13 +4,19 @@ import test from "node:test";
 import { bindRendererRecovery } from "./renderer-recovery.mjs";
 
 const settle = () => new Promise(resolve => setImmediate(() => setImmediate(resolve)));
-function fixture(response = 0, fails = false, shutdown = Promise.resolve()) {
+function fixture(response = 0, fails = false, shutdown = Promise.resolve(), recoveryTimeout = 10000) {
   const window = new EventEmitter(); window.webContents = new EventEmitter(); window.isDestroyed = () => false;
   const seen = { logs: [], stopped: 0, reset: 0, restored: 0, closed: 0, dialogs: [] };
+  window.webContents.reload = () => {
+    seen.restored++;
+    if (fails === 'pending') return;
+    if (fails) window.webContents.emit('did-fail-load', {}, -2, 'ERR_FAILED', '?', true);
+    else window.webContents.emit('did-finish-load');
+  };
   bindRendererRecovery({ window,
     dialog: { showMessageBox: async (_w, options) => { seen.dialogs.push(options); return { response }; }, showErrorBox: () => {} },
     log: (...args) => seen.logs.push(args), stopJobs: () => { seen.stopped++; return shutdown; }, resetClose: () => seen.reset++,
-    restore: async () => { seen.restored++; if (fails) throw new Error("failure"); }, close: () => seen.closed++,
+    recoveryTimeout, close: () => seen.closed++,
   });
   return { window, seen, crash: reason => window.webContents.emit("render-process-gone", {}, { reason, exitCode: -1 }) };
 }
@@ -36,4 +42,12 @@ test("close choice never reloads, normal shutdown never opens recovery", async (
 test("failed recovery closes instead of leaving a black window", async () => {
   const f = fixture(0, true); f.crash("crashed"); await settle();
   assert.equal(f.seen.closed, 1); assert.equal(f.seen.logs.at(-1)[0], "renderer-recovery-failed");
+});
+test("a stalled native renderer reload has a finite deadline and removes recovery listeners", async () => {
+  const f = fixture(0, 'pending', Promise.resolve(), 10);
+  f.crash('crashed'); await settle(); assert.equal(f.seen.restored, 1);
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(f.seen.closed, 1);
+  assert.deepEqual(f.seen.logs.at(-1), ['renderer-recovery-failed', { code: 'renderer-reload-timeout' }]);
+  for(const event of ['did-finish-load','did-fail-load','destroyed']) assert.equal(f.window.webContents.listenerCount(event),0);
 });

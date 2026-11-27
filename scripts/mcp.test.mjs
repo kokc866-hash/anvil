@@ -168,6 +168,23 @@ test("MCP catalog lifecycle, scoped calls and cancellation", async (t) => {
       },
     );
     await t.test(
+      "canceling a new catalog before its waiter attaches is handled and can be retried",
+      async () => {
+        const c = { ...a, id: "cancel-on-catalog-change" }, controller = new AbortController();
+        useIde.getState().setMcpServers([c]);
+        const unsubscribe = mcp.mcpSubscribe(() => controller.abort());
+        try {
+          await assert.rejects(mcp.mcpProbe(c, [c], controller.signal), { name: "AbortError" });
+        } finally { unsubscribe(); }
+        // Node's test runner fails on any orphaned rejection from the canceled
+        // native request, even though the caller already handled its own abort.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await mcp.mcpProbe(c, [c]);
+        assert.ok(mcp.mcpSnapshot([c]).ready.has(c.id));
+        assert.equal(mcp.mcpSnapshot([c]).tools.length, 18);
+      },
+    );
+    await t.test(
       "agent resource/output tools route correctly and MCP images carry no Graph instructions",
       async () => {
         const { beginAgent } = await vite.ssrLoadModule("/src/lib/abort.ts");
@@ -242,9 +259,9 @@ test("MCP catalog lifecycle, scoped calls and cancellation", async (t) => {
     await t.test(
       "Companion token is bound to configured LAN endpoint, not arbitrary loopback",
       async () => {
-        useIde.setState({ companionUrl: "http://192.168.178.41:7845", workspaceCwd: "" });
+        useIde.setState({ companionUrl: "http://192.168.56.40:7845", workspaceCwd: "" });
         saveSecrets({ companionToken: "fixture-token" });
-        const lan = { ...a, id: "lan", url: "http://192.168.178.41:7845/mcp" };
+        const lan = { ...a, id: "lan", url: "http://192.168.56.40:7845/mcp" };
         const local = { ...a, id: "local", url: "http://127.0.0.1:9900/mcp" };
         useIde.getState().setMcpServers([lan, local]);
         await mcp.mcpList([lan, local]);

@@ -1,6 +1,6 @@
 # Installation, Updates und Freigabe
 
-Stand: 13. September 2026. [Anvil 1.3.26](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.26) ist als Setup-EXE und portable ZIP veröffentlicht. Auf Wunsch des Eigentümers sind beide Pakete unsigniert. `product-release.json` enthält noch keine Herausgeber-, Support-, Lizenz- oder Signaturangaben; die Prüfung für eine signierte Freigabe lehnt diesen Zustand weiterhin ab. Das blockiert nicht den ausdrücklich freigegebenen unsignierten Veröffentlichungsweg.
+Stand: 4. Oktober 2026, Quellstand 1.3.35. Öffentliche Pakete findest du unter [aktuelle Veröffentlichung](https://github.com/kokc866-hash/anvil/releases/latest); diese Anleitung behauptet keine Veröffentlichung des heutigen Arbeitsstands. Auf Wunsch des Eigentümers werden Setup-EXE und portable ZIP bisher unsigniert bereitgestellt. `product-release.json` enthält noch keine Herausgeber-, Support-, Lizenz- oder Signaturangaben; die Prüfung für eine signierte Freigabe lehnt diesen Zustand weiterhin ab. Das blockiert nicht den ausdrücklich freigegebenen unsignierten Veröffentlichungsweg.
 
 Die Release-Prüfungen für 1.3.26 liefen erfolgreich auf einem frischen GitHub-Windows-Runner, einschließlich Installer- und ZIP-Abnahme. Beide veröffentlichten Downloads wurden geprüft. Ein solcher Runner ist keine unveränderte Endnutzer-Windows-Installation: Der App-Start wird ohne externes Node.js im Anwendungspfad geprüft, der Baujob selbst besitzt Entwicklungswerkzeuge. Eine echte Migration von einem älteren Nutzer-Release bleibt ein zusätzlicher Nachweis.
 
@@ -14,15 +14,16 @@ Die Release-Prüfungen für 1.3.26 liefen erfolgreich auf einem frischen GitHub-
 
 ## Reproduzierbare Paketabnahme
 
-`scripts/verify-installer.ps1` startet tatsächlich die installierte Anwendung. Es kontrolliert die Oberfläche, die Datenablage neben der Anwendung, einen Speichervorgang, den Schutz ungespeicherter Änderungen bei Update und Deinstallation, Abbrechen beim Schließen, einen vollständigen Neustart, eine erneute Installation und die anschließende Deinstallation. Der gestarteten Anwendung steht kein externes Node.js im PATH zur Verfügung. Es werden keine Modellanfragen gestellt.
+`scripts/verify-installer.ps1` startet tatsächlich die installierte Anwendung. Es kontrolliert die Oberfläche, die Datenablage neben der Anwendung, einen Speichervorgang, den Schutz ungespeicherter Änderungen bei Update und Deinstallation, Abbrechen beim Schließen, einen vollständigen Neustart, eine erneute Installation und die anschließende Deinstallation. Der gestarteten Anwendung steht kein externes Node.js im PATH zur Verfügung. Die Hintergrundprüfung verwendet ausschließlich einen künstlichen Modelladapter im lokalen Testprozess; sie sendet keine Anfragen an persönliche Modellserver oder Cloudanbieter. Dabei werden die tatsächlich gepackten Agenten-, Shell-, Formatierungs-, Debugger-, Vorschau-, Skill- und Gedächtnispfade ausgeführt.
 
-Auf Entwicklerrechnern ist ausschließlich ein separat gebautes Paket mit `appId: app.anvil.installerqa`, Produktname und ausführbarer Datei `AnvilInstallerQA` erlaubt. Seine effektive Baukonfiguration wird vor der Installation kontrolliert. Die Tests verwenden einen neu angelegten Unterordner in `artifacts/installer-acceptance`; Screenshots und `result.json` bleiben dort zur Prüfung erhalten. Die normale Anvil-Installation und vorhandene Projekte werden nicht für die Prüfung verwendet.
+Auf Entwicklerrechnern ist ausschließlich ein separat gebautes Paket mit `appId: app.anvil.installerqa`, Produktname und ausführbarer Datei `AnvilInstallerQA` erlaubt. Der Paketierer prüft die kopierten Programmdateien und schreibt die tatsächlich aufgelöste Identität in `package-identity.json`, auch bei umgeleiteter Terminalausgabe. Vor der Installation werden diese Angaben und die Bindung an den frischen Build kontrolliert; fehlende Nachweise oder eine normale Anvil-Identität brechen die Prüfung ab. Der Nachweis enthält keine Signier- oder Veröffentlichungszugangsdaten. Die Tests verwenden einen neu angelegten Unterordner in `artifacts/installer-acceptance`; Screenshots und `result.json` bleiben dort zur Prüfung erhalten. Die normale Anvil-Installation und vorhandene Projekte werden nicht für die Prüfung verwendet.
 
-Nach einem aktuellen Build und `node scripts/pack-ui.mjs`:
+Der gemeinsame Paketbau erzeugt Oberfläche, Hintergrundprozess, geprüften Fingerabdruck, Setup-EXE und portable ZIP frisch. Für eine lokale Abnahme mit eigener App-Identität:
 
 ```powershell
-node node_modules/electron-builder/cli.js --win nsis --publish never --config.appId=app.anvil.installerqa --config.productName=AnvilInstallerQA --config.win.executableName=AnvilInstallerQA --config.nsis.shortcutName=AnvilInstallerQA --config.nsis.createDesktopShortcut=false --config.nsis.createStartMenuShortcut=false --config.directories.output=artifacts/installer-package
+npm run dist:win -- --config.appId=app.anvil.installerqa --config.productName=AnvilInstallerQA --config.win.executableName=AnvilInstallerQA --config.nsis.shortcutName=AnvilInstallerQA --config.nsis.createDesktopShortcut=false --config.nsis.createStartMenuShortcut=false --config.directories.output=artifacts/installer-package
 ./scripts/verify-installer.ps1 -Directory artifacts/installer-package -Executable AnvilInstallerQA.exe
+node scripts/verify-portable.mjs (Resolve-Path 'artifacts/installer-package/AnvilInstallerQA-1.3.35-win.zip').Path AnvilInstallerQA.exe
 ```
 
 Eine erneute Installation derselben Version prüft den Installer-Updateweg und den Datenerhalt. Sie ersetzt keine Migration von einer tatsächlich älteren veröffentlichten Version. Dafür muss ein entsprechendes älteres, isoliertes Prüfpaket zusätzlich bereitliegen.
@@ -40,7 +41,17 @@ Für eine spätere **signierte** Veröffentlichung:
 
 Es werden keine Identitäten oder Lizenzangaben erfunden; Zertifikate werden separat eingerichtet.
 
-## Lokales Ergebnis vom 12. September 2026
+## Lokales Ergebnis vom 4. Oktober 2026
+
+Die frischen QA-Pakete für den lokalen Quellstand **1.3.35** liegen unter `artifacts/audit-2026-10-04/implementation/packages`: `AnvilInstallerQA Setup 1.3.35.exe` und `AnvilInstallerQA-1.3.35-win.zip`. Beide enthalten Electron **44.5.1** und den aktuellen Agentendienst. Der Paketierer prüfte die kopierten Dateien vor der Auslieferung; die Installer- und ZIP-Prüfung verglichen die enthaltenen SHA-256-Werte erneut mit dem frischen Build. Die lokale QA-Identität wurde vor der Installation anhand des tatsächlichen Paketiernachweises bestätigt.
+
+Die [Installer-Abnahme](../artifacts/installer-acceptance/install-eLLYEv/result.json) und die [portable Abnahme](../artifacts/portable-acceptance/zip-fhWsue/result.json) stehen beide auf `ok: true`, ohne Rendererfehler. Beide starteten ohne externes Node im Anwendungspfad. Tatsächlich geprüft wurden Hintergrundauftrag, Shell mit gebündeltem Node, erwarteter negativer Exitcode, Dateien umbenennen/zurücknehmen, Formatierung, Canvas mit ES-Modulen, konfigurierte Steuerung, Bildaufnahme, Debugger-Wiederverbindung, Gedächtnis, dauerhafte Skills, native Go-Formatierung und Go-Trace-Auswertung. Der Modelladapter verwendete ausschließlich künstliche lokale Testantworten.
+
+Beim Setup bestanden zusätzlich echter Speichervorgang, Abbrechen beim Schließen, verweigertes Update und verweigerte Deinstallation bei offener Arbeit, vollständiger Neustart, erneute Installation mit Datenerhalt sowie anschließende Deinstallation mit erhaltenen Nutzerdaten und Run-Ausgaben. Bei der portablen Version blieben die Einstellungen nach einem vollständigen Neustart erhalten. Beide Screenshots wurden visuell geprüft.
+
+Setup und Anwendung sind laut tatsächlicher Windows-Signaturprüfung **nicht signiert**. Diese QA-Pakete sind keine neue öffentliche Veröffentlichung und ersetzen nicht die normale Anvil-Installation. Weitere Ergebnisse und Grenzen stehen im [Umsetzungsbericht](../artifacts/audit-2026-10-04/umsetzung.md); ein echter mehrstündiger Qwen-Auftrag ist damit nicht abgenommen.
+
+## Historisches lokales Ergebnis vom 12. September 2026
 
 Das isolierte Setup `artifacts/installer-package/AnvilInstallerQA Setup 1.3.24.exe` wurde tatsächlich installiert und vollständig abgenommen. Ergebnis: `artifacts/installer-acceptance/install-NPYrMa/result.json`, `ok: true`, keine Rendererfehler.
 

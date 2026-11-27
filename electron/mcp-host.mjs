@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { SorceressClient, assertSorceressConfig } from "./sorceress.mjs";
+import { initializeSystemCertificates } from "./system-certificates.mjs";
+
+// Both desktop and independent agent hosts must trust the Windows CA store.
+// Initialize before the SDK opens its first HTTPS connection; never disable TLS checks.
+const systemCertificates = initializeSystemCertificates();
+if (systemCertificates.status === "unavailable")
+  console.warn("MCP: Windows-Zertifikatsspeicher nicht verfügbar.", systemCertificates.error);
 
 export function mcpConfig(input) {
   if (!input || typeof input.id !== "string" || !/^[\w:-]{1,120}$/.test(input.id))
@@ -9,6 +17,7 @@ export function mcpConfig(input) {
     ...input,
     timeoutMs: Math.min(600_000, Math.max(8000, Number(input.timeoutMs) || 120_000)),
   };
+  if (config.service === "sorceress") assertSorceressConfig(config);
   if (
     config.connectionToken != null &&
     (typeof config.connectionToken !== "string" || !/^[\w-]{1,80}$/.test(config.connectionToken))
@@ -147,7 +156,7 @@ export class McpHost {
         if (this.sessions.get(config.id)?.controller !== controller) return;
         this.emit({ server: config.id, kind: "catalog", connectionToken: config.connectionToken });
       };
-      const client = new Client(
+      const client = config.service === "sorceress" ? new SorceressClient(config, mcpFetch) : new Client(
         { name: "anvil", version: this.version },
         {
           capabilities: {},
@@ -169,14 +178,23 @@ export class McpHost {
         fingerprint,
         config,
         ready: null,
+        connected: false,
+        startError: null,
         outputs: new Set(),
       };
       this.sessions.set(config.id, session);
       const owned = session;
+      client.onerror = (error) => {
+        if (!owned.connected) owned.startError ||= error;
+      };
       client.onclose = () => {
         if (this.sessions.get(config.id) !== owned) return;
+        // During connect the SDK rejects with the original transport error.
+        // Aborting here would replace that failure with a generic AbortError.
+        // The connect catch below owns startup cleanup.
+        if (!owned.connected) return;
         this.sessions.delete(config.id);
-        controller.abort();
+        controller.abort(new Error("MCP-Verbindung wurde vom Server beendet."));
         this.emit({ server: config.id, kind: "closed", connectionToken: config.connectionToken });
       };
       client.fallbackNotificationHandler = async (note) => {
@@ -196,7 +214,7 @@ export class McpHost {
           owned.provider = provider;
           controller.signal.throwIfAborted();
           signal?.throwIfAborted();
-          const transport =
+          const transport = config.service === "sorceress" ? null :
             config.transport === "stdio"
               ? new StdioClientTransport({
                   command: config.command,
@@ -225,19 +243,25 @@ export class McpHost {
                   },
                 });
           owned.transport = transport;
-          transport.stderr?.on("data", (data) => {
+          transport?.stderr?.on("data", (data) => {
             stderr = (stderr + String(data)).slice(-3000);
           });
           await client.connect(transport, {
             signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
             timeout: config.timeoutMs,
           });
+          owned.connected = true;
         } catch (error) {
+          const failure = owned.startError || error;
           if (this.sessions.get(config.id) === owned) await this.close(config.id);
           if (signal?.aborted) throw signal.reason;
-          if (stderr && /closed|spawn|ENOENT|connect/i.test(error.message))
-            throw new Error(`${error.message}\n${stderr}`);
-          throw error;
+          if (config.transport === "stdio") {
+            const detail = failure.code === "ENOENT"
+              ? `MCP-Programm „${config.command}“ konnte nicht gestartet werden (ENOENT). Prüfe das Programm und den optionalen Arbeitsordner.${config.command === "uvx" ? " Für uvx muss uv installiert und erreichbar sein; alternativ den vollständigen Pfad zu uvx.exe eintragen." : ""}`
+              : `MCP-Programm „${config.command}“ konnte keine Verbindung herstellen: ${failure.message}`;
+            throw new Error(`${detail}${stderr.trim() ? `\n${stderr.trim()}` : ""}`, { cause: failure });
+          }
+          throw failure;
         } finally {
           signal?.removeEventListener("abort", abort);
         }

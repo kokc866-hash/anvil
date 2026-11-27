@@ -71,7 +71,8 @@ export function filterTrailSteps(steps: TrailStep[], cap = 80): TrailStep[] {
       pack.push(s);
     } else {
       flush();
-      out.push({ ...s, path: s.path || stepPath(s), detail: shortTrail(s.detail) });
+      const detail = s.name === "mcp_call" && s.status === "err" ? s.detail : shortTrail(s.detail);
+      out.push({ ...s, path: s.path || stepPath(s), detail });
     }
   }
   flush();
@@ -79,6 +80,7 @@ export function filterTrailSteps(steps: TrailStep[], cap = 80): TrailStep[] {
 }
 
 const DE: Record<string, string> = {
+  select_tools: "Werkzeuge suchen",
   write_file: "Schreiben",
   edit_file: "Ändern",
   delete_file: "Löschen",
@@ -96,6 +98,7 @@ const DE: Record<string, string> = {
   format_file: "Format",
   grep: "Suche",
   read_file: "Lesen",
+  verify_file: "Datei prüfen",
   list_files: "Dateien",
   skill_run: "Skill",
   skill_write: "Skill",
@@ -112,6 +115,7 @@ const DE: Record<string, string> = {
 };
 
 const EN: Record<string, string> = {
+  select_tools: "Discover tools",
   write_file: "Write",
   edit_file: "Edit",
   delete_file: "Delete",
@@ -129,6 +133,7 @@ const EN: Record<string, string> = {
   format_file: "Format",
   grep: "Search",
   read_file: "Read",
+  verify_file: "Verify file",
   list_files: "Files",
   skill_run: "Skill",
   skill_write: "Skill",

@@ -32,7 +32,7 @@ function seed(id: string, name: string, when: string, body: string, score = 0.7)
 }
 
 export const SEED: Seed[] = [
-  ...PRODUCT_WORKFLOWS.map(flow => seed(flow.skill, flow.skill, `${flow.title} ${flow.titleEn}`,
+  ...PRODUCT_WORKFLOWS.filter(flow => flow.skill).map(flow => seed(flow.skill, flow.skill, `${flow.title} ${flow.titleEn}`,
     `1. Nutze read_file für die relevanten Projektdateien.\n2. ${flow.steps}\n3. Beziehe das Ergebnis auf den konkreten Auftrag und benenne fehlende Nachweise.`, 0.8)),
   seed(
     "skill-creator",

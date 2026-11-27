@@ -3,6 +3,41 @@ import {test} from "node:test";
 import {createServer} from "vite";
 import path from "node:path";
 
+test("renderer requests a fresh subscription model catalog and rejects late cancelled results", async () => {
+  const vite = await createServer({configFile:false,root:process.cwd(),resolve:{alias:{"@":path.resolve("src")}},server:{middlewareMode:true,hmr:false,watch:null},appType:"custom"});
+  const previous = globalThis.window;
+  try {
+    const { listCliModels } = await vite.ssrLoadModule("/src/lib/cli-client.ts");
+    const listeners = new Map();
+    const calls = [];
+    let reply = { ok: true, value: ["gpt-6.1-sol", "future-model"] }, cancel;
+    globalThis.window = { anvilNative: {
+      onCliEvent: (id, fn) => { listeners.set(id, fn); return () => listeners.delete(id); },
+      cliModels: async request => { calls.push(request); return reply; },
+      cliCancel: async id => { cancel = id; },
+    } };
+    assert.deepEqual(await listCliModels("codex"), ["gpt-6.1-sol", "future-model"]);
+    assert.equal(calls[0].kind, "codex");
+    assert.equal(calls[0].prompt, undefined);
+    reply = { ok: true, value: ["next-model"] };
+    assert.deepEqual(await listCliModels("codex"), ["next-model"]);
+    assert.notEqual(calls[0].id, calls[1].id);
+    assert.equal(listeners.size, 0);
+    reply = { ok: false, error: "catalog unavailable" };
+    await assert.rejects(listCliModels("codex"), /catalog unavailable/);
+    assert.equal(listeners.size, 0);
+    const controller = new AbortController();
+    let finish;
+    globalThis.window.anvilNative.cliModels = request => { calls.push(request); return new Promise(resolve => { finish = resolve; }); };
+    const pending = listCliModels("codex", controller.signal);
+    controller.abort();
+    finish({ ok: true, value: ["stale-model"] });
+    await assert.rejects(pending, /Abgebrochen/);
+    assert.equal(cancel, calls.at(-1).id);
+    assert.equal(listeners.size, 0);
+  } finally { globalThis.window = previous; await vite.close(); }
+});
+
 test("renderer CLI bridge sends images, streams before completion, validates tools and cancels without late text",async()=>{
   const vite=await createServer({configFile:false,root:process.cwd(),resolve:{alias:{"@":path.resolve("src")}},server:{middlewareMode:true,hmr:false,watch:null},appType:"custom"});
   const previous=globalThis.window;
@@ -34,6 +69,14 @@ test("renderer CLI bridge sends images, streams before completion, validates too
     beginAgent();const invalid=completeViaCli("copilot","model",messages,[],0,()=>{});
     resolveRun({ok:true,value:JSON.stringify({content:"Done",tool_calls:[{name:"unapproved",arguments:"{}"}]})});
     await assert.rejects(invalid,/unbekannt/);assert.equal(listeners.size,0);
+
+    beginAgent();
+    const paused=completeViaCli("claude","model",messages,tools,0,undefined,"off",new AbortController().signal,true);
+    resolveRun({ok:true,value:JSON.stringify({content:"",tool_calls:[{name:"set_plan",arguments:{}}]})});
+    const pausedResult=await paused;
+    assert.equal(pausedResult.tool_calls[0].function.name,"set_plan");
+    assert.deepEqual(pausedResult.toolContract.names,["read_file"]);
+    assert.equal(listeners.size,0);
 
     beginAgent();const mismatch=completeViaCli("claude","model",messages,[],0,()=>{});
     listeners.get(current.id)({text:"Different"});resolveRun({ok:true,value:'{"content":"Final","tool_calls":[]}'});

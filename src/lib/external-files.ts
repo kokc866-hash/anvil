@@ -1,17 +1,17 @@
 import { useIde } from "@/store/ide";
-import { captureDiskTarget, noteDiskFile } from "./disk-sync";
-import { readDiskFiles } from "./disk";
-import { companionReadFiles } from "./companion";
+import { captureDiskTarget, noteDiskFile, readDiskTargetFiles } from "./disk-sync";
+import { checkEmptyLocalWorkspace } from "./workspace-empty";
 let reading = false;
 /** Refresh on focus or explicit request; dirty buffers are offered as a conflict diff. */
 export async function refreshExternalFiles(): Promise<void> {
+  await checkEmptyLocalWorkspace();
   const before = useIde.getState(), target = captureDiskTarget();
   if (reading || before.agentBusy || before.running || (!target.cwd && !target.handle)) return;
   const paths = [...new Set([...before.openPaths, ...Object.keys(before.dirty).filter((p) => before.dirty[p])])];
   if (!paths.length) return;
   reading = true;
   try {
-    const disk = target.cwd ? await companionReadFiles(paths, target.cwd, target.base || undefined) : await readDiskFiles(paths, target.handle);
+    const disk = await readDiskTargetFiles(paths, target);
     const cur = useIde.getState();
     if (cur.workspaceEpoch !== before.workspaceEpoch || captureDiskTarget().handle !== target.handle) return;
     const files = { ...cur.files }, dirty = { ...cur.dirty }, bases = { ...cur.editBases }, diffs = [...cur.pendingDiffs];

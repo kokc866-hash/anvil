@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { lookupSymbol, rebuildIndex, resolveImport, searchIndex, summarizeFile, workspaceIndex, workspaceMap, workspaceTree } from "./ws-index.ts";
+import { lookupSymbol, parseFile, rebuildIndex, resolveImport, searchIndex, summarizeFile, workspaceIndex, workspaceMap, workspaceTree } from "./ws-index.ts";
 
 describe("ws-index", () => {
+  it("counts declaration lines once without changing blank-line or CRLF locations", () => {
+    const row = parseFile("symbols.ts", "\r\nconst first = 1;\r\n\r\nexport function ping() {}\r\nclass Box {}\r\n");
+    assert.deepEqual(row.symbols.map(({ name, line, text }) => ({ name, line, text })), [
+      { name: "first", line: 2, text: "const first = 1;" },
+      { name: "ping", line: 4, text: "export function ping() {}" },
+      { name: "Box", line: 5, text: "class Box {}" },
+    ]);
+  });
   it("picks names and comment", () => {
     const s = summarizeFile(
       "src/app.ts",

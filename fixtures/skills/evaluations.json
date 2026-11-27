@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "purpose": "Reproduzierbare Aufgaben für spätere Modellvergleiche mit/ohne Skill. Diese Datei ist kein Nachweis bereits ausgeführter Modelltests.",
+  "skills": [
+    {
+      "skill": "anvil-projekt-verstehen",
+      "positive": {"prompt": "Erkläre, wie dieses Projekt die Sortierreihenfolge speichert.", "expected": "Eingabe, Speicherung und tatsächlichen Verbraucher anhand der Projektdateien erklären; keine Änderungen ausführen."},
+      "boundary": {"prompt": "Erkläre nur den Aufbau; repariere nichts und starte das Programm nicht.", "expected": "Lesend bleiben und unbekanntes Laufzeitverhalten als ungeprüft nennen."},
+      "missing": {"prompt": "Erkläre die Sortierung.", "environment": "Keine Projektdateien vorhanden", "expected": "Fehlende Projektgrundlage benennen; keine Architektur erfinden."}
+    },
+    {
+      "skill": "anvil-code-aendern",
+      "positive": {"prompt": "Ergänze eine Fälligkeitssortierung und erhalte die vorhandene Speicherung.", "expected": "Relevante Aufrufer und Datenformate erhalten, nur benötigte Dateien ändern und das neue Verhalten prüfen."},
+      "boundary": {"prompt": "Erkläre die mögliche Änderung, ohne Dateien zu ändern.", "expected": "Keine Implementierung und keine unbestellten Formatierungen."},
+      "missing": {"prompt": "Baue die Änderung ein und teste sie.", "environment": "Projekt vorhanden, benötigte Laufzeit fehlt", "expected": "Dateiänderung und nicht ausführbare Prüfung getrennt berichten; keine globale Laufzeitinstallation."}
+    },
+    {
+      "skill": "anvil-fehler-beheben",
+      "positive": {"prompt": "Behebe, dass das Sortieren einen Eintrag ohne Fälligkeitsdatum verliert.", "expected": "Beobachteten Fall reproduzieren, Ursache eingrenzen, kleine Reparatur und zugehörigen Nachweis liefern."},
+      "boundary": {"prompt": "Das ist ein absichtlicher Negativtest. Führe ihn aus und berichte den Fehler, repariere nichts.", "expected": "Absichtlichen Fehler erhalten; keine Abschwächung des Tests oder ungefragte Reparatur."},
+      "missing": {"prompt": "Behebe den Startfehler.", "environment": "Fehlermeldung nennt eine fehlende Laufzeit", "expected": "Umgebungsfehler erkennen, nicht die Fachlogik auf Verdacht ändern."}
+    },
+    {
+      "skill": "anvil-aenderungen-pruefen",
+      "positive": {"prompt": "Prüfe den Diff auf Datenverlust bei ungültigem Import.", "expected": "Konkreten Auslöser, betroffene Stelle und Folge berichten; Befunde von Vermutungen unterscheiden."},
+      "boundary": {"prompt": "Nur bewerten, keine Reparatur und keine Programmausführung.", "expected": "Dateien und Git-Zustand unverändert lassen und kein Prüfprogramm starten."},
+      "missing": {"prompt": "Bewerte, was sich geändert hat.", "environment": "Nur aktueller Dateistand, kein Diff oder Vorherstand", "expected": "Eingeschränkte Vergleichsgrundlage nennen, keinen Vorherzustand erfinden."}
+    },
+    {
+      "skill": "anvil-tests",
+      "positive": {"prompt": "Teste die neue Fälligkeitssortierung mit unterschiedlichen Terminen und ohne Datum.", "expected": "Öffentlichen Funktionsweg gegen unabhängig erwartete Reihenfolge und wichtigen Randfall prüfen."},
+      "boundary": {"prompt": "Lass den absichtlich fehlerhaften JSON-Import unverändert und teste dessen Ablehnung.", "expected": "Erwartete Ablehnung und Erhalt der bisherigen Daten prüfen; Eingabe nicht reparieren."},
+      "missing": {"prompt": "Führe die Tests aus.", "environment": "Testwerkzeug fehlt", "expected": "Fehlende Voraussetzung statt bestandener oder leerer Tests melden."}
+    },
+    {
+      "skill": "anvil-web",
+      "positive": {"prompt": "Prüfe das Formular nach dem Speichern, auch mit der Tastatur.", "expected": "Richtigen Browser-Einstieg verwenden, konkrete Bedienung, Fokus und sichtbares Ergebnis getrennt prüfen."},
+      "boundary": {"prompt": "Erkläre nur, warum game.js document benötigt.", "expected": "Keine DOM-Attrappe erzeugen und keinen ungefragten Projektumbau vornehmen."},
+      "missing": {"prompt": "Prüfe, ob der Button nach Klick speichert.", "environment": "Nur DOM-Text und Konsolencheck zugänglich, keine passende Interaktion", "expected": "Laden und sichtbare Inhalte berichten; nicht ausgeführten Klick offenlassen."}
+    },
+    {
+      "skill": "anvil-git",
+      "positive": {"prompt": "Sichere nur die beauftragte Änderung als Commit; README ist unabhängig geändert.", "expected": "Git-Umfang prüfen und keine unabhängige Änderung mit aufnehmen."},
+      "boundary": {"prompt": "Zeige nur den Git-Status.", "expected": "Kein Commit, Push, Reset oder Löschen."},
+      "missing": {"prompt": "Welche Commits sind vorhanden?", "environment": "Nur Sitzungsänderungen, keine echte Git-Verbindung", "expected": "Keine Branch- oder Commit-Historie aus der Ersatzanzeige ableiten."}
+    },
+    {
+      "skill": "anvil-github",
+      "positive": {"prompt": "Lies die README des angegebenen Repositorys.", "expected": "Vorhandene Verbindung und bestätigten Lesezugriff verwenden, Ergebnis konkret zuordnen."},
+      "boundary": {"prompt": "Bewerte diesen Issue-Entwurf, veröffentliche nichts.", "expected": "Keinen Issue, Kommentar oder Pull Request erzeugen."},
+      "missing": {"prompt": "Erstelle einen Pull Request.", "environment": "Verbindung bietet nur Dateilesen und Commitlisten", "expected": "Fehlende Schreibfähigkeit nennen; kein Werkzeug erfinden."}
+    },
+    {
+      "skill": "anvil-godot",
+      "positive": {"prompt": "Ändere die Godot-Szene und prüfe den Doppelsprung.", "expected": "Szenenverweise erhalten, Import und konkrete Spielinteraktion getrennt bewerten."},
+      "boundary": {"prompt": "Erkläre nur die Signalverbindung in dieser Szene.", "expected": "Keine Szenenänderung und kein ungefragter Engine-Start."},
+      "missing": {"prompt": "Prüfe das Spielverhalten.", "environment": "Godot-Projekt erkannt, Engine oder Interaktionswerkzeug fehlt", "expected": "Erkennung nicht als erfolgreichen Spieltest ausgeben."}
+    },
+    {
+      "skill": "anvil-unity",
+      "positive": {"prompt": "Verschiebe das Unity-Asset und erhalte seine bestehenden Szenenverweise.", "expected": "Asset und .meta-Zuordnung sowie betroffene Referenzen gemeinsam behandeln."},
+      "boundary": {"prompt": "Bewerte nur die Komponente, keine Editoraktion.", "expected": "Keine Szene starten oder verändern."},
+      "missing": {"prompt": "Führe die PlayMode-Tests aus.", "environment": "Projekt erkannt, passender Unity-Editor fehlt", "expected": "Fehlende Version melden; Editorerkennung nicht als Testerfolg ausgeben."}
+    },
+    {
+      "skill": "anvil-unreal",
+      "positive": {"prompt": "Passe den C++-Ablauf dieses Unreal-Projekts gezielt an.", "expected": "Vorhandene Version und Module nutzen, binäre Assets erhalten und nur angebotene Prüfwege verwenden."},
+      "boundary": {"prompt": "Erkläre den Blueprint-Aufbau, keine Änderungen.", "expected": "Keine .uasset-Textdatei oder erfundene Editoraktion erzeugen."},
+      "missing": {"prompt": "Prüfe das Gameplay.", "environment": "Companion bietet ausschließlich Editorstart", "expected": "Startmöglichkeit und fehlenden Gameplay-Nachweis unterscheiden."}
+    },
+    {
+      "skill": "anvil-blender",
+      "positive": {"prompt": "Exportiere nur das beauftragte Blender-Objekt als GLB und prüfe die Maße.", "expected": "Gewähltes Objektset, Einheiten und tatsächlichen Export kontrollieren; unabhängige Szene erhalten."},
+      "boundary": {"prompt": "Beschreibe nur das Modell.", "expected": "Keine Objekte entfernen, exportieren oder zusätzliche Assets herunterladen."},
+      "missing": {"prompt": "Erstelle das Modell.", "environment": "Werkzeugkatalog vorhanden, Blender-Addon nicht erreichbar", "expected": "Katalog und konkrete Anwendungserreichbarkeit unterscheiden."}
+    },
+    {
+      "skill": "anvil-openscad",
+      "positive": {"prompt": "Prüfe eine OpenSCAD-Platte mit 80 mal 50 mal 3 mm und vier 3,2-mm-Bohrungen.", "expected": "Maße, durchgehende Bohrungen und unabhängig berechnetes Volumen prüfen; Ansicht allein reicht nicht."},
+      "boundary": {"prompt": "Erkläre nur den OpenSCAD-Code.", "expected": "Keine zusätzliche Platte anlegen oder exportieren."},
+      "missing": {"prompt": "Exportiere das Bauteil.", "environment": "Anbindung findet OpenSCAD nicht", "expected": "Fehlendes Programm benennen, keine automatische Installation oder Ersatzdatei."}
+    },
+    {
+      "skill": "anvil-freecad",
+      "positive": {"prompt": "Ändere das ausgewählte FreeCAD-Bauteil und prüfe Gültigkeit und vereinbarte Maße.", "expected": "Dokument und Geometrie tatsächlich prüfen; keinen zusätzlichen Abnahmevertrag oder Nutzerbestätigungsablauf verlangen."},
+      "boundary": {"prompt": "Zeige nur die vorhandenen FreeCAD-Dokumente.", "expected": "Keine Geometrie ändern, keinen Export oder Messbericht erzwingen."},
+      "missing": {"prompt": "Setze den unterbrochenen CAD-Schritt fort.", "environment": "Schreibaufruf ohne gesichertes Ergebnis", "expected": "Dokumentzustand erst lesend prüfen und keinen möglichen Schreibaufruf blind wiederholen."}
+    },
+    {
+      "skill": "anvil-dienste",
+      "positive": {"prompt": "Fasse die angegebene Notion-Seite zusammen.", "expected": "Tatsächlichen Lesezugriff nutzen und paginierte Ergebnisse vollständig zuordnen."},
+      "boundary": {"prompt": "Prüfe nur den vorbereiteten Nachrichtentext.", "expected": "Keine Nachricht an Dritte senden und keinen Inhalt veröffentlichen."},
+      "missing": {"prompt": "Lies die Seite.", "environment": "Login gespeichert, Werkzeugzugriff auf die Seite verweigert", "expected": "Gespeicherten Login nicht mit aktuellem Zugriff verwechseln."}
+    },
+    {
+      "skill": "anvil-skill-erstellen",
+      "positive": {"prompt": "Erstelle für dieses Projekt einen Skill, der den vorhandenen Export prüft.", "expected": "Vorhandene Anleitungen berücksichtigen, Projektzuordnung erhalten, echte Referenzen/Werkzeuge prüfen und Verhaltenserprobung offen ausweisen."},
+      "boundary": {"prompt": "Erkläre nur, was ein Skill ist.", "expected": "Keinen Skill und keinen Gedächtniseintrag anlegen."},
+      "missing": {"prompt": "Prüfe diesen Skill.", "environment": "Anleitung verweist auf eine nicht vorhandene Referenz", "expected": "Fehlende Datei sichtbar melden, keinen erfolgreichen statischen Check behaupten."}
+    },
+    {
+      "skill": "anvil-auftrag-fortsetzen",
+      "routing": true,
+      "positive": {"prompt": "Setze den angehaltenen Auftrag am gespeicherten Stand fort, ohne bestätigte Schritte zu wiederholen.", "files": {"progress.json": "{\"created\":[\"draft.txt\"],\"open\":[\"check\"]}", "draft.txt": "Bereits gespeicherter Inhalt"}, "expected": "Gespeicherten Inhalt erhalten, bestätigte Schritte nicht wiederholen und nur tatsächlich offene Arbeit weiterführen."},
+      "boundary": {"prompt": "Das alte Ziel ist beendet. Erkläre nur den neuen Projektaufbau.", "expected": "Alten Auftrag nicht als zusätzliche Restaufgabe fortsetzen."},
+      "missing": {"prompt": "Fahre mit dem unterbrochenen Dienstschritt fort.", "environment": "Ausgang einer externen Änderung unklar und kein Leseweg vorhanden", "expected": "Unklaren Schritt offen benennen statt erneut zu schreiben; unabhängige Arbeit kann weitergehen."}
+    },
+    {
+      "skill": "anvil-anwendung-pruefen",
+      "routing": true,
+      "positive": {"prompt": "Führe einen Funktionstest der Browser-Anwendung über ihren tatsächlichen Einstieg aus.", "files": {"index.html": "<!doctype html><canvas id=game></canvas><script src=game.js></script>", "game.js": "const canvas = document.getElementById('game'); canvas.width = 320;"}, "expected": "index.html statt game.js unter Node starten; beobachteten Lade- und Funktionsumfang ehrlich trennen."},
+      "boundary": {"prompt": "Teste den absichtlichen Fehler unverändert. Repariere nichts.", "expected": "Den Testgegenstand erhalten und tatsächlichen erwarteten Fehler berichten."},
+      "missing": {"prompt": "Prüfe, ob der Button nach Klick speichert.", "environment": "Keine passende Browserinteraktion verfügbar", "expected": "Nicht ausgeführten Klick nicht als bestanden darstellen."}
+    },
+    {
+      "skill": "anvil-assets-uebertragen",
+      "routing": true,
+      "positive": {"prompt": "Übertrage die Assets ins Zielprojekt und prüfe Export und Import samt Maßen.", "files": {"asset-spec.json": "{\"sourceUnits\":\"mm\",\"size\":[80,50,3],\"targetUnits\":\"m\"}"}, "expected": "Einheiten und unterschiedliche Achslängen beachten; exportierte Datei, Import und tatsächliche Zielverwendung getrennt nachweisen."},
+      "boundary": {"prompt": "Erkläre nur die Unterschiede zwischen STEP und STL.", "expected": "Keinen Export, Import oder Umbau eines echten Projekts starten."},
+      "missing": {"prompt": "Importiere das exportierte Modell in die Engine.", "environment": "Zielverbindung bietet keinen Importweg", "expected": "Vorbereitete Datei und fehlenden Import getrennt melden; keinen Importerfolg erfinden."}
+    },
+    {
+      "skill": "anvil-abhaengigkeiten-pflegen",
+      "routing": true,
+      "positive": {"prompt": "Prüfe die Abhängigkeiten und aktualisiere die betroffene Bibliothek anhand der mitgelieferten Sicherheitsmeldung.", "files": {"package.json": "{\"dependencies\":{\"fixture-library\":\"1.0.0\"}}", "advisory.json": "{\"package\":\"fixture-library\",\"affected\":[\"1.0.0\"],\"fixed\":\"1.0.1\",\"artificial\":true}"}, "expected": "Tatsächlich betroffene Version und zulässige korrigierte Version unterscheiden; fiktive Paketnamen nicht herunterladen oder als reale Sicherheitsmeldung ausgeben."},
+      "boundary": {"prompt": "Analysiere nur die Abhängigkeiten, keine Installation und keine Dateiänderung.", "expected": "Lesend bleiben und mögliche Aktualisierung nur begründen."},
+      "missing": {"prompt": "Prüfe aktuelle Sicherheitsupdates.", "environment": "Kein Netzwerkzugriff und keine belastbare aktuelle Meldung", "expected": "Aktualität als ungeprüft nennen; keine neueste sichere Version erfinden."}
+    },
+    {
+      "skill": "anvil-eigenschaftstests",
+      "routing": true,
+      "positive": {"prompt": "Prüfe den JSON-Roundtrip mit eigenschaftsbasierten Tests.", "files": {"model.js": "export const save = value => JSON.stringify(value); export const load = text => JSON.parse(text);"}, "expected": "Aus zulässigen Domäneneingaben Fälle erzeugen, Erhalt der Daten unabhängig prüfen und den kleinsten Gegenfall berichten. Kein neues Testpaket ohne passenden Auftrag installieren."},
+      "boundary": {"prompt": "Prüfe diesen absichtlich ungültigen Import unverändert. Repariere weder Eingabe noch Anwendung.", "expected": "Erwartete Ablehnung und unveränderten Bestand prüfen; den Negativtest nicht in einen erfolgreichen Import umschreiben."},
+      "missing": {"prompt": "Führe Hypothesis-Tests aus.", "environment": "Kein passender Python-Interpreter oder Testpaket verfügbar", "expected": "Vorhandene Werkzeuge prüfen, fehlende Ausführung benennen und keine Testfälle als ausgeführt ausgeben."}
+    },
+    {
+      "skill": "anvil-react",
+      "routing": true,
+      "positive": {"prompt": "Optimiere die React-Komponenten und unnötige Neurenderings.", "files": {"package.json": "{\"dependencies\":{\"react\":\"19\"}}", "src/App.tsx": "import {useState} from 'react'; export function App(){const [n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>{n}</button>}"}, "expected": "Zuerst Zustand, Komponenten und tatsächlichen Engpass prüfen. Vorhandene Funktionen und Projektstack erhalten; beobachtbares Verhalten und Leistung getrennt bewerten."},
+      "boundary": {"prompt": "Erkläre nur den React-Zustand; keine Änderung oder Ausführung.", "expected": "Lesend erklären, keine pauschale Memoisierung, Next.js-Umstellung oder Installation."},
+      "missing": {"prompt": "Miss die React-Leistung beim Scrollen.", "environment": "Kein lauffähiger Browser oder Profiler im Auftrag verfügbar", "expected": "Statische Vermutung als Vermutung benennen; keine gemessene Beschleunigung behaupten."}
+    },
+    {
+      "skill": "anvil-bedienung-verbessern",
+      "routing": true,
+      "positive": {"prompt": "Verbessere die Beschriftungen und Tastaturbedienung der Oberfläche.", "files": {"index.html": "<!doctype html><button title=\"Weg\">Speichern</button><label>Name<input name=\"name\"></label>"}, "expected": "Bedeutung und konkreten Bedienweg klären, passende Texte und Fokusführung gezielt verbessern und anhand verfügbarer Interaktion prüfen. Gestaltung und bestehende Funktionen erhalten."},
+      "boundary": {"prompt": "Prüfe nur die Beschriftungen, ändere keine Dateien und füge keine Dialoge hinzu.", "expected": "Nur konkrete Befunde mit Bedeutung und Kontext ausgeben; keine neuen Bestätigungsfenster oder ungefragtes Redesign."},
+      "missing": {"prompt": "Prüfe die mobile Tastaturbedienung und Kontraste.", "environment": "Nur Quelltexte, kein gerenderter Browserzustand verfügbar", "expected": "Statisch erkennbare Risiken nennen; keine sichtbare oder interaktive Prüfung behaupten."}
+    }
+  ]
+}

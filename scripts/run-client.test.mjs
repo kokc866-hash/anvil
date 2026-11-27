@@ -51,14 +51,18 @@ test("manual Run survives agent Stop, keeps the custom URL, and returns native e
     companionEnsure: async () => { held++; return { ok: true }; },
     companionRelease: async () => { released++; return { ok: true }; },
   };
+  const statusId = 'fixture/1234567890123-abcdef123456';
   globalThis.fetch = async () => {
     assert.equal(held - released, 1, "status requests must hold the local Companion alive");
-    return Response.json({ ok: false, running: false, stderr: "late process failure", stdout: "", duration: 1000, code: 9, cmd: "fixture" });
+    return Response.json({ ok: false, running: false, stderr: "late process failure", stdout: "", duration: 1000, code: 9, cmd: "fixture", stage: { kind: "log", id: statusId } });
   };
   const { companionRunStatus } = await server.ssrLoadModule("/src/lib/companion.ts");
-  assert.equal((await companionRunStatus("fixture/123")).stderr, "late process failure");
+  assert.equal((await companionRunStatus(statusId)).stderr, "late process failure");
   assert.equal(held, 1);
   assert.equal(released, 1);
+  globalThis.fetch = async () => Response.json({ ok: true, running: false, stderr: "", stdout: "", duration: 1, code: 0, cmd: "fixture", stage: { kind: "log", id: 'other/1234567890123-abcdef123456' } });
+  await assert.rejects(companionRunStatus(statusId), /anderen Run-ID/);
+  assert.equal(held, 2);assert.equal(released, 2, 'a mismatched status also releases only its Companion keepalive');
   // The editor coordinator must release its own busy state across project switches.
   let started, finish;
   const began = new Promise((r) => { started = r; });

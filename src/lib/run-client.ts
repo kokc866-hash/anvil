@@ -8,10 +8,12 @@ import { langFromPath, langMeta, type LangId } from "./languages";
 import { compileFiles } from "./compile-files";
 import type { RunResult } from "@/store/ide";
 import { useIde } from "@/store/ide";
-import { throwIfAborted, withAgentTimeout } from "./abort";
+import { withAgentTimeout } from "./abort";
+import { captureAgentRun, type AgentRun } from "./agent-run";
 import { scrubRunError } from "./run-error";
 import { isTestFile } from "./test-parse";
 import { isExecutablePath } from "./run-target";
+import { captureNativeRunScope } from "./native-run";
 
 type PyodideLike = {
   runPythonAsync: (code: string) => Promise<unknown>;
@@ -261,86 +263,72 @@ async function companionJob(
   lang: string,
   path: string,
   files: Record<string, string>,
-  opts?: { asTest?: boolean },
+  opts?: { asTest?: boolean; run?: AgentRun },
 ): Promise<RunResult | null> {
   const st = useIde.getState();
+  const watchScope = captureNativeRunScope();
   const url = st.companionUrl || "http://127.0.0.1:7845";
-  const signal = st.agentBusy ? withAgentTimeout(0) : undefined;
+  const signal = opts?.run?.signal ?? (st.agentBusy ? withAgentTimeout(0) : undefined);
   const { withCompanion } = await import("./companion-life");
   const { nativeHelper } = await import("./helper-local");
+  opts?.run?.assertCurrent();
   return withCompanion(async () => {
     try {
-      const { companionCompile } = await import("./companion");
+      const { companionCompile, watchCompanionRun } = await import("./companion");
+      opts?.run?.assertCurrent();
       const job = await companionCompile({ lang, entry: path, files: compileFiles(lang, path, files),
         cwd: st.workspaceCwd || undefined, asTest: opts?.asTest }, url, signal);
-      if (job.running && job.stage?.id) watchNativeRun(job.stage.id, url);
+      opts?.run?.assertCurrent();
+      if (job.running && job.stage?.id) watchCompanionRun(job.stage.id, url, watchScope);
       return { ok: job.ok, stdout: job.stdout, stderr: job.stderr, duration: job.duration / 1000,
         label: path, stage: job.stage ?? { kind: job.running ? "window" : "log" } };
     } catch (err) {
+      opts?.run?.assertCurrent();
       if (signal?.aborted) throw err;
       // The web build can run Python in the browser when no local Companion is configured.
       if (!nativeHelper() && url === "http://127.0.0.1:7845" && err instanceof TypeError) return null;
       return { ok: false, stdout: "", stderr: `Companion ${url}: ${err instanceof Error ? err.message : String(err)}`,
         duration: 0, label: path, stage: { kind: "log" } };
     }
-  }, url);
-}
-
-const nativeWatches = new Set<string>();
-function watchNativeRun(id: string, base: string) {
-  const key = `${base}/${id}`;
-  if (nativeWatches.has(key)) return;
-  nativeWatches.add(key);
-  let failures = 0;
-  const poll = async () => {
-    try {
-      const { companionRunStatus } = await import("./companion");
-      const r = await companionRunStatus(id, base);
-      failures = 0;
-      useIde.setState((st) => ({
-        output: st.output.map((o) => o.stage?.id === id ? { ...o, ok: r.ok, stdout: r.stdout, stderr: r.stderr, duration: r.duration / 1000, stage: r.stage } : o),
-        chat: st.chat.map((c) => c.lastRun?.id === id ? { ...c, lastRun: { ...c.lastRun, ok: r.ok, stdout: r.stdout, stderr: r.stderr, running: r.running } } : c),
-      }));
-      if (!r.running) { nativeWatches.delete(key); return; }
-    } catch {
-      if (++failures >= 3) {
-        useIde.setState((st) => ({ output: st.output.map((o) => o.stage?.id === id ? { ...o, ok: false,
-          stderr: [o.stderr, "Run-Status nicht mehr erreichbar. Companion-Verbindung unterbrochen."].filter(Boolean).join("\n"),
-          stage: { ...o.stage, kind: "log" } } : o) }));
-        nativeWatches.delete(key); return;
-      }
-    }
-    setTimeout(() => void poll(), 2000);
-  };
-  setTimeout(() => void poll(), 1000);
+  }, url, st.workspaceCwd, opts?.run);
 }
 
 export async function runFile(
   path: string,
   files: Record<string, string>,
-  opts?: { asTest?: boolean },
+  opts?: { asTest?: boolean; run?: AgentRun },
 ): Promise<RunResult> {
-  if (useIde.getState().agentBusy) throwIfAborted();
+  const epoch = useIde.getState().workspaceEpoch;
+  const run = opts?.run ?? (useIde.getState().agentBusy ? captureAgentRun(() => useIde.getState().workspaceEpoch === epoch) : undefined);
+  opts = { ...opts, run };
+  run?.assertCurrent();
   const lang = langFromPath(path);
   const code = files[path];
   const started = performance.now();
-  const done = (r: Omit<RunResult, "duration" | "label">): RunResult => ({
+  const done = (r: Omit<RunResult, "duration" | "label">): RunResult => {
+    run?.assertCurrent();
+    return ({
     ...r,
     duration: (performance.now() - started) / 1000,
     label: path,
-  });
+    });
+  };
   const graphical = async (page: string, entry = path): Promise<RunResult> => {
     const st = useIde.getState();
     let html: string | undefined;
-    const signal = st.agentBusy ? withAgentTimeout(0) : undefined;
+    const signal = run?.signal;
     try {
       html = withEngine(await prepareHtmlProject(page, files, entry), st.inputMap);
+      run?.assertCurrent();
       st.setRunPath(path);
       const { ensureCanvasOutput } = await import("./run-window");
+      run?.assertCurrent();
       await ensureCanvasOutput();
+      run?.assertCurrent();
       const frame = await findCanvasFrame(canvasScope(useIde.getState()), 7000, signal);
+      run?.assertCurrent();
       const result = await canvasCommand(frame, "load", { html, restart: true }, signal);
-      return done({ ok: result.ok, stdout: result.ok ? "Ausgabe bereit." : "", stderr: result.error || "", html,
+      return done({ ok: result.ok, stdout: result.ok ? "Ausgabe bereit." : "", stderr: result.error || "", html, observation:result.observation,
         stage: { kind: "html", id: result.session, state: result.state } });
     } catch (error) {
       return done({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), html, stage: { kind: "html", state: "failed" } });
@@ -358,6 +346,7 @@ export async function runFile(
   }
   if (lang === "python") {
     const live = await companionJob("python", path, files, opts);
+    run?.assertCurrent();
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runPython(files, path);
     return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
@@ -366,6 +355,7 @@ export async function runFile(
     let src: string;
     try { src = lang === "typescript" ? await stripTs(code, path) : code; }
     catch (error) { return done({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) }); }
+    run?.assertCurrent();
     const testing = Boolean(opts?.asTest) || isTestFile(path);
     if (!testing && useIde.getState().runHtml) {
       const host = projectHtmlEntry(path, files, isEsm(src));
@@ -374,16 +364,20 @@ export async function runFile(
     }
 
     const live = await companionJob(lang, path, files, opts);
+    run?.assertCurrent();
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const { stdout, stderr } = await runJsSandboxed(src);
     return done({ ok: !stderr, stdout, stderr, stage: { kind: "log" } });
   }
   if (langMeta(lang)?.run === "remote") {
     const live = await companionJob(lang, path, files, opts);
+    run?.assertCurrent();
     if (live) return done({ ok: live.ok, stdout: live.stdout, stderr: live.stderr, stage: live.stage });
     const remoteFiles = compileFiles(lang, path, files);
     const { withCompanion } = await import("./companion-life");
+    run?.assertCurrent();
     return withCompanion(async () => {
+      run?.assertCurrent();
       if (!useIde.getState().netCompiler) {
         return done({ ok: false, stdout: "", stderr: "Compiler fehlt. In Einstellungen → Companion in Anvil laden." });
       }
@@ -393,6 +387,7 @@ export async function runFile(
           entry: path,
           files: remoteFiles,
         },
+        signal: run?.signal,
       });
       return done({
         ok: remote.ok,
@@ -400,7 +395,7 @@ export async function runFile(
         stderr: remote.stderr,
         stage: { kind: "log" },
       });
-    });
+    }, undefined, undefined, run);
   }
   return done({
     ok: false,

@@ -35,7 +35,7 @@ Testgrenze: Nur der Windows-Ordnerdialog wurde automatisiert mit dem vorbereitet
 
 ## Prüfrahmen
 
-Direkte Bedienung der Windows-App mit dem Computer-Use-Skill, ergänzt durch vorhandene automatisierte Tests und gezielte Quellcodeprüfung nach dem Code-Verification-Skill. Für Änderungen wurde ein eigenes Profil mit einem eigenen Projekt unter `I:\Anvil\data\produkt-pruefung-20260912` verwendet. Das vorhandene Nutzerprojekt war nicht Ziel des Änderungsauftrags. Die Testinstanz hatte eigene App-Ports; die Oberfläche nutzte allerdings den bereits erreichbaren Companion unter Port 7845. Damit war der Companion keine vollständig unabhängige Testumgebung.
+Direkte Bedienung der Windows-App mit dem Computer-Use-Skill, ergänzt durch vorhandene automatisierte Tests und gezielte Quellcodeprüfung nach dem Code-Verification-Skill. Für Änderungen wurde ein eigenes Profil mit einem eigenen Projekt unter `produkt-pruefung-20260912` verwendet. Das vorhandene Nutzerprojekt war nicht Ziel des Änderungsauftrags. Die Testinstanz hatte eigene App-Ports; die Oberfläche nutzte allerdings den bereits erreichbaren Companion unter Port 7845. Damit war der Companion keine vollständig unabhängige Testumgebung.
 
 Der Desktop-Arbeitsplatz wurde maximiert bei 2560 × 1392 Pixeln betrachtet. Einzelne Einrichtungsschritte erfolgten zuvor im normalen App-Fenster. Die frühere Browser-Vorschau mit 786 Pixeln Breite ist keine Grundlage für eine negative Desktop-Layoutbewertung.
 

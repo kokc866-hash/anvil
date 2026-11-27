@@ -1,5 +1,5 @@
 import type { AfterWrite, HarnessPhase } from "./harness.ts";
-import { dumpGraph, dumpHarness, GRAPH_PATH, HARNESS_PATH, guessProjectHarness, loadProjectGraph, loadProjectHarness, type ProjectGraph, type ProjectGraphEdge, type ProjectHarness } from "./harness-project.ts";
+import { dumpGraph, dumpHarness, GRAPH_PATH, HARNESS_PATH, guessProjectHarness, loadProjectGraph, loadProjectHarness, parseGraphJson, type ProjectGraph, type ProjectGraphEdge, type ProjectHarness } from "./harness-project.ts";
 import { classify, density, fromPairs, wouldCycle } from "./graph-theory.ts";
 
 export const BOARD_PATH = ".anvil/board.json";
@@ -33,6 +33,7 @@ export type Board = {
   cam: BoardCam;
   nodes: BoardNode[];
   wires: BoardWire[];
+  graph?: Pick<ProjectGraph, "version" | "recipes">;
 };
 
 export type BoardSettings = {
@@ -68,6 +69,7 @@ const SPINE: BoardWire[] = [
 /** Where a graph-tool hangs. Not always Run. */
 export function sourcePhase(edge: ProjectGraphEdge, preferred?: string | null): string {
   if (preferred && PHASES.some((p) => p.id === preferred)) return preferred;
+  if (edge.phase && PHASES.some((p) => p.id === edge.phase)) return edge.phase;
   const m: Record<string, string> = {
     preview: "see",
     play: "see",
@@ -103,6 +105,8 @@ export function applySettings(board: Board, s: BoardSettings): Board {
   return {
     ...board,
     wires: board.wires.map((w) => {
+      // Global switches configure the spine, never revive a disabled individual rule.
+      if (!SPINE.some((p) => p.id === w.id)) return w;
       if (w.kind === "fail") return { ...w, on: s.runLoop };
       if (w.kind === "see") return { ...w, on: s.graphLoop };
       if (w.kind === "engine") return { ...w, on: Boolean(s.engineLoop) || s.afterWrite === "engine" };
@@ -137,23 +141,59 @@ export function compileBoard(board: Board, s: BoardSettings): { harness: Project
   const edges: ProjectGraphEdge[] = [];
   const seen = new Set<string>();
   const push = (e: ProjectGraphEdge) => {
-    const k = `${e.edge}:${e.tool ?? ""}:${e.glob ?? ""}`;
+    const k = e.id ?? `${e.phase ?? ""}:${e.edge}:${e.tool ?? ""}:${e.glob ?? ""}`;
     if (seen.has(k)) return;
     seen.add(k);
     edges.push(e);
   };
-  for (const n of board.nodes) if (n.kind === "edge" && n.edge) push(n.edge);
+  const byId = new Map(board.nodes.map((n) => [n.id, n]));
+  const activeWires = board.wires.filter((w) => w.on && byId.has(w.from) && byId.has(w.to));
+  const phases = new Set<string>(["plan"]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const w of activeWires) {
+      if (byId.get(w.from)?.kind === "phase" && byId.get(w.to)?.kind === "phase" && phases.has(w.from) && !phases.has(w.to)) {
+        phases.add(w.to);
+        grew = true;
+      }
+    }
+  }
+  const active = new Map<string, boolean>();
+  const evaluating = new Set<string>();
+  const isActive = (id: string): boolean => {
+    if (active.has(id)) return active.get(id)!;
+    const n = byId.get(id);
+    if (n?.kind === "phase") return phases.has(id);
+    if (!n?.edge || n.edge.enabled === false || evaluating.has(id)) return false;
+    evaluating.add(id);
+    const incoming = activeWires.filter((w) => w.to === id);
+    const dependencies = [...(n.edge.dependsOn ?? []), ...incoming.filter((w) => byId.get(w.from)?.kind === "edge").map((w) => w.from)];
+    const ok = incoming.some((w) => isActive(w.from)) && dependencies.every(isActive);
+    evaluating.delete(id);
+    active.set(id, ok);
+    return ok;
+  };
+  for (const n of board.nodes) {
+    if (n.kind !== "edge" || !n.edge || !isActive(n.id)) continue;
+    const incoming = activeWires.filter((w) => w.to === n.id);
+    const source = incoming.map((w) => byId.get(w.from)).find((node) => node?.kind === "phase" && isActive(node.id));
+    const phase = (source?.phase ?? sourcePhase(n.edge)) as HarnessPhase;
+    const dependsOn = [...new Set([...(n.edge.dependsOn ?? []), ...incoming.filter((w) => byId.get(w.from)?.kind === "edge").map((w) => w.from)])];
+    push({ ...n.edge, id: n.id, phase, enabled: true, ...(dependsOn.length ? { dependsOn } : {}) });
+  }
   for (const w of board.wires) {
     if (!w.on || !SPINE.some((x) => x.id === w.id)) continue;
+    if (!phases.has(w.from) || !phases.has(w.to)) continue;
     const to = board.nodes.find((n) => n.id === w.to);
     if (w.kind === "see" || to?.phase === "see") {
-      push({ when: "Vorschau nach Run", edge: "preview", tool: "see_run", glob: "*.{html,htm}" });
+      push({ id: "spine-preview", phase: "see", condition: "success", when: "Vorschau nach Run", edge: "preview", tool: "see_run", glob: "*.{html,htm}" });
     }
     if (w.kind === "fail" || to?.phase === "patch") {
-      push({ when: "Fehler → Patch → Run", edge: "run", tool: "run_file", glob: "*.{py,js,ts,tsx}" });
+      push({ id: "spine-repair", phase: "patch", condition: "failure", when: "Fehler → Patch → Run", edge: "run", tool: "run_file", glob: "*.{py,js,ts,tsx}" });
     }
     if (w.kind === "engine" || to?.phase === "engine") {
-      push({ when: "Engine-Datei", edge: "engine", tool: "engine_run", glob: "*.{gd,cs,cpp,rs,godot}" });
+      push({ id: "spine-engine", phase: "engine", condition: "changed", when: "Engine-Datei", edge: "engine", tool: "engine_run", glob: "*.{gd,cs,cpp,rs,godot}" });
     }
   }
   return {
@@ -168,7 +208,7 @@ export function compileBoard(board: Board, s: BoardSettings): { harness: Project
       maxRounds: s.maxRounds,
       afterWrite,
     },
-    graph: { name: "board", edges },
+    graph: { ...board.graph, name: "board", edges },
   };
 }
 
@@ -184,7 +224,15 @@ function placeUnder(board: Board, from: string, index: number): { x: number; y: 
   const col = PHASES.find((p) => p.id === from);
   const x = src?.x ?? col?.x ?? 48;
   const y0 = Math.max(TOOL_Y, (src?.y ?? 48) + NODE_H + 36);
-  return { x, y: y0 + index * (NODE_H + 20) };
+  const gap = 20;
+  let y = y0 + index * (NODE_H + gap);
+  // Count geometry, not connections: disabled/disconnected nodes still occupy space.
+  // Ascending fixed-height obstacles need one bounded pass; old positions never move.
+  const obstacles = board.nodes.filter(node => x < node.x + NODE_W + gap && x + NODE_W + gap > node.x).sort((a, b) => a.y - b.y);
+  for (const node of obstacles) {
+    if (y < node.y + NODE_H + gap && y + NODE_H + gap > node.y) y = node.y + NODE_H + gap;
+  }
+  return { x, y };
 }
 
 let edgeSeq = 0;
@@ -198,19 +246,19 @@ export function addEdgeNode(board: Board, edge: ProjectGraphEdge, fromId?: strin
   const kids = board.wires.filter((w) => w.from === from && board.nodes.find((n) => n.id === w.to)?.kind === "edge").length;
   const pos = placeUnder(board, from, kids);
   const node: BoardNode = {
-    id: nextNodeId(),
+    id: edge.id && !board.nodes.some((n) => n.id === edge.id) ? edge.id : nextNodeId(),
     kind: "edge",
     x: pos.x,
     y: pos.y,
     label: edge.glob || edge.tool || edge.edge,
-    edge,
+    edge: { ...edge, phase: from as HarnessPhase },
   };
   const wire: BoardWire = {
     id: `w-${node.id}`,
     from,
     to: node.id,
     kind: wireKindOf(edge),
-    on: true,
+    on: edge.enabled !== false,
   };
   return { ...board, nodes: [...board.nodes, node], wires: [...board.wires, wire] };
 }
@@ -251,7 +299,6 @@ export function connectNodes(board: Board, fromId: string, toId: string): Board 
     if (hit.from === toId && hit.to === fromId) return board;
     return { ...board, wires: board.wires.map((w) => (w.id === hit.id ? { ...w, on: true } : w)) };
   }
-  if (from.kind === "edge" && to.kind === "edge") return board;
   if (wouldCycle(boardGraph(board), fromId, toId)) return board;
   const kind = inferKind(from, to);
   return {
@@ -270,13 +317,21 @@ export function removeWire(board: Board, id: string): Board {
 }
 
 export function mergeGraphNodes(board: Board, edges: ProjectGraphEdge[]): Board {
-  const have = new Set(board.nodes.map((n) => `${n.edge?.tool ?? ""}:${n.edge?.glob ?? n.edge?.when ?? n.id}`));
+  const haveIds = new Set(board.nodes.map((n) => n.id));
+  const key = (e: ProjectGraphEdge) => `${e.phase ?? sourcePhase(e)}:${e.edge}:${e.tool ?? ""}:${e.glob ?? e.when}:${e.condition ?? ""}`;
+  const have = new Set(board.nodes.filter((n) => n.edge).map((n) => key(n.edge!)));
+  const added = new Set<string>();
   let next = board;
   for (const e of edges) {
-    const k = `${e.tool ?? ""}:${e.glob ?? e.when}`;
-    if (have.has(k)) continue;
+    const k = key(e);
+    if (e.id ? haveIds.has(e.id) : have.has(k)) continue;
     next = addEdgeNode(next, e);
+    added.add(next.nodes.at(-1)!.id);
+    if (e.id) haveIds.add(e.id);
     have.add(k);
+  }
+  for (const node of next.nodes.filter(node => added.has(node.id))) {
+    for (const dependency of node.edge?.dependsOn ?? []) next = connectNodes(next, dependency, node.id);
   }
   return next;
 }
@@ -329,7 +384,7 @@ function uniqueEdges(edges: ProjectGraphEdge[]): ProjectGraphEdge[] {
   const seen = new Set<string>();
   const out: ProjectGraphEdge[] = [];
   for (const e of edges) {
-    const k = `${e.edge}:${e.tool ?? ""}:${e.glob ?? ""}`;
+    const k = e.id ?? `${e.phase ?? ""}:${e.edge}:${e.tool ?? ""}:${e.glob ?? ""}:${e.condition ?? ""}`;
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(e);
@@ -343,7 +398,7 @@ function uniqueEdges(edges: ProjectGraphEdge[]): ProjectGraphEdge[] {
   return out;
 }
 
-/** Pipeline: spine → branches → leaves. No mesh, no reverse, no tool-to-tool. */
+/** Put the phase spine first; ordered tool dependencies remain connected. */
 export function layoutPipeline(board: Board): Board {
   const pos = new Map(PHASES.map((p) => [p.id, p]));
   const nodes = board.nodes.map((n) => {
@@ -374,57 +429,39 @@ export function layoutPipeline(board: Board): Board {
 
 export function structureWires(board: Board): Board {
   const byId = new Map(board.nodes.map((n) => [n.id, n]));
-  const prevOn = new Map(board.wires.map((w) => [w.id, w.on]));
-  const wires: BoardWire[] = SPINE.map((s) => ({
-    ...s,
-    on: s.kind === "flow" ? true : (prevOn.get(s.id) ?? s.on),
-  }));
-
-  for (const n of board.nodes) {
-    if (n.kind !== "edge" || !n.edge) continue;
-    const from = sourcePhase(n.edge);
-    if (!byId.has(from)) continue;
-    wires.push({
-      id: `w-${n.id}`,
-      from,
-      to: n.id,
-      kind: wireKindOf(n.edge),
-      on: prevOn.get(`w-${n.id}`) ?? true,
-    });
-  }
-
+  const wires: BoardWire[] = [];
+  const seen = new Set<string>();
   for (const w of board.wires) {
-    if (SPINE.some((s) => s.id === w.id)) continue;
     if (w.from === w.to) continue;
     const a = byId.get(w.from);
     const b = byId.get(w.to);
     if (!a || !b) continue;
-    if (a.kind === "edge" || b.kind === "edge") continue;
-    const ra = RANK[a.phase ?? a.id] ?? 9;
-    const rb = RANK[b.phase ?? b.id] ?? 9;
-    if (ra >= rb) continue;
-    if (wires.some((x) => x.from === w.from && x.to === w.to)) continue;
+    if (a.kind === "phase" && b.kind === "phase") {
+      const ra = RANK[a.phase ?? a.id] ?? 9;
+      const rb = RANK[b.phase ?? b.id] ?? 9;
+      if (ra >= rb) continue;
+    }
+    const key = `${w.from}>${w.to}`;
+    if (seen.has(key)) continue;
+    if (w.on && wouldCycle(fromPairs(board.nodes.map((n) => n.id), wires.filter((p) => p.on)), w.from, w.to)) continue;
+    seen.add(key);
     wires.push({ ...w, id: w.id || `w-${w.from}-${w.to}` });
   }
-
-  const seen = new Set<string>();
-  const clean = wires.filter((w) => {
-    if (!byId.has(w.from) || !byId.has(w.to)) return false;
-    const k = `${w.from}>${w.to}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-  return { ...board, wires: clean };
+  // A missing wire means disconnected. Saving must not invent an active connection.
+  return { ...board, wires };
 }
 
 export function tidyWires(board: Board): Board {
   return structureWires(board);
 }
 
-export function rebuildBoardFromGraph(edges: ProjectGraphEdge[], s: BoardSettings): Board {
+export function rebuildBoardFromGraph(edges: ProjectGraphEdge[], s: BoardSettings, metadata?: Pick<ProjectGraph, "version" | "recipes">): Board {
   let board = defaultBoard(s);
+  if (metadata) board.graph = { ...(metadata.version ? { version: metadata.version } : {}), ...(metadata.recipes ? { recipes: metadata.recipes } : {}) };
   for (const e of uniqueEdges(edges)) board = addEdgeNode(board, e);
+  for (const node of board.nodes) {
+    for (const dependency of node.edge?.dependsOn ?? []) board = connectNodes(board, dependency, node.id);
+  }
   board = layoutPipeline(board);
   board = structureWires(board);
   return applySettings(board, s);
@@ -548,10 +585,13 @@ export function parseBoard(raw: string): Board | null {
   try {
     const j = JSON.parse(raw) as Board;
     if (!j?.nodes || !j?.wires) return null;
+    const metadata = j.graph ? parseGraphJson(JSON.stringify(j.graph)) : undefined;
+    if (j.graph && !metadata) return null;
     return tidyWires({
       cam: { x: j.cam?.x ?? 24, y: j.cam?.y ?? 16, z: j.cam?.z ?? 1 },
       nodes: j.nodes,
       wires: j.wires.map((w) => ({ ...w, kind: w.kind || "flow", on: Boolean(w.on) })),
+      ...(metadata ? { graph: { ...(metadata.version ? { version: metadata.version } : {}), ...(metadata.recipes ? { recipes: metadata.recipes } : {}) } } : {}),
     });
   } catch {
     return null;
@@ -732,6 +772,6 @@ export function syncBoardSettings(files: Record<string, string>): Record<string,
 export function syncBoardFromFiles(files: Record<string, string>): Record<string, string> {
   const s = settingsFromFiles(files);
   const g = loadProjectGraph(files);
-  const board = rebuildBoardFromGraph(g?.edges ?? [], s);
+  const board = rebuildBoardFromGraph(g?.edges ?? [], s, g ?? undefined);
   return filesFromBoard(board, s);
 }

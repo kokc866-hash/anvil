@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { ServiceToolPicker } from "./service-tool-picker";
 import { EngineConnections } from "./engine-connections";
@@ -24,6 +24,7 @@ import {
   createService,
   disconnectService,
   updateService,
+  saveServiceApiKey,
 } from "@/lib/mcp-services";
 
 const field =
@@ -57,6 +58,7 @@ function ServiceConnection({ server }: { server: McpServer }) {
   const mode = useIde((s) => s.surfaceMode);
   const active = useIde((s) => s.activeSurfaceId);
   const [storedLogin, setStoredLogin] = useState<boolean | null>(null);
+  const [apiKey, setApiKey] = useState("");
   const [statusError, setStatusError] = useState("");
   const [busy, setBusy] = useState("");
   const [loginProgress, setLoginProgress] = useState("");
@@ -71,30 +73,38 @@ function ServiceConnection({ server }: { server: McpServer }) {
   const loginConfirmed = useRef(false);
   const mounted = useRef(true);
   const catalog = mcpServiceCatalog(server);
-  const selected = new Set(server.allowedTools || []);
-  const availableSelected = catalog.tools.filter((tool) => selected.has(tool.name));
+  const selected = useMemo(() => new Set(server.allowedTools || []), [server.allowedTools]);
+  const availableSelected = useMemo(
+    () => catalog.tools.filter((tool) => selected.has(tool.name)),
+    [selected, catalog.tools],
+  );
+  const allowedToolsRevision = JSON.stringify(server.allowedTools);
   const chosenTool = availableSelected.find((tool) => tool.name === toolName);
   const catalogError = mcpListError(server.id);
+  const bearer = server.auth === "bearer";
 
-  function current() {
+  const current = useCallback(() => {
     const latest = useIde.getState().mcpServers.find((item) => item.id === server.id);
     if (!latest) throw new Error("Diese Verbindung wurde entfernt.");
     return latest;
-  }
-  async function refreshLocalStatus(signal: AbortSignal) {
-    try {
-      const status = await mcpAuthStatus(current(), signal);
-      if (!signal.aborted && mounted.current) {
-        setStoredLogin(status.authenticated);
-        setStatusError("");
+  }, [server.id]);
+  const refreshLocalStatus = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const status = await mcpAuthStatus(current(), signal);
+        if (!signal.aborted && mounted.current) {
+          setStoredLogin(status.authenticated);
+          setStatusError("");
+        }
+      } catch (failure) {
+        if (!signal.aborted && mounted.current) {
+          setStoredLogin(null);
+          setStatusError(errorText(failure));
+        }
       }
-    } catch (failure) {
-      if (!signal.aborted && mounted.current) {
-        setStoredLogin(null);
-        setStatusError(errorText(failure));
-      }
-    }
-  }
+    },
+    [current],
+  );
   useEffect(() => {
     mounted.current = true;
     const status = new AbortController();
@@ -109,18 +119,18 @@ function ServiceConnection({ server }: { server: McpServer }) {
       status.abort();
       controller.current?.abort();
     };
-  }, [server.id, server.url, server.oauthClientId]);
+  }, [server.id, server.url, server.oauthClientId, refreshLocalStatus]);
   useEffect(() => {
     setResult("");
     setMessage("");
-  }, [server.enabled, JSON.stringify(server.allowedTools), server.allowResources]);
+  }, [server.enabled, allowedToolsRevision, server.allowResources]);
   useEffect(() => {
     if (toolName && !availableSelected.some((tool) => tool.name === toolName)) {
       setToolName("");
       setArgumentsText("{}");
       setResult("");
     }
-  }, [toolName, availableSelected.map((tool) => tool.name).join("\n")]);
+  }, [toolName, availableSelected]);
 
   async function perform(label: string, operation: (signal: AbortSignal) => Promise<void>) {
     if (controller.current) return;
@@ -212,10 +222,14 @@ function ServiceConnection({ server }: { server: McpServer }) {
                 : !server.enabled
                   ? "Deaktiviert"
                   : storedLogin
-                    ? "Angemeldet"
+                    ? bearer
+                      ? "Schlüssel gespeichert"
+                      : "Angemeldet"
                     : storedLogin === null
                       ? "Anmeldung wird geprüft…"
-                      : "Nicht angemeldet"}
+                      : bearer
+                        ? "Schlüssel fehlt"
+                        : "Nicht angemeldet"}
               {catalog.ready
                 ? ` · ${availableSelected.length} von ${catalog.tools.length} Werkzeugen freigegeben`
                 : ""}
@@ -244,7 +258,9 @@ function ServiceConnection({ server }: { server: McpServer }) {
               {storedLogin === null
                 ? "Gespeicherte Anmeldung: noch nicht ermittelt."
                 : storedLogin
-                  ? "Anmeldung lokal gespeichert."
+                  ? bearer
+                    ? "API-Schlüssel lokal gespeichert. Gültigkeit wird beim Zugriff geprüft."
+                    : "Anmeldung lokal gespeichert."
                   : "Keine Anmeldung gespeichert."}
             </p>
             <p>
@@ -266,40 +282,101 @@ function ServiceConnection({ server }: { server: McpServer }) {
               Anmeldestatus: {statusError}
             </p>
           )}
+          {bearer && (
+            <label className="block space-y-1">
+              <span className="text-muted">API-Schlüssel</span>
+              <input
+                type="password"
+                autoComplete="off"
+                className={field}
+                aria-label={`${server.name}: API-Schlüssel`}
+                placeholder={
+                  storedLogin ? "Neuen Schlüssel eintragen, um ihn zu ersetzen" : "sk_sorc_…"
+                }
+                value={apiKey}
+                disabled={Boolean(busy)}
+                onChange={(event) => setApiKey(event.target.value)}
+              />
+              <a
+                href="https://sorceress.games/account/api-keys"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block text-muted underline"
+              >
+                API-Schlüssel bei Sorceress verwalten
+              </a>
+              <p className="text-[10px] text-muted">
+                Der Verbindungstest ist kostenlos. Freigegebene Generierungen können Credits kosten.
+                Medienaufträge benötigen auch sorceress_job_get; Modelloptionen und Preise liefert
+                sorceress_tool_info.
+              </p>
+            </label>
+          )}
           <div className="flex flex-wrap gap-1.5">
-            <Button
-              className={action}
-              disabled={!canConnect}
-              onClick={() => {
-                patch({ enabled: true });
-                setStoredLogin(null);
-                void perform("Anmeldung", async (signal) => {
-                  try {
-                    const login = await mcpLogin(current(), signal, (progress) => {
-                      if (!signal.aborted && mounted.current) setLoginProgress(progress);
-                    });
-                    if (!(login as { authenticated?: boolean } | undefined)?.authenticated)
-                      throw new Error(
-                        "Der Dienst hat die Anmeldung nicht bestätigt. Bitte erneut anmelden.",
-                      );
-                    loginConfirmed.current = true;
-                    if (!signal.aborted && mounted.current) {
-                      setStoredLogin(true);
-                      setLoginProgress("Anmeldung gespeichert. Werkzeugkatalog wird geladen…");
+            {bearer ? (
+              <Button
+                className={action}
+                disabled={!canConnect || (!storedLogin && !apiKey.trim())}
+                onClick={() =>
+                  void perform("Verbindung prüfen", async (signal) => {
+                    const original = current();
+                    if (apiKey.trim()) {
+                      await saveServiceApiKey(server.id, apiKey);
+                      signal.throwIfAborted();
+                      if (mounted.current) setApiKey("");
                     }
-                    await mcpProbe(current(), useIde.getState().mcpServers, signal);
-                    if (!signal.aborted && mounted.current)
-                      setMessage(
-                        "Anmeldung und Katalogabruf erfolgreich. Wähle jetzt die Werkzeuge aus.",
-                      );
-                  } finally {
-                    await refreshLocalStatus(signal);
-                  }
-                });
-              }}
-            >
-              {storedLogin ? "Erneut anmelden" : "Anmelden"}
-            </Button>
+                    if (current().url !== original.url)
+                      throw new Error("Die Verbindung wurde inzwischen verändert.");
+                    updateService(server.id, { enabled: true });
+                    try {
+                      await mcpProbe(current(), useIde.getState().mcpServers, signal);
+                      if (mounted.current && !signal.aborted)
+                        setMessage(
+                          "Verbindung geprüft und Werkzeugkatalog geladen. Wähle die benötigten Werkzeuge aus.",
+                        );
+                    } finally {
+                      await refreshLocalStatus(signal);
+                    }
+                  })
+                }
+              >
+                {apiKey.trim() ? "Schlüssel speichern und prüfen" : "Verbindung prüfen"}
+              </Button>
+            ) : (
+              <Button
+                className={action}
+                disabled={!canConnect}
+                onClick={() => {
+                  patch({ enabled: true });
+                  setStoredLogin(null);
+                  void perform("Anmeldung", async (signal) => {
+                    try {
+                      const login = await mcpLogin(current(), signal, (progress) => {
+                        if (!signal.aborted && mounted.current) setLoginProgress(progress);
+                      });
+                      if (!(login as { authenticated?: boolean } | undefined)?.authenticated)
+                        throw new Error(
+                          "Der Dienst hat die Anmeldung nicht bestätigt. Bitte erneut anmelden.",
+                        );
+                      loginConfirmed.current = true;
+                      if (!signal.aborted && mounted.current) {
+                        setStoredLogin(true);
+                        setLoginProgress("Anmeldung gespeichert. Werkzeugkatalog wird geladen…");
+                      }
+                      await mcpProbe(current(), useIde.getState().mcpServers, signal);
+                      if (!signal.aborted && mounted.current)
+                        setMessage(
+                          "Anmeldung und Katalogabruf erfolgreich. Wähle jetzt die Werkzeuge aus.",
+                        );
+                    } finally {
+                      await refreshLocalStatus(signal);
+                    }
+                  });
+                }}
+              >
+                {storedLogin ? "Erneut anmelden" : "Anmelden"}
+              </Button>
+            )}
             <Button
               className={action}
               disabled={!canConnect || !server.enabled}
@@ -375,7 +452,7 @@ function ServiceConnection({ server }: { server: McpServer }) {
           {busy && (
             <div className="flex flex-wrap items-center gap-2" role="status">
               <span className="break-words">{loginProgress || `${busy} läuft…`}</span>
-              {busy === "Anmeldung" && !loginConfirmed.current && (
+              {!bearer && busy === "Anmeldung" && !loginConfirmed.current && (
                 <>
                   <p className="w-full text-muted">
                     Schließe die Freigabe beim Anbieter ab und kehre anschließend zu Anvil zurück.
@@ -424,8 +501,8 @@ function ServiceConnection({ server }: { server: McpServer }) {
             <div>
               <h4 className="font-medium text-fg">Werkzeuge für Anvil auswählen</h4>
               <p className="mt-1 text-muted">
-                {selected.size} Werkzeuge freigegeben. Neue Werkzeuge bleiben deaktiviert. Je nach Auswahl
-                kann der Dienst Daten lesen oder ändern.
+                {selected.size} Werkzeuge freigegeben. Neue Werkzeuge bleiben deaktiviert. Je nach
+                Auswahl kann der Dienst Daten lesen oder ändern.
               </p>
             </div>
             {catalog.tools.length > 0 ? (
@@ -622,7 +699,7 @@ export function ServicesPane() {
           <h2 className="text-xs font-semibold text-fg">Dienste verbinden</h2>
           <p className="mt-1 text-muted">
             Anmelden, angebotene Werkzeuge auswählen und über Anvils Brücke verwenden. Die Dienste
-            stellen ihre Erweiterungen über MCP bereit.
+            werden über MCP oder einen eingebauten API-Adapter verbunden.
           </p>
         </div>
         {!hasMcpNative() && (
@@ -729,20 +806,22 @@ export function ServicesPane() {
             </p>
           </>
         )}
-        <details>
-          <summary className="cursor-pointer text-muted">Optionale Client-ID</summary>
-          <input
-            className={`${field} mt-2`}
-            aria-label="Dienst: OAuth-Client-ID"
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="Nur falls der Dienst eine Client-ID vorgibt"
-          />
-          <p className="mt-1 text-[10px] text-muted">
-            Ohne Vorgabe versucht Anvil die Registrierung beim Anbieter. Ein Dienst muss diese
-            unterstützen.
-          </p>
-        </details>
+        {chosen?.auth !== "bearer" && (
+          <details>
+            <summary className="cursor-pointer text-muted">Optionale Client-ID</summary>
+            <input
+              className={`${field} mt-2`}
+              aria-label="Dienst: OAuth-Client-ID"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="Nur falls der Dienst eine Client-ID vorgibt"
+            />
+            <p className="mt-1 text-[10px] text-muted">
+              Ohne Vorgabe versucht Anvil die Registrierung beim Anbieter. Ein Dienst muss diese
+              unterstützen.
+            </p>
+          </details>
+        )}
         <Button
           className={`${action} w-full`}
           disabled={Boolean(chosen?.setupRequired)}
@@ -763,7 +842,9 @@ export function ServicesPane() {
           Verbindung hinzufügen
         </Button>
         <p className="text-[10px] text-muted">
-          Wird deaktiviert gespeichert. Erst „Anmelden“ öffnet die Anmeldung beim Dienst.
+          {chosen?.auth === "bearer"
+            ? "Wird deaktiviert gespeichert. Danach den API-Schlüssel im Diensteintrag speichern und prüfen."
+            : "Wird deaktiviert gespeichert. Erst „Anmelden“ öffnet die Anmeldung beim Dienst."}
         </p>
         {error && (
           <p role="alert" className="break-words text-danger">

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, session, shell, ipcMain } from "electron";
+import { app, BrowserWindow, clipboard, dialog, screen, session, shell, ipcMain } from "electron";
+import { readChatClipboard } from "./clipboard.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, appendFileSync } from "node:fs";
 import { createConnection } from "node:net";
@@ -19,7 +20,6 @@ import { registerInteractionChecks } from "./interaction-checks.mjs";
 import { bindRecoveryIpc } from "./recovery.mjs";
 import { bindProjectCheckpointIpc } from "./project-checkpoint-ipc.mjs";
 import { bindRendererRecovery } from "./renderer-recovery.mjs";
-import { startWatchdog } from "./watchdog.mjs";
 import { bindUpdateIpc } from "./update.mjs";
 import { bindChildWindows } from "./child.mjs";
 import { iconPath, loadAppIcon } from "./icon.mjs";
@@ -80,7 +80,7 @@ app.commandLine.appendSwitch("gpu-program-cache-size-kb", "65536");
 app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 
 try {
-  sweepAnvilTemp({ keep: 0, maxAgeMs: 0, toolchain: true });
+  sweepAnvilTemp({ toolchain: true });
 } catch {
   /* */
 }
@@ -114,7 +114,6 @@ let agentJobs = null;
 let splash = null;
 let helperSrv = null;
 let pipeSrv = null;
-let watchdog = null;
 
 function showSplash() {
   splash = new BrowserWindow({
@@ -383,11 +382,16 @@ let quitRequested = false;
 async function createWindow() {
   app.setName("Anvil");
   const icon = loadAppIcon(ROOT);
+  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const width = Math.min(1440, workArea.width);
+  const height = Math.min(900, workArea.height);
   win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 960,
-    minHeight: 640,
+    width,
+    height,
+    x: workArea.x + Math.floor((workArea.width - width) / 2),
+    y: workArea.y + Math.floor((workArea.height - height) / 2),
+    minWidth: Math.min(480, width),
+    minHeight: Math.min(360, height),
     title: appTitle(),
     icon: icon || iconPath(ROOT) || undefined,
     backgroundColor: "#0a0a0b",
@@ -433,13 +437,11 @@ async function createWindow() {
   bindRendererRecovery({
     window: editorWindow, dialog,
     log(event, details) {
-      watchdog?.event(event, details);
       try { appendFileSync(logFile(), `${new Date().toISOString()} ${event} ${JSON.stringify(details)}\n`); } catch { /* logging must not prevent recovery */ }
     },
     backgroundActive: () => agentJobs?.busy() === true,
     stopJobs() { stopCliJobs(); stopAcpJobs(); return stopMcpConnections({ includeBackground: false }); },
     resetClose() { closeReady = false; waiting = false; ticket++; quitRequested = false; },
-    restore: () => editorWindow.loadURL(APP_URL),
     close() { closingApproved = true; app.quit(); },
   });
   const readyToClose = (event) => { if (event.sender === editorWindow.webContents) closeReady = true; };
@@ -488,8 +490,6 @@ if (!gotLock) {
     win.focus();
   });
   app.whenReady().then(async () => {
-    try { watchdog = startWatchdog({ app, getWindow: () => win, logs: loadPaths().logs, mode: desktopMode }); }
-    catch (error) { try { appendFileSync(logFile(), `${new Date().toISOString()} watchdog-start-failed ${error?.code || "unknown"}\n`); } catch {} }
     if (process.platform === "win32") {
       app.setAppUserModelId("app.anvil.ide");
     }
@@ -519,7 +519,7 @@ if (!gotLock) {
     helperSrv = await startHelperHost();
     bindSecretsIpc(isAppUrl);
     pipeSrv = await startLlmPipe(resolveCredentialHeaders);
-    bindPathsIpc();
+    bindPathsIpc(isAppUrl, () => win);
     bindHwIpc();
     bindAccountIpc();
     bindCliIpc(isAppUrl);
@@ -537,17 +537,7 @@ if (!gotLock) {
     handleOnce("companion-ensure", () => ensureCompanion());
     handleOnce("companion-idle", (_e, keep) => releaseCompanion(Boolean(keep), false));
     handleOnce("companion-release", (_e, keep) => releaseCompanion(Boolean(keep)));
-    handleOnce("clipboard-read", () => {
-      const text = clipboard.readText() || "";
-      let image = "";
-      try {
-        const img = clipboard.readImage();
-        if (img && !img.isEmpty()) image = img.toDataURL();
-      } catch {
-        /* */
-      }
-      return { text, image };
-    });
+    handleOnce("clipboard-read", () => readChatClipboard(clipboard));
     bindHelperIpc((p) => win?.webContents.send("helper-progress", p));
     showSplash();
     const up = await portOpen(PORT);
@@ -558,7 +548,7 @@ if (!gotLock) {
       server = startServer();
       await waitForServer(desktopMode === "production" ? 180000 : 60000);
     }
-    try { appendFileSync(logFile(), `${new Date().toISOString()} desktop-mode ${desktopMode}\n`); } catch {}
+    try { appendFileSync(logFile(), `${new Date().toISOString()} desktop-mode ${desktopMode}\n`); } catch { /* Logging must not prevent desktop startup. */ }
     await createWindow();
   }).catch((err) => {
     hideSplash();

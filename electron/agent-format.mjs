@@ -73,7 +73,7 @@ export async function formatAgentFile(input, {signal,tools={},run=spawnRun,timeo
           if(bin){
             const prefix=[...(/(?:^|[\\/])py(?:\.exe)?$/i.test(bin)?['-3']:[]),'-I'];
             const probe=await execute(bin,[...prefix,'-c',"import importlib.util,json; print(json.dumps({m:bool(importlib.util.find_spec(m)) for m in ['ruff','black']}))"]);
-            let available;try{available=JSON.parse(probe.stdout);}catch{}
+            let available;try{available=JSON.parse(probe.stdout);}catch{ /* Malformed probe output leaves no supported formatter. */ }
             if(!probe.ok)return fail(String(probe.stderr||'Python-Formatter konnte nicht geprüft werden.').slice(-2000),'python');
             if(available?.ruff){via='ruff';args=[...prefix,'-m','ruff','format','--isolated','--no-cache',full];}
             else if(available?.black){via='black';args=[...prefix,'-m','black','--config',config,'--quiet',full];}

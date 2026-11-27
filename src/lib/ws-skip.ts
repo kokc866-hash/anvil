@@ -1,3 +1,6 @@
+import { hasAsciiControl } from "../../electron/text-controls.mjs";
+import { rulePath, rulePathAllowed } from "./rule-scope.ts";
+
 export const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
@@ -81,6 +84,25 @@ export function keepBareFile(name: string): boolean {
   return BARE_KEEP.test(name);
 }
 
+/** Full-path exceptions only: never make every .cursor entry a kept dotfile. */
+export function isProjectRulePath(raw: string): boolean {
+  const path = rulePath(raw);
+  return Boolean(path && rulePathAllowed(path) && (/^\.cursorrules$/i.test(path) || /(?:^|\/)\.cursor\/rules\/(?:[^/]+\/)*[^/]+\.mdc$/i.test(path)));
+}
+
+export function isProjectRuleDirectory(raw: string): boolean {
+  const path = rulePath(raw);
+  return Boolean(path && rulePathAllowed(path) && /(?:^|\/)\.cursor(?:\/rules(?:\/[^/]+)*)?$/i.test(path));
+}
+
+/** Only the importer's reserved package storage; never widen ordinary workspace scans. */
+export function isImportedPluginPath(path: string): boolean {
+  const norm = path.replace(/\\/g, "/");
+  if (norm.split("/").some(part => !part || part === "." || part === "..") || norm.includes(":") || hasAsciiControl(norm)) return false;
+  return /^\.anvil\/skills\/package-[a-z0-9-]+(?:\/|$)/.test(norm)
+    || /^\.anvil\/plugin-imports\/[a-z0-9-]+\.json$/.test(norm);
+}
+
 export function skipPath(path: string): boolean {
   const norm = path.replace(/\\/g, "/");
   if (/(^|\/)\.anvil\/(work|out)(\/|$)/i.test(norm)) return true;
@@ -97,7 +119,7 @@ export function skipPath(path: string): boolean {
 
 export function isSourcePath(path: string): boolean {
   const base = path.replace(/\\/g, "/").split("/").pop() ?? "";
-  return SOURCE.test(path) || BARE_KEEP.test(base) || keepDotName(base);
+  return isProjectRulePath(path) || SOURCE.test(path) || BARE_KEEP.test(base) || keepDotName(base);
 }
 
 /** Merge disk tree with RAM: unsaved edits and files the tree skipped (empty, dots, secrets). */

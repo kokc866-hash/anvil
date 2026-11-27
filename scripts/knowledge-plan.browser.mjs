@@ -34,7 +34,7 @@ const server=createServer(async(req,res)=>{try{
  res.writeHead(200,{'Content-Type':'text/event-stream'}).end(`data: ${JSON.stringify({choices:[{delta,finish_reason:call?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`);
 }catch(error){res.writeHead(500).end(String(error));}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_QA_USER_DATA:fixture,ANVIL_HOME:path.join(fixture,'packages'),ANVIL_HOME_FILE:path.join(fixture,'home.txt'),ANVIL_INSTALL_DIR:fixture,ANVIL_PORT:String(port),ANVIL_COMPANION_PORT:String(companion),ANVIL_WATCHDOG:'0',TEMP:temporary,TMP:temporary,TMPDIR:temporary};delete env.ELECTRON_RUN_AS_NODE;
+const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_QA_USER_DATA:fixture,ANVIL_HOME:path.join(fixture,'packages'),ANVIL_HOME_FILE:path.join(fixture,'home.txt'),ANVIL_INSTALL_DIR:fixture,ANVIL_PORT:String(port),ANVIL_COMPANION_PORT:String(companion),TEMP:temporary,TMP:temporary,TMPDIR:temporary};delete env.ELECTRON_RUN_AS_NODE;
 let app,page;
 const until=async(fn)=>{for(let i=0;i<500;i++){if(await fn())return;await new Promise(r=>setTimeout(r,100));}throw Error('Knowledge desktop timeout');};
 try{
@@ -61,7 +61,7 @@ try{
  result.ok=true;await page.evaluate(id=>window.anvilNative.agentJob('dismiss',{id}),state.id);
 }catch(error){result.ok=false;result.error=String(error.stack||error);await page?.screenshot({path:path.join(fixture,'failure.png')}).catch(()=>{});throw error;}
 finally{
- if(app){const timer=setTimeout(()=>app.process()?.kill(),10000);try{await app.close();}catch{}clearTimeout(timer);}
+ if(app){const timer=setTimeout(()=>app.process()?.kill(),10000);try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(timer);}
  server.closeAllConnections();await new Promise(r=>server.close(r));
  await writeFile(path.join(fixture,'result.json'),JSON.stringify(result,null,2));await writeFile(path.join(base,'latest-result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }

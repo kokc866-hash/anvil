@@ -13,7 +13,7 @@ const parsers: Record<string,string> = {js:'babel',mjs:'babel',cjs:'babel',jsx:'
 
 /** Fixed bundled parsers only. Project plugins and executable config are never loaded. */
 export async function formatBackgroundFile(path:string,content:string,files:Record<string,string>,settings:BackgroundFormat={}) {
- if(!path||path.length>512||/[\\:\x00-\x1f]/.test(path)||path.split('/').some(x=>!x||x==='.'||x==='..'))throw Error('Ungültiger Formatierpfad.');
+ if(!path||path.length>512||/[\\:]/.test(path)||Array.from(path).some(x=>x.charCodeAt(0)<32)||path.split('/').some(x=>!x||x==='.'||x==='..'))throw Error('Ungültiger Formatierpfad.');
  if(content.length>1000000)throw Error('Datei für die Hintergrund-Formatierung zu groß.');
  const parser=parsers[path.split('.').pop()!.toLowerCase()];
  if(!parser)throw Error('Für diesen Dateityp ist kein unabhängiger Formatter eingebunden.');

@@ -1,12 +1,12 @@
 import type { McpResource, McpTool } from "./mcp-parse";
-import { mcpCatalogText } from "./mcp-parse.ts";
+import { mcpDiscoveryPrelude } from './capability-search.ts';
 
 export const ANVIL_SURFACE = "anvil";
 export type SurfaceMode = "exclusive" | "bridge";
 
 type Named = { id: string; name: string };
 
-export const MCP_SIDECAR = new Set(["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output", "set_plan", "ask_user", "select_tools"]);
+export const MCP_SIDECAR = new Set(["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output", "read_tool_output", "set_plan", "ask_user", "select_tools", "skill_list", "skill_read", "skill_run", "skill_debug", "skill_outcome"]);
 export const ANVIL_WRITE = new Set([
   "write_file",
   "append_file",
@@ -82,12 +82,12 @@ export function toolsAllowed(id: string, mode: SurfaceMode, name: string): boole
   return MCP_SIDECAR.has(name);
 }
 
-export function surfacePrompt(snap: SurfaceSnap): string {
+export function surfacePrompt(snap: SurfaceSnap, task = ''): string {
   if (snap.id === ANVIL_SURFACE) {
     const mcp = snap.tools.filter((t) => t.name !== "(fehler)");
     const servers = snap.servers ?? [];
     const extra = servers.length || mcp.length
-      ? `\nKonfigurierte MCP-Server: ${servers.map((s) => `${s.id} (${s.name}): ${s.error || (s.ready ? "Katalog geladen" : "Katalog noch nicht geladen")}`).join("; ") || "siehe mcp_list"}.\nMCP ist über mcp_list und mcp_call verfügbar. Bei fehlendem Katalog zuerst mcp_list aufrufen. ${mcp.length} externe Werkzeuge sind aktuell zwischengespeichert; diese Zahl zählt keine nativen Anvil-Tools. Für den Auftrag passende MCP-Aufrufe sind erlaubt.\n${mcpCatalogText(mcp)}`
+      ? `\nKonfigurierte MCP-Server: ${servers.slice(0,12).map((s) => `${s.id} (${s.name.slice(0,100)}): ${s.error?.slice(0,160) || (s.ready ? "Katalog geladen" : "Katalog noch nicht geladen")}`).join("; ") || "siehe mcp_list"}.${servers.length>12?` Weitere ${servers.length-12} Dienste über select_tools suchen.`:''}\nMCP ist über mcp_list und mcp_call verfügbar. ${mcp.length} freigegebene externe Werkzeuge bleiben im lokalen Katalog. Mit select_tools(scope="mcp", query, server) passende vollständige Schemata nachladen. Eine gespeicherte Verbindung bestätigt keinen erfolgreichen Aufruf.\n${mcpDiscoveryPrelude(mcp,task).text}`
       : "\nKeine MCP-Server konfiguriert. Die übergebenen nativen Anvil-Werkzeuge bleiben verfügbar.";
     return `Arbeitsfläche: Anvil (Dateien, Run, Git). Modus: ${snap.mode === "bridge" ? "Brücke — MCP und Anvil erlaubt" : "Anvil"}.${extra}`;
   }
@@ -103,8 +103,8 @@ export function surfacePrompt(snap: SurfaceSnap): string {
       ? "Modus Brücke: mcp_call auf dieser Fläche UND Anvil-Dateien. Jede Aktion gehört zu einer Fläche."
       : "Nur mcp_call auf DIESE Fläche. write_file/run_file sind Anvil — verboten, außer der User schaltet Brücke ein.",
     ctx ? `Kontext (geht in Tool-Args wenn das Tool den Key kennt):\n${ctx}` : "Kein Kontext gesetzt. Vor Schreiben: Resource lesen oder open/status-Tool, sonst den User nach Szene/Projekt fragen.",
-    tools.length ? mcpCatalogText(snap.tools) : "Keine Tools. Mit mcp_list den Katalog und Verbindungsstatus abrufen.",
-    res.length ? `Resources (mcp_read_resource mit server und uri):\n${res.join("\n")}` : "",
+    tools.length ? mcpDiscoveryPrelude(snap.tools,`${snap.label} ${task}`).text : "Keine Tools. Mit mcp_list den Katalog und Verbindungsstatus abrufen.",
+    res.length ? `${snap.resources.length} Ressourcen im Katalog; passende Adressen über mcp_list oder select_tools(scope="mcp",query) abrufen.` : "",
     snap.view ? `Letzte Sicht:\n${snap.view.slice(0, 1200)}` : "",
   ];
   return bits.filter(Boolean).join("\n");

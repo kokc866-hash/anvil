@@ -106,7 +106,7 @@ test('knowledge checklist evidence reflects actual actions without replaying suc
       const call=(name,args)=>({content:'',tool_calls:[{id:crypto.randomUUID(),type:'function',function:{name,arguments:JSON.stringify(args)}}]});
       const result=await runAgentLoop({messages:[{role:'user',content:'Speichere Wissen, pflege den Skill und dokumentiere das Ergebnis.'}],files:[],runLoop:false,afterWrite:'none',maxRounds:14},async messages=>{
         for(const message of messages)if(message.role==='tool'){
-          try{const output=JSON.parse(message.content);if(output.plan_evidence_id&&!refs.includes(output.plan_evidence_id))refs.push(output.plan_evidence_id);}catch{}
+          try{const output=JSON.parse(message.content);if(output.plan_evidence_id&&!refs.includes(output.plan_evidence_id))refs.push(output.plan_evidence_id);}catch{ /* Non-JSON tool output is not a plan evidence record. */ }
         }
         let next;
         if(++round===1)next=call('set_plan',{steps:[compound,'README.md erstellen','Ergebnis berichten'],kinds:['service','edit','report']});

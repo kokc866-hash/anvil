@@ -2,9 +2,11 @@
 
 Stand: 13. September 2026. Veröffentlicht in Anvil 1.3.26.
 
-Unter **Erweiterungen → Dienste** verbindet sich Anvil mit externen Anbietern und nutzt deren angebotene Werkzeuge über die vorhandene MCP-Brücke. Notion ist vorausgewählt. Der [Dienstkatalog](dienstkatalog.md) enthält 50 Angebote für Aufgaben, Wissen, Gestaltung, Dateien, Kundenarbeit, Code, Datenbanken, Hosting und Spieleentwicklung. Suche und Bereiche erleichtern die Auswahl. Anbieter mit zusätzlichem Einrichtungsbedarf sind gekennzeichnet; ihre fehlenden Voraussetzungen werden vor dem Hinzufügen angezeigt. Unter **Engines & 3D-Werkzeuge** stehen zusätzlich sieben lokale Verbindungsvorlagen bereit; siehe [Unity, Unreal und Godot](engines.md).
+Unter **Erweiterungen → Dienste** verbindet sich Anvil mit externen Anbietern und nutzt deren angebotene Werkzeuge über die vorhandene MCP-Brücke. Notion ist vorausgewählt. Der [Dienstkatalog](dienstkatalog.md) enthält 50 Angebote für Aufgaben, Wissen, Gestaltung, Dateien, Kundenarbeit, Code, Datenbanken, Hosting und Spieleentwicklung. Suche und Bereiche erleichtern die Auswahl. Anbieter mit zusätzlichem Einrichtungsbedarf sind gekennzeichnet; ihre fehlenden Voraussetzungen werden vor dem Hinzufügen angezeigt. Unter **Engines, 3D & CAD** stehen zusätzlich neun lokale Verbindungsvorlagen bereit; siehe [Unity, Unreal und Godot](engines.md).
 
 ## Notion verbinden
+
+**Sorceress:** Bilder, Sprites, 3D und Audio über den eingebauten REST-Adapter verbinden. Dieser Dienst verwendet einen API-Schlüssel statt Browser-Anmeldung; siehe [Sorceress einrichten](sorceress.md). Das Agentenmodell wird separat gewählt.
 
 1. **Notion → Verbindung hinzufügen**. Die Verbindung wird zunächst deaktiviert gespeichert.
 2. **Anmelden** öffnet die Anmeldung beim Anbieter im Browser. Dort mit dem eigenen Notion-Konto anmelden und den gewünschten Workspace freigeben. Anvil erhält die Zugangsdaten über den lokalen Rückkanal; kein Token muss kopiert werden.

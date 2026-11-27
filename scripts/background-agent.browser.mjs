@@ -31,7 +31,7 @@ const modelServer = createServer(async (req, res) => {
 await new Promise(r => modelServer.listen(0, '127.0.0.1', r));
 const url = `http://127.0.0.1:${port}/`;
 const env = { ...process.env, ANVIL_DESKTOP_MODE: 'production', ANVIL_PORT: String(port), ANVIL_QA_USER_DATA: profile,
-  ANVIL_HOME: path.join(profile, 'packages'), ANVIL_WATCHDOG: '0' };
+  ANVIL_HOME: path.join(profile, 'packages') };
 delete env.ELECTRON_RUN_AS_NODE;
 const until = async check => { for (let i = 0; i < 180; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 200)); } throw new Error('QA condition timed out'); };
 let app, appProcess;

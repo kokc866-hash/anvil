@@ -31,6 +31,11 @@ describe("trail-filter", () => {
     assert.equal(out[0]?.status, "run");
     assert.equal(stepPath(out[0]!), "app/main.py");
   });
+  it("keeps the complete failed MCP detail for the disclosure", () => {
+    const detail = `mcp:blender-local.execute_blender_code · ${"Dieser Aufruf wurde abgewiesen. ".repeat(4)}Verwende mcp_list.`;
+    const out = filterTrailSteps([step({ name: "mcp_call", status: "err", detail })]);
+    assert.equal(out[0]?.detail, detail);
+  });
   it("labels follow locale", () => {
     assert.equal(stepLabel("write_file", "de"), "Schreiben");
     assert.equal(stepLabel("write_file", "en"), "Write");

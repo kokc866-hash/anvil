@@ -43,6 +43,7 @@
   Delete "$INSTDIR\LICENSES.chromium.html"
   Delete "$INSTDIR\snapshot_blob.bin"
   Delete "$INSTDIR\v8_context_snapshot.bin"
+  Delete "$INSTDIR\version"
   Delete "$INSTDIR\vk_swiftshader.dll"
   Delete "$INSTDIR\vk_swiftshader_icd.json"
   Delete "$INSTDIR\vulkan-1.dll"

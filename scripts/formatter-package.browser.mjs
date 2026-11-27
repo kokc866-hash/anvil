@@ -18,7 +18,7 @@ const env={...process.env};
 for(const key of Object.keys(env))if(/^(path|ELECTRON_RUN_AS_NODE|ANVIL_QA_USER_DATA|ANVIL_USER_DATA|ANVIL_HOME|ANVIL_INSTALL_DIR|ANVIL_TOOLCHAIN_HOME|ANVIL_LSP_HOME)$/i.test(key))delete env[key];
 Object.assign(env,{Path:`${path.resolve('artifacts/formatter-qa-tools/Scripts')};${process.env.SystemRoot}\\System32;${process.env.SystemRoot};${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0`,
   ANVIL_PORT:String(port),ANVIL_COMPANION_PORT:String(companion),ANVIL_QA_USER_DATA:profile,ANVIL_INSTALL_DIR:fixture,
-  ANVIL_HOME:path.join(profile,'packages'),ANVIL_HOME_FILE:path.join(profile,'home.txt'),ANVIL_WATCHDOG:'0',TEMP:temporary,TMP:temporary,TMPDIR:temporary});
+  ANVIL_HOME:path.join(profile,'packages'),ANVIL_HOME_FILE:path.join(profile,'home.txt'),TEMP:temporary,TMP:temporary,TMPDIR:temporary});
 const result={fixture,executable,checks:[],errors:[],modelRequests:0,toolResults:{}};
 let app,page,proc;
 const server=createServer(async(req,res)=>{
@@ -59,7 +59,7 @@ try{
     formatted[name]=await readFile(path.join(project,name),'utf8');assert.notEqual(formatted[name],files[name]);
     assert.equal(state.drafts[name].applied,true);assert.equal(state.drafts[name].after,formatted[name]);
   }
-  assert.match(formatted['example.py'],/def example\(x: int = 1\):/);assert.match(formatted['example.cpp'],/\n    if/);
+  assert.match(formatted['example.py'],/def example\(x: int = 1\):/);assert.match(formatted['example.cpp'],/\n {4}if/);
   await until(async()=>await page.evaluate(expected=>Object.entries(expected).every(([name,content])=>window.__anvilIde.getState().files[name]===content),formatted),'editor acknowledged formatted files');
   await page.locator('.monaco-editor').first().waitFor({state:'visible',timeout:15000});
   await page.screenshot({path:path.join(fixture,'formatted.png')});
@@ -76,7 +76,7 @@ try{
   await page.evaluate(id=>window.anvilNative.agentJob('dismiss',{id}),state.id);result.ok=true;
 }catch(error){result.ok=false;result.failure=String(error.stack||error);await page?.screenshot({path:path.join(fixture,'failure.png')}).catch(()=>{});throw error;}
 finally{
-  if(app){const timer=setTimeout(()=>proc?.kill(),8000);try{await page?.evaluate(()=>window.anvilNative.agentJob('stop')).catch(()=>{});await app.close();}catch{}clearTimeout(timer);}
+  if(app){const timer=setTimeout(()=>proc?.kill(),8000);try{await page?.evaluate(()=>window.anvilNative.agentJob('stop')).catch(()=>{});await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(timer);}
   server.closeAllConnections();await new Promise(r=>server.close(r));
   await writeFile(path.join(fixture,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
 }

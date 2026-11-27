@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import { constants } from "node:fs";
+import { hasAsciiControl } from "./text-controls.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -16,7 +17,7 @@ const within = (root, p) => fold(p) === fold(root) || fold(p).startsWith(fold(ro
 const same = (a, b) => a?.type === b?.type && (a?.type !== "file" || (a.hash === b.hash && a.bytes === b.bytes && a.mode === b.mode));
 const exists = async (p) => { try { return await fs.lstat(p); } catch (e) { if (e.code === "ENOENT") return null; throw e; } };
 function validName(name) {
-  return typeof name === "string" && name.length > 0 && !/[\\:<>"|?*\x00-\x1f]/.test(name) && name.split("/").every((p) => p && p !== "." && p !== ".." && !/[. ]$/.test(p) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p));
+  return typeof name === "string" && name.length > 0 && !/[\\:<>"|?*]/.test(name) && !hasAsciiControl(name) && name.split("/").every((p) => p && p !== "." && p !== ".." && !/[. ]$/.test(p) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p));
 }
 // Same path-based secret exclusions as ref.ts, also applied to directory names.
 function secret(name) {

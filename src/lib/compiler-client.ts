@@ -1,4 +1,5 @@
 import { useIde } from "@/store/ide";
+import { hasTsSource, isTsSource } from "./compiler-files.ts";
 type Reply = { hits?: unknown; checked?: unknown; value?: unknown; local?: unknown };
 let worker: Worker | null = null;
 let filesBefore: Record<string, string> = {};
@@ -10,6 +11,16 @@ export function stopCompilerWorker(): void {
   pending.clear();
 }
 export function compilerJob(method: "lint" | "hover" | "definition" | "rename", files: Record<string, string>, open: string[], args: Record<string, unknown> = {}): Promise<Reply> {
+  if (method === "lint" && !hasTsSource(files, open)) {
+    stopCompilerWorker();
+    return Promise.resolve({ hits: [], checked: [], local: [] });
+  }
+  if (method !== "lint") {
+    const path = typeof args.path === "string" ? args.path : "";
+    if (!isTsSource(path, files[path] ?? "", method === "rename" || open.includes(path))) {
+      return Promise.resolve({ value: method === "hover" ? null : method === "definition" ? [] : {} });
+    }
+  }
   if (!worker) {
     worker = new Worker(new URL("./compiler-worker.ts", import.meta.url), { type: "module" });
     worker.onerror = () => stopCompilerWorker();

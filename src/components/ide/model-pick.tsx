@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 
 function uniq(ids: string[]) {
@@ -37,6 +37,7 @@ export function ModelPick({
   loading = false,
   hint,
   labelOf,
+  sourceLabel = "live",
   prefer = [],
 }: {
   catalog?: string[];
@@ -47,16 +48,18 @@ export function ModelPick({
   loading?: boolean;
   hint?: string;
   labelOf?: (id: string) => string;
+  sourceLabel?: string;
   prefer?: string[];
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const menu = useRef<HTMLUListElement>(null);
   const all = useMemo(() => uniq([...prefer, ...live, ...catalog, value]), [prefer, live, catalog, value]);
   const pref = useMemo(() => new Map(prefer.map((id, i) => [id, i])), [prefer]);
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
-    const filtering = s.length > 0 && s !== value.trim().toLowerCase();
+    const filtering = editing && s.length > 0;
     return all
       .map((id) => ({ id, n: filtering ? score(id, q) : score(id, "") }))
       .filter((r) => r.n < 99)
@@ -68,13 +71,33 @@ export function ModelPick({
         }
         return a.n - b.n || a.id.localeCompare(b.id);
       });
-  }, [all, q, value, pref]);
+  }, [all, q, editing, pref]);
   const shown = rows.slice(0, 400);
+  // An absolutely positioned list can extend past the first-run sheet's scroll port.
+  // Keep it in view on open and when an asynchronous catalog arrives.
+  useLayoutEffect(() => {
+    if (open) menu.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [open, shown.length]);
   const liveSet = useMemo(() => new Set(live), [live]);
   const label = (id: string) => labelOf?.(id) || id;
+  function openPicker() {
+    if (open) return;
+    setQ(value);
+    setEditing(false);
+    setOpen(true);
+  }
 
   return (
-    <div ref={box} className="relative py-2">
+    <div className="relative py-2" data-model-picker={open ? "open" : undefined}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}
+      onKeyDown={(e) => {
+        if (open && e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          e.currentTarget.querySelector("input")?.focus();
+          setOpen(false);
+        }
+      }}>
       <span className="text-xs text-muted">Modell</span>
       <input
         value={open ? q : label(value) || value}
@@ -82,32 +105,24 @@ export function ModelPick({
         autoComplete="off"
         spellCheck={false}
         className="mt-1 h-9 w-full rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
-        onFocus={() => {
-          setQ(value);
-          setOpen(true);
-        }}
-        onBlur={() => {
-          window.setTimeout(() => setOpen(false), 120);
-        }}
+        onFocus={openPicker}
+        onClick={openPicker}
         onChange={(e) => {
           setQ(e.target.value);
+          setEditing(true);
           onChange(e.target.value);
           setOpen(true);
         }}
         onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            setOpen(false);
-            (e.target as HTMLInputElement).blur();
-          }
           if (e.key === "Enter") {
             e.preventDefault();
             const first = shown[0]?.id;
-            if (first) onChange(first);
+            if (open && editing && first) onChange(first);
             setOpen(false);
           }
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            setOpen(true);
+            openPicker();
           }
         }}
       />
@@ -123,7 +138,7 @@ export function ModelPick({
                 : "Modell-ID eingeben oder Verbindung prüfen"}
       </p>
       {open ? (
-        <ul className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-surface shadow-lg">
+        <ul ref={menu} className="absolute z-30 mt-1 max-h-[min(14rem,40vh)] w-full overflow-auto rounded-md border border-border bg-surface shadow-lg">
           {shown.length === 0 ? (
             <li className="px-2 py-2 text-[11px] text-subtle">{q.trim() ? `Übernehmen: ${q.trim()}` : "Keine Treffer"}</li>
           ) : (
@@ -143,7 +158,7 @@ export function ModelPick({
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate font-mono">{label(r.id)}</span>
-                  {liveSet.has(r.id) ? <span className="shrink-0 text-[9px] text-subtle">live</span> : null}
+                  {liveSet.has(r.id) ? <span className="shrink-0 text-[9px] text-subtle">{sourceLabel}</span> : null}
                 </button>
               </li>
             ))

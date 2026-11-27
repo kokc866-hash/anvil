@@ -1,3 +1,5 @@
+import {isSecretPath as protectedPath} from '../../electron/agent-secret-path.mjs';
+export function isSecretPath(path:string):boolean { return protectedPath(path); }
 export const REF_DIR = "ref";
 
 export function isRefPath(path: string): boolean {
@@ -90,30 +92,39 @@ export function refWriteBlocked(path: string, content: string, exists: boolean):
   return null;
 }
 
-export function modelSeesImages(provider: string, model: string): boolean {
+const modelInputs = new Map<string, Map<string, boolean>>();
+function inputCatalogKey(provider: string, baseUrl: string): string {
+  return JSON.stringify([provider.toLowerCase(), baseUrl.trim().replace(/\/+$/, "")]);
+}
+
+/** Replace only a successfully queried endpoint's capabilities, never another connection's. */
+export function ingestModelInputs(provider: string, baseUrl: string, rows: Record<string, unknown>[]): void {
+  const entries = new Map<string, boolean>();
+  for (const row of rows) {
+    const id = row.id ?? row.model ?? row.name;
+    const inference = row.inference_metadata as { request_modality?: unknown } | undefined;
+    const architecture = row.architecture as { input_modalities?: unknown } | undefined;
+    const inputs = row.input_modalities ?? inference?.request_modality ?? architecture?.input_modalities;
+    if (typeof id === "string" && Array.isArray(inputs) && inputs.every(x => typeof x === "string"))
+      entries.set(id.replace(/^models\//, ""), inputs.some(x => /^image$/i.test(x)));
+  }
+  const key = inputCatalogKey(provider, baseUrl);
+  modelInputs.delete(key);
+  modelInputs.set(key, entries);
+  if (modelInputs.size > 32) modelInputs.delete(modelInputs.keys().next().value!);
+}
+
+export function modelSeesImages(provider: string, model: string, baseUrl = ""): boolean {
   const p = (provider || "").toLowerCase();
   const m = (model || "").toLowerCase();
+  const known = modelInputs.get(inputCatalogKey(p, baseUrl))?.get(model);
+  if (known !== undefined) return known;
+  if (p === "qwen" || p === "deepseek") return false;
   if (/ollama|lmstudio|llamacpp|gpt4all|jan|kobold|textgen|vllm|localai|openwebui/.test(p)) {
     return /llava|moondream|vision|minicpm|qwen2.?vl|qwen-vl|pixtral|gemma-3|llama-?3\.2.*vision|gpt-4o/.test(m);
   }
   if (/anthropic|grok|openai|gemini|openrouter|codex|github|xai/.test(p)) return true;
   return /gpt-4o|gpt-4\.1|claude|gemini|grok|vision|llava/.test(m);
-}
-
-const SECRET_SRC = /\.(md|ts|tsx|js|jsx|mjs|cjs|py|go|rs)$/i;
-
-export function isSecretPath(path: string): boolean {
-  const norm = path.replace(/\\/g, "/");
-  const base = norm.split("/").pop() ?? "";
-  if (/\.env\.(example|sample|template)$/i.test(base)) return false;
-  if (/(^|\/)\.env($|\.(?!example|sample|template))/i.test(norm)) return true;
-  if (/(^|\/)(\.git-credentials|id_rsa|credentials)$/i.test(norm)) return true;
-  if (/\.(pem|p12|pfx)$/i.test(base)) return true;
-  if (SECRET_SRC.test(base)) return false;
-  if (/^(secrets?|password|token)(\.|$)/i.test(base)) return true;
-  if (/api[_-]?key/i.test(base)) return true;
-  if (/(^|\/)(secrets?|vault)(\.|\/|$)/i.test(norm)) return true;
-  return false;
 }
 
 export function omitSecrets(files: Record<string, string>): Record<string, string> {

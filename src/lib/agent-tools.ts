@@ -1,3 +1,5 @@
+import { MAX_PLAN_STEPS } from './plan-limits.ts';
+
 function tool(
   name: string,
   description: string,
@@ -15,8 +17,12 @@ function tool(
 }
 
 export const AGENT_TOOLS = [
-  tool("select_tools", "List available tools with names:[]; choose up to 6 names for the next request. Does not execute them.", { names: { type: "array", items: { type: "string" }, maxItems: 6 } }, ["names"]),
-  tool("list_files", "List workspace paths. Optional glob substring, prefix folder, offset for the next page.", {
+  tool("select_tools", "Find and load permitted native tools, MCP schemas or skills for a task. Use query and scope; names loads exact native names. Discovery executes nothing. Results are paginated; skill bodies require skill_read.", {
+    names: { type: "array", items: { type: "string" }, maxItems: 6 }, query: {type:'string'},
+    scope:{type:'string',enum:['all','tools','mcp','skills']},server:{type:'string'},cursor:{type:'string'},limit:{type:'integer'},
+    refresh:{type:'boolean',description:'Refresh only the queried MCP connections when the cached catalog is stale or changed.'},
+  }),
+  tool("list_files", "List workspace paths, including native program results on disk. Optional glob substring, prefix folder, offset for the next page.", {
     glob: { type: "string" },
     prefix: { type: "string" },
     offset: { type: "integer" },
@@ -26,6 +32,30 @@ export const AGENT_TOOLS = [
     start_line: { type: "integer" },
     end_line: { type: "integer" },
   }, ["path"]),
+  tool("verify_file", "Verify a saved file in the local workspace on disk. Returns SHA-256, size and PNG dimensions. Use for file evidence after an export or render; optional width and height test exact PNG dimensions. Does not execute or change the file.", {
+    path: { type: "string", maxLength: 511 },
+    width: { type: "integer", minimum: 1, maximum: 2147483647 },
+    height: { type: "integer", minimum: 1, maximum: 2147483647 },
+  }, ["path"]),
+  tool("review_read_baseline", "Read an immutable comparison-baseline window for the explicitly bound review. This is separate from read_file on the current file, including deleted files. Continue all windows before claiming baseline coverage. Available only for a known review request.", {
+    path: { type: "string", maxLength: 1024 },
+    start_line: { type: "integer", minimum: 1 },
+    end_line: { type: "integer", minimum: 1 },
+  }, ["path"]),
+  tool("review_submit", "Record a partial review report for the explicitly bound review. Native read evidence verifies exact content and complete windows; model-supplied evidence cannot certify coverage. Missing files remain open. Metadata only: no source writes, automatic approval, test result or task-completion gate.", {
+    reviewId: { type: "string", maxLength: 128 },
+    files: { type: "array", maxItems: 500, items: { type: "object", additionalProperties: false, required: ["path", "status"], properties: {
+      path: { type: "string", maxLength: 1024 }, status: { type: "string", enum: ["reviewed", "skipped"] },
+      reason: { type: "string", maxLength: 1200 }, findings: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["line", "title", "detail"], properties: {
+        line: { type: "integer", minimum: 1, maximum: 2000000 }, title: { type: "string", maxLength: 240 }, detail: { type: "string", maxLength: 3000 },
+      } } },
+    } } },
+  }, ["reviewId", "files"]),
+  tool("read_tool_output", "Read the complete retained JSON of a large tool result from this task. Follow nextOffset until null. Handles expire after the task or eviction; never repeat an external action just to retrieve its output.", {
+    output_id: { type: "string" },
+    offset: { type: "integer", minimum: 0 },
+    limit: { type: "integer", minimum: 256, maximum: 24000 },
+  }, ["output_id"]),
   tool("write_file", "Create a new file. Replacing an existing file requires overwrite_reason explaining why the task needs a whole-file replacement. For partial changes, use edit_file and preserve unrelated content, including asset dimensions and geometry. If truncated, append_file — do not rewrite.", {
     path: { type: "string" },
     content: { type: "string" },
@@ -51,10 +81,23 @@ export const AGENT_TOOLS = [
     path: { type: "string" },
   }, ["path"]),
   tool("see_run", "HTML: snapshot the preview. Native/CLI: last Compile/Run log or open OS window — never a fake iframe for .exe.", {}),
-  tool("play", "Send keys to the HTML preview, then snapshot. keys: left,right,up,down,ok.", {
-    keys: { type: "array", items: { type: "string" } },
-    hold_ms: { type: "number" },
-  }, ["keys"]),
+  tool("play", "Interact with the current HTML preview and observe the result. For a function test, derive the expected result from the task BEFORE acting, then combine an input with an assert action for that result. run_file/see_run return controls in elements and status/counter/table outputs in observations, with actual selectors and current values. Current values alone do not define a test expectation. Use keys for sequential shortcuts (Space, s, u, r, Delete, Tab, Enter, arrows); semantic left/right/up/down/ok follow input settings. Or use actions for mouse, text and assertions. Selectors must match one visible enabled element; x/y are CSS pixels from the preview viewport top-left, never desktop coordinates. keys run first, then actions. assert supports expected text/value/count/checked/visible. A delivered input alone is not a passed function test. No OS/engine control, clipboard shortcuts or file pickers.", {
+    keys: { type: "array", items: { type: "string" }, maxItems:32 },
+    hold_ms: { type: "number", minimum:0, maximum:1000, description:'Hold each keys entry, default 90 ms.' },
+    actions: {type:'array',maxItems:32,description:'1–32 total keys/actions, at most 10 seconds of holds/waits. Stops at first failure; never automatically replays.',items:{type:'object',required:['type'],additionalProperties:false,properties:{
+      type:{type:'string',enum:['key','click','move','drag','scroll','type','assert','wait']},
+      selector:{type:'string',description:'CSS selector in the preview. Mouse: center of the element; key/type: focus this element. assert: expected target.'},
+      x:{type:'number'},y:{type:'number'},
+      key:{type:'string'},modifiers:{type:'array',items:{type:'string',enum:['Control','Shift','Alt','Meta']}},hold_ms:{type:'number',minimum:0,maximum:1000},
+      button:{type:'string',enum:['left','middle','right']},count:{type:'integer',description:'click: 1 or 2. assert: expected matching element count.'},
+      to_selector:{type:'string',description:'drag destination in the same viewport; alternatively to_x/to_y.'},to_x:{type:'number'},to_y:{type:'number'},duration_ms:{type:'number',minimum:0,maximum:1000},
+      delta_x:{type:'number'},delta_y:{type:'number',description:'scroll: positive moves down, negative up.'},
+      text:{type:'string',description:'type: insert explicit text (max 4000 chars). assert: exact trimmed visible text.'},
+      value:{type:'string',description:'assert: exact field value.'},checked:{type:'boolean'},visible:{type:'boolean'},
+      timeout_ms:{type:'number',minimum:0,maximum:3000,description:'assert: wait up to this duration for the expectation.'},
+      ms:{type:'number',minimum:0,maximum:1000,description:'wait duration.'},
+    }}},
+  }),
   tool("format_file", "Format a workspace file (JS/TS/JSON/HTML/Markdown; Go/Rust/C/C++ via Companion).", { path: { type: "string" } }, ["path"]),
   tool("open_preview", "Open live preview for HTML, Markdown, JSON, or last run.", {
     path: { type: "string" },
@@ -70,7 +113,7 @@ export const AGENT_TOOLS = [
     url: { type: "string" },
     replace: { type: "boolean", description: "If true, delete existing workspace files first." },
   }, ["url"]),
-  tool("shell", "Run a limited command: python <file>, node <file>, npm test, pytest [-q] [-k name], python -m pytest, go test, cargo test, dotnet test.", {
+  tool("shell", "Run a limited project command: python <file>, node <file>, node --test <project-test-file>, npm test, pytest [-q] [-k name], python -m pytest, go test, cargo test, dotnet test. Node test paths must be existing local snapshot files; no arbitrary runtime flags. Use read_file for file contents, never cat/head. Pipes, redirection and command chaining are unsupported.", {
     command: { type: "string" },
     expected_exit_code: { type: "integer", description: "Optional explicit expected process exit code (0..255) for a requested negative test. Requires a runner returning an actual exit code. Never use to hide an unexpected failure; prefer assertions in a test script when unsupported." },
   }, ["command"]),
@@ -96,7 +139,7 @@ export const AGENT_TOOLS = [
     text: { type: "string" },
   }, ["text"]),
   tool("memory_forget", "Delete a learned fact. id from Gelerntes [id], or the fact text.", { id: { type: "string" } }, ["id"]),
-  tool("skill_list", "List skills the agent wrote (reusable workflows).", {}),
+  tool("skill_list", "List available Anvil, project and imported skills. Skills are instructions, not additional tool permissions.", {}),
   tool("skill_write", "Create or update a skill. Use after a reusable multi-step workflow succeeded. Default scope: current project.", {
     scope: { type: "string", enum: ["user", "project"] },
     name: { type: "string" },
@@ -104,7 +147,7 @@ export const AGENT_TOOLS = [
     body: { type: "string", description: "Concrete steps" },
     kind: { type: "string", description: "guide or plugin" },
   }, ["name", "when", "body"]),
-  tool("skill_read", "Read a skill body.", { name: { type: "string" } }, ["name"]),
+  tool("skill_read", "Read a skill body. For a bundled reference, pass its exact relative resource path from resources. Read only references needed for the task.", { name: { type: "string" }, resource: { type: "string" } }, ["name"]),
   tool("skill_run", "Activate a skill and follow its body now with tools.", { name: { type: "string" } }, ["name"]),
   tool("skill_debug", "Validate a skill (or all). Returns issues to fix with skill_write/skill_patch.", {
     name: { type: "string" },
@@ -114,18 +157,18 @@ export const AGENT_TOOLS = [
     when: { type: "string" },
     body: { type: "string" },
   }, ["name"]),
-  tool("skill_outcome", "Report whether the last skill helped: ok, fail, reject.", {
+  tool("skill_outcome", "Optionally record the agent's report about the last applied skill: ok, fail, reject. This is not independent task verification and does not change instructions or permissions.", {
     kind: { type: "string" },
   }, ["kind"]),
-  tool("set_plan", "Create checklist with steps/kinds; update status with updates and evidence IDs. Reconcile before final answer. Use 3-7 steps in the user's language, kinds read/edit/run/check/service/report. Keep checking and launching separate. Updates preserve existing steps, including locked user checklists. Completion needs matching successful tool evidence from the current checklist context.", {
-    steps: { type: "array", items: { type: "string" } },
-    kinds: { type: "array", items: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"] } },
+  tool("set_plan", "Create a checklist with steps/kinds or update its existing numbered steps. Preserve locked steps and every explicit user requirement. In new steps use the full workspace-relative file paths for outputs in a folder named by the user. For each completed step attach current evidence IDs that prove its own result. For an unclassified test use kind check. If an update is refused, address its specific cause once or leave it open and perform the next distinct test. Reconcile before the final answer.", {
+    steps: { type: "array", maxItems: MAX_PLAN_STEPS, items: { type: "string" } },
+    kinds: { type: "array", maxItems: MAX_PLAN_STEPS, items: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"] } },
     updates: { type: "array", maxItems: 10, items: { type: "object", properties: {
       step: { type: "integer", description: "Existing 1-based step number." },
       status: { type: "string", enum: ["todo", "run", "ok", "err"] },
-      kind: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"] },
-      evidence: { type: "array", items: { type: "string" } },
-      reason: { type: "string" },
+      kind: { type: "string", enum: ["read", "edit", "run", "check", "service", "report"], description: "Existing step type or the type of an unclassified step. Use check for testing a function or asserting a preview result." },
+      evidence: { type: "array", items: { type: "string" }, description: "Actual plan_evidence_id values for this step only. An expected rejection needs the exact observed test result." },
+      reason: { type: "string", description: "What the tool verified, or the concrete blocker if still open." },
     }, required: ["step", "status", "reason"] } },
   }),
   tool("ask_user", "Ask the user a question with 2–5 options. Use when a choice, missing fact, or risky write needs a decision. Do not guess. After the answer, continue the same job.", {
@@ -171,11 +214,16 @@ export const AGENT_TOOLS = [
     testLoop: { type: "boolean" },
     engineLoop: { type: "boolean" },
   }, ["name"]),
-  tool("graph_write", "Rebuild .anvil/graph.json from the workspace (HTML/Python/tests/engine). Pass edges only to replace the whole graph, never append. fromSources:true ignores old edges.", {
+  tool("graph_write", "Rebuild .anvil/graph.json from workspace sources, or replace the whole graph with edges (an empty array clears it). fromSources:true ignores old edges. when is a description only; phase, condition and dependsOn are typed metadata. Never grants tools or enables automatic execution. Preserve recipe id/version when using a versioned recipe.", {
     name: { type: "string" },
+    version: { type: "integer", enum: [1] },
+    recipes: {
+      type: "array", maxItems: 64,
+      items: { type: "object", properties: { id: { type: "string" }, version: { type: "integer", minimum: 1 } }, required: ["id", "version"], additionalProperties: false },
+    },
     fromSources: { type: "boolean" },
     edges: {
-      type: "array",
+      type: "array", maxItems: 256,
       items: {
         type: "object",
         properties: {
@@ -183,7 +231,14 @@ export const AGENT_TOOLS = [
           edge: { type: "string" },
           tool: { type: "string" },
           glob: { type: "string" },
+          id: { type: "string", description: "Unique stable node id." },
+          phase: { type: "string", enum: ["plan", "act", "observe", "patch", "see", "engine", "done", "abort"] },
+          condition: { type: "string", enum: ["changed", "success", "failure", "tests-passed", "manual"] },
+          args: { type: "object", additionalProperties: true },
+          dependsOn: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Existing node ids whose current results must be confirmed; cycles are rejected." },
+          enabled: { type: "boolean" },
         },
+        required: ["when", "edge"],
       },
     },
   }),

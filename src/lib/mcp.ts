@@ -1,4 +1,5 @@
 import { readMcpSse } from "./mcp-stream";
+import {capabilityPage} from './capability-search';
 import { ANVIL_VERSION } from "./version";
 import {
   parseMcpBody,
@@ -12,8 +13,10 @@ import {
   type McpTool,
   type McpResource,
 } from "./mcp-parse";
-import { loadSecrets, saveSecrets } from "./secrets";
-import { mcpArguments } from "./mcp-schema";
+import { flushSecrets, loadSecrets, saveSecrets } from "./secrets";
+import { localMcpFiles, workspaceMcpArguments } from "./mcp-schema";
+import { workspaceDisk } from './native-workspace';
+import { ToolRejection } from '../../electron/tool-rejection.mjs';
 import { forgetMcpOutputs, modelMcpResult, readMcpOutput } from "./mcp-results";
 import { withCompanion } from "./companion-life";
 import { assertMcpPackageRequest, mcpPackage, mcpPackageTools } from "./mcp-packages";
@@ -167,9 +170,10 @@ function fingerprint(s: McpServer) {
   return `${serversFingerprint([s])}|${JSON.stringify([s.context, s.timeoutMs, s.service, s.allowedTools, s.allowResources, credentials(s), loadSecrets().keys[`mcp-env:${s.id}`]])}`;
 }
 /** Capture the same credentials and grants as foreground MCP without opening a connection. */
-export function backgroundMcpServers(bindCredentials=false) {
+export function backgroundMcpServers(bindCredentials=false, scope?:{surface?:{id?:string;mode?:string};serverIds?:readonly string[]}) {
   const st=useIde.getState();
-  return st.mcpServers.filter(s=>mcpConfigured(s)&&(st.surfaceMode==='bridge'||!st.activeSurfaceId||st.activeSurfaceId==='anvil'||s.id===st.activeSurfaceId)).map(s=>{
+  const surface=scope?.surface||{id:st.activeSurfaceId,mode:st.surfaceMode};
+  return st.mcpServers.filter(s=>mcpConfigured(s)&&(!scope?.serverIds||scope.serverIds.includes(s.id))&&(surface.mode==='bridge'||!surface.id||surface.id==='anvil'||s.id===surface.id)).map(s=>{
     validateService(s); assertMcpPackageRequest(s,'initialize',{});
     if(s.auth!=='oauth'){
       const keys=loadSecrets().keys,token=keys[`mcp:${s.id}`]||(!mcpPackage(s)&&keys[`mcp:${s.name}`]);
@@ -411,7 +415,8 @@ async function rpc(
   const timeout = AbortSignal.timeout(Math.min(600000, Math.max(8000, s.timeoutMs || 120000)));
   const combined = AbortSignal.any([entry.controller.signal, timeout, ...(signal ? [signal] : [])]);
   if (hasMcpNative()) return nativeRpc(s, method, params, combined, onChunk);
-  if (s.transport === "stdio" || s.auth === "oauth")
+  if (s.service === "sorceress") throw new Error("Der Sorceress-API-Adapter benötigt die Anvil-Desktop-App.");
+  if (s.transport === "stdio" || s.auth === "oauth" || s.service === "sorceress")
     throw new Error("MCP über stdio und OAuth benötigt die Anvil-Desktop-App.");
   const url = parseMcpUrl(s.url),
     session = sessions.get(s.id);
@@ -563,11 +568,25 @@ function withServer<T>(s: McpServer, fn: () => Promise<T>, cwd?: string) {
 }
 function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
-  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason);
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    // Always observe the shared request, including an abort during changed().
+    // Throwing before attaching handlers would orphan its later rejection.
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
     signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) abort();
   });
 }
 export async function mcpProbe(
@@ -694,7 +713,18 @@ export async function mcpCatalogPage(
   signal?: AbortSignal,
 ) {
   const selected = options.server ? [findServer(servers, String(options.server))] : servers;
-  await mcpRefresh(selected, 60000, signal);
+  await mcpRefresh(selected, options.refresh===true?0:60000, signal);
+  if(options.catalogSearch){
+    const snapshot=mcpSnapshot(selected);
+    const rows=[...snapshot.tools.map(tool=>({tool})),...snapshot.resources.map(resource=>({resource}))];
+    const page=capabilityPage(rows,{query:String(options.query||''),limit:Number(options.limit)||6,cursor:typeof options.cursor==='string'?options.cursor:undefined},row=>{
+      const value='tool'in row?row.tool:row.resource;
+      return {id:`${'tool'in row?'tool':'resource'}:${value.server}:${'tool'in row?row.tool.name:row.resource.uri}`,name:('tool'in row?row.tool.name:row.resource.name)||'',group:value.server,description:'description'in value?String(value.description||''):''};
+    });
+    return {tools:page.items.flatMap(row=>'tool'in row?[row.tool]:[]),resources:page.items.flatMap(row=>'resource'in row?[row.resource]:[]),total:page.total,nextCursor:page.nextCursor,
+      servers:selected.filter(mcpConfigured).map(server=>({id:server.id,name:server.name,ready:snapshot.ready.has(server.id),error:mcpListError(server.id)})),
+      hint:'Use exact serverId and name with arguments matching inputSchema. Read-only catalog search grants no new permissions; nextCursor requires the same query and server.'};
+  }
   const snap = mcpSnapshot(selected),
     query = String(options.query || "").toLowerCase();
   const tools = snap.tools.filter((t) =>
@@ -740,7 +770,7 @@ export async function mcpCall(
   name: string,
   args: unknown,
   onChunk?: (text: string) => void,
-  extra?: { cwd?: string; signal?: AbortSignal },
+  extra?: { cwd?: string; signal?: AbortSignal; workspaceCurrent?: () => boolean },
 ): Promise<unknown> {
   const s = findServer(servers, server);
   return withServer(
@@ -752,14 +782,27 @@ export async function mcpCall(
         throw new Error(
           mcpListError(s.id) || `MCP-Tool nicht im aktuellen Katalog: ${name}. mcp_list verwenden.`,
         );
-      const checked = mcpArguments(
-        tool.inputSchema,
-        args,
-        s.context,
-        companionTarget(s) ? extra?.cwd : undefined,
-      );
+      const assertWorkspace = () => {
+        extra?.signal?.throwIfAborted();
+        if (extra?.workspaceCurrent && !extra.workspaceCurrent()) throw new Error('Der Projektordner wurde inzwischen gewechselt.');
+      };
+      let checked: Record<string, unknown>;
+      try {
+        assertWorkspace();
+        const root = extra?.workspaceCurrent && localMcpFiles(s) ? extra.cwd : undefined;
+        checked = await workspaceMcpArguments(name, tool.inputSchema, args, s.context,
+          companionTarget(s) ? extra?.cwd : undefined, root ? async (path, directory) => {
+            assertWorkspace();
+            return (await workspaceDisk({ action: 'resultDestination', root, path, directory })).path;
+          } : undefined);
+        assertWorkspace();
+      } catch (error) {
+        extra?.signal?.throwIfAborted();
+        throw new ToolRejection(error instanceof Error ? error.message : String(error));
+      }
       return unwrapMcp(
         await rpc(s, "tools/call", { name, arguments: checked }, extra?.signal, onChunk),
+        name,
       );
     },
     extra?.cwd,
@@ -793,6 +836,7 @@ export async function mcpLogin(
 ) {
   if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
   validateService(s);
+  if (s.auth === "bearer") throw new Error("Für diesen Dienst den API-Schlüssel speichern und die Verbindung prüfen.");
   await mcpClose(s);
   return nativeRpc(s, "oauth/login", {}, signal || AbortSignal.timeout(660000), onProgress);
 }
@@ -805,6 +849,11 @@ export async function mcpAuthStatus(
   signal?: AbortSignal,
 ): Promise<{ authenticated: boolean }> {
   if (!hasMcpNative()) throw new Error("Dienst-Anmeldung benötigt die Anvil-Desktop-App.");
+  if (s.auth === "bearer") {
+    validateService(s);
+    signal?.throwIfAborted();
+    return { authenticated: Boolean(credentials(s).authorization) };
+  }
   const value = await nativeRpc(s, "oauth/status", {}, signal || AbortSignal.timeout(8000));
   return {
     authenticated: Boolean((value as { authenticated?: boolean } | undefined)?.authenticated),
@@ -813,6 +862,12 @@ export async function mcpAuthStatus(
 export async function mcpLogout(s: McpServer) {
   if (!hasMcpNative()) throw new Error("MCP-Anmeldung benötigt die Desktop-App.");
   await mcpClose(s);
+  if (s.auth === "bearer") {
+    await nativeRpc(s, "bearer/logout", {}, AbortSignal.timeout(8000));
+    saveSecrets({ keys: { [`mcp:${s.id}`]: "", [`mcp-target:${s.id}`]: "" } });
+    await flushSecrets();
+    return { authenticated: false };
+  }
   return nativeRpc(s, "oauth/logout", {}, AbortSignal.timeout(8000));
 }
 export function newMcpId() {

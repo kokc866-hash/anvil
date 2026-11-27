@@ -109,7 +109,7 @@ describe("abort", () => {
   it("custom stall is LAN only", () => {
     assert.equal(localSseStall("ollama", "https://api.openai.com"), true);
     assert.equal(localSseStall("custom", "http://127.0.0.1:11434"), true);
-    assert.equal(localSseStall("custom", "http://192.168.178.41:11434"), true);
+    assert.equal(localSseStall("custom", "http://192.168.56.40:11434"), true);
     assert.equal(localSseStall("custom", "https://api.openai.com/v1"), false);
     assert.equal(localSseStall("openai", "https://api.openai.com"), false);
   });

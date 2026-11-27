@@ -268,4 +268,21 @@ test("external service permissions, stale callers, logout and persistence use th
     () => mcp.mcpCall([selected], s.id, "read_note", { id: "removed" }),
     /entfernt|deaktiviert/,
   );
+  const sorceress = services.createService("sorceress");
+  useIde.getState().setMcpServers([unrelated, sorceress]);
+  assert.equal(sorceress.auth, "bearer");
+  assert.equal((await mcp.mcpAuthStatus(sorceress)).authenticated, false);
+  await assert.rejects(services.saveServiceApiKey(sorceress.id, "wrong"), /sk_sorc_/);
+  await services.saveServiceApiKey(sorceress.id, "sk_sorc_synthetic_test");
+  assert.equal((await mcp.mcpAuthStatus(sorceress)).authenticated, true);
+  services.updateService(sorceress.id, { enabled: true, allowedTools: ["read_note"] });
+  await mcp.mcpProbe(useIde.getState().mcpServers[1], useIde.getState().mcpServers);
+  assert.ok(calls.findLast(c => c.method === "tools/list").server.headers.authorization.startsWith("Bearer sk_sorc_"));
+  await assert.rejects(mcp.mcpLogin(sorceress), /API-Schlüssel/);
+  const nativeRequest = window.anvilNative.mcpRequest;
+  window.anvilNative.mcpRequest = async request => request.method === "bearer/logout"
+    ? { ok: true, value: { authenticated: false } } : nativeRequest(request);
+  await services.disconnectService(sorceress.id, true);
+  assert.equal((await mcp.mcpAuthStatus(sorceress)).authenticated, false);
+  assert.deepEqual(useIde.getState().mcpServers, [unrelated]);
 });

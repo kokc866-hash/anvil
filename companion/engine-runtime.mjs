@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stripAnsiCsi } from "../electron/text-controls.mjs";
 import { statSync, readdirSync, readFileSync } from "node:fs";
 import { insideRoot, runAllowed, whichExts } from "./guard.mjs";
 import { spawnRun } from "./run-process.mjs";
@@ -161,7 +162,7 @@ export function engineArguments(parsed, cwd) {
 function checkedEngineResult(result, engine, action) {
   if (engine !== "godot" || !["check", "test"].includes(action) || result.running) return result;
   // Godot's import process can report a script/asset failure and still exit zero.
-  const output = `${result.stdout || ""}\n${result.stderr || ""}`.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  const output = stripAnsiCsi(`${result.stdout || ""}\n${result.stderr || ""}`);
   if (!/^\s*(?:SCRIPT ERROR|ERROR):/m.test(output)) return result;
   return { ...result, ok: false, stderr: [result.stderr, "Godot hat Fehler gemeldet; die Prüfung ist fehlgeschlagen."].filter(Boolean).join("\n") };
 }

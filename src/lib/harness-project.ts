@@ -1,9 +1,10 @@
-import type { AfterWrite, HarnessOpts, HarnessTick } from "./harness.ts";
+import type { AfterWrite, HarnessOpts, HarnessTick, HarnessPhase } from "./harness.ts";
 import { effectiveAfterWrite } from "./harness.ts";
-import type { GraphEdge, GraphPolicy } from "./harness-graph.ts";
+import type { GraphEdge, GraphPolicy, GraphContext } from "./harness-graph.ts";
 import { graphEdge, graphPrompt } from "./harness-graph.ts";
 import { kindOfTool, noteObs, stepHarness, harnessPrompt, startHarness, type HarnessState, type Observation } from "./harness.ts";
 import { isTestFile } from "./test-parse.ts";
+import { toolResultFailed, toolResultPending } from "./agent-evidence.ts";
 
 export const HARNESS_PATH = ".anvil/harness.json";
 export const GRAPH_PATH = ".anvil/graph.json";
@@ -24,6 +25,12 @@ export type ProjectHarness = {
 };
 
 export type ProjectGraphEdge = {
+  id?: string;
+  phase?: HarnessPhase;
+  condition?: "changed" | "success" | "failure" | "tests-passed" | "manual";
+  args?: Record<string, unknown>;
+  dependsOn?: string[];
+  enabled?: boolean;
   when: string;
   edge: GraphEdge;
   tool?: string;
@@ -31,9 +38,104 @@ export type ProjectGraphEdge = {
 };
 
 export type ProjectGraph = {
+  version?: 1;
+  recipes?: { id: string; version: number }[];
   name?: string;
   edges?: ProjectGraphEdge[];
 };
+
+export const PROJECT_GRAPH_VERSION = 1;
+const GRAPH_EDGE_LIMIT = 256;
+const GRAPH_EDGES = new Set<string>(["none", "preview", "play", "engine", "test", "run", "format", "lint", "debug", "mcp", "skill", "git"]);
+const GRAPH_PHASES = new Set<string>(["plan", "act", "observe", "patch", "see", "engine", "done", "abort"]);
+const GRAPH_CONDITIONS = new Set<string>(["changed", "success", "failure", "tests-passed", "manual"]);
+const objectRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+const safeText = (value: unknown, limit: number): value is string => typeof value === "string" && value.length <= limit && ![...value].some(char => char.charCodeAt(0) < 32);
+const graphId = (value: unknown): value is string => safeText(value, 256) && /^[a-zA-Z0-9_.:-]+$/.test(value);
+
+/** Project files define workflow metadata, never capabilities or executable conditions. */
+export function validateProjectGraph(value: unknown): { graph: ProjectGraph; error?: never } | { graph?: never; error: string } {
+  const invalid = (detail: string) => ({ error: `Ungültiger Projektablauf: ${detail}` });
+  if (!objectRecord(value)) return invalid("Ein JSON-Objekt wird benötigt.");
+  if (value.version !== undefined && value.version !== PROJECT_GRAPH_VERSION) return invalid("Diese Graphversion wird nicht unterstützt.");
+  if (value.name !== undefined && !safeText(value.name, 256)) return invalid("Der Name muss ein kurzer Text sein.");
+  if (value.edges !== undefined && (!Array.isArray(value.edges) || value.edges.length > GRAPH_EDGE_LIMIT)) return invalid(`Regeln müssen eine Liste mit höchstens ${GRAPH_EDGE_LIMIT} Einträgen sein.`);
+  const graph: ProjectGraph = { ...(value.version === 1 ? { version: 1 } : {}), ...(typeof value.name === "string" ? { name: value.name } : {}) };
+  if (value.recipes !== undefined) {
+    if (!Array.isArray(value.recipes) || value.recipes.length > 64) return invalid("Vorlagenkennungen müssen eine Liste sein.");
+    const ids = new Set<string>();
+    const recipes: NonNullable<ProjectGraph["recipes"]> = [];
+    for (const recipe of value.recipes) {
+      if (!objectRecord(recipe) || !graphId(recipe.id) || !Number.isSafeInteger(recipe.version) || Number(recipe.version) < 1 || Number(recipe.version) > 1_000_000 || ids.has(recipe.id)) return invalid("Vorlagen benötigen eine eindeutige Kennung und eine positive Versionsnummer.");
+      ids.add(recipe.id);
+      recipes.push({ id: recipe.id, version: recipe.version as number });
+    }
+    graph.recipes = recipes;
+  }
+  if (value.edges === undefined) return { graph };
+  const edges: ProjectGraphEdge[] = [];
+  const ids = new Set<string>();
+  for (const [index, raw] of (value.edges as unknown[]).entries()) {
+    const at = `Regel ${index + 1}`;
+    if (!objectRecord(raw)) return invalid(`${at} muss ein Objekt sein.`);
+    if (!safeText(raw.when, 2048) || typeof raw.edge !== "string" || !GRAPH_EDGES.has(raw.edge)) return invalid(`${at} benötigt eine Beschreibung und einen gültigen Werkzeugtyp.`);
+    if (raw.id !== undefined && (!graphId(raw.id) || ids.has(raw.id))) return invalid(`${at} benötigt eine eindeutige Kennung.`);
+    if (typeof raw.id === "string") ids.add(raw.id);
+    if (raw.phase !== undefined && (typeof raw.phase !== "string" || !GRAPH_PHASES.has(raw.phase))) return invalid(`${at} enthält eine unbekannte Phase.`);
+    if (raw.condition !== undefined && (typeof raw.condition !== "string" || !GRAPH_CONDITIONS.has(raw.condition))) return invalid(`${at} enthält eine unbekannte Bedingung.`);
+    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") return invalid(`${at}: „enabled“ muss wahr oder falsch sein.`);
+    if (raw.tool !== undefined && (!safeText(raw.tool, 128) || !/^[a-z_][a-z0-9_]*$/.test(raw.tool))) return invalid(`${at} enthält keinen gültigen Werkzeugnamen.`);
+    if (raw.glob !== undefined && !safeText(raw.glob, 2048)) return invalid(`${at} enthält kein gültiges Dateimuster.`);
+    if (raw.dependsOn !== undefined && (!Array.isArray(raw.dependsOn) || raw.dependsOn.length > GRAPH_EDGE_LIMIT || raw.dependsOn.some(id => !graphId(id)) || new Set(raw.dependsOn).size !== raw.dependsOn.length || !raw.id)) return invalid(`${at} enthält ungültige Abhängigkeiten.`);
+    if (raw.args !== undefined && (!objectRecord(raw.args) || !jsonArguments(raw.args))) return invalid(`${at} enthält ungültige Werkzeugargumente.`);
+    // Copy only the contract: incidental project fields cannot become runtime settings.
+    edges.push({
+      when: raw.when, edge: raw.edge as GraphEdge,
+      ...(typeof raw.id === "string" ? { id: raw.id } : {}),
+      ...(typeof raw.phase === "string" ? { phase: raw.phase as HarnessPhase } : {}),
+      ...(typeof raw.condition === "string" ? { condition: raw.condition as ProjectGraphEdge["condition"] } : {}),
+      ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+      ...(typeof raw.tool === "string" ? { tool: raw.tool } : {}),
+      ...(typeof raw.glob === "string" ? { glob: raw.glob } : {}),
+      ...(Array.isArray(raw.dependsOn) ? { dependsOn: [...raw.dependsOn] as string[] } : {}),
+      ...(objectRecord(raw.args) ? { args: JSON.parse(JSON.stringify(raw.args)) as Record<string, unknown> } : {}),
+    });
+  }
+  const byId = new Map(edges.filter(e => e.id).map(e => [e.id!, e]));
+  const complete = new Set<string>();
+  const visiting = new Set<string>();
+  const acyclic = (id: string): boolean => {
+    if (complete.has(id)) return true;
+    if (visiting.has(id)) return false;
+    const edge = byId.get(id);
+    if (!edge) return false;
+    visiting.add(id);
+    if (edge.dependsOn?.some(dependency => !acyclic(dependency))) return false;
+    visiting.delete(id);
+    complete.add(id);
+    return true;
+  };
+  if (edges.some(e => e.id && !acyclic(e.id))) return invalid("Abhängigkeiten verweisen auf fehlende Regeln oder bilden einen Kreis.");
+  graph.edges = edges;
+  return { graph };
+}
+
+function jsonArguments(value: unknown): boolean {
+  let left = 4096;
+  const active = new Set<object>();
+  const visit = (part: unknown, depth: number): boolean => {
+    if (--left < 0 || depth > 16) return false;
+    if (part === null || typeof part === "boolean") return true;
+    if (typeof part === "number") return Number.isFinite(part);
+    if (typeof part === "string") return part.length <= 65536;
+    if (typeof part !== "object" || (!Array.isArray(part) && !objectRecord(part)) || active.has(part)) return false;
+    active.add(part);
+    const ok = Array.isArray(part) ? part.every(item => visit(item, depth + 1)) : Object.entries(part).every(([key, item]) => !["__proto__", "prototype", "constructor"].includes(key) && key.length <= 256 && visit(item, depth + 1));
+    active.delete(part);
+    return ok;
+  };
+  return visit(value, 0);
+}
 
 export function parseHarnessJson(raw: string): ProjectHarness | null {
   try {
@@ -47,9 +149,8 @@ export function parseHarnessJson(raw: string): ProjectHarness | null {
 
 export function parseGraphJson(raw: string): ProjectGraph | null {
   try {
-    const j = JSON.parse(raw) as ProjectGraph;
-    if (!j || typeof j !== "object") return null;
-    return j;
+    if (raw.length > 2_000_000) return null;
+    return validateProjectGraph(JSON.parse(raw)).graph ?? null;
   } catch {
     return null;
   }
@@ -205,16 +306,22 @@ export function applyHarnessTool(
   }
   if (name === "graph_write") {
     const guessed = guessProjectHarness(files);
-    const given = Array.isArray(args.edges) ? (args.edges as ProjectGraph["edges"]) : null;
-    const fromSources = args.fromSources === true || !given?.length;
-    const edges = fromSources ? guessed.graph.edges : given;
-    const next: ProjectGraph = { name: String(args.name ?? guessed.graph.name ?? "app"), edges };
+    if (args.fromSources !== undefined && typeof args.fromSources !== "boolean") return { result: { ok: false, error: "„fromSources“ muss wahr oder falsch sein." } };
+    const fromSources = args.fromSources === true || args.edges === undefined;
+    const checked = validateProjectGraph({
+      version: args.version === undefined ? PROJECT_GRAPH_VERSION : args.version,
+      name: args.name === undefined ? guessed.graph.name ?? "app" : args.name,
+      edges: fromSources ? guessed.graph.edges : args.edges,
+      ...(args.recipes !== undefined ? { recipes: args.recipes } : {}),
+    });
+    if (!checked.graph) return { result: { ok: false, error: checked.error } };
+    const next = checked.graph;
     return { result: { ok: true, path: GRAPH_PATH, fromSources, graph: next }, writes: { [GRAPH_PATH]: dumpGraph(next) } };
   }
   return { result: { error: `unknown ${name}` } };
 }
 
-export type WireOpts = HarnessOpts & { engineOk?: boolean; edges?: ProjectGraphEdge[]; queued?: string[] };
+export type WireOpts = HarnessOpts & { engineOk?: boolean; edges?: ProjectGraphEdge[]; queued?: string[]; context?: GraphContext };
 
 export function afterTool(
   state: HarnessState,
@@ -222,8 +329,8 @@ export function afterTool(
   result: Record<string, unknown>,
   opts: WireOpts,
 ): { state: HarnessState; stop: boolean; inject: string; graph: GraphPolicy; allow: string[]; strict?: boolean } {
-  const err = "error" in result && result.error;
-  const queued = Boolean(result.queued);
+  const err = toolResultFailed(result) || Boolean(result.interrupted);
+  const queued = !err && (toolResultPending(result) || Boolean(result.queued));
   const obs: Observation = {
     kind: queued ? "other" : kindOfTool(name, result),
     name,
@@ -231,13 +338,13 @@ export function afterTool(
     path: typeof result.path === "string" ? result.path : undefined,
     stdout: typeof result.stdout === "string" ? result.stdout : undefined,
     stderr: typeof result.stderr === "string" ? result.stderr : typeof result.error === "string" ? result.error : undefined,
-    image: Boolean(result.image || result.frame),
-    graphical: Boolean(result.graphical || result.html || result.frame),
+    image: !queued && Boolean(result.image || result.frame),
+    graphical: !queued && Boolean(result.graphical || result.html || result.frame),
   };
   let next = noteObs(state, obs);
   const tick = stepHarness(next, opts);
   next = tick.state;
-  const g = graphEdge(obs, opts, Boolean(opts.engineOk), opts.edges);
+  const g = graphEdge(obs, opts, Boolean(opts.engineOk), opts.edges, opts.context);
   const coming = new Set((opts.queued ?? []).filter(Boolean));
   if (coming.size && (coming.has(g.tool || "") || (tick.allow.length && tick.allow.some((t) => coming.has(t))))) {
     return { state: next, stop: tick.stop, inject: "", graph: { edge: "none", tool: null, why: "" }, allow: tick.allow, strict: tick.strict };

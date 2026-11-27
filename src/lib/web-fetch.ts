@@ -4,12 +4,15 @@ import { fetchPublic, isPrivateHost } from "./net-guard";
 
 export { isPrivateHost };
 
-export async function readWebPage(urlRaw: string): Promise<{ ok: boolean; text: string; status?: number }> {
+export async function readWebPage(urlRaw: string, signal?: AbortSignal): Promise<{ ok: boolean; text: string; status?: number }> {
   try {
+    signal?.throwIfAborted();
     const res = await fetchPublic(urlRaw, {
       headers: { Accept: "text/plain, text/html, application/json, */*;q=0.8" },
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : undefined,
     });
     const raw = await res.text();
+    signal?.throwIfAborted();
     const cut = raw.slice(0, 20_000);
     const text = stripHtml(cut);
     if (!res.ok) return { ok: false, text: `HTTP ${res.status}: ${text.slice(0, 400)}`, status: res.status };
@@ -36,4 +39,7 @@ function stripHtml(html: string): string {
 export const fetchWeb = createServerFn({ method: "POST" })
   .middleware([sameOriginMiddleware])
   .validator((input: { url: string }) => input)
-  .handler(async ({ data }) => readWebPage(data.url));
+  .handler(async ({ data }) => {
+    const { requestTransport } = await import("./request-abort.server");
+    return readWebPage(data.url, requestTransport().signal);
+  });

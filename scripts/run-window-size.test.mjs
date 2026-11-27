@@ -15,13 +15,19 @@ test("ready reports logical output dimensions, surrounding controls and margins 
     __ANVIL_SESSION__: { session: "test", revision: "one", local: {}, storage: {} },
     parent: { postMessage: (data) => sent.push(data) },
     console: { log() {}, warn() {}, error() {} },
-    document: { readyState: "complete", images: [], body: { querySelectorAll: () => [canvas, button] } },
+    // Supply the browser APIs now used by initial-render readiness. This test
+    // still measures the real bridge's one-time logical sizing contract.
+    setTimeout, clearTimeout, clearInterval, fetch,
+    MutationObserver: class { observe() {} disconnect() {} },
+    innerWidth: 1024, innerHeight: 768,
+    document: { readyState: "complete", images: [], querySelector: () => null, body: { querySelectorAll: () => [canvas, button] } },
     getComputedStyle: () => ({ marginLeft: "8px", marginRight: "8px", marginTop: "8px", marginBottom: "8px" }),
     requestAnimationFrame: (fn) => queueMicrotask(fn),
   });
   const runtime = { ready: async () => {}, status: () => ({ state: "running" }), dispose() {} };
   const bridge = installCanvasBridge(win, { dispose() {} }, runtime);
   await bridge.ready;
+  assert.equal(win.setTimeout, setTimeout, "initial readiness restores the page's timer API");
   assert.deepEqual(sent.at(-1).outputSize, { width: 816, height: 536 });
   rect.width = 1000; rect.height = 700;
   assert.deepEqual(bridge.status().outputSize, { width: 816, height: 536 }, "manual resizing never feeds back into preferred size");
@@ -41,9 +47,9 @@ test("native fitting includes window chrome, stays on its monitor and rejects ot
     getBounds() { return bounds; } getContentBounds() { return content; }
     setBounds(next) { fitted = next; }
   }
-  let child;
+  const children = [];
   const Original = BrowserWindow;
-  const Factory = class extends Original { constructor(...args) { super(...args); child = this; } };
+  const Factory = class extends Original { constructor(...args) { super(...args); children.push(this); } };
   const moduleSource = readFileSync("electron/child.mjs", "utf8");
   const functionStart = moduleSource.indexOf("export function bindChildWindows(");
   assert.ok(functionStart >= 0, "The fixture must execute the real child-window binder");
@@ -54,6 +60,7 @@ test("native fitting includes window chrome, stays on its monitor and rejects ot
     { getDisplayMatching: () => ({ workArea: { x: 1920, y: 0, width: 1920, height: 1040 } }) },
     (name, fn) => handlers.set(name, fn), () => ({}), () => url => url.startsWith("http://127.0.0.1:8080/"), new Map());
   const manager = bind({ port: 8080 }); manager.createChild("/run");
+  const child = children.at(-1);
   const fit = handlers.get("child-fit-run");
   const event = { sender: child.webContents, senderFrame: child.webContents.mainFrame };
   assert.equal(fit(event, { width: 1200, height: 700 }), true);

@@ -143,7 +143,7 @@ export async function canvasCommand(
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       remoteReplies.delete(request);
-      error ? reject(error) : resolve(result!);
+      if (error) reject(error); else resolve(result!);
     };
     const abort = () => {
       transport.postMessage({ kind: "cancel", request, target: frame.id });
@@ -277,6 +277,11 @@ export function registerCanvasFrame(
       outputSize: d.outputSize && Number.isFinite(d.outputSize.width) && Number.isFinite(d.outputSize.height)
         && d.outputSize.width > 0 && d.outputSize.height > 0
         ? { width: Math.min(16384, d.outputSize.width), height: Math.min(16384, d.outputSize.height) } : undefined,
+      readiness: d.readiness && ["settled", "live"].includes(d.readiness.state)
+        && ["waitedMs", "revision", "width", "height"].every(key => Number.isFinite(d.readiness[key]) && d.readiness[key] >= 0)
+        ? d.readiness : undefined,
+      observation: d.observation && typeof d.observation.text === 'string' && Array.isArray(d.observation.elements) ? d.observation : undefined,
+      point: d.point && Number.isFinite(d.point.x) && Number.isFinite(d.point.y) ? {x:d.point.x,y:d.point.y} : undefined,
     };
     if (d.op === "state") options.onState?.(reply);
     const p = pending.get(d.request);
@@ -311,7 +316,7 @@ export function registerCanvasFrame(
             new Error("Canvas antwortet nicht. Skript, Ladefehler oder Endlosschleife prüfen."),
           );
         },
-        op === "keys-up" ? 1000 : 12000,
+        op === "keys-up" || op === 'input-up' ? 1000 : 12000,
       );
       const clean = () => {
         clearTimeout(timer);
@@ -440,23 +445,26 @@ export function registerCanvasFrame(
       }
       if (stopped)
         return { ...stopped, ok: false, error: "Die Canvas-Ausführung wurde gestoppt. Wähle „Ausführen“, um sie erneut zu starten." };
-      if (op !== "keys-up" && op !== "dispose") await ready;
+      if (op !== "keys-up" && op !== 'input-up' && op !== "dispose") await ready;
       if (signal?.aborted) throw new DOMException("Abgebrochen", "AbortError");
       if (typeof args.expectedSession === "string" && args.expectedSession !== boot?.session)
         throw new Error("Canvas-Lauf wurde ersetzt; Befehl verworfen.");
       const current = boot;
       if (op === "shot" && options.capture) {
-        const status = await request("ready", {}, signal);
-        const rect = el.getBoundingClientRect();
-        const image = await options.capture({
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        });
-        if (current !== boot || dead)
-          throw new Error("Canvas-Lauf wurde während der Aufnahme ersetzt.");
-        return { ...status, image, w: Math.round(rect.width), h: Math.round(rect.height) };
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const status = await request("capture-ready", {}, signal);
+          if (!status.ok) return status;
+          const rect = el.getBoundingClientRect();
+          const image = await options.capture({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+          if (signal?.aborted) throw new DOMException("Abgebrochen", "AbortError");
+          if (current !== boot || dead) throw new Error("Canvas-Lauf wurde während der Aufnahme ersetzt.");
+          const after = await request("capture-ready", {}, signal);
+          const next = el.getBoundingClientRect();
+          if (after.ok && rect.x === next.x && rect.y === next.y && rect.width === next.width && rect.height === next.height
+            && (status.readiness?.state === "live" || status.readiness?.revision === after.readiness?.revision))
+            return { ...after, image, w: Math.round(rect.width), h: Math.round(rect.height) };
+        }
+        throw new Error("Vorschau wurde während der Aufnahme verändert. Aufnahme erneut anfordern.");
       }
       return request(op, args, signal);
     },

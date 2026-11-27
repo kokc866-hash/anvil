@@ -18,10 +18,12 @@ export async function verifyBackgroundPackage(page,fixture){
  for(const [name,content]of Object.entries(files))await writeFile(path.join(root,name),content);
  let negativeConfirmed=false,shellConfirmed=false,canvasConfirmed=false,playConfirmed=false,seeConfirmed=false,imageConfirmed=false;
  const calls=[
-  ['shell',{command:'node negative.cjs',expected_exit_code:1}],
+  // Complete writes before execution checks: formatting after a shell check
+  // correctly invalidates that check for the current project input stamp.
   ['rename',{from:'main.cjs',to:'checked.cjs'}],
-  ['shell',{command:'node checked.cjs'}],
   ['format_file',{path:'format.ts'}],
+  ['shell',{command:'node negative.cjs',expected_exit_code:1}],
+  ['shell',{command:'node checked.cjs'}],
   ['run_file',{path:'index.html'}],
   ['play',{keys:['left'],hold_ms:150}],
   ['see_run',{}],
@@ -46,11 +48,24 @@ export async function verifyBackgroundPackage(page,fixture){
   const value=call?{delta:{tool_calls:[{index:0,id:'package-'+n,function:call}]},finish_reason:'tool_calls'}:{delta:{content:'Paket-Hintergrundprüfung fertig.'},finish_reason:'stop'};
   res.writeHead(200,{'Content-Type':'text/event-stream'}).end('data: '+JSON.stringify({choices:[value]})+'\n\ndata: [DONE]\n\n');
  });await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ let identity;
+ const callJob = action => page.evaluate(({action,identity})=>window.anvilNative.agentJob(action,identity),{action,identity});
  try{
   const initial=await page.evaluate(async request=>await window.anvilNative.agentJob('start',request),{project:root,files,execution:true,writeThrough:true,knowledge:{enabled:true,personEnabled:true,projectEnabled:true,skillsEnabled:true,skillBodies:true,pluginSkills:true,workspace:'package-fixture',memories:[],skills:[]},inputMap:{left:{keys:['q'],pad:[]}},format:{tabSize:2,insertSpaces:true},messages:[{role:'user',content:'Prüfe den erwarteten negativen Exit, verschiebe main.cjs nach checked.cjs und führe es aus. Formatiere format.ts. Starte index.html, spiele links und kontrolliere die Vorschau.'}],model:{provider:'custom',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'fixture',context:32768,thinking:'auto',hardStopMin:1,vision:true},maxRounds:12});
-  await page.waitForFunction(()=>window.__anvilIde.getState().agentBusy===true);
-  let state;for(let i=0;i<300;i++){state=(await page.evaluate(()=>window.anvilNative.agentJob('status'))).state;if(['done','failed','stopped'].includes(state.status))break;await new Promise(r=>setTimeout(r,100));}
-  assert.equal(state.status,'done',state.error);assert.equal(state.id,initial.state.id);assert.equal(state.lastRun.path,'index.html');assert.equal(state.lastRun.ok,true,state.lastRun.stderr);
+   assert.ok(initial.jobId && initial.state?.id,'Native start must return both job identifiers');
+   identity = {jobId:initial.jobId,id:initial.state.id};
+   // A direct IPC job can belong to a different workspace than the rendered editor.
+   let state;
+   for(let i=0;i<300;i++){
+    const reply = await callJob('status');
+    assert.equal(reply.jobId,identity.jobId);
+    assert.equal(reply.state?.id,identity.id);
+    state = reply.state;
+    if(['done','failed','stopped','interrupted','waiting-user'].includes(state.status))break;
+    await new Promise(r=>setTimeout(r,100));
+   }
+   assert.equal(state.status,'done',state.error || `Background job ${identity.id} had status ${state.status}`);
+   assert.equal(state.lastRun.path,'index.html');assert.equal(state.lastRun.ok,true,state.lastRun.stderr);
   assert.ok(negativeConfirmed,'Bundled runtime must verify the explicit expected exit code');
   assert.ok(shellConfirmed,'Shell must run with the bundled Node runtime');
   assert.ok(canvasConfirmed,'Packaged shared Canvas engine must load before classic and ES-module project scripts');
@@ -59,10 +74,10 @@ export async function verifyBackgroundPackage(page,fixture){
   assert.ok(imageConfirmed,'Actual preview screenshot must reach the vision-enabled local fixture');
   assert.match(await readFile(path.join(root,'format.ts'),'utf8'),/export const n: number = 2;/);
   assert.equal(await readFile(path.join(root,'checked.cjs'),'utf8'),files['main.cjs']);
-  await page.evaluate(id=>window.anvilNative.agentJob('restore',{id}),state.id);assert.equal(await readFile(path.join(root,'main.cjs'),'utf8'),files['main.cjs']);
-  await page.evaluate(id=>window.anvilNative.agentJob('dismiss',{id}),state.id);
-  await page.waitForFunction(()=>window.__anvilIde.getState().agentBusy===false);
+   await callJob('restore');assert.equal(await readFile(path.join(root,'main.cjs'),'utf8'),files['main.cjs']);
+   const dismissed = await callJob('dismiss');
+   assert.equal(dismissed.state?.dismissed,true);
   const remaining=await verifyBackgroundRemaining(page,fixture);
   return 'packaged utility process, expected negative exit, rename, bundled Node shell, formatter, shared Canvas ES modules, mapped play, screenshot, see and restore passed; '+remaining;
- }finally{await page.evaluate(()=>window.anvilNative.agentJob('stop')).catch(()=>{});server.closeAllConnections();await new Promise(r=>server.close(r));}
+ }finally{if(identity)await callJob('stop').catch(()=>{});server.closeAllConnections();await new Promise(r=>server.close(r));}
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   CHAT_RAM,
@@ -146,6 +147,20 @@ describe("persistChat", () => {
 
 
 describe("memory regressions", () => {
+  it("a new build request with constraints replaces a stale game goal without becoming a prohibition", () => {
+    const work = readFileSync('fixtures/workshop-task.txt', 'utf8');
+    const old = { ...EMPTY_JOURNAL, goal: 'Baue mir ein Tower Defence Spiel mit animierten Grafiken und Effekten.', corrections: ['Keine externen Spiel-Assets.'], notes: 'Turmreichweite prüfen.' };
+    const next = beginJournal(work, old);
+    assert.match(next.goal, /^Erstelle einen vollständigen Werkstatt-Projektplaner/);
+    assert.ok(!next.corrections.some(c => /^Erstelle einen vollständigen Werkstatt-Projektplaner/.test(c)));
+    assert.ok(!formatJournal(next).includes('Nicht: Erstelle'));
+    assert.ok(!formatJournal(next).includes('Tower Defence'));
+    assert.ok(!next.notes.includes('Turmreichweite'));
+    const after = extractJournal([{ role: 'user', content: old.goal }, { role: 'assistant', content: 'Spiel erstellt.' }, { role: 'user', content: '[Anvil current user request; preserve the complete text]\n' + work }], next);
+    assert.match(after.goal, /Werkstatt-Projektplaner/);
+    assert.ok(!after.corrections.some(c => /^Erstelle einen vollständigen Werkstatt-Projektplaner/.test(c)));
+    assert.equal(parseSessionFile(sessionFileText(next, 2)).goal, next.goal);
+  });
   it("retains the task on continuation and correction", () => {
     const old = { ...EMPTY_JOURNAL, goal: "Ein spielbares Memory-Spiel bauen", files: ["index.html"], notes: "Tastatur unterstützen" };
     for (const text of ["Mach weiter", "Ok, weiter!", "Bitte nicht automatisch veröffentlichen."]) {

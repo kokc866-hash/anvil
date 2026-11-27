@@ -6,12 +6,14 @@ Der Hintergrundbetrieb bleibt ein **zuschaltbarer Testmodus**. Der bisherige Age
 
 1. Die aktuelle lokale Desktop-Testversion mit `test.bat` starten. Eine ältere geöffnete Version vorher normal schließen.
 2. **Einstellungen → Agent → Hintergrundbetrieb (Test)** einschalten.
-3. Eine lokale API-Verbindung wählen, beispielsweise Ollama oder LM Studio, oder eine bereits eingerichtete CLI-Verbindung (Codex, Claude Code oder Copilot).
+3. Eine lokale API-Verbindung wählen, beispielsweise Ollama oder LM Studio, einen eingerichteten [Qwen-AI- oder DeepSeek-API-Zugang](qwen-und-deepseek.md) oder eine bereits eingerichtete CLI-Verbindung (Codex, Claude Code oder Copilot).
 4. Einen Auftrag senden. Beispiel: „Lies main.py, korrigiere den Fehler und führe die Datei zur Prüfung aus.“ Bildanhänge sind ebenfalls möglich, wenn das gewählte Modell Bilder versteht.
 
 Bei lokalen API-Verbindungen übernimmt der Agent Modell, Kontext, Thinking, Temperatur, Antwortlimit, Werkzeugformat, Versuche, Compacting und automatische Fortsetzung. Auch To-do-Modus, gesperrte Checklisten sowie die eingestellten Run-, Test-, Graph- und Engine-Prüfungen werden übernommen. Die Anzeige unter dem Chat zeigt während des Auftrags dessen übernommene Einstellungen; spätere Änderungen gelten für den nächsten Auftrag. CLI-Verbindungen übernehmen Modell und unterstütztes Thinking wie im bisherigen Betrieb; ihr eigenes Modellfenster, Temperatur und Antwortlimit verwaltet die CLI. Das harte Zeitlimit gilt pro Modellanfrage einschließlich ihrer Wiederholungsversuche.
 
-Es läuft höchstens ein Hintergrundauftrag gleichzeitig. Weitere Texteingaben werden eingereiht. Ein Eintrag wird erst nach bestätigter Startannahme entfernt; ein abgelehnter Start verliert weder Auftrag noch Eingabe. Der nächste Auftrag wartet, bis der vorherige geprüft und über **Abschließen** ausgeblendet wurde. Ein gerade verfasster Text samt Bildanhängen bleibt dabei unberührt. **Stoppen** wirkt auch während der Startvorbereitung.
+Bei Arbeitsaufträgen erscheint eine offene To-do-Liste auch mit **To-do durch Agent**, wenn das Modell selbst keine Liste anlegt. Vorhandene Nutzerlisten und ihr Fortschritt bleiben erhalten. Erfolgreiche Werkzeugergebnisse aktualisieren die passenden Schritte; ein bloßer Programmstart hakt keinen Funktionstest ab. Nach einer Wiederverbindung gehört die Liste weiterhin zum selben Auftrag. Reine Beschreibungen erhalten keine erfundenen Bearbeitungsaufgaben.
+
+Pro Projekt läuft höchstens ein Hintergrundauftrag gleichzeitig. In zwei getrennten echten Projektordnern sind bis zu zwei Aufträge möglich; [getrennte Arbeitsstände](getrennte-arbeitsstaende.md) erklären die Grenzen. Weitere Texteingaben für das beschäftigte Projekt werden eingereiht. Ein Eintrag wird erst nach bestätigter Startannahme entfernt; ein abgelehnter Start verliert weder Auftrag noch Eingabe. Der Folgeauftrag kann nach dem Ende des vorherigen starten, ohne eine zusätzliche Abnahme. Ein gerade verfasster Text samt Bildanhängen bleibt unberührt. **Stoppen** wirkt auch während der Startvorbereitung. Über **Nachricht → Im laufenden Auftrag berücksichtigen** lässt sich stattdessen eine [Textkorrektur](planen-und-nachsteuern.md) zustellen.
 
 Projektregeln, ausgewählter Text, angehängte Dateien und Referenzen werden vor dem Start aufbereitet. Gedächtnis, Skills, Intern-Hinweise und Helfer berücksichtigen ihre bestehenden Freigaben. Änderungen am Projekt oder an der Verbindung während dieser Vorbereitung erfordern erneutes Senden; die Eingabe bleibt erhalten.
 
@@ -19,21 +21,23 @@ Die Kontextanzeige unter dem Chat zeigt auch beim Hintergrundauftrag die Eingabe
 
 ## Dateien bearbeiten und speichern
 
-Ohne weitere Einstellung entstehen **gesicherte Entwürfe**. Der Agent kann diese bereits ausführen und prüfen. Die ursprünglichen Projektdateien werden dabei nicht ersetzt. Nach dem Auftrag **Entwürfe ansehen → Im Editor prüfen** wählen, Änderungen annehmen oder verwerfen und speichern. Wurde eine Datei inzwischen bearbeitet, blockiert die Übernahme den Konflikt.
+Ohne weitere Einstellung entstehen **gesicherte Entwürfe**. Der Agent kann diese bereits ausführen und prüfen. Die ursprünglichen Projektdateien werden dabei nicht ersetzt. Nach dem Auftrag lässt sich die betroffene Datei in der Änderungenliste der Spur öffnen; dort können Entwürfe im Editor angenommen oder verworfen werden. Dieser freiwillige Dateivergleich ist keine Voraussetzung zum Fortsetzen. Wurde eine Datei inzwischen bearbeitet, blockiert die Übernahme den Konflikt.
 
 Für direkte Dateiübernahme zusätzlich **Direkt im Projekt speichern** einschalten:
 
 - Benötigt einen geöffneten lokalen Projektordner und einen gespeicherten, abgeglichenen Editorstand. Offene Änderungsvorschläge zuerst prüfen.
 - Vor der ersten Änderung einer Datei wird ihr ursprünglicher Inhalt gesichert. Danach schreibt Anvil die Änderung ins Projekt und bestätigt sie dem Agenten. Erst dann folgt die nächste Aktion.
-- Hat sich der Dateiinhalt im lokalen Dateisystem inzwischen geändert, hält Anvil den Auftrag an. Der neue Entwurf bleibt zur Ansicht erhalten.
+- Hat sich der Dateiinhalt inzwischen geändert, lehnt Anvil die betroffene Werkzeugaktion ab. Der Agent kann andere Dateien weiter bearbeiten und mit `read_file` den aktuellen Stand nachladen. Inzwischen bearbeitete Textzeilen bleiben dabei geschützt; gezielte Änderungen in unberührten Bereichen sind weiterhin möglich. Es erscheint kein zusätzliches Bestätigungsfenster.
 - Gleichzeitig bearbeitete, ungespeicherte Editorinhalte werden nicht durch die Anzeige des Hintergrundauftrags ersetzt. Bei einem Konflikt beide Fassungen abgleichen.
 - Die Änderungenliste zeigt für jede Datei **Im Projekt gespeichert** oder **Entwurf** sowie den Inhalt vor dem Auftrag.
+
+Der Schutz bleibt bei **Fortsetzen**, einer kurzen Nachricht wie „weiter“ und nach einem Neustart erhalten. Ein abgewiesener Vorschlag ersetzt weder die gespeicherte Datei noch eigene ungespeicherte Editorinhalte. Eine inzwischen gelöschte Datei wird nicht automatisch wieder angelegt. Breite Änderungen, deren Abgrenzung unklar ist, bleiben gesperrt; der Agent muss kleinere, unabhängige Änderungen verwenden. Ein ausdrücklich neuer Auftrag beginnt mit dem dann aktuellen Dateistand.
 
 Neu übernommene Dateiänderungen öffnen den betreffenden Editor-Tab. Das gilt auch, wenn die Dateiüberwachung den gespeicherten Inhalt bereits geladen hat. Reine Statusmeldungen öffnen geschlossene Tabs nicht erneut und ziehen eine inzwischen gewählte Ansicht nicht zurück. Ungespeicherte eigene Änderungen, offene Änderungsvorschläge und noch nicht übernommene Entwürfe bleiben geschützt.
 
 Dateien und Ordner lassen sich außerdem anlegen, umbenennen, verschieben und löschen. Ohne direktes Speichern erscheinen diese Aktionen als Entwürfe; **Dateiaktionen übernehmen** führt die geprüften Änderungen gemeinsam aus. Unbekannte Dateien in einem zu löschenden Ordner blockieren den Vorgang. Verknüpfungen werden nicht verändert.
 
-Ein Stop setzt bereits gespeicherte Änderungen nicht zurück. **Dateien wiederherstellen** stellt den Zustand vor dem Auftrag wieder her, einschließlich verschobener Dateien und leerer Ordner. Spätere eigene Änderungen werden dabei nicht überschrieben; bei einem Konflikt zuerst beide Fassungen abgleichen. Die Wiederherstellung betrifft Projektdateien, keine externen Dienstaktionen, Git-Commits oder von Engines erzeugten Daten.
+Ein Stop setzt bereits gespeicherte Änderungen nicht zurück. Die freiwillige Rücknahme einer Runde in der Spur stellt den Zustand vor dem Auftrag wieder her, einschließlich verschobener Dateien und leerer Ordner. Spätere eigene Änderungen werden dabei nicht überschrieben. Diese gesonderte Aktion betrifft Projektdateien, keine externen Dienstaktionen, Git-Commits oder von Engines erzeugten Daten; sie ist keine Voraussetzung zum Fortsetzen.
 
 ## Ausführen und Vorschau
 
@@ -45,7 +49,7 @@ Jeder Lauf erhält den zuletzt bestätigten Dateistand in einem eigenen Run-Ordn
 
 Die gemeinsame Canvas-Laufzeit wird vor den Projektskripten geladen. `Anvil.run`, Eingabebelegungen und relative ES-Module stehen damit auch hier bereit. Ein Umbau mehrerer Projektdateien zu einem einzigen Skript ist dafür nicht erforderlich. Fehler, die die Canvas-Laufzeit selbst abfängt, erscheinen ebenfalls im Prüfergebnis. Semantische Eingaben wie `left` verwenden die eingestellte Tastenbelegung.
 
-`see_run` liefert DOM-Text, Bedienelemente und Konsolenfehler. Für als bildfähig erkannte Modelle oder Aufträge mit Bildanhang wird zusätzlich eine JPEG-Aufnahme der HTML-Vorschau übertragen. `play` betätigt Tasten in dieser Vorschau, etwa Pfeiltasten, Tab und Enter. Es bringt dazu das Vorschaufenster in den Vordergrund. Ein geladenes HTML-Dokument beweist noch keine korrekte Funktion oder Darstellung. **Letzte Ausführung**, **Vorschauprüfung**, **Codeprüfung** und **Git** bleiben getrennt: Ein erfolgreicher Git-Status ersetzt keinen fehlgeschlagenen Test.
+`see_run` liefert DOM-Text, Bedienelemente mit Selektoren und Feldwerten sowie Konsolenfehler. Für als bildfähig erkannte Modelle oder Aufträge mit Bildanhang wird zusätzlich eine JPEG-Aufnahme der HTML-Vorschau übertragen. `play` bedient Tastatur, Maus und Textfelder dieser Vorschau und kann erwartete Zustände direkt mit `assert` prüfen. Es bringt dazu das Vorschaufenster in den Vordergrund. Details und Beispiele stehen in [Canvas und Vorschau](canvas.md). Ein geladenes HTML-Dokument oder eine zugestellte Eingabe beweist noch keine korrekte Funktion. **Letzte Ausführung**, **Vorschauprüfung**, **Codeprüfung** und **Git** bleiben getrennt: Ein erfolgreicher Git-Status ersetzt keinen fehlgeschlagenen Test.
 
 Ausgabe, erkannte Testergebnisse, Änderungen, Laufzeit und Abbruchgrund erscheinen auch in der normalen Konsole, Testübersicht und Spur. Die Datei-Wiederherstellung in der Spur nutzt dieselbe konfliktgeschützte Sicherung wie der Hintergrundbereich. Diagnosemeldungen werden nur dem passenden, unveränderten Dateistand zugeordnet; fremde Prüfmeldungen bleiben erhalten.
 
@@ -53,7 +57,7 @@ Die unabhängige Codeprüfung prüft JavaScript, JSON und Python auf Syntax sowi
 
 ## Rückfragen, Wissen und weitere Werkzeuge
 
-`ask_user` sichert eine Rückfrage und hält den Auftrag an. Auswahl oder eigene Antwort stehen im Hintergrundbereich. Ein Neuladen verliert weder die Rückfrage noch die Warteschlange. Erst die Antwort startet eine kontrollierte Wiederaufnahme; nachfolgende Aufträge warten bis zum Abschließen des Ergebnisses. Die frühere Rückfrage erscheint danach in der Spur als fortgesetzt. Eine unbestätigte externe Aktion muss weiterhin vor dem Fortsetzen geprüft werden.
+`ask_user` sichert eine echte Rückfrage und hält den Auftrag an. Sie erscheint direkt im normalen Fragebereich; eine eigene Antwort kann ins Chatfeld geschrieben werden. Ein Neuladen verliert weder Rückfrage noch Warteschlange. Nach der Antwort setzt der Agent fort; nachfolgende Aufträge können nach dessen Ende automatisch starten. Für ältere unbestätigte Dienstaktionen gibt es kein Bestätigungsformular: Der Agent prüft den aktuellen Stand selbst und spielt alte Aufrufe nicht automatisch erneut ab.
 
 Freigegebenes Gedächtnis und Skills können gelesen und Skills auf Probleme geprüft werden. Der Agent kann außerdem Fakten hinzufügen oder vergessen sowie Skills schreiben, ändern, verwenden und deren Ergebnis vermerken. Diese Änderungen werden vor ihrer Bestätigung dauerhaft protokolliert und nach einer Wiederverbindung genau einmal übernommen. Projektwissen bleibt dem jeweiligen Projekt zugeordnet. Neuere eigene Änderungen und ausdrücklich vergessene Einträge werden nicht durch verspätete Ereignisse überschrieben. Geänderte Freigaben stoppen den laufenden Auftrag. Skill-Dateien erscheinen als normale, wiederherstellbare Dateiänderungen; **Dateien wiederherstellen** setzt jedoch keine Gedächtniseinträge oder Nutzungszähler zurück.
 
@@ -107,9 +111,13 @@ Ausgabe, Fehler, Exitcode und Abbruch werden aufgezeichnet. **Stoppen** beendet 
 
 **Absichtlich fehlschlagende Prüfungen:** Wenn ein Test ausdrücklich einen bestimmten Fehlercode erwartet, kann der Agent bei `shell` vor der Ausführung `expected_exit_code` angeben (0 bis 255). Anvil vergleicht diesen Wert mit dem tatsächlichen Exitcode. Ohne diese Angabe bleibt ein Fehlercode ein fehlgeschlagener Lauf. Abbruch, Zeitüberschreitung, Startfehler oder ein fehlender Exitcode gelten niemals als bestandene Prüfung. Eine bestätigte Fehlerreaktion allein bestätigt noch keinen funktionierenden Projektstand; dafür bleibt ein erfolgreicher regulärer Test erforderlich. Diese Prüfung benötigt einen Runner mit tatsächlichen Prozessdaten, wie ihn der native Hintergrundbetrieb bereitstellt.
 
+Ein Auftrag wie „Führe den absichtlichen Fehler einmal aus und berichte, ändere nichts“ ist ein Beobachtungsauftrag. Anvil fordert dann keine Reparatur an und blockiert direkte Dateiänderungen außerhalb dieses Auftrags. Die Ausführung behält ihren tatsächlichen Fehlercode. Die Beobachtung kann abgeschlossen sein, während der Programmlauf ausdrücklich als fehlgeschlagen angezeigt bleibt. Unbestätigte Aktionen, Startfehler oder Abbrüche werden dadurch nicht als erfolgreich gewertet.
+
 **Git:** `git_status` zeigt den lokalen Zustand. `git_commit` erstellt einen lokalen Commit ausschließlich mit gespeicherten Änderungen dieses Hintergrundauftrags, einschließlich Umbenennungen und Löschungen. Dafür den Git-Projektstamm öffnen; Git und die eigene Commit-Identität müssen eingerichtet sein. Ein bereits belegter Git-Index blockiert den Commit, damit vorgemerkte fremde Änderungen erhalten bleiben. Nach einem Abbruch den tatsächlichen Git-Status prüfen. Remote-Push und Klonen werden in dieser Stufe nicht angeboten.
 
 ## Fensterabsturz und Beenden
+
+**Wiederholter Denktext:** Der Vordergrund- und der Hintergrundagent erkennen lange, exakt wiederholte Denkblöcke innerhalb einer Modellantwort. Langsames Denken mit neuen Inhalten darf weiterlaufen. Erkennt Anvil eine solche Schleife, beendet es die betroffene Modellverbindung und zeigt den Grund an. Bisher bestätigte Änderungen und Werkzeugergebnisse bleiben erhalten; Werkzeuge aus der abgebrochenen Antwort werden nicht ausgeführt. Es gibt dafür weder einen automatischen Wiederholungsversuch noch eine zusätzliche Bestätigung. Du kannst anschließend eine neue Nachricht senden oder mit dem bisherigen Stand fortsetzen.
 
 - Ein Neuladen oder Absturz des Editors beendet weder Modellanfrage noch laufende Hintergrund-Ausführung. Nach der Wiederherstellung wird derselbe Auftrag wieder angezeigt. Bereits gestartete Aktionen werden nicht erneut ausgeführt.
 - Eine separate HTML-Vorschau bleibt bei einem Editorabsturz bestehen.
@@ -119,7 +127,7 @@ Ausgabe, Fehler, Exitcode und Abbruch werden aufgezeichnet. **Stoppen** beendet 
 
 **Fortsetzen** startet nach einem vollständigen Neustart eine kontrollierte neue Modellanfrage mit dem bisherigen Auftrag, Dateientwürfen, Checkliste und dem zuletzt gesicherten Fortschritt. Es ist keine unveränderte Fortführung einer internen Modellsitzung. Zuerst dasselbe Projekt öffnen und offene Editoränderungen speichern oder verwerfen. Die aktuell eingerichtete Modellverbindung wird verwendet.
 
-Bei einem unbestätigten Shell-, Git- oder Dienstaufruf muss dessen tatsächliches Ergebnis zunächst geprüft und über das Kontrollkästchen bestätigt werden. Bereits gestartete externe Aktionen werden mit ihren Argumenten gespeichert; identische Aufrufe aus dem alten Auftrag sind beim Fortsetzen gesperrt. Anders formulierte Aufrufe können dieselbe Wirkung haben: Deshalb ersetzt diese Sperre nicht die Prüfung beim Dienst. Externe Änderungen werden weder automatisch zurückgenommen noch automatisch wiederholt.
+Seit dem lokalen Stand vom 15. Oktober 2026 ist dafür keine Bestätigung mehr nötig. Der separate Abnahme-Ablauf und seine dauerhaften Werkzeugsperren sind entfernt. Der Agent prüft beim Fortsetzen den aktuellen Stand selbst und arbeitet mit neuen Werkzeugaufrufen weiter. Frühere Aufrufe werden nicht automatisch erneut abgespielt. Die nächste Nachricht und **Wiederholen** sind direkt verfügbar; der vorherige Auftrag wird automatisch archiviert. Einzelheiten: [Aufträge fortsetzen und wiederholen](auftraege.md).
 
 ## Ablage und Grenzen
 
@@ -145,7 +153,7 @@ Die vierte Stufe prüft zusätzlich Bildanhänge über die Oberfläche, lokale O
 
 Diese automatisierten Verbindungsprüfungen verwenden getrennte lokale Testdienste und eine Test-CLI, keine echten Benutzerkonten. Die vorherigen Stufen wurden zusätzlich vom Nutzer mit seinem lokalen Modell praktisch bestätigt. Der Testmodus bleibt standardmäßig ausgeschaltet.
 
-**Fünfte Stufe:** Echte Shell-Ausführung samt Prozessabbruch, lokale Git-Commits, Schutz eines belegten Git-Index, Datei- und Ordneraktionen, vollständige Wiederherstellung und Konfliktfälle sind automatisiert geprüft. Eine Desktop-Prüfung beendet den gesamten Anvil-Prozess während eines Auftrags, startet ihn mit demselben Profil neu, setzt über **Fortsetzen** fort und prüft anschließend Shell, Commit, Checkliste und Wiederherstellung. Eine bereits ausgeführte Umbenennung wird dabei nicht wiederholt. Unterbrochene externe Aktionen bleiben gesperrt.
+**Fünfte Stufe:** Echte Shell-Ausführung samt Prozessabbruch, lokale Git-Commits, Schutz eines belegten Git-Index, Datei- und Ordneraktionen, vollständige Wiederherstellung und Konfliktfälle sind automatisiert geprüft. Eine Desktop-Prüfung beendet den gesamten Anvil-Prozess während eines Auftrags, startet ihn mit demselben Profil neu, setzt über **Fortsetzen** fort und prüft anschließend Shell, Commit, Checkliste und Wiederherstellung. Eine bereits ausgeführte Umbenennung wird dabei nicht wiederholt. Alte Werkzeugaufrufe werden nicht automatisch wiederholt; neue Aufrufe sind beim Fortsetzen möglich.
 
 Unity und Unreal wurden mit getrennten echten Testprojekten gestartet und beendet. Unity kompilierte ein Editor-Skript und erzeugte und speicherte eine Szene in einer anschließenden Batch-Prüfung. Unreal erreichte die vollständige Engine-Initialisierung. Das ist ein Start- und Lebenszyklusnachweis, kein Nachweis für beliebige Engine-Projekte oder veröffentlichbare Spiel-Builds.
 
@@ -178,3 +186,7 @@ Go- und Rust-Aufzeichnungen sowie deren Formatierer wurden mit echten Werkzeugen
 **Checklisten-Nachweise für Gedächtnis und Skills:** Erfolgreiche Aktionen werden jetzt den passenden To-do-Punkten zugeordnet. Nennt ein Punkt mehrere Aktionen, benötigt er für jede einen erfolgreichen Nachweis. Lesen allein bestätigt keine Änderung; fehlgeschlagene oder noch laufende Aktionen bestätigen keinen Abschluss. Spätere Dateiänderungen entwerten bereits abgeschlossene Gedächtnis-/Skill-Aktionen nicht. Die Aktualitätsprüfung für Ausführungs- und Prüfnachweise bleibt erhalten. Meldungen unterscheiden fehlende passende Nachweise von tatsächlich veralteten Prüfungen.
 
 Diese Korrektur bestand 59 gezielte Tests, Typprüfung und Produktionsbuild. Im gebauten Desktop schloss ein kontrollierter Modellablauf die Checkliste mit fünf echten nativen Gedächtnis-/Skill-Aktionen ab; 2/2 erledigte Punkte blieben nach Fensterneustart sichtbar, ohne Aktionen zu wiederholen. Dies ist kein erneuter Qwen-Dauertest. Der Nutzer hatte den vorausgehenden Lauf nach etwa 64 Minuten beendet; er gilt als unvollständig. Die automatische Nachprüfung ist pausiert. Für diese Korrektur wurden Installer und ZIP nicht neu geprüft und keine Veröffentlichung erstellt.
+
+## Abgelehnte Werkzeugbefehle
+
+Wird ein Befehl vor der Ausführung abgelehnt, erhält der Agent den Fehler und einen passenden Werkzeughinweis. Der Auftrag bleibt aktiv. Zum Lesen von Projektdateien verwendet er `read_file`; `shell` unterstützt Projektstarter und bekannte Testbefehle, keine Pipes oder freien Systembefehle. Eine solche Ablehnung gilt weder als ausgeführter Anwendungstest noch als bestandene Prüfung. Tatsächlich fehlgeschlagene Prüfungen und unklare externe Aktionen bleiben im Protokoll erhalten.

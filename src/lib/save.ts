@@ -20,7 +20,7 @@ async function saveCurrent(request: SaveRequest, path: string | null, target: Re
   const sameTarget = () => {
     const s = useIde.getState();
     if (s.pathOperation?.from === "") { s.setNotice("Warte, bis die Wiederherstellung abgeschlossen ist."); return false; }
-    return s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && s.companionUrl === target.base && diskWorkspaceHandle() === target.handle;
+    return s.workspaceEpoch === target.epoch && s.workspaceCwd === target.cwd && (target.local || s.companionUrl === target.base) && diskWorkspaceHandle() === target.handle;
   };
   if (!sameTarget()) return false;
   let note = "Gespeichert";

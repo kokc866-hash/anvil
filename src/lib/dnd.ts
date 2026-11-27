@@ -1,7 +1,8 @@
-import { cleanPath, joinPath } from "./fs";
+import { joinPath, unusedFilePath } from "./fs";
 import { readDroppedFile } from "./ref";
-import { unzipFiles } from "./archive";
+import { ARCHIVE_MAX_COMPRESSED, ARCHIVE_MAX_EXPANDED, ARCHIVE_MAX_FILES, unzipFiles } from "./archive";
 import { useIde } from "@/store/ide";
+import { assertImportTarget, captureImportTarget, commitImportedFiles, commitImportedPatch } from "./plugins/import";
 
 export type DragKind = "path" | "tab";
 export type DragPayload = { kind: DragKind; path: string };
@@ -16,7 +17,7 @@ export function getDrag(dt: DataTransfer): DragPayload | null {
   const m = raw.match(/^(path|tab):(.+)$/);
   if (m) return { kind: m[1] as DragKind, path: m[2] };
   if (raw && !raw.includes("\n") && !raw.includes(":")) return { kind: "path", path: raw };
-  if (raw && /^[\w./\-]+$/.test(raw)) return { kind: "path", path: raw };
+  if (raw && /^[\w./-]+$/.test(raw)) return { kind: "path", path: raw };
   return null;
 }
 
@@ -26,63 +27,72 @@ export function hasOsFiles(dt: DataTransfer): boolean {
 
 export function uniqueDest(files: Record<string, string>, dir: string, name: string): string {
   const base = name.replace(/\\/g, "/").split("/").pop() ?? "datei";
-  const clean = base.replace(/[^\w.\-äöüÄÖÜß]+/g, "_").replace(/^\.+/, "") || "datei";
+  const clean = base.replace(/[^\w.äöüÄÖÜß-]+/g, "_").replace(/^\.+/, "") || "datei";
   const prefix = dir ? `${dir}/` : "";
-  let path = `${prefix}${clean}`;
-  if (!(path in files)) return path;
-  const dot = clean.lastIndexOf(".");
-  const stem = dot > 0 ? clean.slice(0, dot) : clean;
-  const ext = dot > 0 ? clean.slice(dot) : "";
-  for (let i = 2; i < 80; i++) {
-    path = `${prefix}${stem}-${i}${ext}`;
-    if (!(path in files)) return path;
-  }
-  return `${prefix}${stem}-${Date.now().toString(36)}${ext}`;
+  return unusedFilePath(`${prefix}${clean}`, Object.keys(files));
 }
 
 export async function importDropped(list: File[], destDir = ""): Promise<number> {
-  const write = useIde.getState().writeFile;
-  let n = 0;
-  for (const file of list) {
-    if (file.name.endsWith(".vsix") || (file.name.endsWith(".zip") && destDir.startsWith("plugins"))) {
-      if (file.name.endsWith(".vsix")) {
-        const { importVsix } = await import("@/lib/plugins/vscode");
-        const slug = file.name.replace(/\.vsix$/i, "").replace(/[^\w.\-]+/g, "-") || "ext";
-        const got = await importVsix(await file.arrayBuffer(), `plugins/${slug}`);
-        for (const [path, content] of Object.entries(got.files)) {
-          write(path, content);
-          n += 1;
+  try {
+    const target = captureImportTarget(), staged: Record<string, string> = Object.create(null), del = new Set<string>();
+    let hasPatch = false;
+    let stagedUnits = 0;
+    const occupied = new Set([...Object.keys(target.files), ...target.dirs].map(path => path.toLowerCase())), stagedNames = new Set<string>();
+    const add = (path: string, content: string) => {
+      const key = path.toLowerCase();
+      if (occupied.has(key) || stagedNames.has(key)) throw new Error(`Bereits vorhanden, nicht überschrieben: ${path}`);
+      stagedNames.add(key);
+      stagedUnits += content.length;
+      if (stagedNames.size > ARCHIVE_MAX_FILES || stagedUnits > ARCHIVE_MAX_EXPANDED * 1.4) throw new Error("Import überschreitet die Datei-/Größenbegrenzung.");
+      staged[path] = content;
+    };
+    for (const file of list) {
+      if (/\.(vsix|zip)$/i.test(file.name)) {
+        if (file.size > ARCHIVE_MAX_COMPRESSED) throw new Error("Archiv zu groß (höchstens 64 MiB).");
+        const buf = await file.arrayBuffer();
+        assertImportTarget(target);
+        if (/\.vsix$/i.test(file.name)) {
+          const { importVsix } = await import("@/lib/plugins/vscode");
+          assertImportTarget(target);
+          const slug = file.name.replace(/\.vsix$/i, "").replace(/[^\w.-]+/g, "-") || "ext";
+          const got = await importVsix(buf, `plugins/${slug}`);
+          assertImportTarget(target);
+          if (!Object.keys(got.files).length) throw new Error("Das Paket enthält keine unterstützten Editor-Beiträge.");
+          for (const [path, content] of Object.entries(got.files)) add(path, content);
+        } else {
+          const pack = await unzipFiles(buf);
+          assertImportTarget(target);
+          for (const [path, content] of Object.entries(pack)) add(destDir ? `${destDir}/${path}` : path, content);
         }
         continue;
       }
-    }
-    if (/\.(patch|diff|anvil-patch)$/i.test(file.name) || /-patch\.json$/i.test(file.name)) {
-      const { parsePatch, commitPatch } = await import("./patch");
-      const plan = parsePatch(await file.text(), useIde.getState().files);
-      if (!Object.keys(plan.write).length && !plan.del.length) {
-        useIde.getState().setNotice(plan.errors[0] || "Patch leer");
+      if (/\.(patch|diff|anvil-patch)$/i.test(file.name) || /-patch\.json$/i.test(file.name)) {
+        if (file.size > 8_000_000) throw new Error("Patch zu groß.");
+        const { parsePatch } = await import("./patch");
+        assertImportTarget(target);
+        const text = await file.text();
+        assertImportTarget(target);
+        const current = Object.fromEntries(Object.entries({ ...target.files, ...staged }).filter(([path]) => !del.has(path)));
+        const plan = parsePatch(text, current);
+        if (plan.errors.length) throw new Error(plan.errors[0]);
+        hasPatch = true;
+        for (const path of plan.del) { del.add(path); stagedUnits -= staged[path]?.length ?? 0; delete staged[path]; stagedNames.delete(path.toLowerCase()); }
+        for (const [path, content] of Object.entries(plan.write)) {
+          stagedUnits += content.length - (staged[path]?.length ?? 0); staged[path] = content; del.delete(path); stagedNames.add(path.toLowerCase());
+        }
+        if (stagedNames.size > ARCHIVE_MAX_FILES || stagedUnits > ARCHIVE_MAX_EXPANDED * 1.4) throw new Error("Import überschreitet die Datei-/Größenbegrenzung.");
         continue;
       }
-      await commitPatch(plan);
-      n += Object.keys(plan.write).length + plan.del.length;
-      continue;
+      const got = await readDroppedFile(file);
+      assertImportTarget(target);
+      if (got) add(unusedFilePath(uniqueDest({ ...target.files, ...staged }, destDir, got.name), [...Object.keys(target.files), ...Object.keys(staged)], [...target.dirs]), got.content);
     }
-    if (file.name.endsWith(".zip")) {
-      const pack = await unzipFiles(await file.arrayBuffer());
-      for (const [path, content] of Object.entries(pack)) {
-        const rel = cleanPath(destDir ? joinPath(destDir, path) : path);
-        if (!rel) continue;
-        write(rel, content);
-        n += 1;
-      }
-      continue;
-    }
-    const got = await readDroppedFile(file);
-    if (!got) continue;
-    write(uniqueDest(useIde.getState().files, destDir, got.name), got.content);
-    n += 1;
+    assertImportTarget(target);
+    return await (hasPatch ? commitImportedPatch(target, staged, [...del]) : commitImportedFiles(target, staged));
+  } catch (error) {
+    useIde.getState().setNotice(error instanceof Error ? error.message : "Import nicht gespeichert.");
+    return 0;
   }
-  return n;
 }
 
 export function dropDir(path: string, type: "file" | "dir"): string {

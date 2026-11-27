@@ -100,7 +100,7 @@ export type FileDiff = {
   source?: "round" | "propose" | "external";
 };
 
-export type PlanStep = { text: string; status: "todo" | "run" | "ok" | "err"; kind?: "read" | "edit" | "run" | "check" | "service" | "report" };
+export type PlanStep = { text: string; status: "todo" | "run" | "ok" | "err"; kind?: "read" | "edit" | "run" | "check" | "service" | "report"; completedBy?: "user" | "agent" };
 
 export type Checkpoint = {
   id: string;
@@ -109,6 +109,9 @@ export type Checkpoint = {
   files: Record<string, string>;
   dirs: string[];
   workspace?: string;
+  /** Compact recovery contains metadata only until the matching archived revision is loaded. */
+  archiveRevision?: string;
+  archiveMissing?: boolean;
   /** Captured at round completion; old snapshots remain reviewable but are not destructive restore targets. */
   endFiles?: Record<string, string>;
   endDirs?: string[];
@@ -122,6 +125,8 @@ export type Checkpoint = {
 export type ChatVoice = "agent" | "helper";
 
 export type ChatMsg = {
+  workflow?: import("@/lib/agent-workflow").WorkflowSnapshot;
+  skillSelection?:import('../lib/skill-library').SkillSelection[];
   backgroundJobId?:string;
   backgroundFinalized?:boolean;
   backgroundEvents?:string[];
@@ -187,6 +192,7 @@ export type RunResult = {
   duration: number;
   label: string;
   html?: string;
+  observation?: import("@/lib/canvas/protocol").CanvasReply['observation'];
   stage?: { kind: "html" | "window" | "log"; out?: string; id?: string; state?: import("@/lib/canvas/protocol").CanvasState };
 };
 
@@ -337,11 +343,14 @@ export type IdeState = {
   breakpoints: Record<string, number[]>;
   debug: DebugState;
   notice: string;
+  persistenceWarning: string;
   undo: Record<string, string[]>;
   dirs: string[];
   collapsed: string[];
   diskName: string;
   workspaceCwd: string;
+  workspaceNative: boolean;
+  workspaceEmpty: boolean;
   setupDone: boolean;
   backupName: string;
   storageMode: StorageMode;
@@ -484,7 +493,7 @@ export type IdeState = {
   reopenTab: () => void;
   setChatPlan: (steps: PlanStep[], id?: string) => void;
   updatePlanStep: (i: number, status: PlanStep["status"], id?: string) => void;
-  pushAgent: (text: string, steal?: boolean, mode?: AgentMode) => void;
+  pushAgent: (text: string, steal?: boolean, mode?: import('../lib/chat-queue').QueuedChatMode, reply?: import('../lib/chat-queue').QueuedChatReply) => void;
   clearAgentInbox: () => void;
   toggleBreakpoint: (path: string, line: number, on?: boolean) => void;
   setDebug: (p: Partial<DebugState>) => void;
@@ -519,7 +528,8 @@ export type IdeState = {
   appendAssistant: (s: string) => void;
   finalizeAssistant: (reply: string, tools?: string[], options?: { replace?: boolean; incompleteReason?: string }) => void;
   setDiskName: (v: string) => void;
-  setWorkspaceCwd: (v: string) => void;
+  setWorkspaceCwd: (v: string, native?: boolean) => void;
+  startEmptyWorkspaceSession: () => void;
   setSetupDone: (v: boolean) => void;
   setBackupName: (v: string) => void;
   setStorageMode: (v: StorageMode) => void;

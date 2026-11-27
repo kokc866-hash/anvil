@@ -80,6 +80,26 @@ test("provider switching and profiles keep endpoints, auth modes and explicit mo
   assert.equal(useIde.getState().llmBaseUrl, "https://private.example/inference");
   assert.equal(useIde.getState().llmContext, 8192);
 
+  for (const provider of ["qwen", "deepseek"]) {
+    actions.setLlmProvider(provider, "key");
+    assert.equal(useIde.getState().llmModel, "", "New provider slots do not force a fixed model.");
+    actions.setLlmBaseUrl(`https://${provider}.example/compatible/v1`);
+    actions.setLlmModel(`${provider}-future-model`);
+    actions.setLlmApiKey(`synthetic-${provider}-key`);
+    actions.saveLlmProfile(provider);
+  }
+  for (const provider of ["qwen", "deepseek"]) {
+    actions.setLlmProvider(provider, "key");
+    assert.equal(useIde.getState().llmModel, `${provider}-future-model`);
+    assert.equal(useIde.getState().llmApiKey, `synthetic-${provider}-key`);
+    assert.equal(useIde.getState().llmBaseUrl, `https://${provider}.example/compatible/v1`);
+    const profile = useIde.getState().llmProfiles.find(p => p.name === provider);
+    assert.ok(profile);
+    assert.equal(JSON.stringify(profile).includes(`synthetic-${provider}-key`), false, "Profiles never contain keys.");
+    actions.applyLlmProfile(profile.id);
+    assert.equal(useIde.getState().llmModel, `${provider}-future-model`);
+  }
+
   const merge = useIde.persist.getOptions().merge;
   const migrated = merge(
     {

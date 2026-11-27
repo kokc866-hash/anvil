@@ -11,6 +11,7 @@ import {
   refWriteBlocked,
   rewriteRefMedia,
   modelSeesImages,
+  ingestModelInputs,
   imageStub,
   REF_DIR,
 } from "./ref.ts";
@@ -108,5 +109,20 @@ describe("ref paths", () => {
     const s = imageStub("ref/a.png", "data:image/png;base64," + "a".repeat(1000));
     assert.ok(s.length < 200);
     assert.match(s, /image/);
+  });
+  it("Qwen and DeepSeek image support uses the queried catalog and exact endpoint", () => {
+    const url = "https://fixture.eu-central-1.maas.aliyuncs.com/compatible-mode/v1";
+    ingestModelInputs("qwen", url, [
+      { id: "future-vision", inference_metadata: { request_modality: ["Text", "Image"] } },
+      { id: "future-text", inference_metadata: { request_modality: ["Text"] } },
+    ]);
+    assert.equal(modelSeesImages("qwen", "future-vision", url + "/"), true);
+    assert.equal(modelSeesImages("qwen", "future-text", url), false);
+    assert.equal(modelSeesImages("qwen", "future-vision", "https://different.example/v1"), false);
+    ingestModelInputs("qwen", url, [{ id: "future-vision", inference_metadata: { request_modality: ["Text"] } }]);
+    assert.equal(modelSeesImages("qwen", "future-vision", url), false, "Refreshing replaces capabilities.");
+    ingestModelInputs("deepseek", "https://api.deepseek.com/v1", [{ id: "future-ds", input_modalities: ["text", "image"] }]);
+    assert.equal(modelSeesImages("deepseek", "future-ds", "https://api.deepseek.com/v1"), true);
+    assert.equal(modelSeesImages("deepseek", "future-ds"), false, "No unqueried global assumption.");
   });
 });

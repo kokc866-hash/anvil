@@ -36,7 +36,7 @@ export function parseRunTrace(stderr: string, fallback: string, files: Record<st
   for (const raw of blob.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    let m =
+    const m =
       line.match(/^File "([^"]+)", line (\d+)/) ||
       line.match(/^-->\s+([^:\s]+):(\d+)/) ||
       line.match(/^([^:\s]+\.\w+):(\d+):(?:\d+:)?\s*(.*)$/) ||

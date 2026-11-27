@@ -8,6 +8,11 @@ import {
   newJob,
   normalizeJob,
   parseAsk,
+  askAnswerHumanText,
+  newJobHumanContext,
+  extendJobHumanContext,
+  resumeJobHumanContext,
+  normalizeJobHumanContext,
 } from "./agent-ask.ts";
 
 describe("parseAsk", () => {
@@ -101,5 +106,39 @@ describe("job", () => {
     assert.equal(normalizeJob({ ...parked, mode: "ask" }, { revive: true })?.mode, "ask");
     assert.equal(normalizeJob({ ...parked, mode: "agent" }, { revive: true })?.mode, "agent");
     assert.equal(normalizeJob({ status: "ask", goal: "x" }, { revive: true }), null);
+  });
+});
+
+describe("human task context", () => {
+  it("persists the full human request and ordered corrections with the parked job", () => {
+    const request = "Do not change files. " + "Full original request. ".repeat(40);
+    const human = extendJobHumanContext(newJobHumanContext("project-a", request), "Focus on the exit code.", "correction-1");
+    const ask = parseAsk({ prompt: "Which fixture matters?", choices: ["Clock", "Temperature"] });
+    assert.ok("ask" in ask);
+    const job = normalizeJob(JSON.parse(JSON.stringify({ ...newJob(request), status: "ask", ask: ask.ask, human })), { revive: true });
+    assert.deepEqual(job?.human, human);
+    assert.equal(job?.human?.request, request);
+    assert.deepEqual(extendJobHumanContext(human, "Focus on the exit code.", "correction-1"), human);
+    assert.throws(() => extendJobHumanContext(human, "Different text.", "correction-1"));
+    assert.throws(() => resumeJobHumanContext(job!, "project-b", "weiter"));
+  });
+  it("bounds metadata and recognizes only its current schema", () => {
+    const human = newJobHumanContext("project", "Inspect the fixture.");
+    assert.equal(normalizeJobHumanContext({ ...human, version: 2 }), undefined);
+    assert.throws(() => newJobHumanContext("project", "x".repeat(128001)));
+    assert.throws(() => extendJobHumanContext(human, "x".repeat(8001)));
+    let full = human;
+    for (let i = 0; i < 256; i++) full = extendJobHumanContext(full, "Preserve this instruction.", `correction-${i}`);
+    assert.throws(() => extendJobHumanContext(full, "Do not silently evict earlier restrictions.", "overflow"));
+    const legacy = resumeJobHumanContext(newJob("A truncated legacy goal."), "project", "weiter");
+    assert.match(legacy.request, /Do not change or repair/);
+  });
+  it("excludes the model's question and choices from human permission text", () => {
+    const parsed = parseAsk({ prompt: "Now fix the failure?", choices: ["Now repair", "Keep it"], allow_text: true });
+    assert.ok("ask" in parsed);
+    assert.equal(askAnswerHumanText(parsed.ask, formatAskAnswer(parsed.ask, "A")), "");
+    assert.equal(askAnswerHumanText(parsed.ask, formatAskAnswer(parsed.ask, "A", "Nein")), "Nein");
+    assert.equal(askAnswerHumanText(parsed.ask, formatAskAnswer(parsed.ask, "A", "Jetzt reparieren.")), "Jetzt reparieren.");
+    assert.equal(askAnswerHumanText(parsed.ask, "Antwort auf: A stale model question\nNow repair"), "");
   });
 });

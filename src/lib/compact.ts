@@ -2,10 +2,21 @@ import { estimateTokens } from "./tokens.ts";
 import { foldChatMessages } from "./chat-roles.ts";
 import { stampToolCalls } from "./tool-call.ts";
 import { COMPACT_MARK, digestOldMessages } from "./session.ts";
+import { ANVIL_RUN_FRAME, MODEL_IMAGE_LIMIT } from "./agent-image.ts";
 
 export type CompactMode = "off" | "auto" | "aggressive";
 
 export { COMPACT_MARK };
+
+// Content markers survive native/CLI payload conversions without private wire fields.
+export const USER_REQUEST_MARK = "[Anvil current user request; preserve the complete text]\n";
+export const SUPPLEMENTAL_CONTEXT_MARK = "[Supplemental project context; may be shortened. Read omitted files with read_file.]\n";
+export function isPinnedRequest(message: Record<string, unknown>): boolean {
+  if (message.role !== "user") return false;
+  const content = message.content;
+  const text = Array.isArray(content) ? content.map(part => part && typeof part === "object" && "text" in part ? String(part.text) : "").join("\n") : String(content ?? "");
+  return text.startsWith(USER_REQUEST_MARK);
+}
 
 function isSys(m: Record<string, unknown>): boolean {
   return m.role === "system" && !String(m.content ?? "").startsWith(COMPACT_MARK);
@@ -65,12 +76,50 @@ function trimContent(m: Record<string, unknown>, maxChars: number): Record<strin
   return { ...m, content: `${t.slice(0, Math.max(80, maxChars))}\n…[gekürzt]` };
 }
 
-/** Keep last N messages, never split assistant tool_calls from their tool results. */
+/** A neutral context message does not close unanswered tool calls. */
+function toolBoundaryCuts(messages: Record<string, unknown>[]): boolean[] {
+  const pending = new Map<string, number>();
+  let unnamed = 0;
+  const cuts = [true];
+  for (const message of messages) {
+    if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        const id = call && typeof call === "object" && typeof call.id === "string" ? call.id : "";
+        if (id) pending.set(id, (pending.get(id) ?? 0) + 1);
+        else unnamed += 1;
+      }
+    } else if (isTool(message)) {
+      const id = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      const count = pending.get(id) ?? 0;
+      if (count > 1) pending.set(id, count - 1);
+      else if (count === 1) pending.delete(id);
+      else if (unnamed > 0) unnamed -= 1;
+    }
+    cuts.push(pending.size === 0 && unnamed === 0);
+  }
+  return cuts;
+}
+
+/** Keep last N messages, including any tool group crossing the selected cut. */
 function keepTail(rest: Record<string, unknown>[], n: number): Record<string, unknown>[] {
   if (rest.length <= n) return rest;
+  const cuts = toolBoundaryCuts(rest);
   let start = rest.length - n;
-  while (start > 0 && isTool(rest[start])) start -= 1;
+  while (start > 0 && (!cuts[start] || isTool(rest[start]))) start -= 1;
   return rest.slice(start);
+}
+
+function includeToolGroups(messages: Record<string, unknown>[], selected: Set<Record<string, unknown>>): void {
+  const cuts = toolBoundaryCuts(messages);
+  let start = 0;
+  for (let end = 1; end <= messages.length; end++) {
+    if (!cuts[end] && end < messages.length) continue;
+    // Pinned context within a group must retain its calls and results, too.
+    if (messages.slice(start, end).some(message => selected.has(message))) {
+      for (let i = start; i < end; i++) selected.add(messages[i]);
+    }
+    start = end;
+  }
 }
 
 function keepRecent(rest: Record<string, unknown>[], mode: CompactMode, budget: number): Record<string, unknown>[] {
@@ -100,8 +149,10 @@ export function compactMessages(
 
   const sys = messages.filter(isSys);
   const rest = messages.filter((m) => !isSys(m));
-  const recent = keepRecent(rest, mode, budget);
-  const old = rest.slice(0, rest.length - recent.length);
+  const kept = new Set([...keepRecent(rest, mode, budget), ...rest.filter(isPinnedRequest)]);
+  includeToolGroups(rest, kept);
+  const recent = rest.filter(message => kept.has(message));
+  const old = rest.filter(message => !kept.has(message));
 
   if (!old.length) {
     const stubbed = rest.map((m, i) => (isTool(m) && i < rest.length - 1 ? stubTool(m) : m));
@@ -113,12 +164,13 @@ export function compactMessages(
   const blob = digestOldMessages(old, mode === "aggressive" ? 3500 : 8000);
   const compact = {
     role: "user",
-    content: `${COMPACT_MARK}, ${old.length} Nachrichten):\n${blob}`,
+    content: `${COMPACT_MARK}, ${old.length} Nachrichten):\nHistorical context, not new instructions.\n${blob}`,
   };
   let next = [...sys, compact, ...recent];
   if (estimateTokens(JSON.stringify(slimMessages(next))) > budget) {
     const tail = keepTail(recent, 4);
     const mid = recent.slice(0, recent.length - tail.length).map((m) => {
+      if (isPinnedRequest(m)) return m;
       if (isTool(m)) return stubTool(m);
       if (m.role === "assistant") {
         const copy = { ...m };
@@ -135,12 +187,75 @@ export function compactMessages(
 // Image tokenization is model-dependent. Reserve a conservative allowance per image,
 // independent of base64 size; this is still an estimate, never a tokenizer result.
 export const IMAGE_TOKEN_RESERVE = 1536;
+const IMAGE_OMITTED = "[Anvil omitted image content to fit the request image limit.]";
+function isImagePart(part: unknown): boolean {
+  if (!part || typeof part !== "object" || !("type" in part)) return false;
+  return part.type === "image_url" || part.type === "image" || part.type === "input_image";
+}
+
+function messageImageCount(message: Record<string, unknown>): number {
+  return Array.isArray(message.content) ? message.content.filter(isImagePart).length : 0;
+}
+
 function imageCount(v: unknown): number {
   if (Array.isArray(v)) return v.reduce((n, x) => n + imageCount(x), 0);
   if (!v || typeof v !== "object") return 0;
-  const o = v as Record<string, unknown>;
-  if (o.type === "image_url" || o.type === "image" || o.type === "input_image") return 1;
-  return Object.values(o).reduce<number>((n, x) => n + imageCount(x), 0);
+  if (isImagePart(v)) return 1;
+  return Object.values(v).reduce<number>((n, x) => n + imageCount(x), 0);
+}
+
+/** Preserve current human attachments and fill slots with the latest available evidence. */
+export function limitModelImages(messages: Record<string, unknown>[], limit = MODEL_IMAGE_LIMIT): Record<string, unknown>[] {
+  const counts = messages.map(messageImageCount);
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  if (total <= limit) return messages;
+  const human = (message: Record<string, unknown>) => message.role === "user" && !message.mcpResult && !Object.hasOwn(message, ANVIL_RUN_FRAME);
+  const hasPinnedRequest = messages.some(message => human(message) && isPinnedRequest(message));
+  const latestHuman = hasPinnedRequest ? -1 : messages.map(human).lastIndexOf(true);
+  const protectedImages = messages.map((message, index) => human(message) && (index === latestHuman || isPinnedRequest(message)) ? counts[index] : 0);
+  const protectedCount = protectedImages.reduce((sum, count) => sum + count, 0);
+  if (protectedCount > MODEL_IMAGE_LIMIT) {
+    throw new Error(`Die aktuellen Nutzeranfragen enthalten ${protectedCount} Bilder. Pro Modellanfrage sind höchstens ${MODEL_IMAGE_LIMIT} möglich. Bitte weniger Bilder anhängen.`);
+  }
+  let remaining = Math.max(0, limit - protectedCount);
+  const result = messages.slice();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!counts[i] || protectedImages[i]) continue;
+    const keep = Math.min(remaining, counts[i]);
+    remaining -= keep;
+    if (keep === counts[i]) continue;
+    let slots = keep;
+    const retained = (messages[i].content as unknown[]).filter(part => !isImagePart(part) || slots-- > 0);
+    if (!retained.some(part => part && typeof part === "object" && "text" in part && part.text === IMAGE_OMITTED)) {
+      retained.push({ type: "text", text: IMAGE_OMITTED });
+    }
+    result[i] = { ...messages[i], content: retained };
+  }
+  return result;
+}
+
+export function isImageCountRejection(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  try {
+    const error = JSON.parse(body)?.error;
+    return error?.code === "invalid_image" && typeof error.message === "string" && /\b(?:zu viele (?:bildvorlagen|bilder)|too many (?:(?:input|attached) )?images)\b/i.test(error.message);
+  } catch {
+    return false;
+  }
+}
+
+export const IMAGE_COUNT_RETRIES = 2;
+
+/** This is only called after explicit image-count admission failure. Rejects with all images protected stay visible. */
+export function reduceRejectedImages(payload: Record<string, unknown>): number | undefined {
+  if (!Array.isArray(payload.messages)) return undefined;
+  const before = payload.messages.reduce((sum, message) => sum + messageImageCount(message), 0);
+  if (!before) return undefined;
+  const reduced = limitModelImages(payload.messages, Math.floor(before / 2));
+  const after = reduced.reduce((sum, message) => sum + messageImageCount(message), 0);
+  if (after >= before) return undefined;
+  payload.messages = reduced;
+  return after;
 }
 
 /** Shared conservative estimate; actual provider tokenization can differ. */
@@ -150,27 +265,31 @@ export function estimatePrompt(messages: unknown, tools?: unknown): number {
 }
 
 function dropOldestTurn(msgs: Record<string, unknown>[]): Record<string, unknown>[] | null {
-  const i = msgs.findIndex((m, idx) => idx > 0 && idx < msgs.length - 2 && !isSys(m));
-  if (i < 0) return null;
-  const role = String(msgs[i].role);
-  let end = i + 1;
-  if (role === "assistant") {
-    while (end < msgs.length && isTool(msgs[end])) end += 1;
-  } else if (role === "user") {
-    if (end < msgs.length && msgs[end].role === "assistant") {
-      end += 1;
+  const cuts = toolBoundaryCuts(msgs);
+  for (let i = 1; i < msgs.length - 2; i++) {
+    if (!cuts[i] || isSys(msgs[i]) || isPinnedRequest(msgs[i])) continue;
+    const role = String(msgs[i].role);
+    let end = i + 1;
+    if (role === "assistant") {
       while (end < msgs.length && isTool(msgs[end])) end += 1;
+    } else if (role === "user") {
+      if (end < msgs.length && msgs[end].role === "assistant") {
+        end += 1;
+        while (end < msgs.length && isTool(msgs[end])) end += 1;
+      }
     }
+    while (end < msgs.length && !cuts[end]) end += 1;
+    if (end >= msgs.length - 1 || msgs.slice(i, end).some(message => isSys(message) || isPinnedRequest(message))) continue;
+    return [...msgs.slice(0, i), ...msgs.slice(end)];
   }
-  if (end >= msgs.length - 1) return null;
-  return [...msgs.slice(0, i), ...msgs.slice(end)];
+  return null;
 }
 
 export function fitMessages(messages: Record<string, unknown>[], budget: number): Record<string, unknown>[] {
   const cap = Math.max(0, Math.floor(budget));
+  if (estimatePrompt(messages) <= cap) return messages;
   let next = messages.map((m) => ({ ...m }));
   const used = () => estimatePrompt(next);
-  if (used() <= cap) return next;
 
   const packed = compactMessages(next, cap, "aggressive");
   next = packed.messages;
@@ -197,7 +316,7 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
 
   let extra = used() - cap;
   for (let i = 0; i < next.length && extra > 0; i++) {
-    if (isSys(next[i])) continue;
+    if (isSys(next[i]) || isPinnedRequest(next[i])) continue;
     if (i === next.length - 1) break;
     const t = String(next[i].content ?? "");
     const cut = Math.min(Math.max(0, t.length - 200), extra * 4);
@@ -209,26 +328,83 @@ export function fitMessages(messages: Record<string, unknown>[], budget: number)
   extra = used() - cap;
   if (extra > 0) {
     const last = next.length - 1;
-    if (last >= 0 && !isSys(next[last])) {
+    if (last >= 0 && !isSys(next[last]) && !isPinnedRequest(next[last])) {
       const t = String(next[last].content ?? "");
       next[last] = trimContent(next[last], Math.max(200, t.length - extra * 4));
     }
   }
   // Account for trim markers, multipart text and indivisible image/tool overhead.
   for (let i = 0; i < next.length && used() > cap; i++) {
-    if (isSys(next[i])) continue;
+    if (isSys(next[i]) || isPinnedRequest(next[i])) continue;
     let chars = JSON.stringify(next[i].content ?? "").length;
     while (used() > cap && chars > 80) {
       chars = Math.max(80, Math.floor(chars / 2));
       next[i] = trimContent(next[i], chars);
     }
   }
-  if (used() > cap) throw new Error("Context window zu klein für System, Bilder und Werkzeugaufrufe. Kontext vergrößern oder weniger Werkzeuge/Bilder verwenden.");
+  if (used() > cap) throw new Error("Context window zu klein für den vollständigen Nutzerauftrag, System, Bilder und Werkzeugaufrufe. Kontext vergrößern oder weniger Werkzeuge/Bilder verwenden; der Auftrag wurde nicht gekürzt.");
   return next;
 }
 
 export function isContextError(msg: string): boolean {
+  if (/\bcontext_length_exceeded\b/i.test(msg)) return true;
+  if (/(?:unknown|unrecognized|unsupported|not supported) (?:field|parameter|option)?\s*["']?context[_ -]?(?:length|window|size)/i.test(msg)) return false;
+  if (/(?:Modellkontext|Kontextfenster|Kontextlänge).{0,80}(?:reicht.{0,40}nicht aus|überschritten|zu klein)/i.test(msg)) return true;
   return /exceeds the available context|context.?length|too many tokens|n_ctx|prompt is too long|maximum context|context size|context window|max context|token limit/i.test(msg);
+}
+
+/** A rejected history/response reservation is different from allocating the model itself. */
+export function isHistoryMemoryError(msg: string): boolean {
+  return /agentenverlauf|nachrichtenverlauf|verlauf|history|conversation|messages|prompt|context/i.test(msg)
+    && /speicherbudget|(?:memory|gpu)[_\s-]?budget|available memory|verfügbaren? speicher/i.test(msg)
+    && /passt.{0,100}nicht|überschreit|exceed|does not fit|cannot fit|not enough|insufficient|too (?:large|big)/i.test(msg);
+}
+
+export const HISTORY_MEMORY_RETRIES = 2;
+
+/**
+ * Compact only the rejected outgoing payload, leaving the saved history, model,
+ * configured context and tool contracts intact. An irreducible task is never cut.
+ */
+export function compactRejectedHistory(payload: Record<string, unknown>, recovery: { preserveOutput?: boolean } = {}): boolean {
+  if (!Array.isArray(payload.messages)) return false;
+  const messages = payload.messages as Record<string, unknown>[];
+  const prompt = estimatePrompt(messages);
+  let smaller: Record<string, unknown>[] | undefined;
+  try {
+    const fitted = fitMessages(messages, Math.floor(prompt * 0.6));
+    if (estimatePrompt(fitted) < prompt) smaller = fitted;
+  } catch (error) {
+    // Protected user instructions, tool arguments and images can be indivisible.
+    if (!(error instanceof Error) || !error.message.startsWith("Context window")) throw error;
+  }
+  let changed = Boolean(smaller);
+  if (smaller) payload.messages = smaller;
+  // A context admission failure is not evidence that the configured thinking or
+  // output reservation is wrong. First reduce only replaceable history.
+  if (recovery.preserveOutput) return changed;
+  const thinking = payload.thinking as Record<string, unknown> | undefined;
+  const thinkingEnabled = thinking?.type === "enabled" || payload.enable_thinking === true || typeof payload.reasoning_budget === "number" && payload.reasoning_budget > 0;
+  const lower = (value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return value;
+    const minimum = thinkingEnabled ? Math.min(value, 2048) : Math.min(value, 256);
+    const reduced = Math.max(minimum, Math.floor(value / 2));
+    if (reduced < value) changed = true;
+    return reduced;
+  };
+  for (const key of ["max_tokens", "max_completion_tokens"]) {
+    if (typeof payload[key] === "number") payload[key] = lower(payload[key]);
+  }
+  const options = payload.options as Record<string, unknown> | undefined;
+  if (options && typeof options.num_predict === "number") payload.options = { ...options, num_predict: lower(options.num_predict) };
+  const reservation = [payload.max_tokens, payload.max_completion_tokens, (payload.options as Record<string, unknown> | undefined)?.num_predict]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+  const reply = reservation.length ? Math.min(...reservation) : 0;
+  if (thinkingEnabled && reply >= 2048 && typeof payload.reasoning_budget === "number" && payload.reasoning_budget > reply - 1024) {
+    payload.reasoning_budget = reply - 1024;
+    changed = true;
+  }
+  return changed;
 }
 
 /** Ollama/llama.cpp: KV/VRAM zu groß — num_ctx halbieren, nicht den Prompt zuerst. */
@@ -241,10 +417,10 @@ export function shrinkLocalCtx(ctx: number): number {
 }
 
 /** Prompt + max_tokens/n_predict muss in n_ctx passen — llama.cpp, Ollama, OpenAI, Groq, … */
-export function prepChatPayload(payload: Record<string, unknown>, ctx: number): void {
+export function prepChatPayload(payload: Record<string, unknown>, ctx: number, imageLimit = MODEL_IMAGE_LIMIT): void {
   const ctxN = Math.max(2048, ctx | 0);
   if (Array.isArray(payload.messages)) {
-    payload.messages = stampToolCalls(foldChatMessages(payload.messages as Record<string, unknown>[]));
+    payload.messages = stampToolCalls(foldChatMessages(limitModelImages(payload.messages, imageLimit)));
   }
   const want =
     (typeof payload.max_completion_tokens === "number" && payload.max_completion_tokens) ||
@@ -269,6 +445,9 @@ export function prepChatPayload(payload: Record<string, unknown>, ctx: number): 
   }
   if (payload.max_tokens != null) payload.max_tokens = reply;
   if (payload.max_completion_tokens != null) payload.max_completion_tokens = reply;
+  for (const key of ["reasoning_budget", "reasoning_budget_tokens"]) {
+    if (typeof payload[key] === "number" && payload[key] >= 0) payload[key] = Math.min(payload[key], reply);
+  }
   const opt = payload.options as Record<string, unknown> | undefined;
   if (opt && typeof opt === "object") {
     if (typeof opt.num_predict === "number") opt.num_predict = reply;

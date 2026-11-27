@@ -6,23 +6,26 @@
  * Token: ~/.anvil-companion-token  oder  ANVIL_COMPANION_TOKEN
  */
 import http from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { runLint, lintBins } from "./lint.mjs";
 import { listLsp, pullLsp, checkLsp } from "./lsp.mjs";
+import { languageUpdates } from "./language-updates.mjs";
 import { installBin, installerKind, refreshPath } from "./install.mjs";
 import { listToolchains, pullToolchain, removeToolchain, resolveBin, abortPull, toolchainProgress, toolHome, toolEnv } from "./toolchain.mjs";
 import { compileLang } from "./compile-run.mjs";
 import { runRoot } from "./run-storage.mjs";
 import { activeRunCount, runStatus } from "./run-jobs.mjs";
+import { RunRequests } from "./run-requests.mjs";
 import { spawnRun as spawnOnce } from "./run-process.mjs";
 import { snapshot, setAnvilHome, lspHome, ensureHomes } from "./paths.mjs";
 import { termKill, termPlatform, termRead, termStart, termWrite } from "./term.mjs";
 import { llmUpstream, noTimeout, openLlmPipe, isAbortNoise, assertLlmTarget } from "../scripts/llm-agent.mjs";
-import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
-import { gitDispatch, gitBin, listTree, writeRel, removeRel, readRelFiles, moveRel, mkdirRel, resolveCwd } from "./git.mjs";
+import { makeAnvilTemp, rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
+import { gitDispatch, gitBin, listTree, listWorkspaceResults, writeRel, removeRel, readRelFiles, moveRel, mkdirRel, resolveCwd } from "./git.mjs";
+import { worktreeManager } from "./worktrees.mjs";
 import { debugCmd, debugPoll, debugStart, debugStop } from "./debug.mjs";
 import { restoreRel } from "./restore.mjs";
 import { findBinary, engineBinaries, detectDiskEngines, selectEngineCommand, runEngineCommand } from "./engine-runtime.mjs";
@@ -73,6 +76,7 @@ function loadToken() {
 }
 
 const TOKEN = loadToken();
+const runRequests = new RunRequests({ status: runStatus });
 
 const which = findBinary;
 
@@ -112,9 +116,9 @@ function safeCwd(cwd) {
   throw new Error("cwd außerhalb des Workspace");
 }
 
-async function runCmd(cwd, cmd, timeoutMs, action = "") {
+async function runCmd(cwd, cmd, timeoutMs, action = "", signal) {
   try {
-    return await runEngineCommand(safeCwd(cwd), cmd, timeoutMs || MAX_MS, { action, env: engineEnvironment(toolEnv()), resolveBin });
+    return await runEngineCommand(safeCwd(cwd), cmd, timeoutMs || MAX_MS, { action, env: engineEnvironment(toolEnv()), resolveBin, signal, keepAbort: Boolean(signal) });
   } catch (error) {
     return { ok: false, code: 1, stdout: "", stderr: error.message, duration: 0, cmd };
   }
@@ -130,11 +134,10 @@ async function formatLang(body) {
   const rel = safeRel(body.path || "file.txt");
   const src = String(body.content ?? "");
   const ext = path.extname(rel).toLowerCase();
-  const dir = path.join(os.tmpdir(), "anvil-fmt-" + randomBytes(4).toString("hex"));
-  mkdirSync(dir, { recursive: true });
+  const dir = makeAnvilTemp("fmt");
   const full = path.join(dir, path.basename(rel) || "file.txt");
-  writeFileSync(full, src, "utf8");
   try {
+    writeFileSync(full, src, "utf8");
     let bin = "";
     let args = [];
     if (ext === ".go") {
@@ -154,7 +157,6 @@ async function formatLang(body) {
     return { ok: false, content: src, error: err instanceof Error ? err.message : String(err) };
   } finally {
     if (!rmDir(dir)) rmSoon(dir);
-    sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
   }
 }
 
@@ -313,7 +315,7 @@ if(send) send.onclick=function(){
   if(window.opener) window.opener.postMessage({anvilPair:1,token:${JSON.stringify(TOKEN)}}, ${JSON.stringify(target)});
   this.textContent="Gesendet — Tab zu";
 };
-<\/script></body>`;
+</script></body>`;
 }
 
 function lanTarget(raw, customBase = "") {
@@ -374,6 +376,22 @@ const server = http.createServer(async (req, res) => {
     json(req, res, 401, { ok: false, error: "Token fehlt (Header x-anvil-token)." });
     return;
   }
+  if (["GET", "POST"].includes(req.method) && url.pathname === "/v1/language-updates") {
+    try {
+      let result;
+      if (req.method === "GET") result = languageUpdates.status();
+      else {
+        const body = await readBody(req);
+        if (body.action === "configure") result = languageUpdates.configure(body.automatic);
+        else if (body.action === "check") {
+          if (body.manual != null && typeof body.manual !== "boolean") throw new Error("manual must be a boolean.");
+          result = await languageUpdates.check({ manual: body.manual === true });
+        } else throw new Error("Unbekannte Updateaktion.");
+      }
+      json(req, res, 200, { ok: true, ...result });
+    } catch (error) { json(req, res, 400, { ok: false, error: error.message }); }
+    return;
+  }
   if (["GET", "POST"].includes(req.method) && url.pathname === "/v1/engines") {
     try {
       const configured = req.method === "POST" ? saveEngineConfig(await readBody(req)) : readEngineConfig();
@@ -387,7 +405,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === "/v1/run-status") {
-    try { json(req, res, 200, runStatus(url.searchParams.get("id"))); }
+    try { json(req, res, 200, url.searchParams.has("requestId") ? runRequests.read(url.searchParams.get("requestId")) : runStatus(url.searchParams.get("id"))); }
     catch (e) { json(req, res, 404, { ok: false, error: String(e) }); }
     return;
   }
@@ -427,6 +445,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/run") {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const closed = () => { if (!res.writableEnded) abort(); };
+    req.once("aborted", abort);
+    res.once("close", closed);
     try {
       const body = await readBody(req);
       const cmd = String(body.cmd || "").trim();
@@ -434,9 +457,15 @@ const server = http.createServer(async (req, res) => {
         json(req, res, 400, { ok: false, error: "cmd fehlt" });
         return;
       }
-      json(req, res, 200, await runCmd(String(body.cwd || workspace), cmd, Number(body.timeoutMs) || MAX_MS, String(body.action || "")));
+      if (req.aborted || res.destroyed) abort();
+      const execute = () => runCmd(String(body.cwd || workspace), cmd, Number(body.timeoutMs) || MAX_MS, String(body.action || ""), controller.signal);
+      const result = body.requestId == null ? await execute() : await runRequests.start(body.requestId, execute);
+      json(req, res, 200, result);
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e) });
+    } finally {
+      req.removeListener("aborted", abort);
+      res.removeListener("close", closed);
     }
     return;
   }
@@ -454,14 +483,20 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
-  if (req.method === "GET" && url.pathname === "/v1/tree") {
+  if (req.method === "GET" && (url.pathname === "/v1/tree" || url.pathname === "/v1/results")) {
     if (!checkToken(req)) {
       json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true });
       return;
     }
     try {
       const cwd = url.searchParams.get("cwd") || workspace;
-      json(req, res, 200, listTree(safeCwd(cwd)));
+      const selected = safeCwd(cwd);
+      if (url.pathname === "/v1/results") {
+        const root = realpathSync(safeCwd(workspace));
+        const resolved = realpathSync(selected);
+        if (!insideRoot(root, resolved)) throw new Error("Ergebnisordner liegt außerhalb des Workspace.");
+        json(req, res, 200, listWorkspaceResults(resolved));
+      } else json(req, res, 200, listTree(selected));
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
@@ -530,6 +565,21 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       json(req, res, 400, { ok: false, error: String(e instanceof Error ? e.message : e) });
     }
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/v1/worktrees") {
+    if (!checkToken(req)) { json(req, res, 401, { ok: false, error: "Token fehlt.", needToken: true }); return; }
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    req.once("aborted", abort);
+    res.once("close", () => { if (!res.writableEnded) abort(); });
+    try {
+      const body = await readBody(req);
+      const result = await worktreeManager().dispatch(String(body.action || "list"), { ...body, cwd: safeCwd(body.cwd || workspace), signal: controller.signal });
+      if (!res.destroyed) json(req, res, 200, result);
+    } catch (error) {
+      if (!res.destroyed) json(req, res, 400, { ok: false, error: String(error instanceof Error ? error.message : error) });
+    } finally { req.removeListener("aborted", abort); }
     return;
   }
   if (req.method === "POST" && url.pathname === "/v1/git") {
@@ -727,8 +777,8 @@ const server = http.createServer(async (req, res) => {
 noTimeout(server);
 server.listen(PORT, HOST, () => {
   ensureHomes();
-  sweepAnvilTemp({ keep: 0, maxAgeMs: 0, toolchain: true });
-  setInterval(() => sweepAnvilTemp({ keep: 0, maxAgeMs: 15 * 60 * 1000, toolchain: true }), 20 * 60 * 1000).unref?.();
+  sweepAnvilTemp({ toolchain: true });
+  setInterval(() => sweepAnvilTemp({ toolchain: true }), 20 * 60 * 1000).unref?.();
   const snap = snapshot();
   console.log(`Anvil companion http://${HOST}:${PORT}`);
   console.log(`Token-Datei ${TOKEN_PATH}`);

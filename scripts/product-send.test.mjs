@@ -23,6 +23,7 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
   const server = await createServer({
     configFile: false, root: process.cwd(),
     resolve: { alias: { "@": path.resolve("src") } },
+    optimizeDeps: { noDiscovery: true, include: [], entries: [] },
     server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom",
     plugins: [{
       name: "product-test-model-boundary",
@@ -33,7 +34,7 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
         if (id === "\0product-plan-boundary") return `export async function brainPlanText() { const next=globalThis.__productNextPlan; delete globalThis.__productNextPlan; return next || []; }`;
       },
       transform(code, id) {
-        if (id.replaceAll("\\", "/").endsWith("/src/lib/chat-session.ts")) return 'import { brainPlanText } from "virtual:product-plan-boundary";\n' + code.replace(/  brainPlanText,\r?\n/, '').replace('import { chatWithProvider } from "@/lib/agent-client";', 'import { chatWithProvider } from "virtual:product-model-boundary";').replace('import { runFile } from "@/lib/run-client";', 'import { runFile } from "virtual:product-run-boundary";');
+        if (id.replaceAll("\\", "/").endsWith("/src/lib/chat-session.ts")) return 'import { brainPlanText } from "virtual:product-plan-boundary";\n' + code.replace(/ {2}brainPlanText,\r?\n/, '').replace('import { chatWithProvider } from "@/lib/agent-client";', 'import { chatWithProvider } from "virtual:product-model-boundary";').replace('import { runFile } from "@/lib/run-client";', 'import { runFile } from "virtual:product-run-boundary";');
       },
     }],
   });
@@ -294,6 +295,22 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
     assert.equal(useIde.getState().files['index.html'], '<p>Updated project</p>');
   });
 
+  await t.test("foreground continuation preserves its concrete checklist and never starts a replacement helper", async () => {
+    for (const status of ['todo', 'ok']) {
+      const priorPlan = [{ text: 'Rabatt in cart.js ergänzen', kind: 'edit', status, ...(status === 'ok' ? { completedBy: 'agent' } : {}) }, { text: 'Grenzen in cart.test.js prüfen', kind: 'check', status: 'todo' }];
+      reset({agentMode:'agent',planWho:'helper',autoRunAgent:false,testLoop:false,chat:[{id:'prior-user',role:'user',content:'Ergänze die Rabattberechnung.',at:1},{id:'prior-assistant',role:'assistant',content:'Prüfung noch offen.',plan:priorPlan,planLocked:false,at:2}]});
+      globalThis.__productNextPlan = ['Verstehen', 'Ändern', 'Ausführen', 'Prüfen'];
+      globalThis.__productNextResponse = async () => {
+        assert.deepEqual(useIde.getState().chat.at(-1).plan, priorPlan);
+        return {ok:true,reply:'Der bisherige Aufgabenstand wurde übernommen; hier keine Ausführung.'};
+      };
+      await sendChat(input('weiter',[]).value);
+      assert.deepEqual(useIde.getState().chat.at(-1).plan, priorPlan);
+      assert.ok(globalThis.__productNextPlan, 'The unnecessary helper was never invoked');
+      delete globalThis.__productNextPlan;
+    }
+  });
+
   await t.test("a delayed helper cannot replace progress during or after the request", async () => {
     for (const timing of ['during', 'after']) {
       reset({agentMode:'agent',planWho:'helper',autoRunAgent:false,testLoop:false});
@@ -334,7 +351,7 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
   await t.test("automatic execution replaces stale completion text and updates the visible plan", async () => {
     reset({ agentMode: "agent", files: { "main.js": "console.log(1)" }, autoRunAgent: true, runInWindow: false, testLoop: false, planWho: "agent" });
     globalThis.__productNextResponse = options => {
-      options.onTool({ name: "set_plan", args: {}, result: { steps: ["Ändern", "Run"] } });
+      options.onTool({ name: "set_plan", args: {}, result: { steps: ["main.js ändern", "main.js ausführen"] } });
       options.onToolStart({ name: "edit_file", args: { path: "main.js" } });
       options.onTool({ name: "edit_file", args: { path: "main.js" }, result: { ok: true } });
       return { ok: true, modelReply: "Berechnung korrigiert.", reply: "Noch nicht bestätigt: alter Stand\n\nModellantwort:\nBerechnung korrigiert.", verification: { state: "stale", detail: "alter Stand" }, runPaths: ["main.js"], tools: ["edit_file", "run_file"] };
@@ -350,5 +367,32 @@ test("product send boundaries preserve drafts and keep guided reviews read-only"
     await sendChat(input("Führe den aktuellen Stand erneut aus.", []).value);
     assert.match(useIde.getState().chat.at(-1).content, /Run-Verbindung getrennt/);
     assert.doesNotMatch(useIde.getState().chat.at(-1).content, /Alte Erfolgsaussage/);
+  });
+
+  await t.test("a final automatic run cannot certify an unacknowledged descriptive implementation", async () => {
+    reset({ agentMode: "agent", files: { "main.js": "console.log(1)" }, autoRunAgent: true, runInWindow: false, testLoop: false, planWho: "agent" });
+    globalThis.__productNextResponse = options => {
+      options.onTool({ name: "set_plan", args: {}, result: { steps: ["Berechnung fachlich korrigieren", "main.js ausführen"] } });
+      options.onToolStart({ name: "edit_file", args: { path: "main.js" } });
+      options.onTool({ name: "edit_file", args: { path: "main.js" }, result: { ok: true } });
+      return { ok: true, reply: "Datei geändert.", verification: { state: "stale", detail: "alter Stand" }, runPaths: ["main.js"], tools: ["edit_file"] };
+    };
+    globalThis.__productNextRun = async () => ({ ok: true, stdout: "1", stderr: "", duration: 0.01 });
+    await sendChat(input("Korrigiere die Berechnung und führe sie aus.", []).value);
+    assert.notEqual(useIde.getState().chat.at(-1).plan[0].status, "ok", "the successful process does not establish the requested semantic correction");
+  });
+
+  await t.test("an observed intentional failure never triggers the legacy final autorun", async () => {
+    reset({ agentMode: "agent", files: { "negative.cjs": "process.exit(7);" }, autoRunAgent: true, runInWindow: false, testLoop: false, planWho: "agent" });
+    let automaticRuns = 0;
+    const reply = "Exit 7 beobachtet.\n\nFehler beobachtet; die Ausführung blieb fehlgeschlagen.";
+    globalThis.__productNextResponse = { ok: true, modelReply: "Exit 7 beobachtet.", reply,
+      verification: { state: "failed", detail: "negative.cjs: Exit 7", observedFailure: true },
+      runPaths: ["negative.cjs"], tools: [] }; // Legacy adapter lacks workflow/tools metadata.
+    globalThis.__productNextRun = async () => { automaticRuns++; return { ok: false, code: 7, stdout: "", stderr: "EXPECTED_FAILURE", duration: 0.01 }; };
+    await sendChat(input("Run the intentional negative test once. Do not change or repair anything.", []).value);
+    assert.equal(automaticRuns, 0, "the requested failing execution was already observed; final UI bookkeeping cannot run it again");
+    assert.equal(useIde.getState().chat.at(-1).content, reply);
+    assert.equal(useIde.getState().files["negative.cjs"], "process.exit(7);");
   });
 });

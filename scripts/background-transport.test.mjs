@@ -4,7 +4,7 @@ import {createServer as httpServer} from 'node:http';
 import {createServer} from 'vite';
 let vite, completeRuntime, ToolSession;
 before(async()=>{
-  vite=await createServer({configFile:false,root:process.cwd(),server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
+  vite=await createServer({configFile:false,root:process.cwd(),optimizeDeps:{noDiscovery:true,include:[]},server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
   ({completeRuntime}=await vite.ssrLoadModule('/src/agent-runtime/transport.ts'));
   ({ToolSession}=await vite.ssrLoadModule('/src/lib/tool-compat.ts'));
 });
@@ -24,7 +24,7 @@ async function fixture(t,handle,opts={}){
   t.after(async()=>{api.closeAllConnections();await new Promise(resolve=>api.close(resolve));});
   const model={provider:'custom',baseUrl:`http://127.0.0.1:${api.address().port}/v1`,model:'fixture',apiKey:'',context:32768,thinking:'off',temperature:0.3,maxOut:1000,hardStopMin:1,retries:3,...opts};
   const estimates=[],deltas=[];
-  const run=(tools=[],signal=new AbortController().signal,session)=>completeRuntime(model,[{role:'user',content:'Synthetic test.'}],tools,signal,(s,k)=>deltas.push([s,k]),session,tokens=>estimates.push(tokens));
+  const run=(tools=[],signal=new AbortController().signal,session,messages=[{role:'user',content:'Synthetic test.'}])=>completeRuntime(model,messages,tools,signal,(s,k)=>deltas.push([s,k]),session,tokens=>estimates.push(tokens));
   return{run,requests,model,estimates,deltas};
 }
 const tool={type:'function',function:{name:'read_file',description:'Read a synthetic file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}};
@@ -127,17 +127,63 @@ test('explicitly unsupported options are removed while unknown bad requests stay
  await assert.rejects(bad.run(),/Bad image encoding/);assert.equal(bad.requests.length,1);
 });
 
+const syntheticImage = (label) => ({ type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from(label).toString('base64')}` } });
+const userImage = syntheticImage('current-user-image');
+const userImageRequest = { role: 'user', content: [{ type: 'text', text: '[Anvil current user request; preserve the complete text]\nInspect the synthetic drawing.' }, userImage] };
+const imageUrls = (body) => body.messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url').map(part => part.image_url.url) : []);
+const rejectImage = (res, message = 'Zu viele Bildvorlagen für dieses Modellprofil.') => {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: { message, type: 'invalid_request_error', code: 'invalid_image' } }));
+};
+
+test('Studio image-count recovery sends the same conversation with fewer images and learns the accepted limit', async t => {
+  const f = await fixture(t, (_body, res, n) => n <= 2 ? rejectImage(res) : response(res), { context: 131072 });
+  const knownResult = { role: 'tool', tool_call_id: 'read-1', content: 'Already executed; output handle snapshot-1.' };
+  const messages = [userImageRequest,
+    { role: 'assistant', tool_calls: [{ id: knownResult.tool_call_id, type: 'function', function: { name: 'read_file', arguments: '{"path":"notes.txt"}' } }] }, knownResult,
+    { role: 'user', mcpResult: true, content: [{ type: 'text', text: 'MCP returned four synthetic references.' }, ...[1, 2, 3, 4].map(label => syntheticImage(String(label)))] },
+  ];
+  const run = () => f.run([tool], new AbortController().signal, undefined, messages);
+  assert.equal((await run()).content, 'ready');
+  assert.equal((await run()).content, 'ready');
+  assert.deepEqual(f.requests.map(body => imageUrls(body).length), [4, 2, 1, 1]);
+  assert.ok(f.requests.every(body => imageUrls(body).includes(userImage.image_url.url)));
+  const { messages: _initialMessages, ...wireOptions } = f.requests[0];
+  assert.equal(wireOptions.max_tokens, 1000);
+  for (const { messages: wireMessages, ...options } of f.requests) {
+    assert.deepEqual(options, wireOptions);
+    assert.deepEqual(wireMessages.find(message => message.role === 'tool'), knownResult);
+    assert.equal(wireMessages.find(message => message.mcpResult)?.content[0].text, 'MCP returned four synthetic references.');
+  }
+  assert.ok(f.estimates.every(tokens => tokens.limit === 131072));
+  assert.equal(f.deltas.length, 2);
+  assert.equal(messages.at(-1).content.length, 5, 'request retries leave the source conversation intact');
+});
+
+test('an image-format error and an image-count rejection with only protected attachments fail once', async t => {
+  for (const [message, messages] of [
+    ['Invalid image encoding', [userImageRequest, { role: 'user', mcpResult: true, content: [syntheticImage('mcp')] }]],
+    ['Zu viele Bildvorlagen für dieses Modellprofil.', [userImageRequest]],
+  ]) {
+    const f = await fixture(t, (_body, res) => rejectImage(res, message), { retries: 8 });
+    await assert.rejects(f.run([], new AbortController().signal, undefined, messages), error => error.message.includes(message));
+    assert.equal(f.requests.length, 1);
+  }
+});
+
 test('failed connection before response headers can retry without repeating output',async t=>{
  const f=await fixture(t,(_body,res,n,req)=>n===1?req.socket.destroy():response(res));
  const choice=await f.run();assert.equal(choice.content,'ready');assert.equal(f.requests.length,2);assert.deepEqual(f.deltas,[['ready','text']]);
 });
 
-test('context rejection reduces response budget and can recover without repeating model output',async t=>{
+test('an irreducible context rejection stays visible without silently reducing the output budget',async t=>{
  const f=await fixture(t,(body,res,n)=>{
   if(n===1){res.writeHead(400);res.end('maximum context length exceeded');return;}
-  assert.equal(body.max_tokens,500);response(res);
+  response(res);
  });
- await f.run();assert.equal(f.requests.length,2);assert.equal(f.estimates.length,2);
+ await assert.rejects(f.run(),/maximum context length exceeded/);
+ assert.equal(f.requests.length,1);assert.equal(f.estimates.length,1);
+ assert.equal(f.requests[0].max_tokens,1000);assert.deepEqual(f.deltas,[]);
 });
 
 test('an unsupported native option is removed from the actual Ollama wire payload',async t=>{

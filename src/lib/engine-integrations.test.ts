@@ -4,11 +4,11 @@ import { ENGINE_INTEGRATIONS, createEngineIntegration } from "./engine-integrati
 import { AgentEvidence } from "./agent-evidence.ts";
 
 test("engine integration templates are inactive drafts and keep setup arguments separate", () => {
-  assert.equal(new Set(ENGINE_INTEGRATIONS.map((p) => p.id)).size, 7);
+  assert.equal(new Set(ENGINE_INTEGRATIONS.map((p) => p.id)).size, ENGINE_INTEGRATIONS.length);
   for (const item of ENGINE_INTEGRATIONS) {
     const draft = createEngineIntegration(item.id, {
-      program: "I:/Tools/Unity Relay/relay_win.exe",
-      cwd: "I:/Tools/Unreal MCP/Python",
+      program: "C:/Example/Tools/Unity Relay/relay_win.exe",
+      cwd: "C:/Example/Tools/Unreal MCP/Python",
     });
     assert.equal(draft.enabled, false);
     assert.equal(draft.transport, "stdio");
@@ -26,6 +26,20 @@ test("engine integration templates are inactive drafts and keep setup arguments 
     /Pfad/,
   );
   assert.throws(() => createEngineIntegration("unreal-chongdashu", { cwd: "../outside" }), /Pfad/);
+});
+
+test("Blender uses current package and CAD drafts use distinct documented servers", () => {
+  assert.deepEqual(createEngineIntegration("blender-mcp").args, ["mcp-for-blender"]);
+  for (const [id, pkg] of [["freecad-mcp", "freecad-mcp"], ["openscad-mcp", "openscad-mcp"]]) {
+    const entry = ENGINE_INTEGRATIONS.find(item => item.id === id)!;
+    assert.equal(entry.category, "cad");
+    const connection = createEngineIntegration(id);
+    assert.equal(connection.command, "uvx");
+    assert.deepEqual(connection.args, [pkg]);
+    assert.equal(connection.enabled, false);
+    assert.ok(entry.example?.includes("80 × 50 × 3 mm"));
+    assert.equal(connection.url, "");
+  }
 });
 
 test("starting an editor cannot pass verification or erase a failed check", () => {

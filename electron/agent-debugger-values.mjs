@@ -1,7 +1,7 @@
 /** Evaluate simple expressions against recorded primitive values only. Never executes code. */
 export function evaluateRecordedLocals(expression, locals) {
   try {
-    const tokens = String(expression).match(/\s*(?:\d+(?:\.\d+)?(?:e[+-]?\d+)?|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_$][\w$]*|===|!==|==|!=|<=|>=|&&|\|\||[()+*/%<>!\-])/gi) || [];
+    const tokens = String(expression).match(/\s*(?:\d+(?:\.\d+)?(?:e[+-]?\d+)?|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_$][\w$]*|===|!==|==|!=|<=|>=|&&|\|\||[()+*/%<>!-])/gi) || [];
     if (tokens.map(x => x.trim()).join('') !== String(expression).replace(/\s+(?=(?:[^"']*["'][^"']*["'])*[^"']*$)/g, '')) throw Error('Nur primitive aufgezeichnete Werte, Klammern und einfache Operatoren sind verfügbar.');
     const ts = tokens.map(x => x.trim()); let at = 0;
     const precedence = { '||': 1, '&&': 2, '==': 3, '!=': 3, '===': 3, '!==': 3, '<': 4, '>': 4, '<=': 4, '>=': 4, '+': 5, '-': 5, '*': 6, '/': 6, '%': 6 };

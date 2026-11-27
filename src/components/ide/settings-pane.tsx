@@ -57,20 +57,14 @@ export function SettingsPane() {
   const query = q.trim().toLowerCase();
   const show = (id: Cat) => Boolean(query) || id === cat;
   const de = useIde((s) => s.locale) !== "en";
-  const purpose: Partial<Record<Cat, string>> = {
-    agent: de ? "KI für deinen Chat" : "AI for your chat",
-    companion: de ? "Programme ausführen" : "Run programs",
-    brain: de ? "Zusätzliche lokale KI" : "Additional local AI",
-    models: de ? "Lokale Modelle laden" : "Get local models",
-    learn: de ? "Wissen und Regeln" : "Knowledge and rules",
-    intern: de ? "Fehlersuche" : "Diagnostics",
-  };
+  const categoryName = (c: typeof CATS[number]) => c.id === "overview" ? (de ? "Orientierung" : "Getting started") : c.id === "help" ? (de ? "Hilfe" : "Help") : t(c.key);
+  const selectCategory = (id: Cat) => { setCat(id); setQ(""); };
   useEffect(() => { if (results.current) results.current.scrollTop = 0; }, [cat, query]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
-        <h2 className="text-xs font-medium tracking-wide text-muted uppercase">{t("settings")}</h2>
+    <div className="settings-pane flex h-full min-h-0 flex-col bg-surface">
+      <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-border px-3 py-1">
+        <h2 id="anvil-settings-title" className="text-sm font-semibold">{t("settings")}</h2>
         <input
           value={q}
           placeholder={t("searchPh")}
@@ -82,36 +76,31 @@ export function SettingsPane() {
           {t("done")}
         </Button>
       </div>
+      <label className="settings-category-picker items-center gap-3 border-b border-border px-3 py-1.5 text-sm text-muted">
+        {de ? "Bereich" : "Category"}
+        <select aria-label={de ? "Einstellungsbereich" : "Settings category"} value={query ? "" : cat}
+          className="min-h-9 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 text-sm text-fg" onChange={e => selectCategory(e.target.value as Cat)}>
+          {query && <option disabled value="">{de ? "Suchergebnisse" : "Search results"}</option>}
+          {CATS.map(c => <option key={c.id} value={c.id}>{categoryName(c)}</option>)}
+        </select>
+      </label>
       <div className="flex min-h-0 flex-1">
-        <nav aria-label={de ? "Einstellungsbereiche" : "Settings categories"} className="flex w-40 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border p-2">
+        <nav aria-label={de ? "Einstellungsbereiche" : "Settings categories"} className="settings-categories flex w-44 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border p-2">
           {CATS.map((c) => (
             <button
               key={c.id}
               type="button"
-              aria-label={c.id === "overview" ? (de ? "Orientierung" : "Getting started") : c.id === "help" ? (de ? "Hilfe" : "Help") : t(c.key)}
+              aria-label={categoryName(c)}
               aria-current={cat === c.id && !query ? "page" : undefined}
-              onClick={() => {
-                setCat(c.id);
-                setQ("");
-              }}
+              onClick={() => selectCategory(c.id)}
               className={cn(
                 "shrink-0 rounded-md px-2 py-2 text-left text-sm",
                 cat === c.id && !query ? "bg-hover text-fg" : "text-muted hover:text-fg",
               )}
             >
-              <span className="block">{c.id === "overview" ? (de ? "Orientierung" : "Getting started") : c.id === "help" ? (de ? "Hilfe" : "Help") : t(c.key)}</span>
-              {purpose[c.id] ? <span className="mt-0.5 block text-[10px] leading-tight text-subtle">{purpose[c.id]}</span> : null}
+              {categoryName(c)}
             </button>
           ))}
-          {!query && cat !== "help" && cat !== "overview" ? <div className="mt-auto border-t border-border pt-3">
-            <Button variant="quiet" className="h-auto w-full whitespace-normal px-2 py-2 text-left text-xs" onClick={() => {
-              resetSettingsCategory(cat);
-              useIde.getState().setNotice(de ? "Die Einstellungen dieses Bereichs wurden zurückgesetzt. Profile und Projektinhalte bleiben erhalten." : "Category reset. Profiles and project contents are kept.");
-            }}>
-              {de ? "Bereich zurücksetzen" : "Reset category"}
-            </Button>
-            <p className="px-2 pt-1 text-[10px] text-subtle">{de ? "Profile, Zugangsdaten und Projektinhalte bleiben erhalten." : "Keeps profiles, credentials and project contents."}</p>
-          </div> : null}
         </nav>
         <div ref={results} className="settings-results min-h-0 min-w-0 flex-1 overflow-auto px-4 pb-8">
           <Suspense fallback={<p className="py-4 text-sm text-muted">{t("settings")} …</p>}>
@@ -121,7 +110,7 @@ export function SettingsPane() {
             {show("agent") ? <AgentSection q={query} /> : null}
             {show("companion") ? (
               <SettingsSection q={query} className="pb-6">
-                <Vis q={query} label="Companion Ausführen Run Unity Unreal Godot Engine Compiler Pakete Packages Sprachserver Language Server Go Rust Java Python C++ Token koppeln Pairing Verbindung Connection">
+                <Vis q={query} label="Companion Ausführen Run Unity Unreal Godot Engine Compiler Pakete Packages Sprachserver Language Server Go Rust Java Python C++ Token koppeln Pairing Verbindung Connection Updates Aktualisierung Versionen Sprachupdates Language updates">
                 <h3 className="pt-4 pb-1 text-xs font-medium tracking-wide text-muted uppercase">{t("catCompanion")}</h3>
                 <CompanionSetup probeOnMount={!query} revealConnection={Boolean(query)} />
                 </Vis>
@@ -140,6 +129,13 @@ export function SettingsPane() {
             {show("data") ? <DataSection q={query} /> : null}
             {show("help") ? <SupportSection q={query} /> : null}
           </Suspense>
+          {!query && cat !== "help" && cat !== "overview" && <div className="mt-4 border-t border-border pt-3">
+            <Button variant="quiet" className="min-h-9 px-2 text-sm" onClick={() => {
+              resetSettingsCategory(cat);
+              useIde.getState().setNotice(de ? "Die Einstellungen dieses Bereichs wurden zurückgesetzt. Profile und Projektinhalte bleiben erhalten." : "Category reset. Profiles and project contents are kept.");
+            }}>{de ? "Bereich zurücksetzen" : "Reset category"}</Button>
+            <p className="px-2 text-xs text-muted">{de ? "Profile, Zugangsdaten und Projektinhalte bleiben erhalten." : "Keeps profiles, credentials and project contents."}</p>
+          </div>}
         </div>
       </div>
     </div>

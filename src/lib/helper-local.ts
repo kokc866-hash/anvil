@@ -1,4 +1,5 @@
 import { BRAIN_MODELS } from "./brain/models";
+import type { WorkspaceDiskRequest } from "./native-workspace";
 
 export const HELPER_HTTP = "http://127.0.0.1:7847";
 let helperPort = 7847;
@@ -26,6 +27,7 @@ type Native = {
   pathsWrite?: (name: string, text: string) => Promise<string>;
   pathsRead?: (name: string) => Promise<string | null>;
   workspacePick?: () => Promise<string | null>;
+  workspaceDisk?: (request: WorkspaceDiskRequest) => Promise<{ ok: true } | { ok: false; error: string }>;
   clipboardRead?: () => Promise<{ text: string; image: string }>;
   companionEnsure?: () => Promise<{ ok: boolean; token?: string; owned?: boolean }>;
   companionIdle?: (keep?: boolean) => Promise<{ ok: boolean; running?: boolean }>;

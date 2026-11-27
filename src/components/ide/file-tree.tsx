@@ -1,5 +1,5 @@
 import { selectFileKeys } from "@/lib/workspace-index";
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -24,8 +24,7 @@ import { baseName, buildTree, cleanPath, isPinnedPath, joinPath, parentDir, unus
 import { Button } from "@/components/ui/button";
 import { CtxMenu, type CtxItem } from "@/components/ide/ctx-menu";
 import { cn } from "@/lib/cn";
-import { diskFolderName, diskSupported, pickFolder } from "@/lib/disk";
-import { canOpenOsWorkspace, openOsWorkspace } from "@/lib/workspace-open";
+import { canOpenOsWorkspace } from "@/lib/workspace-open";
 import { zipFiles } from "@/lib/archive";
 import { langFromPath, templateFor } from "@/lib/languages";
 import { canMove, getDrag, hasOsFiles, importDropped, setDrag, uniqueDest } from "@/lib/dnd";
@@ -33,6 +32,9 @@ import { preferredExt } from "@/lib/learn";
 import { confirmApp } from "@/lib/confirm";
 import { useT } from "@/lib/i18n";
 import { isSecretPath } from "@/lib/ref";
+import { readWorkspaceFile, refreshWorkspaceResults, useWorkspaceResults } from "@/lib/workspace-results";
+import { workspaceDisk } from "@/lib/native-workspace";
+import { opaqueWorkspaceResult, WORKSPACE_TEXT_READ_LIMIT } from "../../../scripts/workspace-results.mjs";
 
 const FILE_KINDS: { label: string; ext: string }[] = [
   { label: "Python", ext: "py" },
@@ -74,9 +76,12 @@ export function FileTree() {
   const toggleCollapsed = useIde((s) => s.toggleCollapsed);
   const setSidebar = useIde((s) => s.setSidebar);
   const setNotice = useIde((s) => s.setNotice);
-  const applyFiles = useIde((s) => s.applyFiles);
-  const setDiskName = useIde((s) => s.setDiskName);
   const diskName = useIde((s) => s.diskName);
+  const cwd = useIde(s => s.workspaceCwd);
+  const epoch = useIde(s => s.workspaceEpoch);
+  const native = useIde(s => s.workspaceNative);
+  const companionUrl = useIde(s => s.companionUrl);
+  const resultView = useWorkspaceResults();
   const box = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [win, setWin] = useState({ top: 0, h: 480 });
@@ -131,10 +136,22 @@ export function FileTree() {
     if (creating) nameRef.current?.focus();
   }, [creating, inDir]);
 
-  const allPaths = fileKeys.split("\n").filter(Boolean);
+  const diskResults = useMemo(() => {
+    const files = new Set(fileKeys.split("\n"));
+    const view = resultView.scope;
+    return new Map(view?.workspaceCwd === cwd && view.workspaceEpoch === epoch && view.workspaceNative === native && (native || view.companionUrl === companionUrl)
+      ? (resultView.index?.entries ?? resultView.index?.results)?.filter(file => !files.has(file.path)).map(file => [file.path, file] as const)
+      : []);
+  }, [fileKeys, resultView, cwd, epoch, native, companionUrl]);
+  const treeDirs = useMemo(() => {
+    const view = resultView.scope;
+    if (view?.workspaceCwd !== cwd || view.workspaceEpoch !== epoch || view.workspaceNative !== native || !native && view.companionUrl !== companionUrl) return dirs;
+    return [...new Set([...dirs, ...(resultView.index?.directories ?? [])])];
+  }, [resultView, cwd, epoch, native, companionUrl, dirs]);
+  const allPaths = useMemo(() => [...fileKeys.split("\n").filter(Boolean), ...diskResults.keys()], [fileKeys, diskResults]);
   const items = useMemo(
-    () => visibleTree(buildTree(allPaths, dirs), collapsed, filter),
-    [fileKeys, dirs, collapsed, filter],
+    () => visibleTree(buildTree(allPaths, treeDirs), collapsed, filter),
+    [allPaths, treeDirs, collapsed, filter],
   );
 
   const hasKids = useMemo(() => {
@@ -146,12 +163,13 @@ export function FileTree() {
         d = parentDir(d);
       }
     }
-    for (const d of dirs) {
+    for (const d of treeDirs) {
       const p = parentDir(d);
       if (p) s.add(p);
     }
     return s;
-  }, [fileKeys, dirs]);
+  }, [allPaths, treeDirs]);
+  const folderCount = useMemo(() => new Set([...treeDirs, ...hasKids]).size, [treeDirs, hasKids]);
 
   useEffect(() => {
     if (!flashPath) return;
@@ -176,14 +194,14 @@ export function FileTree() {
     return () => ro.disconnect();
   }, [fileKeys]);
 
-  function targetDir(): string {
+  const targetDir = useCallback((): string => {
     if (!selected) return "";
     const hit = items.find((i) => i.path === selected);
     if (hit?.type === "dir") return selected;
     return parentDir(selected);
-  }
+  }, [selected, items]);
 
-  function beginCreate(kind: "file" | "dir", dir = targetDir()) {
+  const beginCreate = useCallback((kind: "file" | "dir", dir = targetDir()) => {
     const version = ++createVersion.current;
     if (dir && collapsed.includes(dir)) toggleCollapsed(dir);
     setInDir(dir);
@@ -209,49 +227,22 @@ export function FileTree() {
       setNewName("");
     }
     setMenu(null);
-  }
+  }, [targetDir, collapsed, toggleCollapsed]);
 
   useEffect(() => {
     function onNew(e: Event) {
       const kind = (e as CustomEvent<"file" | "dir">).detail ?? "file";
       beginCreate(kind);
     }
-    function onOpen() {
-      void (async () => {
-        if (canOpenOsWorkspace()) {
-          const r = await openOsWorkspace();
-          if (!r.ok) {
-            if (r.error && r.error !== "Kein Ordner") setNotice(r.error);
-            return;
-          }
-          if (r.skipped) setNotice(`${r.n} Dateien, ${r.skipped} übersprungen`);
-          else setNotice(`${r.n ?? 0} Dateien geladen`);
-          return;
-        }
-        if (!diskSupported()) {
-          setNotice("Zum Öffnen eines Ordners benötigst du Chrome, Edge oder die Anvil-Desktop-App.");
-          return;
-        }
-        const pack = await pickFolder();
-        applyFiles(pack.files, pack.dirs);
-        setDiskName(diskFolderName());
-        const first = Object.keys(pack.files).sort()[0];
-        if (first) openFile(first);
-        const n = Object.keys(pack.files).length;
-        setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
-      })().catch((err) => setNotice(err instanceof Error ? err.message : "Der Ordner konnte nicht geöffnet werden."));
-    }
     function onSave() { void import("@/lib/save").then((s) => s.saveNow({ all: true })); }
 
     window.addEventListener("anvil-new-file", onNew as EventListener);
-    window.addEventListener("anvil-open-disk", onOpen);
     window.addEventListener("anvil-save-disk", onSave);
     return () => {
       window.removeEventListener("anvil-new-file", onNew as EventListener);
-      window.removeEventListener("anvil-open-disk", onOpen);
       window.removeEventListener("anvil-save-disk", onSave);
     };
-  }, [applyFiles, openFile, setDiskName, setNotice]);
+  }, [beginCreate]);
 
   function submitNew() {
     const raw0 = cleanPath(inDir ? joinPath(inDir, newName) : newName);
@@ -297,9 +288,29 @@ export function FileTree() {
     setNotice(`${drag.path} → ${dir || dest}`);
   }
 
+  const openResult = (path: string, reveal = false) => {
+    const current = useIde.getState();
+    const result = diskResults.get(path);
+    if (current.workspaceEpoch !== epoch || current.workspaceCwd !== cwd || !result) return;
+    const opened = !reveal && !opaqueWorkspaceResult(path) && result.size <= WORKSPACE_TEXT_READ_LIMIT
+      ? readWorkspaceFile(path, undefined, true).then(file => {
+          if (file.content === null) {
+            void refreshWorkspaceResults(current).catch(() => undefined);
+            setNotice("Die Datei ist nicht mehr vorhanden.");
+          }
+        })
+      : native ? workspaceDisk({ action: "resultReveal", root: cwd, path })
+        : navigator.clipboard.writeText(path).then(() => setNotice("Pfad kopiert"));
+    void opened.catch(error => setNotice(error instanceof Error ? error.message : "Datei konnte nicht angezeigt werden."));
+  };
+
   const menuItems: CtxItem[] = menu
     ? menu.type === "file"
-      ? [
+      ? diskResults.has(menu.path) ? [
+          ...(!opaqueWorkspaceResult(menu.path) && diskResults.get(menu.path)!.size <= WORKSPACE_TEXT_READ_LIMIT ? [{ label: "Öffnen", onClick: () => openResult(menu.path) }] : []),
+          ...(native ? [{ label: "Im Explorer anzeigen", onClick: () => openResult(menu.path, true) }] : []),
+          { label: "Pfad kopieren", onClick: () => { void navigator.clipboard.writeText(menu.path); setNotice("Pfad kopiert"); } },
+        ] : [
           { label: "Öffnen", onClick: () => openFile(menu.path) },
           { label: "Umbenennen", onClick: () => { setRenaming(menu.path); setRenameTo(menu.path); } },
           { label: "Duplizieren", onClick: () => duplicateFile(menu.path) },
@@ -478,7 +489,7 @@ export function FileTree() {
             setRenaming(selected);
             setRenameTo(selected);
           }
-          if (e.key === "Delete" && selected) {
+          if (e.key === "Delete" && selected && !diskResults.has(selected)) {
             e.preventDefault();
             const isDir = dirs.includes(selected) || items.find((i) => i.path === selected)?.type === "dir";
             if (isDir) {
@@ -513,6 +524,7 @@ export function FileTree() {
                 {slice.map((item, i) => {
             const abs = start + i;
             const name = baseName(item.path);
+            const diskResult = diskResults.get(item.path);
             const isOpen = !collapsed.includes(item.path);
             const emptyDir = item.type === "dir" && !hasKids.has(item.path);
             const pinned = isPinnedPath(item.path);
@@ -532,7 +544,7 @@ export function FileTree() {
                     pinEnd ? "border-b border-border" : "",
                   )}
                   style={{ paddingLeft: 8 + item.depth * (slim ? 8 : 12) }}
-                  draggable
+                  draggable={!diskResult}
                   onDragStart={(e) => {
                     e.stopPropagation();
                     setDrag(e.dataTransfer, { kind: "path", path: item.path });
@@ -602,11 +614,14 @@ export function FileTree() {
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                      title={diskResult ? `${item.path} · ${!opaqueWorkspaceResult(item.path) && diskResult.size <= WORKSPACE_TEXT_READ_LIMIT ? "Öffnen" : native ? "Im Explorer anzeigen" : "Pfad kopieren"}` : undefined}
                       onClick={() => {
                         setSelected(item.path);
-                        openFile(item.path);
+                        if (diskResult) openResult(item.path);
+                        else openFile(item.path);
                       }}
                       onDoubleClick={() => {
+                        if (diskResult) return;
                         setRenaming(item.path);
                         setRenameTo(item.path);
                       }}
@@ -617,7 +632,7 @@ export function FileTree() {
                       {dirty[item.path] ? <span className="size-1.5 shrink-0 rounded-full bg-accent" /> : null}
                     </button>
                   )}
-                  {item.type === "file" ? (
+                  {diskResult ? null : item.type === "file" ? (
                     <button
                       type="button"
                       className="invisible size-7 rounded-sm text-subtle hover:text-danger group-hover:visible"
@@ -650,7 +665,7 @@ export function FileTree() {
       <div className="border-t border-border px-2 py-1.5 text-[11px] text-subtle">
         <span className="block truncate">
           {allPaths.length} Dateien
-          {dirs.length ? ` · ${dirs.length} Ordner` : ""}
+          {folderCount ? ` · ${folderCount} Ordner` : ""}
           {selected && !slim ? ` · ${selected}` : ""}
         </span>
       </div>

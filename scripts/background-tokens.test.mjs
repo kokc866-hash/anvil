@@ -13,9 +13,10 @@ test('real background worker reports pending context and confirmed usage through
  mkdirSync('artifacts',{recursive:true});
  const root=mkdtempSync(path.resolve('artifacts','token-worker-')),build=path.join(root,'worker');mkdirSync(build);
  await buildAgentRuntime(build); // Never replace the worker of a running user test.
- let requests=0,release;
+ let requests=0,release;const contracts=[];
  const api=httpServer(async(req,res)=>{
-  for await(const chunk of req){};
+  let body='';for await(const chunk of req)body+=chunk;
+  const parsed=JSON.parse(body);contracts.push((parsed.tools||[]).map(tool=>tool.function.name));
   const n=++requests;
   if(n===1)await new Promise(r=>release=r);
   const delta=n===1?{tool_calls:[{index:0,id:'read',function:{name:'read_file',arguments:'{"path":"notes.txt"}'}}]}:{content:'Gelesen.'};
@@ -40,6 +41,9 @@ test('real background worker reports pending context and confirmed usage through
   const persisted=JSON.parse(readFileSync(path.join(root,'state.json'),'utf8'));
   assert.deepEqual(persisted.usage,host.state.usage);
   assert.deepEqual(persisted.requestTokens,host.state.requestTokens);
+  assert.deepEqual(host.state.toolContracts.map(row=>row.names),contracts);
+  assert.deepEqual(persisted.toolContracts,host.state.toolContracts);
+  assert.ok(host.state.toolContracts.every(row=>row.transport==='native'&&Number.isSafeInteger(row.sequence)));
  }finally{release?.();await host.close();api.closeAllConnections();await new Promise(r=>api.close(r));}
 });
 
@@ -48,7 +52,7 @@ test('background polling, reopening and foreground requests do not count the sam
  globalThis.localStorage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
  globalThis.window=Object.assign(new EventTarget(),{localStorage,setTimeout,clearTimeout});
  globalThis.document=Object.assign(new EventTarget(),{documentElement:{lang:'de'}});
- const server=await createServer({configFile:false,root:process.cwd(),resolve:{alias:{'@':path.resolve('src')}},server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
+ const server=await createServer({configFile:false,root:process.cwd(),resolve:{alias:{'@':path.resolve('src')}},optimizeDeps:{noDiscovery:true,include:[]},server:{middlewareMode:true,hmr:false,watch:null},appType:'custom'});
  let stop;
  t.after(async()=>{stop?.();try{const {flushPersistence}=await server.ssrLoadModule('/src/lib/persist-storage.ts');await flushPersistence().catch(()=>{});}finally{await server.close();delete globalThis.window;delete globalThis.document;delete globalThis.localStorage;}});
  const {useIde}=await server.ssrLoadModule('/src/store/ide.ts');
@@ -110,5 +114,19 @@ test('host rejects duplicate, stale and malformed token messages',async()=>{
   assert.equal(host.state.usageSequence,1);
   host.message({...usage,sequence:2,usage:{prompt:250,completion:40,estimated:false}});
   assert.deepEqual(host.state.usage,{prompt:250,completion:40,estimated:false});
+ }finally{await host.close();}
+});
+
+test('tool advertisement history is bounded metadata and rejects malformed names',async()=>{
+ const root=mkdtempSync(path.resolve('artifacts','tool-contract-host-'));
+ const host=new AgentJobHost({snapshotPath:path.join(root,'state.json'),launch:()=>{throw Error('not used');}});
+ host.state={status:'running',revision:1,requestSequence:0,usageSequence:0};
+ try{
+  for(let sequence=1;sequence<=36;sequence++)host.message({type:'request-tokens',sequence,requestTokens:{prompt:100,limit:32768,estimated:true},toolContract:{transport:sequence%2?'native':'text',names:['read_file','play'],password:'NEVER_COPY'}});
+  assert.equal(host.state.toolContracts.length,32);assert.equal(host.state.toolContractsOmitted,4);
+  assert.equal(host.state.toolContracts[0].sequence,5);assert.equal(host.state.toolContracts.at(-1).sequence,36);
+  assert.ok(!JSON.stringify(host.state.toolContracts).includes('NEVER_COPY'));
+  host.message({type:'request-tokens',sequence:37,requestTokens:{prompt:100,limit:32768,estimated:true},toolContract:{transport:'native',names:['read_file','bad\nname']}});
+  assert.equal(host.state.toolContracts.at(-1).sequence,36);
  }finally{await host.close();}
 });

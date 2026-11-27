@@ -3,6 +3,8 @@ import { normalizeBaseUrl } from "./connection.ts";
 import { AGENT_TOOLS } from "./agent-tools.ts";
 import type { ToolCall } from "./tool-call.ts";
 import { shrinkTools } from "./tool-fallback.ts";
+import { capabilityPage, compactCatalogHistory } from './capability-search.ts';
+import { previewInteractionRequest } from './preview-task.ts';
 
 export type ToolCompatibility = "standard" | "compact" | "text";
 export type ToolContract = { transport: "native" | "text"; names: string[] };
@@ -58,7 +60,7 @@ export function validateToolCall(call: ToolCall, names: string[]): { args: Recor
 }
 
 /** Only a complete answer envelope is executable. Prose, fences, examples and thinking are never scanned. */
-export function parseTextTool(content: string, names: string[]): { calls: ToolCall[]; error?: string } {
+export function parseTextTool(content: string, names: string[], rejectPausedPlan = false): { calls: ToolCall[]; error?: string } {
   const src = content.trim();
   if (!src.startsWith("{")) return { calls: [] };
   try {
@@ -66,6 +68,9 @@ export function parseTextTool(content: string, names: string[]): { calls: ToolCa
     if (!value || !Object.hasOwn(value, "name") || !Object.hasOwn(value, "arguments")) return { calls: [] };
     if (Object.keys(value).sort().join(",") !== "arguments,name" || typeof value.name !== "string") return { calls: [], error: "Use only name and arguments in the tool object." };
     const call: ToolCall = { id: `text_${crypto.randomUUID()}`, type: "function", function: { name: value.name, arguments: JSON.stringify(value.arguments) } };
+    // The loop needs the envelope to return a controlled rejection instead of
+    // terminating text transport. The paused tool cannot reach the executor.
+    if (rejectPausedPlan && value.name === "set_plan") return { calls: [call] };
     const checked = validateToolCall(call, names);
     return checked.error ? { calls: [], error: checked.error } : { calls: [call] };
   } catch { return /"(?:name|arguments)"\s*:/.test(src) ? { calls: [], error: "Tool call must be one complete JSON object." } : { calls: [] }; }
@@ -90,13 +95,23 @@ export function toolCallKey(name: string, args: Record<string, unknown>): string
 }
 
 const BASE = ["read_file", "list_files", "grep", "edit_file", "write_file", "run_file", "ask_user"];
+const CORE = ['select_tools','set_plan','ask_user','read_tool_output'];
 const RELEVANCE: [RegExp, string[]][] = [
-  [/\bmcp\b|server.*tools?/i, ["mcp_list", "mcp_call"]],
-  [/compil|\brun\b|ausführ|starte|testen/i, ["run_file", "see_run"]],
+  [/\.(?:png|blend|fcstd|glb|gltf|stl|step|fbx)\b|\b(?:render|export)\w*\b|dateiprüfung|file verification/i, ["verify_file"]],
+  [/\bmcp\b|\bdienste?\b|\bservices?\b|server.*tools?|freecad|openscad|blender|\bcad\b|notion|linear|studio/i, ["mcp_list", "mcp_call"]],
+  [/compil|\brun\b|\bshell\b|ausführ|starte|test|prüf|\bcheck\b|\bverify\b/i, ["run_file", "see_run","shell"]],
   [/debug|breakpoint|haltepunkt/i, ["debug_state", "debug_start", "debug_step"]],
-  [/\bgit\b|push|commit/i, ["git_status", "git_commit", "git_push"]],
+  [/\bgit\b|repository|push|commit/i, ["git_status", "git_commit", "git_push"]],
   [/engine|godot|unity|unreal/i, ["engine_detect", "engine_status", "engine_run"]],
   [/skill/i, ["skill_list", "skill_read", "skill_run"]],
+  [/skill.*(?:bewert|outcome|nutzung)|(?:bewert|outcome).*skill/i,['skill_outcome']],
+  [/format|einruck|einrück/i,['format_file']],
+  [/https?:|website|webseite|fetch|\burl\b/i,['fetch_url','open_preview']],
+  [/rename|umbenenn|verschieb|\bmove\b/i,['rename']],
+  [/delete|losch|lösch|entfern/i,['delete_file']],
+  [/mkdir|ordner.*(?:erstell|anleg)|create.*(?:folder|director)/i,['mkdir']],
+  [/append|anhang|anhäng|anfug|anfüg/i,['append_file']],
+  [/memory|gedachtnis|gedächtnis|erinner/i,['memory_list','memory_add','memory_forget']],
   [/harness|tafel|board/i, ["harness_read", "board_read", "board_write"]],
 ];
 
@@ -105,32 +120,46 @@ export class ToolSession {
   private selected: string[] = [];
   private available = AGENT_TOOLS;
   private fallback = false;
+  private planUpdatesPaused = false;
   readonly mode: ToolCompatibility;
   readonly task: string;
-  constructor(mode: ToolCompatibility, task: string) { this.mode = mode; this.task = taskText(task); }
+  constructor(mode: ToolCompatibility, task: string, hints: string[] = []) { this.mode = mode; this.task = taskText(task); this.selected = hints.slice(0,12); }
+  pausePlanUpdates(paused: boolean) { this.planUpdatesPaused = paused; }
+  get planUpdatesArePaused() { return this.planUpdatesPaused; }
+  private currentTools() {
+    return this.planUpdatesPaused ? this.available.filter(tool => tool.function.name !== "set_plan") : this.available;
+  }
   tools(available: typeof AGENT_TOOLS): typeof AGENT_TOOLS {
     this.available = available;
-    if (this.mode === "standard") return available;
+    available = this.currentTools();
     const exclusiveMcp = available.some((t) => t.function.name === "mcp_call") && !available.some((t) => t.function.name === "read_file");
-    const priorities = [...(exclusiveMcp ? ["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output"] : []), ...this.selected, ...RELEVANCE.filter(([re]) => re.test(this.task)).flatMap(([, names]) => names), ...BASE];
-    const names = new Set(["select_tools", "ask_user", ...[...new Set(priorities)].filter((name) => name !== "ask_user" && name !== "select_tools" && available.some((t) => t.function.name === name)).slice(0, 6)]);
-    return shrinkTools(available.filter((t) => names.has(t.function.name))) || [];
+    const priorities = [...(exclusiveMcp ? ["mcp_list", "mcp_call", "mcp_read_resource", "mcp_read_output"] : []), ...(previewInteractionRequest(this.task) ? ['play','run_file','see_run'] : []), ...this.selected, ...RELEVANCE.filter(([re]) => re.test(this.task)).flatMap(([, names]) => names), ...BASE];
+    const names = new Set([...CORE, ...(this.mode==='standard'?BASE:[]), ...[...new Set(priorities)].filter((name) => !CORE.includes(name) && available.some((t) => t.function.name === name)).slice(0, this.mode==='standard'?24:6)]);
+    const picked=available.filter((t) => names.has(t.function.name));
+    return this.mode==='standard'?picked:shrinkTools(picked)||[];
   }
   select(names: string[]) {
-    const allowed = new Set(this.available.map((t) => t.function.name));
+    const allowed = new Set(this.currentTools().map((t) => t.function.name));
     const invalid = names.filter((name) => !allowed.has(name));
     if (invalid.length) return { error: `Unavailable tools: ${invalid.join(", ")}` };
-    if (names.length) this.selected = names.filter((name) => name !== "select_tools");
-    return { ok: true, selected: this.selected, available: this.available.map((t) => ({ name: t.function.name, description: t.function.description.slice(0, 100) })) };
+    if (names.length) this.selected = [...new Set([...names,...this.selected])].filter((name) => name !== "select_tools").slice(0,24);
+    return { ok: true, selected: this.selected.filter(name => !this.planUpdatesPaused || name !== "set_plan") };
+  }
+  selectAvailable(names:string[]) { const tools = this.currentTools(); return this.select(names.filter(name=>tools.some(tool=>tool.function.name===name))); }
+  search(options:{query?:string;cursor?:string;limit?:number}={}) {
+    const rows=this.currentTools().map(t=>({id:t.function.name,name:t.function.name,description:t.function.description}));
+    const page=capabilityPage(rows,options);
+    if(options.query?.trim())this.select(page.items.map(row=>row.name));
+    return {available:page.items.map(({name,description})=>({name,description:description.slice(0,180)})),total:page.total,nextCursor:page.nextCursor};
   }
   get text() { return this.mode === "text" || this.fallback; }
   prepare(payload: Record<string, unknown>) {
-    if (this.mode === "standard" || !Array.isArray(payload.messages)) return;
+    if (!Array.isArray(payload.messages)) return;
     const marker = "\nTool selection for this request:";
-    const instruction = `${marker}\nOnly the offered tools are available on this request. Skip flow steps whose tool is absent. select_tools({"names":[]}) lists other allowed tools; select_tools({"names":[...]}) makes up to 6 of them available on the next request without executing them. Use that when a needed tool is missing. A final answer or a question needs no tool.`;
-    const messages = (payload.messages as Record<string, unknown>[]).map((m) => ({ ...m }));
+    const instruction = `${marker}\n${this.planUpdatesPaused ? "Checklist updates are paused until the next successful work action." : "Core tools stay available."} More permitted capabilities are loaded on demand: select_tools({"query":"describe the needed capability","scope":"all"}) searches native tools, MCP connections and skills; scope can be tools, mcp or skills. Exact names can be loaded with names:[...]. This discovers only; it executes no action and grants no permissions. For a selected skill use skill_read before applying its guide. Missing capabilities remain searchable; never silently skip required work. A final answer or a question needs no tool.`;
+    const messages = compactCatalogHistory(payload.messages as Record<string, unknown>[]).map((m) => ({ ...m }));
     const system = messages.find((m) => m.role === "system" && typeof m.content === "string");
-    if (system) system.content = String(system.content).split(marker)[0] + instruction;
+    if (system) { if(!String(system.content).endsWith(instruction))system.content = String(system.content) + instruction; }
     else messages.unshift({ role: "system", content: instruction.trim() });
     payload.messages = messages;
   }

@@ -371,7 +371,7 @@ export function scanMarkdown(src: string): SyntaxToken[] {
       out.push({ text: line, kind: "punct" });
       continue;
     }
-    if (/^[\-*+] /.test(line) || /^\d+\. /.test(line)) {
+    if (/^[-*+] /.test(line) || /^\d+\. /.test(line)) {
       const sp = line.indexOf(" ");
       out.push({ text: line.slice(0, sp + 1), kind: "op" });
       out.push({ text: line.slice(sp + 1), kind: "text" });

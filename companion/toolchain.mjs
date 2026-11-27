@@ -1,9 +1,10 @@
 /** Portable compilers into <anvil-home>/toolchains — not the Anvil install, not Wandbox. */
 import { spawn, execFileSync } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, realpathSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolveToolchainArtifact, verifyToolchainDownload } from "./toolchain-download.mjs";
 import { toolHome } from "./paths.mjs";
+import { makeAnvilTemp, rmDir, rmSoon } from "./tmp.mjs";
 
 export { toolHome };
 export const TOOL_HOME = toolHome();
@@ -114,7 +115,7 @@ export function resolveBin(bin) {
   const aliases = {
     cc: ["cc", "gcc", "clang"],
     cxx: ["c++", "g++", "clang++"],
-    python: ["python3", "python", "py"],
+    python: WIN ? ["python", "python3", "py"] : ["python3", "python", "py"],
     tsc: ["tsc"],
   };
   const names = aliases[bin] || [bin];
@@ -227,16 +228,6 @@ async function download(url, dest) {
   }
 }
 
-async function downloadWithFallback(url, fallback, dest) {
-  try {
-    await download(url, dest);
-  } catch (err) {
-    if (!fallback || fallback === url) throw err;
-    pull.phase = "download";
-    await download(fallback, dest);
-  }
-}
-
 function unzip(zip, dest) {
   mkdirSync(dest, { recursive: true });
   const ms = 5 * 60 * 1000;
@@ -277,25 +268,6 @@ function spawnWait(file, args, opts = {}) {
   });
 }
 
-async function latestGo() {
-  const list = await (await fetch("https://go.dev/dl/?mode=json")).json();
-  const ver = list[0];
-  const osName = WIN ? "windows" : process.platform === "darwin" ? "darwin" : "linux";
-  const arch = ARCH === "arm64" ? "arm64" : "amd64";
-  const f = ver.files.find((x) => x.os === osName && x.arch === arch && x.kind === "archive");
-  if (!f) throw new Error("Kein Go-Archiv für dieses System");
-  return `https://go.dev/dl/${f.filename}`;
-}
-
-async function latestNode() {
-  const list = await (await fetch("https://nodejs.org/dist/index.json")).json();
-  const lts = list.find((x) => x.lts);
-  const v = lts.version;
-  if (WIN) return `https://nodejs.org/dist/${v}/node-${v}-win-${ARCH === "arm64" ? "arm64" : "x64"}.zip`;
-  const plat = process.platform === "darwin" ? "darwin" : "linux";
-  return `https://nodejs.org/dist/${v}/node-${v}-${plat}-${ARCH === "arm64" ? "arm64" : "x64"}.tar.gz`;
-}
-
 function zigPlat() {
   if (WIN) return ARCH === "arm64" ? "aarch64-windows" : "x86_64-windows";
   if (process.platform === "darwin") return ARCH === "arm64" ? "aarch64-macos" : "x86_64-macos";
@@ -319,54 +291,10 @@ export function zigGithubUrl(ver, plat = zigPlat()) {
   return `https://github.com/ziglang/zig/releases/download/${ver}/${zigArchiveName(ver, plat)}`;
 }
 
-function semverDesc(a, b) {
-  const pa = String(a).split(".").map((n) => Number(n) || 0);
-  const pb = String(b).split(".").map((n) => Number(n) || 0);
-  return pb[0] - pa[0] || pb[1] - pa[1] || (pb[2] || 0) - (pa[2] || 0);
-}
-
-async function fetchJson(url, ms = 15000) {
-  const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(ms) });
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${url}`);
-  return r.json();
-}
-
-async function latestZig() {
-  const plat = zigPlat();
-  const fallbackVer = "0.14.1";
-  try {
-    const j = await fetchJson("https://ziglang.org/download/index.json", 12000);
-    const vers = Object.keys(j).filter((k) => k !== "master" && /^\d+\.\d+/.test(k) && j[k]?.[plat]?.tarball);
-    vers.sort(semverDesc);
-    const ver = vers[0];
-    if (ver) {
-      return { url: String(j[ver][plat].tarball), fallback: zigGithubUrl(ver, plat), ver };
-    }
-  } catch {
-    /* GitHub */
-  }
-  return { url: zigGithubUrl(fallbackVer, plat), fallback: "", ver: fallbackVer };
-}
-
-function phpUrl() {
-  if (!WIN) throw new Error("PHP-Zip nur Windows. Auf Linux: Paketmanager.");
-  return "https://windows.php.net/downloads/releases/latest/php-8.3-nts-Win32-vs16-x64-latest.zip";
-}
-
-function pythonUrl() {
-  if (!WIN) throw new Error("Python-Embed nur Windows. Auf Linux liegt python3 meist schon da.");
-  return "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip";
-}
-
 function jdkUrl() {
   if (WIN) return "https://aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip";
   if (process.platform === "darwin") return "https://aka.ms/download-jdk/microsoft-jdk-21-macos-x64.tar.gz";
   return "https://aka.ms/download-jdk/microsoft-jdk-21-linux-x64.tar.gz";
-}
-
-function rubyUrl() {
-  if (!WIN) throw new Error("Ruby-Installer nur Windows.");
-  return "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-3.3.8-1/rubyinstaller-3.3.8-1-x64.exe";
 }
 
 function rustupUrl() {
@@ -385,13 +313,15 @@ export async function pullToolchain(id) {
   pull.total = 0;
   pull.abort = false;
   const dest = dirOf(spec.kind);
-  const tmp = path.join(os.tmpdir(), "anvil-tc-" + spec.kind);
+  let tmp;
   try {
     mkdirSync(toolHome(), { recursive: true });
-    mkdirSync(tmp, { recursive: true });
+    tmp = makeAnvilTemp("tc");
     if (spec.kind === "rust") {
       const init = path.join(tmp, WIN ? "rustup-init.exe" : "rustup-init.sh");
-      await download(rustupUrl(), init);
+      const artifact = WIN ? await resolveToolchainArtifact("rustup") : null;
+      await download(artifact?.url || rustupUrl(), init);
+      if (artifact) await verifyToolchainDownload(init, artifact);
       throwIfAbort();
       pull.phase = "install";
       const cargo = path.join(dest, "cargo");
@@ -415,21 +345,15 @@ export async function pullToolchain(id) {
       }
     } else if (spec.kind === "ruby") {
       const exe = path.join(tmp, "ruby-setup.exe");
-      await download(rubyUrl(), exe);
+      const artifact = await resolveToolchainArtifact("ruby");
+      await download(artifact.url, exe);
+      await verifyToolchainDownload(exe, artifact);
+      throwIfAbort();
       mkdirSync(dest, { recursive: true });
       await spawnWait(exe, ["/verysilent", `/dir=${dest}`, "/tasks="]);
     } else {
-      let url = "";
-      let fallback = "";
-      if (spec.kind === "go") url = await latestGo();
-      else if (spec.kind === "node") url = await latestNode();
-      else if (spec.kind === "zig") {
-        const z = await latestZig();
-        url = z.url;
-        fallback = z.fallback;
-      } else if (spec.kind === "php") url = phpUrl();
-      else if (spec.kind === "python") url = pythonUrl();
-      else if (spec.kind === "jdk") url = jdkUrl();
+      const artifact = spec.kind === "jdk" ? null : await resolveToolchainArtifact(spec.kind);
+      const url = artifact?.url || (spec.kind === "jdk" ? jdkUrl() : "");
       if (!url) throw new Error("Keine URL");
       const ext = url.endsWith(".tar.xz") || url.endsWith(".txz")
         ? ".tar.xz"
@@ -439,7 +363,8 @@ export async function pullToolchain(id) {
             ? ".exe"
             : ".zip";
       const zip = path.join(tmp, "pack" + ext);
-      await downloadWithFallback(url, fallback, zip);
+      await download(url, zip);
+      if (artifact) await verifyToolchainDownload(zip, artifact);
       throwIfAbort();
       pull.phase = "unpack";
       rmSync(dest, { recursive: true, force: true });
@@ -471,11 +396,7 @@ export async function pullToolchain(id) {
   } finally {
     busy = null;
     if (pull.phase !== "done") pull.phase = pull.abort ? "abort" : pull.phase;
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* */
-    }
+    if (tmp && !rmDir(tmp)) rmSoon(tmp);
   }
 }
 

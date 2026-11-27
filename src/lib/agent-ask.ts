@@ -1,3 +1,5 @@
+import type { WorkflowSnapshot } from "./agent-workflow";
+import { validWorkflowSnapshot } from "../../electron/workflow-validation.mjs";
 export type JobAskChoice = { id: string; label: string };
 
 export type JobAsk = {
@@ -10,6 +12,13 @@ export type JobAsk = {
   blocking: "hard" | "soft";
 };
 
+export type JobHumanContext = {
+  version: 1;
+  project: string;
+  request: string;
+  corrections: { id: string; text: string }[];
+};
+
 export type AgentJob = {
   id: string;
   status: "run" | "ask" | "paused";
@@ -18,6 +27,8 @@ export type AgentJob = {
   ask: JobAsk | null;
   at: number;
   mode?: "ask" | "agent";
+  workflow?: WorkflowSnapshot;
+  human?: JobHumanContext;
 };
 
 const LETTERS = "ABCDE";
@@ -98,6 +109,57 @@ export function isAskAnswer(text: string): boolean {
   return /^Antwort auf:/i.test(String(text ?? "").trim());
 }
 
+/** Question and choice labels come from the model; only the user's extra text can change permissions. */
+export function askAnswerHumanText(ask: JobAsk, text: string): string {
+  if (!isAskAnswer(text)) return text.trim();
+  const lines = text.trim().split("\n");
+  if (lines.shift() !== `Antwort auf: ${ask.prompt}`) return "";
+  if (lines[0]?.startsWith("Wahl: ")) lines.shift();
+  return lines.join("\n").trim();
+}
+
+export function normalizeJobHumanContext(value: unknown): JobHumanContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const context = value as JobHumanContext;
+  if (context.version !== 1 || typeof context.project !== "string" || !context.project || context.project.length > 4000 ||
+      typeof context.request !== "string" || !context.request.trim() || context.request.length > 128000 ||
+      !Array.isArray(context.corrections) || context.corrections.length > 256) return;
+  const seen = new Set<string>();
+  for (const correction of context.corrections) {
+    if (!correction || typeof correction.id !== "string" || !/^[-\w:.]{1,120}$/.test(correction.id) || seen.has(correction.id) ||
+        typeof correction.text !== "string" || !correction.text.trim() || correction.text.length > 8000) return;
+    seen.add(correction.id);
+  }
+  return { version: 1, project: context.project, request: context.request, corrections: context.corrections.map(({ id, text }) => ({ id, text })) };
+}
+
+export function newJobHumanContext(project: string, request: string): JobHumanContext {
+  const context = normalizeJobHumanContext({ version: 1, project, request, corrections: [] });
+  if (!context) throw Error("Projekt oder Auftrag ist ungültig oder zu lang. Dein Entwurf bleibt erhalten.");
+  return context;
+}
+
+export function extendJobHumanContext(context: JobHumanContext, text: string, id: string = globalThis.crypto.randomUUID()): JobHumanContext {
+  if (!text.trim()) return context;
+  const previous = context.corrections.find(correction => correction.id === id);
+  if (previous) {
+    if (previous.text !== text.trim()) throw Error("Die Kennung der Nutzerkorrektur wurde bereits verwendet.");
+    return context;
+  }
+  const next = normalizeJobHumanContext({ ...context, corrections: [...context.corrections, { id, text: text.trim() }] });
+  if (!next) throw Error("Die Nutzerkorrekturen sind zu lang oder zu zahlreich. Dein Entwurf bleibt erhalten.");
+  return next;
+}
+
+export function resumeJobHumanContext(job: AgentJob, project: string, correction: string): JobHumanContext {
+  const existing = normalizeJobHumanContext(job.human);
+  if (job.human && !existing) throw Error("Die gespeicherten Nutzeranweisungen sind ungültig. Starte einen neuen Auftrag.");
+  if (existing && existing.project !== project) throw Error("Dieser Auftrag gehört zu einem anderen Projekt. Dein Entwurf bleibt erhalten.");
+  // Older saved jobs have no full human request. A neutral continuation must not invent permission from their short goal or model history.
+  const context = existing ?? newJobHumanContext(project, "Resume the saved task by inspection and reporting. Do not change or repair files.");
+  return extendJobHumanContext(context, correction);
+}
+
 export function askCorrection(ask: JobAsk, choiceId?: string, text?: string): string {
   const want = str(choiceId);
   const choice = ask.choices.find((c) => c.id === want || c.label === want);
@@ -138,14 +200,17 @@ export function normalizeJob(raw: unknown, opts?: { revive?: boolean }): AgentJo
   const o = raw as Record<string, unknown>;
   const status = o.status === "ask" || o.status === "paused" || o.status === "run" ? o.status : null;
   if (!status) return null;
-  if (opts?.revive && status === "run") return null;
+  if (opts?.revive && status === "run" && !validWorkflowSnapshot(o.workflow)) return null;
   const ask = status === "ask" ? normalizeAsk(o.ask) : null;
   if (opts?.revive && status === "ask" && !ask) return null;
   const goal = str(o.goal).slice(0, 240);
   const id = str(o.id).slice(0, 40) || `job-${Date.now().toString(36)}`;
   const rounds = typeof o.rounds === "number" && Number.isFinite(o.rounds) ? Math.max(0, Math.round(o.rounds)) : 0;
   const at = typeof o.at === "number" && Number.isFinite(o.at) ? o.at : Date.now();
-  return { id, status: opts?.revive && status === "ask" ? "ask" : status, goal, rounds, ask, at,
+  const human = normalizeJobHumanContext(o.human);
+  return { id, status: opts?.revive && status === "run" ? "paused" : status, goal, rounds, ask, at,
     ...(o.mode === "ask" || o.mode === "agent" ? { mode: o.mode } : {}),
+    ...(validWorkflowSnapshot(o.workflow) ? { workflow: o.workflow as WorkflowSnapshot } : {}),
+    ...(human ? { human } : {}),
   };
 }

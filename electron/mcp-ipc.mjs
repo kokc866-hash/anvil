@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { handleOnce } from "./ipc.mjs";
 import { McpHost, mcpConfig } from "./mcp-host.mjs";
 import { McpOAuth } from "./mcp-oauth.mjs";
+import { sharedAgentResourceGate } from './resource-gate.mjs';
 
 const owners = new Map();
 // Credentials are app-wide. Sharing the OAuth generation guard prevents a
@@ -136,11 +137,20 @@ export function bindMcpIpc(isTrusted) {
     )
       return { ok: false, error: "Ungültige oder bereits laufende MCP-Anfrage." };
     const controller = new AbortController();
+    let resourceLease;
     try {
       const config = mcpConfig(request.server);
+      resourceLease = sharedAgentResourceGate.acquire(`foreground:${e.sender.id}:renderer`, 'external');
       state.jobs.set(id, { controller, server: config.id });
       let value;
-      if (
+      if (request.method === "bearer/logout") {
+        if (config.auth !== "bearer") throw new Error("Dieser Dienst verwendet keinen API-Schlüssel.");
+        for (const owner of owners.values())
+          for (const [jobId, job] of owner.jobs)
+            if (job.server === config.id && !(owner === state && jobId === id)) job.controller.abort();
+        await Promise.allSettled([...owners.values()].map(owner => owner.host.close(config.id)));
+        value = { authenticated: false };
+      } else if (
         ["oauth/login", "oauth/logout", "oauth/status", "oauth/reopen"].includes(request.method)
       ) {
         if (config.transport !== "http") throw new Error("OAuth benötigt HTTP.");
@@ -190,6 +200,7 @@ export function bindMcpIpc(isTrusted) {
       };
     } finally {
       state.jobs.delete(id);
+      if (resourceLease) sharedAgentResourceGate.release(resourceLease.leaseId, resourceLease.owner);
     }
   });
   handleOnce("mcp-cancel", (e, id) => {

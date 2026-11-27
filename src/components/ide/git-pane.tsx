@@ -9,6 +9,8 @@ import { overlayDiskTree } from "@/lib/ws-skip";
 import { openOsWorkspace, writeTreeToDisk } from "@/lib/workspace-open";
 import { nativeHelper } from "@/lib/helper-local";
 import { useIde } from "@/store/ide";
+import { WorktreePane } from './worktree-pane';
+import { TaskReviewPane } from './task-review-pane';
 
 function applyTreeKeep(files?: Record<string, string>, dirs?: string[]) {
   if (!files) return;
@@ -36,29 +38,52 @@ export function GitPane() {
   const setGithubToken = useIde((s) => s.setGithubToken);
   const setNotice = useIde((s) => s.setNotice);
   const workspaceCwd = useIde((s) => s.workspaceCwd);
+  const workspaceEpoch = useIde((s) => s.workspaceEpoch);
+  const workspaceNative = useIde((s) => s.workspaceNative);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; path?: string; commit?: string } | null>(null);
-  const [live, setLive] = useState<GitStatus | null>(null);
+  const [liveStatus, setLiveStatus] = useState<{ cwd: string; epoch: number; value: GitStatus } | null>(null);
   const [branchName, setBranchName] = useState("");
   const dirtyPaths = Object.keys(dirty).filter(Boolean);
+  const live = liveStatus?.cwd === workspaceCwd && liveStatus.epoch === workspaceEpoch ? liveStatus.value : null;
   const liveOn = Boolean(workspaceCwd && live?.ok && live.repo);
 
-  async function refreshLive(cwd = workspaceCwd) {
-    if (!cwd) {
-      setLive(null);
-      return;
+  function setLive(value: GitStatus) {
+    const current = useIde.getState();
+    if (workspaceCwd === current.workspaceCwd && workspaceEpoch === current.workspaceEpoch) {
+      setLiveStatus({ cwd: workspaceCwd, epoch: workspaceEpoch, value });
     }
-    await holdCompanion();
-    const st = await companionGit("status", { cwd });
-    setLive(st);
-    if (!useIde.getState().companionKeep) await releaseCompanion();
+  }
+
+  async function refreshLive(cwd = workspaceCwd) {
+    const initial = useIde.getState(), base = initial.companionUrl || undefined;
+    if (!cwd || cwd !== initial.workspaceCwd) return;
+    const currentStatus = (value: GitStatus) => {
+      const current = useIde.getState();
+      if (initial.workspaceEpoch === current.workspaceEpoch && cwd === current.workspaceCwd && initial.companionUrl === current.companionUrl) {
+        setLiveStatus({ cwd, epoch: initial.workspaceEpoch, value });
+      }
+    };
+    let held = false;
+    try {
+      held = await holdCompanion(cwd, base);
+      currentStatus(await companionGit("status", { cwd }, base));
+    } catch (error) {
+      currentStatus({ ok: false, error: error instanceof Error ? error.message : "Git-Status konnte nicht geladen werden." });
+    } finally {
+      if (held) await releaseCompanion().catch(() => undefined);
+    }
   }
 
   useEffect(() => {
+    if (!workspaceCwd || workspaceNative) {
+      setLiveStatus(null);
+      return;
+    }
     void refreshLive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceCwd]);
+  }, [workspaceCwd, workspaceNative]);
 
   async function pickWorkspace() {
     setBusy(true);
@@ -70,7 +95,6 @@ export function GitPane() {
       }
       if (r.skipped) setNotice(`${r.n} Dateien, ${r.skipped} übersprungen`);
       else if (r.n) setNotice(`${r.n} Dateien von ${r.cwd}`);
-      await refreshLive(r.cwd);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Ordner fehlgeschlagen");
     } finally {
@@ -252,6 +276,18 @@ export function GitPane() {
         ) : (
           <p className="mb-2 text-xs text-subtle">Öffne in der Desktop-App einen Projektordner, um Git zu verwenden. Ohne Projektordner verwaltet Anvil eigene Sicherungsstände.</p>
         )}
+        {workspaceNative && workspaceCwd ? (
+          <Button
+            className="mb-2 h-8 text-xs"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void refreshLive().finally(() => setBusy(false));
+            }}
+          >
+            Git-Status laden
+          </Button>
+        ) : null}
         {live?.error ? <p className="mb-2 text-xs text-danger">{live.error}</p> : null}
         {live?.error && /git fehlt/i.test(live.error) ? (
           <Button
@@ -295,6 +331,9 @@ export function GitPane() {
             Git-Repository erstellen
           </Button>
         ) : null}
+
+        {liveOn ? <WorktreePane onChanged={() => void refreshLive().catch(error => setNotice(String(error)))} /> : null}
+        <TaskReviewPane />
 
         {pending.length > 0 ? (
           <div className="mb-4">
@@ -379,7 +418,7 @@ export function GitPane() {
                 </li>
               ))}
             </ul>
-            <Button className="mb-3 h-8 text-xs" onClick={() => void import("@/lib/fix-agent").then((m) => m.askGit())}>
+            <Button className="mb-3 h-8 text-xs" onClick={() => void import("@/lib/fix-agent").then((m) => m.askGit(changed.map(row => row.path)))}>
               Änderungen vom Agenten prüfen lassen
             </Button>
           </>
@@ -617,7 +656,7 @@ export function GitPane() {
               ? [
                   { label: "Öffnen", onClick: () => openFile(menu.path!) },
                   { label: "Pfad kopieren", onClick: () => void navigator.clipboard.writeText(menu.path!) },
-                  { label: "Änderungen vom Agenten prüfen lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askGit()) },
+                  { label: "Änderungen vom Agenten prüfen lassen", onClick: () => void import("@/lib/fix-agent").then((m) => m.askGit([menu.path!])) },
                   { sep: true, label: "" },
                   { label: "Änderung verwerfen", danger: true, onClick: () => revertFile(menu.path!) },
                 ]

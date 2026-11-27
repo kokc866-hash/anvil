@@ -1,3 +1,4 @@
+import { agentMessageContent } from '@/lib/agent-output';
 import { runFile } from "@/lib/run-client";
 
 import { isSecretPath, REF_DIR, safeRefName } from "@/lib/ref";
@@ -56,22 +57,22 @@ function saveRef(name: string, content: string, mode: "write" | "append" = "writ
 function transcript(): string {
   return useIde
     .getState()
-    .chat.map((m) => `## ${m.role}\n\n${m.content.trim()}`)
+    .chat.map((m) => `## ${m.role}\n\n${agentMessageContent(m).trim()}`)
     .join("\n\n");
 }
 
 export const chatSel = { a: 0, b: 0 };
 
-function insertDraft(text: string) {
+function insertDraft(text: string, selection: typeof chatSel) {
   const st = useIde.getState();
   const cur = st.agentDraft;
   const el = document.getElementById("anvil-chat") as HTMLTextAreaElement | null;
-  const a = Math.min(chatSel.a, cur.length);
-  const b = Math.min(chatSel.b, cur.length);
+  const a = Math.max(0, Math.min(selection.a, cur.length));
+  const b = Math.max(a, Math.min(selection.b, cur.length));
   const next = `${cur.slice(0, a)}${text}${cur.slice(b)}`;
   st.setAgentDraft(next);
   requestAnimationFrame(() => {
-    if (!el) return;
+    if (!el || useIde.getState().workspaceEpoch !== st.workspaceEpoch || useIde.getState().agentDraft !== next) return;
     el.focus();
     const n = a + text.length;
     el.setSelectionRange(n, n);
@@ -92,43 +93,70 @@ function blobDataUrl(blob: Blob): Promise<string> {
 async function readChatClipboard(): Promise<{ text: string; images: string[] }> {
   const native = nativeHelper();
   if (native?.clipboardRead) {
-    const r = await native.clipboardRead();
-    return { text: r.text || "", images: r.image ? [r.image] : [] };
+    try {
+      const r = await native.clipboardRead();
+      if (typeof r?.text === "string" && typeof r?.image === "string") return { text: r.text, images: r.image ? [r.image] : [] };
+    } catch {
+      // A missing or unavailable native handler must not block browser paste.
+    }
   }
   const images: string[] = [];
   let text = "";
+  let readable = false;
+  const web = typeof navigator === "undefined" ? undefined : navigator.clipboard;
   try {
-    if (navigator.clipboard.read) {
-      const items = await navigator.clipboard.read();
+    if (web?.read) {
+      const items = await web.read();
+      readable = items.length === 0;
       for (const item of items) {
         for (const type of item.types) {
-          if (type.startsWith("image/")) images.push(await blobDataUrl(await item.getType(type)));
-          else if (type === "text/plain" && !text) text = await (await item.getType(type)).text();
+          try {
+            if (type.startsWith("image/") && images.length < 4) {
+              const image = await blobDataUrl(await item.getType(type));
+              if (image && !images.includes(image)) images.push(image);
+              readable = true;
+            } else if (type === "text/plain" && !text) {
+              text = await (await item.getType(type)).text();
+              readable = true;
+            }
+          } catch {
+            // Keep other readable formats if one representation is unavailable.
+          }
         }
       }
     }
   } catch {
     /* */
   }
-  if (!text) {
+  if (!text && web?.readText) {
     try {
-      text = await navigator.clipboard.readText();
+      text = await web.readText();
+      readable = true;
     } catch {
       /* */
     }
   }
+  if (!readable && !text && !images.length) throw new Error("Clipboard access unavailable.");
   return { text, images: images.filter(Boolean).slice(0, 4) };
 }
 
 async function pasteIntoChat(addImages: (urls: string[]) => void) {
   const st = useIde.getState();
+  const selection = { ...chatSel };
+  const current = () => {
+    const now = useIde.getState();
+    return now.workspaceEpoch === st.workspaceEpoch && now.workspaceCwd === st.workspaceCwd
+      && now.agentDraft === st.agentDraft && now.chat[0]?.id === st.chat[0]?.id;
+  };
   try {
     const { text, images } = await readChatClipboard();
+    if (!current()) return;
+    if (st.notice === t("chatClipboardEmpty") || st.notice === t("chatClipboardReadFailed")) st.setNotice("");
     if (images.length) addImages(images);
-    if (text) insertDraft(text);
-    if (!text && !images.length) st.setNotice("Die Zwischenablage ist leer.");
+    if (text) insertDraft(text, selection);
+    if (!text && !images.length) st.setNotice(t("chatClipboardEmpty"));
   } catch {
-    st.setNotice("Die Zwischenablage konnte nicht gelesen werden.");
+    if (current()) st.setNotice(t("chatClipboardReadFailed"));
   }
 }
 
@@ -214,8 +242,9 @@ export function chatMenu(menu: ChatMenu, extra?: { addImages: (urls: string[]) =
       },
     ];
   }
-  const m = st.chat.find((x) => x.id === menu.id);
-  if (!m) return [];
+  const stored = st.chat.find((x) => x.id === menu.id);
+  if (!stored) return [];
+  const m = { ...stored, content: agentMessageContent(stored) };
   const items: CtxItem[] = [
     { label: t("copy"), onClick: () => void navigator.clipboard.writeText(menu.selection || m.content) },
     { label: t("chatCopyMd"), onClick: () => void navigator.clipboard.writeText(`## ${m.role}\n\n${m.content}`) },

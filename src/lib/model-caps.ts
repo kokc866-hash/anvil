@@ -91,6 +91,7 @@ function seed(provider: string, model: string): Partial<ModelCap> {
     return { responsesApi: true };
   }
   if (provider === "llamacpp" || provider === "ollama") return {};
+  if (provider === "qwen" || provider === "deepseek") return { noRequired: true };
   return {};
 }
 
@@ -98,7 +99,7 @@ export function getCap(provider: string, model: string, baseUrl = ""): ModelCap 
   const k = capKey(provider, model, baseUrl);
   if (!k || k === "::") return empty();
   const hit = load()[k];
-  if (hit) return { ...empty(), ...hit };
+  if (hit) return { ...empty(), ...hit, ...(["qwen", "deepseek"].includes(provider) ? { noRequired: true } : {}) };
   return { ...empty(), ...seed(provider, model) };
 }
 
@@ -133,6 +134,12 @@ export function capLabel(cap: ModelCap): string {
 
 export function classifyLlmError(status: number, body: string): Partial<ModelCap> | null {
   const t = `${status} ${body}`;
+  // Some OpenAI-compatible gateways reject native tool-result continuations
+  // with this exact runtime error, even when the original user turn is present.
+  // Adapt the existing tool transport; never invent a new task or replay a tool.
+  if ([400, 422, 500].includes(status) && /no user query found in messages/i.test(body)) {
+    return { tools: "text", note: "Werkzeugfortsetzung als Text" };
+  }
   if (status !== 400 && status !== 422) return null;
   const patch: Partial<ModelCap> = { note: "" };
   let hit = false;
@@ -159,7 +166,7 @@ export function classifyLlmError(status: number, body: string): Partial<ModelCap
     patch.note = patch.note || "ohne Stream";
     hit = true;
   }
-  if (!patch.noThinkWithTools && /does not support tools|unknown field.*\btools\b|tools are not enabled|tool use is not supported|\"tools\".*unexpected/i.test(t)) {
+  if (!patch.noThinkWithTools && /does not support tools|unknown field.*\btools\b|tools are not enabled|tool use is not supported|"tools".*unexpected/i.test(t)) {
     patch.tools = "text";
     patch.note = "Tools als Text";
     hit = true;
@@ -188,7 +195,7 @@ export function noteToolSuccess(provider: string, model: string, baseUrl: string
 }
 
 export function applyCapToPayload(payload: Record<string, unknown>, cap: ModelCap, toolsOn: boolean): boolean {
-  let tools = toolsOn && cap.tools !== "off" && cap.tools !== "text";
+  const tools = toolsOn && cap.tools !== "off" && cap.tools !== "text";
   if (!tools) {
     delete payload.tools;
     delete payload.tool_choice;

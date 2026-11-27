@@ -1,7 +1,63 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyLlmOptions, applyResponsesStore, clampMaxOut, needsCompletionTokens, normalizeThinking, patchResponses400, responsesBody, toResponsesInput, usesResponsesApi } from "./llm-options.ts";
+import { applyLlmOptions, applyResponsesStore, clampMaxOut, needsCompletionTokens, normalizeThinking, patchResponses400, responsesBody, toResponsesInput, toolDetail, usesResponsesApi } from "./llm-options.ts";
 import { effectiveThinking, thinkingModes } from "../../electron/thinking-support.mjs";
+import { prepChatPayload } from "./compact.ts";
+
+test("MCP trace keeps the target and redacts the rejection reason", () => {
+  const args = { server: 'mcp:blender-local', name: 'execute_blender_code', arguments: { code: 'private input' } };
+  const target = 'mcp:blender-local.execute_blender_code';
+  assert.equal(toolDetail('mcp_call', args, { ok: true, text: 'private tool output' }), target);
+  const detail = toolDetail('mcp_call', args, { ok: false, error: 'Nur prüfen. Authorization: Bearer fake-token-for-mcp-tests' });
+  assert.match(detail, /execute_blender_code.*Nur prüfen\./);
+  assert.doesNotMatch(detail, /fake-token|private input/);
+  assert.match(toolDetail('mcp_call', args, { isError: true, text: 'Blender: Kamera fehlt.' }), /Kamera fehlt/);
+});
+
+test("Qwen cloud uses documented effort levels and never sends mutually exclusive reasoning controls", () => {
+  assert.deepEqual(thinkingModes("qwen", "qwen3.8-flash"), ["off", "auto", "low", "medium", "xhigh"]);
+  assert.equal(thinkingModes("qwen", "qwen3.8-2.4t-a95b").includes("off"), false);
+  assert.deepEqual(thinkingModes("qwen", "qwen3-coder-next"), ["auto"]);
+  assert.deepEqual(thinkingModes("qwen", "unknown-future"), ["auto"]);
+  const make = (model: string, thinking: "off" | "auto" | "low" | "medium" | "high" | "xhigh") => applyLlmOptions({ stream: true }, { provider: "qwen", model, thinking, context: 131072 });
+  const modern = make("qwen3.8-flash", "medium");
+  assert.equal(modern.reasoning_effort, "medium");
+  assert.equal(modern.thinking_budget, undefined);
+  assert.equal(modern.enable_thinking, true);
+  assert.deepEqual(modern.stream_options, { include_usage: true });
+  assert.equal(make("qwen3.8-max", "off").enable_thinking, false);
+  assert.equal(make("qwen3.8-max", "auto").reasoning_effort, undefined);
+  assert.equal(make("qwen3.8-max", "auto").enable_thinking, undefined);
+  const legacy = make("qwen3.5-plus", "high");
+  assert.equal(legacy.enable_thinking, true);
+  assert.ok(Number(legacy.thinking_budget) > 0);
+  assert.equal(legacy.reasoning_effort, undefined);
+  const unknown = make("unknown-future", "high");
+  assert.equal(unknown.enable_thinking, undefined);
+  assert.equal(unknown.reasoning_effort, undefined);
+});
+
+test("DeepSeek current aliases expose off, auto and the native low/high/max effort", () => {
+  assert.deepEqual(thinkingModes("deepseek", "deepseek-flash"), ["off", "auto", "low", "high", "max"]);
+  const p = applyLlmOptions({}, { provider: "deepseek", model: "deepseek-flash", thinking: "max", context: 131072 });
+  assert.deepEqual(p.thinking, { type: "enabled" });
+  assert.equal(p.reasoning_effort, "max");
+  assert.equal(p.temperature, undefined, "temperature is ignored in DeepSeek thinking mode");
+});
+
+test("cloud tool histories preserve reasoning_content separately, without changing messages or other providers", () => {
+  const messages = [{ role: "assistant", content: "", reasoning: "fixture reasoning", tool_calls: [{ id: "c", type: "function", function: { name: "read_file", arguments: "{}" } }] }, { role: "tool", tool_call_id: "c", content: "fixture" }];
+  const before = JSON.stringify(messages);
+  for (const provider of ["qwen", "deepseek"]) {
+    const payload = applyLlmOptions({ messages }, { provider, model: "unknown", thinking: "auto", context: 32768 }, { tools: true });
+    const wire = payload.messages as Record<string, unknown>[];
+    assert.equal(wire[0].reasoning_content, "fixture reasoning");
+    assert.equal(wire[0].reasoning, undefined);
+    assert.equal(wire[0].content, "");
+  }
+  assert.equal(JSON.stringify(messages), before);
+  assert.equal(applyLlmOptions({ messages }, { provider: "ollama", model: "qwen3.8", thinking: "auto", context: 32768 }).messages, messages);
+});
 
 test("Fable explicit effort uses adaptive thinking, never a legacy budget", () => {
   const p = applyLlmOptions({}, { provider: "anthropic", model: "claude-fable-5", context: 200000, thinking: "high" });
@@ -273,6 +329,46 @@ test("local temperature and n_ctx go on the wire", () => {
   assert.equal(p.max_tokens, 1024);
 });
 
+test("local OpenAI thinking preserves a standard total output limit while Ollama keeps its native options", () => {
+  for (const provider of ["custom", "llamacpp", "lmstudio", "vllm", "localai"]) {
+    for (const thinking of ["auto", "off", "high"] as const) {
+      const p = applyLlmOptions({}, { provider, model: "qwen3.8", context: 131072, thinking, maxOut: 4096 });
+      assert.equal(p.max_tokens, 4096, `${provider}/${thinking}`);
+      assert.equal(p.max_completion_tokens, undefined);
+    }
+  }
+  const native = applyLlmOptions({}, { provider: "ollama", model: "qwen3.8", context: 131072, thinking: "high", maxOut: 4096 });
+  assert.equal(native.max_tokens, undefined);
+  assert.equal((native.options as {num_predict:number}).num_predict, 4096);
+});
+
+test("native llama.cpp uses its actual budget field without inventing chat-template effort support", () => {
+  const make = (thinking: "off" | "auto" | "high") => applyLlmOptions({}, { provider: "llamacpp", model: "qwen3.8", thinking, context: 131072, maxOut: 4096 });
+  const high = make("high");
+  assert.equal(high.reasoning_budget_tokens, 4096);
+  assert.equal(high.reasoning_budget, undefined);
+  assert.equal(high.reasoning_effort, undefined);
+  assert.equal(make("off").reasoning_budget_tokens, 0);
+  assert.equal(make("off").enable_thinking, false);
+  assert.equal(make("auto").reasoning_effort, undefined);
+});
+test("context fitting keeps native and wrapper reasoning budgets within the sent output limit", () => {
+  for (const provider of ["custom", "llamacpp"]) {
+    const runtime = { provider, model: "qwen3.8", thinking: "high" as const, context: 8192, maxOut: 16384 };
+    const payload = applyLlmOptions({ messages: [{ role: "user", content: "Synthetic fitting fixture." }] }, runtime);
+    prepChatPayload(payload, runtime.context);
+    const max = Number(payload.max_tokens), budget = Number(payload.reasoning_budget_tokens ?? payload.reasoning_budget);
+    assert.ok(max > 0 && max < 8192);
+    assert.ok(budget <= max);
+    assert.equal((payload.options as {num_predict:number}).num_predict, max);
+    assert.equal(runtime.maxOut, 16384, "fitting must not rewrite the saved setting");
+  }
+  const disabled = { messages: [{role:"user",content:"Synthetic fixture."}], max_tokens: 512, reasoning_budget: 0, reasoning_budget_tokens: -1 };
+  prepChatPayload(disabled, 8192);
+  assert.equal(disabled.reasoning_budget, 0);
+  assert.equal(disabled.reasoning_budget_tokens, -1);
+});
+
 test("qwen thinking on does not rewrite the prompt", () => {
   const p = applyLlmOptions(
     { model: "qwen3", messages: [{ role: "user", content: "hi" }] },
@@ -342,6 +438,14 @@ test("explicit local output is not capped to a percentage of context", () => {
     assert.equal((payload.options as { num_predict: number }).num_predict, 16384);
     assert.equal(payload.stream_options, undefined);
   }
+});
+
+test("DeepSeek represents absent prior reasoning explicitly without inventing or copying answer text", () => {
+  const messages = [{ role: "assistant", content: "An earlier plain-text summary." }];
+  const p = applyLlmOptions({ messages, tools: [] }, { provider: "deepseek", model: "deepseek-flash", context: 131072, thinking: "auto" });
+  assert.equal((p.messages as Record<string, unknown>[])[0].reasoning_content, "");
+  assert.equal((p.messages as Record<string, unknown>[])[0].content, messages[0].content);
+  assert.equal(Object.hasOwn(messages[0], "reasoning_content"), false);
 });
 
 test("request streamed usage on OpenAI without changing Anthropic or legacy local wire formats", () => {

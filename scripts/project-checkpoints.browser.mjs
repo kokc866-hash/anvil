@@ -20,7 +20,7 @@ async function launch(){
   await page.waitForFunction(()=>window.__anvilIde?.persist.hasHydrated());
 }
 try {
-  for(let i=0;i<120;i++){try{if((await fetch(`http://127.0.0.1:${port}/`)).ok)break;}catch{} await pause(250);}
+  for(let i=0;i<120;i++){try{if((await fetch(`http://127.0.0.1:${port}/`)).ok)break;}catch{ /* Retry while the production server is starting. */ } await pause(250);}
   await launch();
   await writeFile(path.join(project,"unopened.bin"),Buffer.from([0,255,17,3]));
   const id=randomUUID();

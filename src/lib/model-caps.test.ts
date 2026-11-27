@@ -20,6 +20,21 @@ test("gpt-5 seeds responsesApi", () => {
   assert.equal(getCap("xai", "grok-4.5").responsesApi, false);
 });
 
+test("Qwen and DeepSeek begin with automatic tool choice while keeping thinking enabled", () => {
+  for (const provider of ["qwen", "deepseek"]) {
+    resetCap(provider, "future-model-fixture");
+    const cap = getCap(provider, "future-model-fixture");
+    const payload = { tools: [1], tool_choice: "required", reasoning_effort: "high", stream: true };
+    applyCapToPayload(payload, cap, true);
+    assert.equal(payload.tool_choice, "auto", provider);
+    assert.equal(payload.reasoning_effort, "high");
+    assert.equal(cap.noThinkWithTools, false);
+    setCap(provider, "future-model-fixture", { noRequired: false, tools: "ok" });
+    assert.equal(getCap(provider, "future-model-fixture").noRequired, true, "Older learned capabilities must not restore an unsupported tool choice.");
+    resetCap(provider, "future-model-fixture");
+  }
+});
+
 test("classify thinking+tools 400", () => {
   const p = classifyLlmError(
     400,

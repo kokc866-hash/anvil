@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 
-import { LEARN_DEFAULTS, useLearn, type LearnPrefs } from "@/lib/learn";
+import { LEARN_DEFAULTS, openSkillLibrary, useLearn, type LearnPrefs } from "@/lib/learn";
+import { useIde } from "@/store/ide";
 
 import { SettingsSection, Head, Vis, Row, Seg, Toggle } from "./fields";
 
@@ -21,7 +22,7 @@ export function LearnSection({ q }: { q: string }) {
         {facts.length} Fakten · {skills.length} Skills · {negs.length} Einschränkungen · {events.length} Protokolleinträge
       </p>
       <Vis q={q} label="Lernen merken an aus">
-        <Row label="Gedächtnis verwenden" hint="Wenn ausgeschaltet, speichert Anvil kein neues Wissen und gibt keine Gedächtnisinhalte an den Agenten weiter.">
+        <Row label="Gedächtnis verwenden" hint="Wenn ausgeschaltet, speichert Anvil keine neuen Erinnerungen und gibt keine persönlichen oder projektbezogenen Gedächtnisinhalte an den Agenten weiter. Skills bleiben unabhängig davon einstellbar.">
           <Toggle on={on} onChange={(v) => useLearn.getState().setOn(v)} />
         </Row>
       </Vis>
@@ -51,13 +52,19 @@ export function LearnSection({ q }: { q: string }) {
           <Toggle on={p.negatives} onChange={(v) => setPref("negatives", v)} />
         </Row>
       </Vis>
+      <Head>Skills · unabhängig vom Gedächtnis</Head>
       <Vis q={q} label="Skills Liste Prompt">
-        <Row label="Verfügbare Skills nennen" hint="Teilt dem Agenten Namen und Einsatzzwecke der Skills mit, damit er passende Anleitungen verwenden kann.">
+        <Row label="Skills verwenden" hint="Stellt dem Agenten Anvil-Skills und freigegebene Projekt-Skills zur Verfügung. Die Bibliothek findest du unter Erweiterungen → Skills.">
           <Toggle on={p.skills} onChange={(v) => setPref("skills", v)} />
         </Row>
       </Vis>
+      <Vis q={q} label="Skills automatisch auswählen">
+        <Row label="Passende Skills automatisch auswählen" hint="Wählt automatisch bis zu zwei passende Anleitungen vor. Ausdrücklich genannte und angeheftete Skills werden zusätzlich berücksichtigt und funktionieren auch ohne Automatik.">
+          <Toggle on={p.skillAuto} onChange={(v) => setPref("skillAuto", v)} />
+        </Row>
+      </Vis>
       <Vis q={q} label="Skill Body Anweisung Tokens">
-        <Row label="Skill-Anleitungen mitsenden" hint="Sendet den vollständigen Text passender Skills an das Modell. Dadurch wird mehr Kontext belegt.">
+        <Row label="Skill-Anleitungen bei Bedarf laden" hint="Der Agent kann die Anleitung eines ausgewählten Skills und einzelne Referenzen lesen. Die vollständige Bibliothek wird nicht bei jeder Anfrage mitgesendet.">
           <Toggle on={p.skillBodies} onChange={(v) => setPref("skillBodies", v)} />
         </Row>
       </Vis>
@@ -74,18 +81,8 @@ export function LearnSection({ q }: { q: string }) {
           />
         </Row>
       </Vis>
-      <Vis q={q} label="Skills Limit Anzahl">
-        <Row label="Skills pro Anfrage">
-          <Seg
-            value={String(p.skillLimit)}
-            onChange={(v) => setPref("skillLimit", Number(v))}
-            options={[
-              { id: "2", label: "2" },
-              { id: "5", label: "5" },
-              { id: "8", label: "8" },
-            ]}
-          />
-        </Row>
+      <Vis q={q} label="Skills Bibliothek verwalten importieren">
+        <Button variant="quiet" onClick={() => { useIde.getState().setSettingsOpen(false); openSkillLibrary(); }}>Skill-Bibliothek öffnen</Button>
       </Vis>
       <Head>Automatik</Head>
       <Vis q={q} label="Destillieren Fakten aus Nutzung">
@@ -109,8 +106,8 @@ export function LearnSection({ q }: { q: string }) {
           <Button className="h-8" onClick={() => useLearn.getState().clearLog()}>
             Protokoll leeren
           </Button>
-          <Button className="h-8" onClick={() => useLearn.getState().clear()}>
-            Gespeichertes Wissen löschen
+          <Button className="h-8" onClick={() => useLearn.getState().clearMemories()}>
+            Gespeicherte Erinnerungen löschen
           </Button>
           <Button className="h-8" onClick={() => useLearn.getState().resetPrefs()}>
             Einstellungen zurücksetzen

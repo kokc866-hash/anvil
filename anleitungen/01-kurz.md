@@ -4,7 +4,7 @@ Anvil ist eine lokale Entwicklungsumgebung mit Editor, KI-Agent und Programmausf
 
 ## Start
 
-**Windows, Release 1.3.29:** [Anvil 1.3.29](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.29) → **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; Node.js muss dafür nicht installiert werden. Beide Pakete sind bewusst unsigniert. Die GitHub-Dateien „Source code“ sind keine fertige Anwendung.
+**Windows:** [Aktuelle Veröffentlichung](https://github.com/kokc866-hash/anvil/releases/latest) → **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; Node.js muss dafür nicht installiert werden. Die bisherige Auslieferung ist bewusst unsigniert. Die GitHub-Dateien „Source code“ sind keine fertige Anwendung. Diese Anleitung beschreibt den lokalen Quellstand 1.3.35 vom 4. Oktober 2026; neue Funktionen benötigen eine gesonderte Veröffentlichung.
 
 Für die Entwicklung aus dem Quellcode:
 

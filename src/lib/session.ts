@@ -29,7 +29,7 @@ export const EMPTY_JOURNAL: SessionJournal = {
 };
 
 const PATH_RE =
-  /(?:^|[\s`\[('"])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][\w]*|[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|cs|php|rb|md|html|css|json|vue|svelte|sql|toml|ya?ml))/g;
+  /(?:^|[\s`[('"])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][\w]*|[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|cs|php|rb|md|html|css|json|vue|svelte|sql|toml|ya?ml))/g;
 const SKIP_FILE = /(^|\/)(node_modules|\.git|\.env|package-lock|pnpm-lock|yarn\.lock)/i;
 const CORRECT_RE = /\b(nicht so|nicht mehr|nicht verwenden|kein[e]? |ohne |statt |don't|do not|never |lass das|no more|nicht [A-ZÄÖÜa-zäöü])/i;
 const OPEN_RE = /\b(todo|offen|noch |fehlt|left to|next:|danach )\b/i;
@@ -94,7 +94,9 @@ function uniqCap(xs: string[], cap: number): string[] {
 function taskLooksNew(next: string, prev: string): boolean {
   if (!prev || next === prev) return false;
   if (/^(?:(?:ok(?:ay)?|ja|bitte)[,!. ]*)?(?:mach(?:e)? weiter|weiter(?:machen)?|fortsetzen|continue|go on|reparieren(?: und nichts kaputt machen)?|korrigieren|push(?: und release)?|release)[.! ]*$/i.test(next.trim())) return false;
-  if (CORRECT_RE.test(next)) return false;
+  // A constraint later in a build request does not turn its positive goal into
+  // a correction of the previous task.
+  if (/^(?:bitte\s+)?(?:nicht\b|kein\w*\b|ohne\b|statt\b|don't\b|do not\b|never\b|lass das\b|no more\b)/i.test(next)) return false;
   if (!/^(?:neue[rns]? (?:aufgabe|auftrag|thema)|anderes (?:problem|thema)|jetzt (?:ein|eine|bauen|schreibe|erstelle)|build |create |schreibe |erstelle |bau(?:e)? )/i.test(next)) return false;
   if (next.startsWith(prev.slice(0, 24))) return false;
   const words = (s: string) => new Set(s.toLowerCase().split(/\s+/).filter((w) => w.length > 3));
@@ -115,6 +117,7 @@ export function parseSessionFile(text: string): SessionJournal {
     .replace(/^Dateien:.*$/m, "")
     .replace(/^Fest:.*$/m, "")
     .replace(/^Nicht:.*$/m, "")
+    .replace(/^Vorgaben:.*$/m, "")
     .replace(/^Offen:.*$/m, "")
     .replace(/^Nachrichten:.*$/m, "")
     .replace(/^Runden:.*$/m, "")
@@ -126,7 +129,7 @@ export function parseSessionFile(text: string): SessionJournal {
     goal: grab("Ziel"),
     files: split(grab("Dateien"), /,\s*/),
     decisions: split(grab("Fest"), /\s·\s/),
-    corrections: split(grab("Nicht"), /\s·\s/),
+    corrections: split(grab("Vorgaben") || grab("Nicht"), /\s·\s/),
     open: split(grab("Offen"), /\s·\s/),
     notes,
     turns,
@@ -182,11 +185,13 @@ export function extractJournal(
   const open: string[] = [...base.open];
   const noteBits: string[] = [];
   let goal = base.goal;
+  let previousFiles = base.files;
+  let previousNotes = base.notes;
   let users = 0;
 
   for (const m of messages) {
     const role = String(m.role ?? "");
-    const text = messageText(m);
+    const text = messageText(m).replace(/^\[Anvil current user request; preserve the complete text\]\s*/, "");
     harvestPaths(text, files);
     toolPaths(m as Record<string, unknown>, files);
     if (Array.isArray(m.steps)) {
@@ -206,9 +211,19 @@ export function extractJournal(
       const one = task.replace(/\s+/g, " ").slice(0, 240);
       if (one.length >= 8 && !one.startsWith("[")) {
         if (!goal) goal = one;
-        else if (!CORRECT_RE.test(text) && taskLooksNew(one, goal)) goal = one;
+        else if (taskLooksNew(one, goal)) {
+          goal = one;
+          decisions.length = corrections.length = open.length = noteBits.length = 0;
+          previousFiles = [];
+          previousNotes = "";
+          files.clear(); harvestPaths(text, files);
+        }
       }
-      if (CORRECT_RE.test(text)) corrections.push(text.replace(/\s+/g, " ").trim().slice(0, 160));
+      // Preserve complete constraint clauses, not an entire positive task
+      // merely because one of its later requirements contains "ohne/nicht".
+      for (const clause of task.split(/\r?\n|(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean)) {
+        if (CORRECT_RE.test(clause)) corrections.push(clause.replace(/\s+/g, " ").slice(0, 1000));
+      }
       if (OPEN_RE.test(text) && one.length < 160) open.push(one);
     } else if (role === "assistant") {
       const one = text.replace(/\s+/g, " ").trim();
@@ -218,11 +233,11 @@ export function extractJournal(
     }
   }
 
-  const notes = mergeNotes(base.notes, ...noteBits);
+  const notes = mergeNotes(previousNotes, ...noteBits);
 
   return {
     goal,
-    files: uniqCap([...files].reverse().concat(base.files), 48),
+    files: uniqCap([...files].reverse().concat(previousFiles), 48),
     decisions: uniqCap([...decisions.slice(base.decisions.length).reverse(), ...base.decisions], 16),
     corrections: uniqCap([...corrections.slice(base.corrections.length).reverse(), ...base.corrections], 16),
     open: uniqCap([...open.slice(base.open.length).reverse(), ...base.open], 10),
@@ -233,7 +248,8 @@ export function extractJournal(
 }
 
 export function beginJournal(work: string, prev?: SessionJournal | null): SessionJournal {
-  const one = String(work || "").replace(/\s+/g, " ").trim().slice(0, 240);
+  work = String(work || "").replace(/^\[Anvil current user request; preserve the complete text\]\s*/, "");
+  const one = work.replace(/\s+/g, " ").trim().slice(0, 240);
   const cur = normalizeJournal(prev);
   if (/^Antwort auf:/i.test(one)) return cur;
   if (cur.goal && !/^Antwort auf:/i.test(cur.goal) && !taskLooksNew(one, cur.goal)) return { ...extractJournal([{ role: "user", content: work }], cur), turns: cur.turns };
@@ -249,6 +265,7 @@ export function mergeJournal(a: SessionJournal | null | undefined, b: SessionJou
   const right = normalizeJournal(b);
   if (isJournalEmpty(right)) return left;
   if (isJournalEmpty(left)) return right;
+  if (right.goal && taskLooksNew(right.goal, left.goal)) return right;
   return {
     goal: right.goal || left.goal,
     files: uniqCap([...right.files, ...left.files], 48),
@@ -268,7 +285,7 @@ export function formatJournal(j: SessionJournal): string {
     n.goal ? `Ziel: ${n.goal}` : "",
     n.files.length ? `Dateien: ${n.files.join(", ")}` : "",
     n.decisions.length ? `Fest: ${n.decisions.join(" · ")}` : "",
-    n.corrections.length ? `Nicht: ${n.corrections.join(" · ")}` : "",
+    n.corrections.length ? `Vorgaben: ${n.corrections.join(" · ")}` : "",
     n.open.length ? `Offen: ${n.open.join(" · ")}` : "",
     n.notes ? n.notes : "",
   ]
@@ -281,7 +298,7 @@ export function journalPrompt(j: SessionJournal | null | undefined): string {
   const body = formatJournal(j);
   if (!body.trim()) return "";
   const runden = j.turns ? `, ${j.turns} Runden` : "";
-  return `Sitzung (gilt weiter, auch nach Compacting${runden}):\n${body}`;
+  return `Sitzungskontext (Zusammenfassung${runden}; der aktuelle Nutzerauftrag hat Vorrang):\n${body}`;
 }
 
 export function sessionFileText(j: SessionJournal, chatLen = 0): string {

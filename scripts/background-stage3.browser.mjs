@@ -72,7 +72,6 @@ const env = {
   ANVIL_PORT: String(port),
   ANVIL_QA_USER_DATA: profile,
   ANVIL_HOME: path.join(profile, "packages"),
-  ANVIL_WATCHDOG: "0",
 };
 delete env.ELECTRON_RUN_AS_NODE;
 const until = async (check, label = "condition") => {
@@ -374,7 +373,7 @@ try {
     const deadline = setTimeout(() => proc?.kill(), 8000);
     try {
       await app.close();
-    } catch {}
+    } catch { /* The app may already be closed; the deadline handles a hung process. */ }
     clearTimeout(deadline);
   }
   model.closeAllConnections();

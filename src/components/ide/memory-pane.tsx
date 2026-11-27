@@ -2,9 +2,8 @@ import { legacyProject } from "@/lib/learn-parse";
 import { useState } from "react";
 import { Brain, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { profile, useLearn, workspaceId } from "@/lib/learn";
+import { openSkillLibrary, profile, useLearn, workspaceId } from "@/lib/learn";
 import { formatJournal, isJournalEmpty, EMPTY_JOURNAL } from "@/lib/session";
-import { debugSkill } from "@/lib/skill-debug";
 import { cn } from "@/lib/cn";
 import { useIde } from "@/store/ide";
 
@@ -18,19 +17,17 @@ export function MemoryPane() {
   const forgetFact = useLearn((s) => s.forgetFact);
   const forgetSkill = useLearn((s) => s.forgetSkill);
   const forgetNeg = useLearn((s) => s.forgetNeg);
-  const writeSkill = useLearn((s) => s.writeSkill);
   const addFact = useLearn((s) => s.addFact);
-  const clear = useLearn((s) => s.clear);
+  const clear = useLearn((s) => s.clearMemories);
   const setSidebar = useIde((s) => s.setSidebar);
   const p = profile();
   useIde(s => s.memoryWorkspace);
   const ws = workspaceId();
   const assignLegacy = useLearn(s => s.assignLegacy);
-  const [tab, setTab] = useState<"person" | "project" | "session" | "skills" | "neg" | "log" | "legacy">("person");
+  const [tab, setTab] = useState<"person" | "project" | "session" | "neg" | "log" | "legacy">("person");
   const [draft, setDraft] = useState("");
   const person = facts.filter((f) => f.scope !== "project" && f.kind !== "project" && !/^Nicht so \(/.test(f.text));
   const proj = facts.filter((f) => (f.scope === "project" || f.kind === "project" || /^Nicht so \(/.test(f.text)) && f.ws === ws);
-  const shownSkills = skills.filter((s) => s.scope !== "project" || s.ws === ws);
   const shownNegs = negs.filter(n => n.ws === ws);
   const legacy = [
     ...facts.filter(f => (f.scope === "project" || f.kind === "project" || /^Nicht so \(/.test(f.text)) && legacyProject(f.ws)).map(f => ({ id: f.id, text: f.text, ws: f.ws, forget: forgetFact })),
@@ -67,7 +64,6 @@ export function MemoryPane() {
             ["person", "Persönlich"],
             ["project", "Projekt"],
             ["session", "Sitzung"],
-            ["skills", "Skills"],
             ["neg", "Vermeiden"],
             ["log", "Protokoll"],
             ["legacy", "Nicht zugeordnet"],
@@ -83,6 +79,7 @@ export function MemoryPane() {
           </button>
         ))}
       </div>
+      <button type="button" className="border-b border-border px-3 py-2 text-left text-[11px] text-muted hover:text-fg" onClick={openSkillLibrary}>Skills verwalten →</button>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2 text-xs">
         {tab === "legacy" ? <>
           <p className="mb-2 text-muted">Alte Projekteinträge bleiben erhalten. Ordne sie nur zu, wenn sie zu diesem Projekt gehören.</p>
@@ -118,34 +115,7 @@ export function MemoryPane() {
                   </button>
                 </div>
               )
-          : tab === "skills"
-            ? shownSkills.map((s) => {
-                const dbg = debugSkill(s);
-                return (
-                <div key={s.id} className="mb-1.5 rounded-md border border-border px-2 py-1.5">
-                  <div className="flex items-start gap-2">
-                    <p className="min-w-0 flex-1 font-medium text-fg">{s.name}</p>
-                    <button type="button" className="text-subtle hover:text-fg" onClick={() => forgetSkill(s.id)}>
-                      ×
-                    </button>
-                  </div>
-                  <p className="text-muted">{s.when}</p>
-                  <p className="mt-1 whitespace-pre-wrap font-mono text-[10px] text-subtle">{s.body.slice(0, 280)}</p>
-                  <p className="text-[10px] text-subtle">
-                    {s.scope} · {Math.round((s.score ?? 0.5) * 100)}% · {s.wins ?? 0} ok / {s.fails ?? 0} fail
-                    {dbg.ok ? " · ok" : ""}
-                  </p>
-                  {!dbg.ok
-                    ? dbg.issues.map((i) => (
-                        <p key={i} className="text-[10px] text-danger">
-                          {i}
-                        </p>
-                      ))
-                    : null}
-                </div>
-                );
-              })
-            : tab === "neg"
+          : tab === "neg"
               ? shownNegs.map((n) => (
                   <div key={n.id} className="mb-1.5 flex gap-2 rounded-md border border-border px-2 py-1.5">
                     <p className="min-w-0 flex-1 font-mono text-muted">
@@ -164,7 +134,6 @@ export function MemoryPane() {
                 ))}
         {tab === "person" && person.length === 0 ? <p className="text-muted">Noch keine persönlichen Informationen gespeichert.</p> : null}
         {tab === "project" && proj.length === 0 ? <p className="text-muted">Noch keine Projekt-Fakten für {ws}.</p> : null}
-        {tab === "skills" && shownSkills.length === 0 ? <p className="text-muted">Keine Skills für {ws}.</p> : null}
         {tab === "neg" && shownNegs.length === 0 ? <p className="text-muted">Keine abgelehnten Muster.</p> : null}
       </div>
       {tab !== "session" && tab !== "log" && tab !== "neg" && tab !== "legacy" ? (
@@ -174,15 +143,14 @@ export function MemoryPane() {
           e.preventDefault();
           const t = draft.trim();
           if (!t) return;
-          if (tab === "skills") writeSkill({ name: t.split(":")[0] ?? "skill", when: t, body: t, kind: "guide" });
-          else if (tab === "project") addFact("project", t, 0.9);
+          if (tab === "project") addFact("project", t, 0.9);
           else addFact("user", t, 0.9);
           setDraft("");
         }}
       >
         <input
           value={draft}
-          placeholder={tab === "skills" ? "Neuer Skill" : tab === "project" ? "Projekt-Fakt" : "Person-Fakt"}
+          placeholder={tab === "project" ? "Projekt-Fakt" : "Person-Fakt"}
           className="h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 text-xs text-fg outline-none"
           onChange={(e) => setDraft(e.target.value)}
         />
@@ -198,7 +166,7 @@ export function MemoryPane() {
           clear();
         }}
       >
-        Gelerntes vergessen
+        Erinnerungen löschen
       </button>
     </div>
   );

@@ -1,5 +1,6 @@
 import { withAgentTimeout } from "./abort";
 import { loadSecrets, saveSecrets } from "./secrets";
+import { captureNativeRunScope, reportUncertainNativeRun, watchNativeRun, type NativeRunObservation, type NativeRunScope } from "./native-run";
 
 export type ToolchainInfo = {
   id: string;
@@ -39,6 +40,8 @@ export type CompanionJob = {
   cmd: string;
   stage?: { kind: "html" | "window" | "log"; out?: string; id?: string };
   running?: boolean;
+  requestId?: string;
+  uncertain?: boolean;
 };
 
 export type CompanionDiag = {
@@ -62,6 +65,52 @@ export type LspPack = {
 
 export const DEFAULT_COMPANION = "http://127.0.0.1:7845";
 export const DEFAULT_ENGINE_MCP = "http://127.0.0.1:7845/mcp";
+
+export type LanguageUpdateItem = {
+  id: string;
+  label: string;
+  kind: "runtime" | "language-server";
+  provider: string;
+  installed: string | null;
+  latest: string | null;
+  location: "anvil" | "system" | "missing";
+  path?: string | null;
+  backup?: boolean;
+  channel?: string;
+  managedBy?: string;
+  source?: string;
+  checkedAt: number;
+  status: "update" | "new-series" | "current" | "newer-installed" | "unknown" | "bundled" | "provider-reference" | "not-installed" | "error";
+  error?: string;
+};
+
+export type LanguageUpdateState = {
+  home: string;
+  automatic: boolean;
+  checking: boolean;
+  intervalHours: number;
+  checkedAt: number;
+  lastAttemptAt: number;
+  nextCheckAt: number | null;
+  updateCount: number;
+  errorCount: number;
+  incomplete?: boolean;
+  items: LanguageUpdateItem[];
+  error?: string;
+};
+
+export async function companionLanguageUpdates(base = DEFAULT_COMPANION,
+  action?: { action: "check"; manual?: boolean } | { action: "configure"; automatic: boolean }): Promise<LanguageUpdateState> {
+  const response = await fetch(`${base.replace(/\/$/, "")}/v1/language-updates`, {
+    method: action ? "POST" : "GET", headers: headers(), ...(action ? { body: JSON.stringify(action) } : {}),
+    signal: AbortSignal.timeout(action?.action === "check" ? 150000 : 8000),
+  });
+  const data = await response.json();
+  if (response.status === 404) throw new Error("Der verbundene Companion unterstützt die Update-Prüfung noch nicht. Aktualisiere den Companion und prüfe erneut.");
+  if (!response.ok || data.ok !== true || !Array.isArray(data.items))
+    throw new Error(data.error || "Sprachupdates konnten nicht geladen werden. Companion aktualisieren und erneut prüfen.");
+  return data as LanguageUpdateState;
+}
 
 export type EnginePaths = { godot: string; unity: string; unreal: string };
 export async function companionEnginePaths(base = DEFAULT_COMPANION, configured?: EnginePaths): Promise<{configured: EnginePaths; bins: Record<string, string | null>}> {
@@ -118,12 +167,13 @@ export function pairCompanion(base = DEFAULT_COMPANION): Promise<string> {
   });
 }
 
-export async function companionPing(base = DEFAULT_COMPANION): Promise<CompanionInfo> {
+export async function companionPing(base = DEFAULT_COMPANION, signal?: AbortSignal): Promise<CompanionInfo> {
   try {
+    signal?.throwIfAborted();
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/ping`, {
       method: "GET",
       headers: headers(),
-      signal: AbortSignal.timeout(8000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
     });
     const j = (await r.json()) as CompanionInfo;
     if (r.status === 401) return { ok: false, needToken: true, error: j.error || "Token fehlt" };
@@ -137,18 +187,80 @@ export async function companionPing(base = DEFAULT_COMPANION): Promise<Companion
 export async function companionRun(
   body: { cwd?: string; cmd: string; action?: "play" | "check" | "editor" | "test"; timeoutMs?: number },
   base = DEFAULT_COMPANION,
+  signal: AbortSignal = withAgentTimeout(0),
 ): Promise<CompanionJob> {
+  if (!body.action) return rawCompanionRun(body, base, signal);
+  signal.throwIfAborted();
+  const scope = captureNativeRunScope(), requestId = crypto.randomUUID();
+  const root = base.replace(/\/$/, ""), key = `engine-request:${root}:${requestId}`;
+  const requestHeaders = headers(), label = `Engine · ${body.action}`;
+  let dispatched = false;
+  const { withForegroundResource, releaseForegroundResource } = await import("./external-resource");
+  const observe = (recover = false, id?: string) => watchNativeRun({ key, id, scope, label, recover,
+    read: () => readNativeRunStatus({ requestId }, root, requestHeaders), release: () => releaseForegroundResource(key) });
+  try {
+    const value = await withForegroundResource(
+      () => rawCompanionRun(body, root, signal, { requestId, headers: requestHeaders, dispatch: () => { dispatched = true; } }),
+      result => result.running ? key : undefined,
+      () => dispatched ? key : undefined,
+    );
+    if (value.running) observe(false, value.stage?.id);
+    return value;
+  } catch (error) {
+    if (dispatched) { reportUncertainNativeRun(scope, key, label, error); observe(true); }
+    throw error;
+  }
+}
+async function rawCompanionRun(body:{cwd?:string;cmd:string;action?:'play'|'check'|'editor'|'test';timeoutMs?:number},base:string,signal:AbortSignal,
+  request?: { requestId: string; headers: Record<string, string>; dispatch: () => void }):Promise<CompanionJob>{
+  signal.throwIfAborted();
+  request?.dispatch();
   const r = await fetch(`${base.replace(/\/$/, "")}/v1/run`, {
     method: "POST",
-    headers: headers(),
-    body: JSON.stringify(body),
-    signal: withAgentTimeout(Math.min(120000, Math.max(8000, body.timeoutMs ?? 90000))),
+    headers: request?.headers || headers(),
+    body: JSON.stringify({ ...body, ...(request ? { requestId: request.requestId } : {}) }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(Math.min(120000, Math.max(8000, body.timeoutMs ?? 90000)))]),
   });
   if (!r.ok) {
     const t = await r.text();
+    if (request) throw new Error(`Engine-Startantwort HTTP ${r.status}: ${t.slice(0, 1000)}`);
     return { ok: false, code: r.status, stdout: "", stderr: t.slice(0, 4000), duration: 0, cmd: body.cmd };
   }
-  return r.json() as Promise<CompanionJob>;
+  const data = await r.json() as CompanionJob;
+  const result = request ? nativeRunResult(data) : data;
+  if (request) {
+    if (result.requestId !== request.requestId) throw new Error("Companion hat die Engine-Startkennung nicht bestätigt. Companion aktualisieren; der Startstatus bleibt unbekannt.");
+  }
+  return result;
+}
+
+function nativeRunResult(input: unknown): CompanionJob {
+  const value = input as Partial<CompanionJob> & { command?: string };
+  const cmd = value && (typeof value.cmd === "string" ? value.cmd : value.command);
+  // Older compile records called this field command and omitted running on a completed log.
+  const running = typeof value?.running === "boolean" ? value.running : value?.stage?.kind === "log" && typeof value.code === "number" ? false : undefined;
+  if (!value || typeof value.ok !== "boolean" || typeof value.stdout !== "string" || typeof value.stderr !== "string" ||
+    typeof cmd !== "string" || !Number.isFinite(value.duration) || typeof running !== "boolean")
+    throw new Error("Companion hat keinen bestätigten Prozessstatus geliefert.");
+  return { ...value, cmd, running } as CompanionJob;
+}
+
+async function readNativeRunStatus(target: { id?: string; requestId?: string }, base: string, requestHeaders = headers(), signal = AbortSignal.timeout(5000)): Promise<NativeRunObservation> {
+  const query = target.requestId ? `requestId=${encodeURIComponent(target.requestId)}` : `id=${encodeURIComponent(target.id || "")}`;
+  const response = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?${query}`, { headers: requestHeaders, signal });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+  if (target.requestId && result.requestId !== target.requestId) throw new Error("Prozessstatus gehört zu einem anderen Engine-Start.");
+  if (target.requestId && result.pending === true) return result as NativeRunObservation;
+  if (target.id && result.stage?.id !== target.id) throw new Error("Prozessstatus gehört zu einer anderen Run-ID.");
+  return nativeRunResult(result);
+}
+
+/** Compile runs already have a known run ID; polling uses captured headers without selecting a workspace. */
+export function watchCompanionRun(id: string, base = DEFAULT_COMPANION, scope: NativeRunScope = captureNativeRunScope()): void {
+  const root = base.replace(/\/$/, ""), key = `engine:${root}:${id}`, requestHeaders = headers();
+  watchNativeRun({ key, id, scope, read: () => readNativeRunStatus({ id }, root, requestHeaders),
+    release: async () => { const { releaseForegroundResource } = await import("./external-resource"); await releaseForegroundResource(key); } });
 }
 
 export type ToolPull = {
@@ -414,13 +526,16 @@ export async function companionGit(
   action: string,
   body: Record<string, unknown> = {},
   base = DEFAULT_COMPANION,
+  signal?: AbortSignal,
 ): Promise<GitStatus> {
   try {
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(action === "push" || action === "pull" || action === "clone" ? 180000 : 20000);
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/git`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ action, ...body }),
-      signal: AbortSignal.timeout(action === "push" || action === "pull" || action === "clone" ? 180000 : 20000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
     return (await r.json()) as GitStatus;
   } catch (e) {
@@ -428,13 +543,33 @@ export async function companionGit(
   }
 }
 
-export async function companionWorkspace(cwd: string, base = DEFAULT_COMPANION): Promise<{ ok: boolean; cwd?: string; error?: string }> {
+export async function companionWorktrees(
+  action: import('./worktrees').WorktreeAction,
+  body: { cwd: string; id?: string; name?: string; expectedRevision?: string },
+  base = DEFAULT_COMPANION,
+  signal?: AbortSignal,
+): Promise<import('./worktrees').WorktreeReply> {
   try {
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(90000);
+    const response = await fetch(`${base.replace(/\/$/, '')}/v1/worktrees`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ ...body, action }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+    return await response.json() as import('./worktrees').WorktreeReply;
+  } catch (error) {
+    return { ok: false, aborted: Boolean(signal?.aborted), error: signal?.aborted ? 'Arbeitsstand-Aktion abgebrochen. Bereits erstellte Dateien bleiben erhalten.' : error instanceof Error ? error.message : 'Arbeitsstände nicht erreichbar.' };
+  }
+}
+
+export async function companionWorkspace(cwd: string, base = DEFAULT_COMPANION, signal?: AbortSignal): Promise<{ ok: boolean; cwd?: string; error?: string }> {
+  try {
+    signal?.throwIfAborted();
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/workspace`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ cwd }),
-      signal: AbortSignal.timeout(8000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
     });
     return (await r.json()) as { ok: boolean; cwd?: string; error?: string };
   } catch (e) {
@@ -456,6 +591,16 @@ export async function companionTree(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Baum fehlgeschlagen" };
   }
+}
+
+export async function companionWorkspaceResults(cwd: string, base = DEFAULT_COMPANION) {
+  const response = await fetch(`${base.replace(/\/$/, "")}/v1/results?cwd=${encodeURIComponent(cwd)}`, {
+    headers: headers(),
+    signal: AbortSignal.timeout(10000),
+  });
+  const result = await response.json() as import("./native-workspace").WorkspaceResults | { ok: false; error?: string };
+  if (!result.ok || !response.ok) throw new Error(!result.ok && result.error || "Projektdateien konnten nicht ermittelt werden.");
+  return result;
 }
 
 export async function companionWriteFile(path: string, content: string, cwd?: string, base = DEFAULT_COMPANION, expected?: string | null): Promise<boolean> {
@@ -546,34 +691,44 @@ export type DebugSnap = {
   stderr?: string;
   eval?: string;
   pause?: DebugPause | null;
+  uncertain?: boolean;
 };
 
 export async function companionDebug(
   action: "start" | "cmd" | "poll" | "stop",
   body: Record<string, unknown> = {},
   base = DEFAULT_COMPANION,
+  signal?: AbortSignal,
 ): Promise<DebugSnap> {
+  const {withForegroundResource,releaseForegroundResource}=await import('./external-resource');
+  const value=await withForegroundResource(()=>rawCompanionDebug(action,body,base,signal),snap=>snap.ok&&!snap.done&&action!=='stop'||snap.uncertain?`debug:${base}`:undefined);
+  if(value.ok&&(value.done||action==='stop')&&!value.uncertain)await releaseForegroundResource(`debug:${base}`);
+  return value;
+}
+async function rawCompanionDebug(action:'start'|'cmd'|'poll'|'stop',body:Record<string,unknown>,base:string,signal?:AbortSignal):Promise<DebugSnap>{
   try {
+    signal?.throwIfAborted();
     const r = await fetch(`${base.replace(/\/$/, "")}/v1/debug`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ action, ...body }),
-      signal: AbortSignal.timeout(action === "start" ? 15000 : 8000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(action === "start" ? 15000 : 8000)]) : AbortSignal.timeout(action === "start" ? 15000 : 8000),
     });
     return (await r.json()) as DebugSnap;
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Debug nicht erreichbar" };
+    return { ok: false, error: e instanceof Error ? e.message : "Debug nicht erreichbar", ...(action === "start" ? { uncertain: true } : {}) };
   }
 }
 
-export async function companionRunStatus(id: string, base = DEFAULT_COMPANION): Promise<CompanionJob> {
+export async function companionRunStatus(id: string, base = DEFAULT_COMPANION, run?: import("./agent-run").AgentRun): Promise<CompanionJob> {
   const { withCompanion } = await import("./companion-life");
+  run?.assertCurrent();
   return withCompanion(async () => {
-    const r = await fetch(`${base.replace(/\/$/, "")}/v1/run-status?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(5000) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    run?.assertCurrent();
+    const j = await readNativeRunStatus({ id }, base, headers(), run?.timeout(5000)) as CompanionJob;
+    if(j.running === false && !j.uncertain){const {releaseForegroundResource}=await import('./external-resource');await releaseForegroundResource(`engine:${base.replace(/\/$/, "")}:${id}`);}
     return j as CompanionJob;
-  }, base);
+  }, base, undefined, run);
 }
 
 export async function companionReadFiles(paths: string[], cwd: string, base = DEFAULT_COMPANION): Promise<Record<string, string | null>> {

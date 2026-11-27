@@ -23,6 +23,6 @@ test("recovery preserves complete text and binary images without overwriting ano
 });
 
 test("Windows workspace boundaries accept case differences and reject siblings/drives/traversal", () => {
-  assert.equal(insideRoot("I:\\AnvilTest\\tests", "i:\\anviltest\\TESTS\\snake", path.win32), true);
-  for (const file of ["I:\\AnvilTest\\tests-other", "J:\\AnvilTest\\tests", "I:\\AnvilTest\\tests\\..\\private"]) assert.equal(insideRoot("I:\\AnvilTest\\tests", file, path.win32), false);
+  assert.equal(insideRoot("I:\\Test-Workspace\\tests", "i:\\test-workspace\\TESTS\\snake", path.win32), true);
+  for (const file of ["I:\\Test-Workspace\\tests-other", "J:\\Test-Workspace\\tests", "I:\\Test-Workspace\\tests\\..\\private"]) assert.equal(insideRoot("I:\\Test-Workspace\\tests", file, path.win32), false);
 });

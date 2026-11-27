@@ -1,12 +1,12 @@
 # Anvil — Arbeitsabläufe
 
-Schritt für Schritt. [Fenster erklärt](02-handbuch.md). Stand: 13.09.2026, Release 1.3.29. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
+Schritt für Schritt. [Fenster erklärt](02-handbuch.md). Stand: 4. Oktober 2026, lokaler Quellcode 1.3.35. Einzelheiten und Prüfgrenzen stehen in den Fachanleitungen und unter [Optimierungen und Abnahme](optimierungen-2026-10.md).
 
 ---
 
 ## A. Neu auf diesem PC
 
-1. **Fertige Anwendung:** [Anvil 1.3.29](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.29) als Setup-EXE installieren oder portable ZIP vollständig entpacken und **Anvil.exe** starten. Node.js ist darin enthalten. Für die Arbeit am Quellcode stattdessen Node.js LTS installieren, einmal **install.bat**, danach **start.bat** verwenden.
+1. **Fertige Anwendung:** [Aktuelle Veröffentlichung](https://github.com/kokc866-hash/anvil/releases/latest) als Setup-EXE installieren oder portable ZIP vollständig entpacken und **Anvil.exe** starten. Node.js ist darin enthalten. Für die Arbeit am Quellcode stattdessen Node.js LTS installieren, einmal **install.bat**, danach **start.bat** verwenden.
 2. Warte beim ersten Start, bis sich das Anvil-Fenster öffnet.
 3. Einstellungen → Editor → Sprache.
 4. Einstellungen → Agent:

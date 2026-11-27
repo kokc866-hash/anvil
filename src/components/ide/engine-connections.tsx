@@ -7,24 +7,25 @@ import { ENGINE_INTEGRATIONS, createEngineIntegration } from "@/lib/engine-integ
 const field =
   "w-full min-w-0 rounded-md border border-border bg-bg px-2 py-1.5 text-[11px] text-fg";
 export function EngineConnections() {
+  const busy = useIde(state => state.agentBusy || Boolean(state.pathOperation));
   const [id, setId] = useState("unity-official");
   const [program, setProgram] = useState("");
   const [cwd, setCwd] = useState("");
   const [message, setMessage] = useState("");
   const chosen = ENGINE_INTEGRATIONS.find((item) => item.id === id) || ENGINE_INTEGRATIONS[0];
   return (
-    <details className="m-3 rounded-md border border-border p-3 text-[11px]">
-      <summary className="cursor-pointer font-semibold">Engines & 3D-Werkzeuge</summary>
+    <details className="m-3 rounded-md border border-border p-3 text-[11px]" data-testid="engine-connections">
+      <summary className="cursor-pointer font-semibold">Engines, 3D & CAD</summary>
       <div className="mt-3 space-y-3">
         <p className="text-muted">
-          Lokale Editor-Erweiterungen und Asset-Werkzeuge ergänzen die Cloud-Dienste. Sie benötigen
-          die unten genannte Einrichtung.
+          Verbinde Spiele-Editoren, 3D-Werkzeuge und CAD-Programme mit Anvil. Die Vorlagen
+          bereiten die Verbindung vor; Programme und Add-ons benötigen die unten genannte Einrichtung.
         </p>
         <label className="block space-y-1">
           <span>Erweiterung</span>
           <select
             className={field}
-            aria-label="Engine-Erweiterung auswählen"
+            aria-label="Engine-, 3D- oder CAD-Erweiterung auswählen"
             value={chosen.id}
             onChange={(e) => {
               setId(e.target.value);
@@ -33,11 +34,11 @@ export function EngineConnections() {
               setMessage("");
             }}
           >
-            {ENGINE_INTEGRATIONS.map((item) => (
+            {([['engine', 'Spiele-Engines'], ['3d', '3D & Assets'], ['cad', 'CAD & Konstruktion']] as const).map(([category, title]) => <optgroup key={category} label={title}>{ENGINE_INTEGRATIONS.filter(item => (item.category || 'engine') === category).map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
               </option>
-            ))}
+            ))}</optgroup>)}
           </select>
         </label>
         <p>{chosen.description}</p>
@@ -48,7 +49,7 @@ export function EngineConnections() {
           ))}
         </ul>
         <a className="inline-block underline" href={chosen.source} target="_blank" rel="noreferrer">
-          Einrichtung beim Anbieter
+          Anleitung des Projekts
         </a>
         {chosen.programRequired && (
           <label className="block space-y-1">
@@ -75,6 +76,7 @@ export function EngineConnections() {
           </label>
         )}
         <Button
+          disabled={busy}
           className="h-auto min-h-7 w-full whitespace-normal px-2 py-1 text-[11px]"
           onClick={() => {
             try {
@@ -92,6 +94,15 @@ export function EngineConnections() {
         >
           In MCP vorbereiten
         </Button>
+        {chosen.example && <div className="space-y-2 border-t border-border pt-2">
+          <p className="font-semibold">Erste Aufgabe</p>
+          <p className="text-muted">Nach der Einrichtung: Modell erstellen, Maße und Ansicht prüfen, als neue Datei speichern. Änderungen in Blender oder CAD werden nicht automatisch durch Anvils Projektrücksetzung rückgängig gemacht.</p>
+          <Button className="h-auto min-h-7 w-full whitespace-normal px-2 py-1 text-[11px]" disabled={busy} onClick={() => {
+            const state = useIde.getState();
+            if (!state.agentDraft.includes(chosen.example!)) state.setAgentDraft([state.agentDraft, chosen.example].filter(Boolean).join("\n\n"));
+            setMessage("Beispiel zum Chat-Entwurf hinzugefügt. Ergänze dein Speicherziel und sende den Auftrag nach der Einrichtung. Es wurde noch nichts ausgeführt.");
+          }}>Beispiel zum Chat hinzufügen</Button>
+        </div>}
         <p className="text-muted">
           Vorbereiten installiert und startet nichts. Beim späteren Aktivieren können Pakete geladen
           und Programme gestartet werden. Schlüssel gehören ausschließlich in den Schlüsselspeicher

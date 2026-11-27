@@ -50,11 +50,18 @@ test("keeps more than 80 same-language files", () => {
   assert.equal(got.length, 91);
 });
 
-test("decodes u003c in C++ snapshot before compile", () => {
+test("compiling uses the exact editor snapshot without guessing a source encoding", () => {
   const files = compileFiles("cpp", "main.cpp", {
     "main.cpp": "#include u003ciostreamu003e\nint main(){return 0;}\n",
     "util.hpp": "int add(int a, int b);\n",
   });
   const main = files.find((f) => f.path === "main.cpp");
-  assert.match(main?.content ?? "", /#include <iostream>/);
+  assert.equal(main?.content, "#include u003ciostreamu003e\nint main(){return 0;}\n");
+});
+
+test("compile snapshots preserve entity literals and line endings in browser and native code", () => {
+  for (const [lang, entry] of [["javascript", "ui.js"], ["cpp", "main.cpp"], ["python", "main.py"]]) {
+    const content = '\uFEFF// &lt; &#39; &amp; u003c u003e\r\n';
+    assert.equal(compileFiles(lang, entry, { [entry]: content })[0].content, content);
+  }
 });

@@ -9,10 +9,13 @@ export type CanvasReply = {
   w?: number;
   h?: number;
   outputSize?: { width: number; height: number };
+  readiness?: { state: "settled" | "live"; waitedMs: number; revision: number; width: number; height: number };
   session: string;
   revision: string;
+  observation?: { title: string; text: string; viewport: {width:number;height:number}; elements: Record<string, unknown>[]; observations?: Record<string, unknown>[]; observationsTruncated?: boolean };
+  point?: {x:number;y:number};
 };
-export type CanvasOperation = "ready" | "shot" | "keys" | "keys-up" | "pause" | "stop" | "dispose";
+export type CanvasOperation = "ready" | "capture-ready" | "shot" | "keys" | "keys-up" | "input" | "input-up" | "target" | "assert" | "pause" | "stop" | "dispose";
 export type CanvasBoot = {
   session: string;
   revision: string;

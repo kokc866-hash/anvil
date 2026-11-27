@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,7 +14,7 @@ export const INSTALL = {
   cxx: { id: "LLVM.LLVM", label: "LLVM" },
   php: { id: "PHP.PHP.8.3", label: "PHP" },
   ruby: { id: "RubyInstallerTeam.RubyWithDevKit.3.3", label: "Ruby" },
-  python: { id: "Python.Python.3.12", label: "Python" },
+  python: { id: "Python.Python.3.14", label: "Python" },
   tsc: { id: "OpenJS.NodeJS.LTS", label: "Node.js" },
   dotnet: { id: "Microsoft.DotNet.SDK.8", label: ".NET SDK" },
   git: { id: "Git.Git", label: "Git" },
@@ -40,12 +40,25 @@ export function installerKind() {
 }
 
 export function refreshPath() {
+  const pythonRoot = path.join(process.env.LOCALAPPDATA || "", "Programs", "Python");
+  let pythonDirs = [];
+  if (process.platform === "win32") {
+    try {
+      pythonDirs = readdirSync(pythonRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^Python\d\d+$/.test(entry.name) && existsSync(path.join(pythonRoot, entry.name, "python.exe")))
+        .sort((a, b) => {
+          const parts = (name) => [Number(name[6]), Number(name.slice(7))];
+          const av = parts(a.name), bv = parts(b.name);
+          return bv[0] - av[0] || bv[1] - av[1];
+        })
+        .flatMap((entry) => [path.join(pythonRoot, entry.name), path.join(pythonRoot, entry.name, "Scripts")]);
+    } catch { /* PATH remains usable when the conventional install directory is absent. */ }
+  }
   const extra = [
     path.join(os.homedir(), "go", "bin"),
     path.join(os.homedir(), ".cargo", "bin"),
     path.join(os.homedir(), "scoop", "shims"),
-    path.join(process.env.LOCALAPPDATA || "", "Programs", "Python", "Python312"),
-    path.join(process.env.LOCALAPPDATA || "", "Programs", "Python", "Python312", "Scripts"),
+    ...pythonDirs,
     path.join(process.env.ProgramFiles || "C:\\Program Files", "Go", "bin"),
     path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs"),
     path.join(process.env.ProgramFiles || "C:\\Program Files", "dotnet"),

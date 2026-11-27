@@ -1,0 +1,36 @@
+Erstelle einen vollständigen Werkstatt-Projektplaner als Browseranwendung.
+
+Arbeite ausschließlich in einem neuen Unterordner „anvil-dauertest“. Falls dieser bereits existiert, verwende einen neuen nummerierten Ordner. Verändere keine bestehenden Projektdateien.
+
+Verwende HTML, CSS und JavaScript ohne externe Bibliotheken oder Netzwerkdienste. Teile die Anwendung sinnvoll in mehrere Dateien auf. Trenne Datenmodell und Geschäftslogik von der Browseroberfläche.
+
+Die Anwendung soll Folgendes können:
+1. Projekte und Aufgaben erstellen, bearbeiten und löschen.
+2. Aufgaben mit Beschreibung, Priorität, Tags und Fälligkeitsdatum versehen.
+3. Zwischen Listenansicht und Kanban-Ansicht wechseln.
+4. Aufgaben suchen, filtern und sortieren.
+5. Abhängigkeiten zwischen Aufgaben verwalten und zyklische Abhängigkeiten verhindern.
+6. Fortschritt, überfällige Aufgaben und Projektstatistiken anzeigen.
+7. Alle Daten lokal speichern und nach einem Neustart wiederherstellen.
+8. Projekte als JSON exportieren und importieren.
+9. Fehlerhafte Importdateien verständlich ablehnen, ohne vorhandene Daten zu beschädigen.
+10. Änderungen rückgängig machen und wiederholen.
+11. Tastaturbedienung und eine kompakte Hilfe anbieten.
+12. Bei schmalen Fenstern weiterhin gut bedienbar bleiben.
+
+Vorgehen:
+- Erstelle zuerst eine sichtbare To-do-Liste.
+- Implementiere schrittweise und halte die Liste während der Arbeit aktuell.
+- Lade benötigte Werkzeuge und passende Skills gezielt nach.
+- Erstelle realistische Beispieldaten mit mehreren Projekten und mindestens 30 unterschiedlichen Aufgaben.
+- Prüfe die reine Geschäftslogik mit automatisierten Tests, insbesondere Abhängigkeiten, Datumsgrenzen, Importvalidierung und Rückgängig/Wiederholen.
+- Öffne index.html im Browser und prüfe die Oberfläche durch tatsächliche Interaktionen. Browsercode mit document/window darf nicht direkt als Node-Programm ausgeführt werden.
+- Prüfe insbesondere: Aufgabe anlegen und ändern, Filter kombinieren, Status wechseln, Daten neu laden, Export/Import und Wiederherstellung nach einer Änderung.
+- Ungültige Eingaben in Negativtests sind absichtlich vorhanden. Verändere die erwarteten Ergebnisse nicht, um Tests grün zu bekommen.
+- Behebe tatsächlich nachgewiesene Implementierungsfehler und wiederhole anschließend die betroffenen Prüfungen.
+- Wiederhole keine bereits erledigten Änderungen und lies unveränderte Dateien nicht ohne konkreten Anlass erneut.
+- Falls ein Werkzeug fehlt, suche nach einer geeigneten vorhandenen Möglichkeit. Erfinde keine Testergebnisse.
+
+Arbeite bis zum vollständigen Ergebnis. Erzeuge keine künstlichen Wartezeiten oder Wiederholungsschleifen, um den Lauf zu verlängern.
+
+Speichere abschließend einen TESTBERICHT.md mit den ausgeführten Prüfungen, tatsächlichen Ergebnissen und offenen Einschränkungen. Unterscheide klar zwischen implementiert, automatisch getestet und im Browser durch Interaktion geprüft.

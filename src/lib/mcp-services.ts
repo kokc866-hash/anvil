@@ -1,6 +1,7 @@
 import { useIde } from "@/store/ide";
 import { mcpLogout, uniqueMcpName, type McpServer } from "./mcp";
 import { flushPersistence } from "./persist-storage";
+import { flushSecrets, saveSecrets } from "./secrets";
 import {
   SERVICE_PROVIDERS,
   isMcpService,
@@ -25,7 +26,7 @@ export function createService(
     name: provider?.name || name?.trim() || "Eigener Dienst",
     url: serviceAddress(provider?.url || url || ""),
     transport: "http",
-    auth: "oauth",
+    auth: provider?.auth || "oauth",
     oauthClientId: clientId?.trim() || undefined,
     enabled: false,
     allowedTools: [],
@@ -50,6 +51,24 @@ export function updateService(id: string, patch: Partial<McpServer>) {
   const next = { ...previous, ...patch };
   validateService(next);
   st.setMcpServers(st.mcpServers.map((s) => (s.id === id ? next : s)));
+}
+
+export async function saveServiceApiKey(id: string, raw: string) {
+  const server = useIde.getState().mcpServers.find((s) => s.id === id);
+  if (!server || !isMcpService(server)) throw new Error("Dienst nicht mehr vorhanden.");
+  validateService(server);
+  if (server.auth !== "bearer") throw new Error("Dieser Dienst verwendet die Browser-Anmeldung.");
+  const key = raw.trim();
+  if (
+    !key ||
+    key.length > 512 ||
+    /\s/.test(key) ||
+    [...key].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) ||
+    (server.service === "sorceress" && !key.startsWith("sk_sorc_"))
+  )
+    throw new Error("Gültigen Sorceress-API-Schlüssel eintragen (beginnt mit sk_sorc_).");
+  saveSecrets({ keys: { [`mcp:${id}`]: key, [`mcp-target:${id}`]: server.url } });
+  await flushSecrets();
 }
 
 export async function disconnectService(id: string, remove = false) {

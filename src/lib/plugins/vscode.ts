@@ -200,8 +200,9 @@ export function vsPackFilePaths(files: Record<string, string>, packPath: string)
 export async function importVsix(
   buf: ArrayBuffer,
   dest = "plugins/vscode",
+  options?: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<{ files: Record<string, string>; skipped: number; name: string }> {
-  const raw = await unzipFiles(buf);
+  const raw = await unzipFiles(buf, options);
   const files: Record<string, string> = {};
   let skipped = 0;
   let name = dest.split("/").pop() ?? "vscode";

@@ -30,7 +30,7 @@ Continue bietet bereits mehrere Modellanbieter einschließlich Ollama und versch
 
 Geprüft wurde die aktuelle lokale Oberfläche in einer getrennten Browser-Vorschau bei 786 × 912 Pixeln. Alle vier Bilder wurden in dieser Untersuchung aufgenommen und gespeichert. Dieses Vorschaufenster war für Anvils Arbeitsplatz zu klein, wie der Nutzer anschließend klargestellt hat. Die dadurch zusammengedrängte Darstellung ist kein Beleg für ein Layoutproblem im vorgesehenen Fenster. Aussagen über Platzbedarf und sichtbare Informationsdichte müssen bei geeigneter Fenstergröße erneut geprüft werden. Native Anmeldung, Installation und echte Modellantworten wurden dabei nicht getestet.
 
-**Nachprüfung am selben Tag:** Anvil 1.3.24 wurde direkt auf dem Rechner aus `I:\Anvil` geöffnet und mit dem vorhandenen Projekt im maximierten Desktop-Fenster bei 2560 × 1392 Pixeln betrachtet. Für Schritt 3 ersetzt diese Beobachtung die Layoutbewertung aus der Browser-Vorschau. Es wurde keine neue Modellanfrage gesendet und kein Projektinhalt bearbeitet.
+**Nachprüfung am selben Tag:** Anvil 1.3.24 wurde direkt auf dem Rechner aus dem Quellordner geöffnet und mit dem vorhandenen Projekt im maximierten Desktop-Fenster bei 2560 × 1392 Pixeln betrachtet. Für Schritt 3 ersetzt diese Beobachtung die Layoutbewertung aus der Browser-Vorschau. Es wurde keine neue Modellanfrage gesendet und kein Projektinhalt bearbeitet.
 
 ### Schritt 1 – Ersteinrichtung: hoher Verbesserungsbedarf
 

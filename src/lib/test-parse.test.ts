@@ -10,6 +10,7 @@ import {
   parseTests,
   pruneTestMap,
   remapTestMap,
+  summarizeTests,
   testsPrompt,
 } from "./test-parse.ts";
 
@@ -57,6 +58,35 @@ describe("test-parse", () => {
     const rs = parseTests("test tests::it_works ... ok\ntest tests::boom ... FAILED", "", files);
     assert.ok(rs.some((h) => h.name.includes("it_works") && h.ok));
     assert.ok(rs.some((h) => h.name.includes("boom") && !h.ok));
+  });
+  it("merges three Node spec results with their discovered tests instead of displaying six", () => {
+    const names = ["manual body color remains exact", "unrelated header edit is applied", "other files progress after blocked writes"];
+    const files = { "preserve.test.cjs": names.map((name) => `test('${name}', () => {})`).join("\n") };
+    const output = [...names.map((name) => `✔ ${name} (0.8141ms)`), "ℹ tests 3", "ℹ suites 0", "ℹ pass 3"].join("\r\n");
+    const tests = mergeTests(discoverTests(files), parseTests(output, "", files));
+    assert.deepEqual(tests.map((hit) => hit.name), names);
+    assert.ok(tests.every((hit) => hit.ok && !hit.skip && hit.path === "preserve.test.cjs"));
+    assert.deepEqual(summarizeTests(tests), { passed: 3, total: 3 });
+  });
+  it("keeps Node failures and marks skip and todo separately from passes and suites", () => {
+    const files = { "fixture.test.cjs": "describe('suite', () => {\n  test('working', () => {});\n  test.skip('not run', () => {});\n  test.todo('later');\n  test('breaks', () => {});\n});" };
+    const output = ["▶ suite", "  ✔ working (0.4386ms)", "  ﹣ not run (0.1043ms) # SKIP", "  ✔ later (0.074ms) # pending", "  ✖ breaks (0.1651ms)", "✖ suite (2.1228ms)", "ℹ tests 4", "ℹ suites 1", "ℹ pass 1", "ℹ fail 1", "✖ failing tests:", "✖ breaks (0.1651ms)"].join("\n");
+    const tests = mergeTests(discoverTests(files), parseTests(output, "", files));
+    assert.deepEqual(tests.filter((hit) => hit.ok && !hit.skip).map((hit) => hit.name), ["working"]);
+    assert.deepEqual(tests.filter((hit) => hit.skip).map((hit) => hit.name), ["not run", "later"]);
+    assert.deepEqual(tests.filter((hit) => !hit.ok && !hit.skip).map((hit) => hit.name), ["breaks"]);
+    assert.deepEqual(summarizeTests(tests), { passed: 1, total: 4 });
+  });
+  it("does not merge an unresolved Node spec name into similarly named tests in two files", () => {
+    const files = { "a.test.cjs": "test('same name', () => {})", "b.test.cjs": "test('same name', () => {})" };
+    const hits = parseTests("✔ same name (0.1ms)\nℹ tests 1\nℹ suites 0", "", files);
+    const merged = mergeTests(discoverTests(files), hits);
+    assert.equal(hits[0].path, "");
+    assert.deepEqual(merged.filter((hit) => hit.skip).map((hit) => hit.path), ["a.test.cjs", "b.test.cjs"]);
+    assert.deepEqual(summarizeTests(merged), { passed: 1, total: 2 });
+    const explicit = parseTests("PASS a.test.cjs:1 same name\nFAIL b.test.cjs:1 same name", "", files);
+    assert.deepEqual(mergeTests(discoverTests(files), explicit).map((hit) => [hit.path, hit.ok]), [["a.test.cjs", true], ["b.test.cjs", false]]);
+    assert.deepEqual(summarizeTests(mergeTests(discoverTests(files), [...explicit, ...hits])), { passed: 1, total: 2 });
   });
   it("fallback fail is scoped to the file in the blob", () => {
     const files = {
@@ -108,5 +138,12 @@ describe("test-parse", () => {
     assert.equal(isTestStepText("shell", "pytest -q", "err"), false);
     assert.equal(isTestStepText("shell", "dotnet test", "ok"), true);
     assert.equal(isTestStepText("write_file", "mentioned pytest in a comment", "ok"), false);
+  });
+  it("recognizes explicit Node builtin test files without opening discovery, loaders or escaping paths", () => {
+    assert.deepEqual(parseTestCommand('node --test ./adder.test.cjs "nested/test file.mjs"')?.paths, ["adder.test.cjs", "nested/test file.mjs"]);
+    assert.equal(isTestStepText("shell", "node --test adder.test.cjs", "ok"), true);
+    assert.equal(isTestStepText("write_file", "mentioned node --test in documentation", "ok"), false);
+    for (const command of ["node --test", "node --test ../outside.test.cjs", "node --test /outside.test.cjs", "node --test C:/outside.test.cjs", "node --test --import setup.mjs adder.test.cjs", "node --test -e 'process.exit(0)'", "node --test --test-reporter ./reporter.mjs adder.test.cjs"])
+      assert.equal(parseTestCommand(command), null, command);
   });
 });

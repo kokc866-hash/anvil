@@ -21,6 +21,7 @@ import {useBrain} from '@/lib/brain/store';
 import {useIntern} from '@/lib/intern';
 import {startBackgroundAgentMonitor,useBackgroundAgent} from '@/lib/background-agent';
 import {stopAgent} from '@/lib/abort';
+import {appLogLines} from '@/lib/app-log';
 await useIde.persist.rehydrate();
 useBrain.setState({on:false,autoLoad:false,autoUpdate:false,autonomy:'off',jobs:Object.fromEntries(Object.keys(useBrain.getState().jobs).map(k=>[k,false]))});
 useIntern.getState().setPrefs({on:false,autoHeal:false});
@@ -34,13 +35,14 @@ const job=(payload:any)=>({id:'browser-'+(++id),revision:1,project:payload.proje
   if(native.mode==='hold')return new Promise(resolve=>native.pending=()=>{native.state=job(payload);resolve({state:native.state});});
   native.state=job(payload);return{state:native.state};
  }
+ if(action==='resume'){native.calls.push({...payload,action:'resume'});native.state={...job(payload),resumedFrom:payload.resumeId};return{state:native.state};}
  if(action==='status')return{available:true,state:native.state};
  if(action==='dismiss'){native.state={...native.state,revision:native.state.revision+1,dismissed:true};return{state:native.state};}
  if(action==='stop'){if(native.state)native.state={...native.state,status:'stopped',revision:native.state.revision+1};return{state:native.state};}
  return{unchanged:true};
 }};
 useBackgroundAgent.setState({available:true,job:null,error:''});
-(window as any).fixture={native,ide:useIde,bg:useBackgroundAgent,stop:stopAgent};
+(window as any).fixture={native,ide:useIde,bg:useBackgroundAgent,stop:stopAgent,appLogLines};
 startBackgroundAgentMonitor();
 createRoot(document.getElementById('root')!).render(<ChatPane/>);
 `);
@@ -72,7 +74,7 @@ try{
   catch(error){const state=await page.evaluate(()=>window.fixture?{draft:window.fixture.ide.getState().agentDraft,queue:window.fixture.ide.getState().agentQueue,inbox:window.fixture.ide.getState().agentInbox,starts:window.fixture.native.calls.length}:null).catch(()=>null);results.push({name,ok:false,error:String(error),errors,state});console.error(name+': '+String(error)+' '+JSON.stringify(state));await page.screenshot({path:path.join(output,name+'-failed.png')}).catch(()=>{});}
   finally{await context.close();}
  };
- await run('acceptance-and-dismiss',async page=>{
+ await run('accepted-queue-continues-without-dismiss',async page=>{
   await page.evaluate(()=>window.fixture.ide.setState({agentQueue:[{text:'First queued synthetic order',mode:'agent'},{text:'Second queued synthetic order',mode:'agent'}]}));
   await page.waitForFunction(()=>window.fixture.native.calls.length===1&&window.fixture.native.pending);
   assert.equal(await page.evaluate(()=>window.fixture.ide.getState().agentQueue.length),2,'queue remains until host acceptance');
@@ -80,10 +82,8 @@ try{
   await page.waitForFunction(()=>window.fixture.ide.getState().agentQueue.length===1);
   assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),1);
   await page.evaluate(()=>{window.fixture.native.state={...window.fixture.native.state,status:'done',finishedAt:Date.now(),revision:2};});
-  await page.getByRole('button',{name:'Abschließen',exact:true}).waitFor();
-  assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),1,'finished but unreviewed job blocks next');
-  await page.getByRole('button',{name:'Abschließen',exact:true}).click();
   await page.waitForFunction(()=>window.fixture.native.calls.length===2);
+  assert.equal(await page.evaluate(()=>window.fixture.native.state.dismissed),false,'a finished job does not need manual dismissal before the next queued start');
   assert.equal(await page.evaluate(()=>window.fixture.ide.getState().agentQueue.length),1);
   await page.evaluate(()=>window.fixture.native.pending());await page.waitForFunction(()=>window.fixture.ide.getState().agentQueue.length===0);
   assert.deepEqual(await page.evaluate(()=>window.fixture.native.calls.map(p=>p.userPrompt)),['First queued synthetic order','Second queued synthetic order']);
@@ -97,6 +97,27 @@ try{
   await page.evaluate(()=>{window.fixture.native.mode='accept';window.fixture.ide.setState({agentBusy:true});});
   await page.waitForTimeout(30);await page.evaluate(()=>window.fixture.ide.setState({agentBusy:false}));
   await page.waitForFunction(()=>window.fixture.native.calls.length===2&&window.fixture.ide.getState().agentQueue.length===0);
+ });
+ await run('persistent-start-failure',async page=>{
+  await page.evaluate(()=>{
+   window.fixture.native.mode='refuse';
+   window.fixture.native.state={id:'stopped-previous',revision:1,project:'browser-queue-project',prompt:'Previous synthetic order',status:'stopped',startedAt:1000,text:'Previous progress',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'Stopped',dismissed:true};
+  });
+  const field=page.locator('textarea');
+  await field.fill('Continue the synthetic stopped task');await field.press('Enter');
+  await page.waitForFunction(()=>window.fixture.native.calls.length===1&&!window.fixture.ide.getState().agentBusy);
+  assert.equal(await page.evaluate(()=>window.fixture.bg.getState().startFailure?.message),'Synthetic start refusal');
+  await page.evaluate(()=>window.fixture.ide.getState().setNotice(''));
+  // A native status poll must not erase the start error together with its toast.
+  await page.waitForTimeout(1400);
+  await page.getByRole('alert').getByText('Synthetic start refusal',{exact:true}).waitFor();
+  assert.equal(await field.inputValue(),'Continue the synthetic stopped task');
+  assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),1,'No automatic model retry');
+  assert.equal(await page.evaluate(()=>window.fixture.appLogLines().some(row=>row.tag==='agent-start'&&row.msg==='Synthetic start refusal')),true);
+  await page.screenshot({path:path.join(output,'persistent-start-failure-visible.png')});
+  await page.evaluate(()=>window.fixture.native.mode='accept');await field.press('Enter');
+  await page.waitForFunction(()=>window.fixture.native.calls.length===2&&window.fixture.bg.getState().startFailure===null);
+  assert.equal(await field.inputValue(),'');
  });
  await run('queued-order-preserves-composer',async page=>{
   await page.locator('textarea').fill('Unsent new request must remain in the composer');
@@ -120,9 +141,64 @@ try{
    window.fixture.native.mode='accept';
    window.fixture.native.state={id:'waiting-fixture',revision:1,project:'browser-queue-project',prompt:'Initial request',status:'waiting-user',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,ask:{id:'question',prompt:'Which fixture colour?',why:'Choose before continuing.',choices:[{id:'A',label:'Blue fixture'},{id:'B',label:'Green fixture'}],allowText:false,blocking:'hard'}};
   });
-  await page.getByText('Which fixture colour?',{exact:true}).waitFor();
+  await page.getByRole('group',{name:'Rückfrage',exact:true}).getByText('Which fixture colour?',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('dialog').count(),0);
+  assert.equal(await page.getByRole('region',{name:'Hintergrundauftrag',exact:true}).count(),0);
   await page.evaluate(()=>window.fixture.ide.setState({agentQueue:[{text:'Keep behind background question',mode:'agent'}]}));
   await page.waitForTimeout(300);assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),0);assert.equal(await page.evaluate(()=>window.fixture.ide.getState().agentQueue.length),1);
+ });
+ await run('empty-composer-resumes-without-panel',async page=>{
+  await page.evaluate(()=>{window.fixture.native.mode='accept';window.fixture.native.state={id:'paused-fixture',revision:1,project:'browser-queue-project',prompt:'Continue the saved fixture',status:'stopped',startedAt:1000,text:'Saved fixture.',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false};});
+  await page.getByRole('button',{name:'Fortsetzen',exact:true}).waitFor();
+  assert.equal(await page.getByRole('region',{name:'Hintergrundauftrag',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Auftragsdetails öffnen',exact:true}).count(),0);
+  await page.locator('textarea').press('Enter');
+  await page.waitForFunction(()=>window.fixture.native.calls.length===1);
+  assert.equal(await page.evaluate(()=>window.fixture.native.calls[0].resumeId),'paused-fixture');
+  assert.equal(await page.getByRole('dialog').count(),0);
+ });
+ await run('background-question-choice-without-dialog',async page=>{
+  await page.evaluate(()=>{window.fixture.native.mode='accept';window.fixture.native.state={id:'choice-fixture',revision:1,project:'browser-queue-project',prompt:'Ask a colour',status:'waiting-user',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,ask:{id:'colour-question',prompt:'Choose a fixture colour',choices:[{id:'B',label:'Blue fixture'}],allowText:false,blocking:'hard'}};});
+  await page.getByRole('group',{name:'Rückfrage',exact:true}).getByRole('button',{name:/Blue fixture/}).click();
+  await page.waitForFunction(()=>window.fixture.native.calls.length===1);
+  const payload=await page.evaluate(()=>window.fixture.native.calls[0]);
+  assert.equal(payload.resumeId,'choice-fixture');assert.deepEqual(payload.answer,{askId:'colour-question',choiceId:'B'});
+  assert.equal(await page.getByRole('dialog').count(),0);
+ });
+ await run('background-question-answers-in-normal-composer',async page=>{
+  await page.evaluate(()=>{window.fixture.native.mode='accept';window.fixture.native.state={id:'text-fixture',revision:1,project:'browser-queue-project',prompt:'Ask a fixture name',status:'waiting-user',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,ask:{id:'name-question',prompt:'Name this fixture',choices:[],allowText:true,blocking:'hard'}};});
+  await page.getByRole('group',{name:'Rückfrage',exact:true}).waitFor();
+  await page.locator('textarea').fill('A normal chat answer');await page.locator('textarea').press('Enter');
+  await page.waitForFunction(()=>window.fixture.native.calls.length===1&&window.fixture.ide.getState().agentDraft==='');
+  const payload=await page.evaluate(()=>window.fixture.native.calls[0]);
+  assert.equal(payload.resumeId,'text-fixture');assert.deepEqual(payload.answer,{askId:'name-question',text:'A normal chat answer'});
+  assert.equal(await page.getByRole('dialog').count(),0);
+ });
+ await run('background-question-can-be-dismissed-without-confirmation',async page=>{
+  await page.evaluate(()=>{window.fixture.native.mode='accept';window.fixture.native.state={id:'cancel-fixture',revision:1,project:'browser-queue-project',prompt:'Ask a question',status:'waiting-user',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,ask:{id:'cancel-question',prompt:'An unnecessary question',choices:[],allowText:true,blocking:'hard'}};});
+  const question=page.getByRole('group',{name:'Rückfrage',exact:true});await question.waitFor();
+  await question.getByRole('button').last().click();
+  await page.waitForFunction(()=>window.fixture.native.state.dismissed===true);
+  await question.waitFor({state:'hidden'});assert.equal(await page.getByRole('dialog').count(),0);
+ });
+ await run('disabled-background-mode-does-not-hijack-composer',async page=>{
+  await page.evaluate(()=>{window.fixture.native.state={id:'disabled-question',revision:1,project:'browser-queue-project',prompt:'Old question',status:'waiting-user',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,ask:{id:'old-question',prompt:'Old background question',choices:[],allowText:true,blocking:'hard'}};});
+  await page.getByRole('group',{name:'Rückfrage',exact:true}).waitFor();
+  await page.evaluate(()=>window.fixture.ide.setState({backgroundAgent:false}));
+  await page.getByRole('group',{name:'Rückfrage',exact:true}).waitFor({state:'hidden'});
+  assert.equal(await page.getByRole('button',{name:'Fortsetzen',exact:true}).count(),0);
+  assert.equal(await page.locator('textarea').inputValue(),'');assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),0);
+ });
+ await run('foreground-question-takes-precedence-over-paused-background-task',async page=>{
+  await page.evaluate(()=>{
+   window.fixture.native.state={id:'paused-other-task',revision:1,project:'browser-queue-project',prompt:'An older task',status:'stopped',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false};
+   window.fixture.ide.setState({agentJob:{id:'current-foreground-question',status:'ask',goal:'Clarify this task',rounds:1,at:1,mode:'agent',ask:{id:'current-question',prompt:'Current foreground question',choices:[],allowText:true,blocking:'hard'}}});
+  });
+  await page.getByRole('group',{name:'Rückfrage',exact:true}).getByText('Current foreground question',{exact:true}).waitFor();
+  await page.waitForTimeout(300);
+  assert.equal(await page.getByRole('button',{name:'Fortsetzen',exact:true}).count(),0);
+  await page.locator('textarea').press('Enter');await page.waitForTimeout(150);
+  assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),0,'Empty Enter cannot resume another owner while the foreground question is active');
  });
  await run('stop-during-preparation',async page=>{
   await page.evaluate(()=>{
@@ -133,7 +209,7 @@ try{
   await page.locator('textarea').fill('Start then stop while the context is being prepared');await page.locator('textarea').press('Enter');
   await page.waitForFunction(()=>window.fixturePreparationEntered);
   // Actual ChatPane button: no fixture call to the stop function.
-  await page.getByRole('button',{name:'Abbrechen',exact:true}).click();
+  await page.locator('button[aria-label="Stoppen"]').click();
   await page.waitForFunction(()=>!window.fixture.ide.getState().agentBusy);
   await page.evaluate(()=>window.fixtureReleasePreparation());await page.waitForTimeout(400);
   assert.equal(await page.evaluate(()=>window.fixture.native.calls.length),0,'Stop during asynchronous preparation must prevent native start');
@@ -142,7 +218,7 @@ try{
  await run('stop-during-native-acceptance',async page=>{
   await page.locator('textarea').fill('Stop while native acceptance is pending');await page.locator('textarea').press('Enter');
   await page.waitForFunction(()=>window.fixture.native.pending&&window.fixture.native.calls.length===1);
-  await page.getByRole('button',{name:'Abbrechen',exact:true}).click();
+  await page.locator('button[aria-label="Stoppen"]').click();
   await page.waitForFunction(()=>!window.fixture.ide.getState().agentBusy);
   await page.evaluate(()=>window.fixture.native.pending());
   await page.waitForFunction(()=>window.fixture.native.state?.status==='stopped');

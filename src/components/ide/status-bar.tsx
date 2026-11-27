@@ -1,3 +1,5 @@
+import { useId } from "react";
+import { ChevronUp } from "lucide-react";
 import { providerOf } from "@/lib/providers";
 import { langFromPath, langLabel } from "@/lib/languages";
 import { BRAIN_MODELS, useBrain } from "@/lib/brain";
@@ -12,7 +14,9 @@ import { ANVIL_VERSION } from "@/lib/version";
 import { useT } from "@/lib/i18n";
 import { useKbd } from "@/lib/use-kbd";
 
-export function StatusBar() {
+export function StatusBar({ compact = false }: { compact?: boolean }) {
+  const detailId = useId();
+  const en = useIde(s => s.locale === "en");
   const path = useIde((s) => s.activePath);
   const cursor = useIde((s) => s.cursor);
   const provider = useIde((s) => s.llmProvider);
@@ -71,8 +75,8 @@ export function StatusBar() {
           ? t("error")
           : t("idle");
 
-  return (
-    <footer className={`flex h-6 shrink-0 items-center gap-3 border-t border-border bg-surface px-2 font-mono text-[11px] text-muted ${agentBusy ? "ui-busy" : ""}`}>
+  const controls = (
+    <>
       <Tip label={t("anvilVerTip", { v: ANVIL_VERSION })} side="top">
         <button type="button" className="shrink-0 hover:text-fg" onClick={() => setSettingsOpen(true)}>
           Anvil {ANVIL_VERSION}
@@ -210,6 +214,22 @@ export function StatusBar() {
           {path ?? ""}
         </button>
       </Tip>
+    </>
+  );
+
+  return (
+    <footer className={`flex shrink-0 items-center gap-3 border-t border-border bg-surface px-2 text-muted ${compact ? "h-8 text-xs" : "h-6 font-mono text-[11px]"} ${agentBusy ? "ui-busy" : ""}`}>
+      {compact ? <>
+        <span className="min-w-0 flex-1 truncate" title={path ?? undefined}>{path || `Anvil ${ANVIL_VERSION}`}</span>
+        <button type="button" className="h-full px-1 hover:text-fg" onClick={() => void saveNow()}>{t("save")}</button>
+        <button type="button" popoverTarget={detailId} className="flex h-full items-center gap-1 px-1 hover:text-fg">
+          {en ? "Status details" : "Statusdetails"}{lspN + internN > 0 && <span className="text-warning"> · {lspN + internN}</span>}<ChevronUp className="size-3.5" />
+        </button>
+        <div id={detailId} popover="auto" role="group" aria-label={en ? "Status details" : "Statusdetails"} className="status-details rounded-md border border-border bg-surface p-1 text-sm text-fg shadow-lg"
+          onClick={e => { if (e.target instanceof Element && e.target.closest("button")) e.currentTarget.hidePopover(); }}>
+          {controls}
+        </div>
+      </> : controls}
     </footer>
   );
 }

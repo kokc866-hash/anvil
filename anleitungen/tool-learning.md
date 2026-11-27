@@ -24,7 +24,7 @@ Unter **Einstellungen → Agent → Gelernte Werkzeugaufrufe** gilt die Auswahl 
 | Beobachten | Vorschläge sammeln; der bestehende Ausführungsweg bleibt aktiv. |
 | Lernen & anwenden | Eindeutige, vollständig validierte Zuordnungen verwenden und ihre Ausführungsergebnisse zählen. |
 
-Ohne eigene Auswahl startet **Bisherig** mit **Beobachten**. Bei **Kompakt** und **Text** startet **Lernen & anwenden**. Die gültigen nativen Aufrufe brauchen keine Lernregeln und werden weiter direkt verarbeitet. Die Abo-Verbindung verwendet weiterhin die CLI; CLI und der integrierte Grok-Weg erhalten diese Übersetzung nicht.
+Ohne eigene Auswahl startet **Standard** mit **Beobachten**. Bei **Kompakt** und **Text** startet **Lernen & anwenden**. Die gültigen nativen Aufrufe brauchen keine Lernregeln und werden weiter direkt verarbeitet. Die Abo-Verbindung verwendet weiterhin die CLI; CLI und der integrierte Grok-Weg erhalten diese Übersetzung nicht. Die [Vorauswahl und Suche](werkzeuge-nach-bedarf.md) stehen unabhängig davon zur Verfügung.
 
 Eine neue Regel steht zunächst auf **Beobachtet**. Erst erfolgreiche Tool-Ausführungen in **zwei getrennten normalen Agent-Aufträgen** führen zu **Bewährt**. Mehrere gleiche Aufrufe innerhalb eines Auftrags zählen einmal. „Bewährt“ belegt die technische Ausführbarkeit, nicht die inhaltliche Richtigkeit jedes Modellauftrags. Fehlgeschlagene, gesperrte, abgebrochene, noch laufende oder beim Transportwechsel bereits ausgeführte Aktionen gelten nicht als Lernerfolg.
 
@@ -45,7 +45,7 @@ Unbekannte Namen werden nicht anhand einer vagen Ähnlichkeit ausgeführt. Fehle
 
 ## Ausführungsgrenzen
 
-Die neue Erkennung durchsucht weder Denktext noch Prosa, Markdown-Codeblöcke, XML oder zitierte Beispiele. In einer nativen Antwort wird deren normaler Text nicht für neue Lernregeln ausgewertet. Ein ganzes JSON-Aufrufobjekt im ausdrücklich aktiven Text-Tool-Protokoll ist dagegen eine Ausführungsanweisung. Das ältere Verhalten des Modus **Bisherig** wird durch die Lernfunktion nicht nachträglich umgebaut.
+Die neue Erkennung durchsucht weder Denktext noch Prosa, Markdown-Codeblöcke, XML oder zitierte Beispiele. In einer nativen Antwort wird deren normaler Text nicht für neue Lernregeln ausgewertet. Ein ganzes JSON-Aufrufobjekt im ausdrücklich aktiven Text-Tool-Protokoll ist dagegen eine Ausführungsanweisung. Auch im Modus **Standard** ersetzt die Lernfunktion nicht den normalen nativen Werkzeugaufruf.
 
 Ein übersetzter Aufruf muss zum tatsächlich angebotenen Werkzeug passen. Ask-Modus, Flächenbeschränkungen, Harness-Budget, bestehende Datei-/Befehlsprüfungen und Stop gelten weiter. Bestätigen einer Zuordnung erteilt keine zusätzlichen Rechte.
 

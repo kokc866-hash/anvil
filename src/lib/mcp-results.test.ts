@@ -74,6 +74,42 @@ test("large MCP results retain structured content, all images and errors and can
   assert.throws(() => readMcpOutput(String(result.outputId), ["server"]), /nicht mehr verfügbar/);
 });
 
+test("Blender's FastMCP execution failure is a tool error even when its MCP envelope claims success", () => {
+  const failure = 'Error executing code: Communication error with Blender: {"exception_type": "AttributeError", "message": "module \'bpy\' has no attribute \'mathutils\'", "traceback": "Traceback (most recent call last):"}';
+  const raw = {
+    content: [{ type: "text", text: failure }],
+    structuredContent: { result: failure },
+    isError: false,
+  };
+  const serviceResult = unwrapMcp(raw, "execute_blender_code") as Record<string, unknown>;
+  assert.equal(serviceResult.isError, true);
+  assert.equal(serviceResult.ok, false);
+  assert.equal(serviceResult.text, failure);
+  assert.equal(Object.hasOwn(serviceResult, "definitelyNotExecuted"), false);
+  const modelResult = modelMcpResult("mcp:blender-local", serviceResult);
+  assert.equal(modelResult.isError, true);
+  assert.equal(modelResult.ok, false);
+  assert.deepEqual(modelResult.structuredContent, raw.structuredContent);
+  forgetMcpOutputs("mcp:blender-local");
+});
+
+test("only Blender execution wrappers mark legacy text or structured tool output as failed", () => {
+  const unwrap = (text: string, name?: string, structured = false) => unwrapMcp(
+    structured ? { structuredContent: { result: text } } : { content: [{ type: "text", text }] },
+    name,
+  ) as Record<string, unknown>;
+  const failure = "Error executing code: AttributeError: Invalid object";
+  const rejected = "Rejected by safe mode - Import not allowed";
+  for (const wrapper of [failure, rejected]) {
+    assert.equal(unwrap(wrapper, "execute_blender_code").isError, true);
+    assert.equal(unwrap(wrapper, "execute_blender_code", true).text, wrapper);
+    assert.equal(unwrap(wrapper).isError, false);
+    assert.equal(unwrap(wrapper, "read_file").isError, false);
+    assert.equal(unwrap('Code executed successfully: "' + wrapper + '"', "execute_blender_code").isError, false);
+  }
+  assert.equal(unwrap('{"result":"Error executing code: example"}', "execute_blender_code").isError, false);
+});
+
 test("exclusive MCP is usable in the first compact round without MCP keywords", () => {
   const allowed = AGENT_TOOLS.filter((t) => toolsAllowed("docs", "exclusive", t.function.name));
   const tools = new ToolSession("compact", "Suche die Projektbeschreibung")

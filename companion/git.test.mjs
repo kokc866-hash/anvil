@@ -25,6 +25,54 @@ describe("git cwd", () => {
 });
 
 describe("tree", () => {
+  it("loads only declared Cursor rule paths and keeps unrelated hidden data excluded", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-rule-tree-"));
+    try {
+      const accepted = { '.cursorrules': 'ROOT LEGACY', '.cursor/rules/global.mdc': 'ROOT MDC', '.cursor/rules/group/ui.mdc': 'GROUP MDC', 'app/.cursor/rules/typescript.mdc': 'APP MDC', 'app/AGENTS.md': 'APP AGENTS', 'app/.anvil/rules.md': 'APP ANVIL' };
+      const excluded = { '.cursor/mcp.json': '{}', '.cursor/hooks/script.js': 'must-not-run', '.cursor/rules/README.md': 'not a rule', '.cursor/rules/.env': 'TOKEN=private', '.foreign/rules/always.mdc': 'PRIVATE HIDDEN', 'app/.cursorrules': 'nested legacy unsupported' };
+      for (const [file, body] of Object.entries({ ...accepted, ...excluded })) { mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); writeFileSync(path.join(dir, file), body); }
+      const result = listTree(dir);
+      for (const [file, body] of Object.entries(accepted)) assert.equal(result.files[file], body, file);
+      for (const file of Object.keys(excluded)) assert.equal(file in result.files, false, file);
+      assert.equal(result.dirs.includes('.cursor/hooks'), false);
+      assert.equal(result.dirs.includes('.foreign'), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("reopens imported package manifests and complete binary resources only within reserved storage", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-package-tree-"));
+    try {
+      const root = ".anvil/skills/package-test/";
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255]);
+      const large = Buffer.alloc(4_000_001, 255);
+      const resources = {
+        [root + ".codex-plugin/plugin.json"]: '{"name":"test"}',
+        [root + ".cursor-plugin/plugin.json"]: '{"name":"test"}',
+        [root + ".mcp.json"]: '{"mcpServers":{}}',
+        [root + "dist/worker.js"]: "export {};",
+        [root + "node_modules/tool/package.json"]: "{}",
+        [root + "assets/picture.png"]: png,
+        [root + "assets/audio.dat"]: large,
+        [root + ".env"]: "TOKEN=test",
+        [root + "key.pem"]: "fake-private-key",
+        ".anvil/plugin-imports/test.json": '{"schema":1}',
+        "src/.codex-plugin/plugin.json": "{}",
+        "src/picture.png": png,
+        "src/node_modules/tool/index.js": "no",
+      };
+      for (const [file, content] of Object.entries(resources)) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), content);
+      }
+      const { files } = listTree(dir);
+      for (const file of [".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", ".mcp.json", "dist/worker.js", "node_modules/tool/package.json"])
+        assert.equal(files[root + file], resources[root + file]);
+      assert.equal(files[root + "assets/picture.png"], `data:application/octet-stream;base64,${png.toString("base64")}`);
+      assert.equal(files[root + "assets/audio.dat"], `data:application/octet-stream;base64,${large.toString("base64")}`);
+      assert.equal(files[".anvil/plugin-imports/test.json"], '{"schema":1}');
+      for (const file of [root + ".env", root + "key.pem", "src/.codex-plugin/plugin.json", "src/picture.png", "src/node_modules/tool/index.js"])
+        assert.equal(file in files, false, file);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it("skips node_modules and keeps source", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-tree-"));
     try {
@@ -147,7 +195,7 @@ describe("git op", () => {
       writeRel(dir, "readme.md", "# hi\n");
       const init = await gitDispatch("init", { cwd: dir });
       if (!init.ok && /Benutzerbereich/.test(init.error || "")) return;
-      assert.equal(init.ok, true);
+      assert.equal(init.ok, true, JSON.stringify(init));
       spawnSync(gitBin(), ["config", "user.email", "anvil-test@local"], { cwd: dir, windowsHide: true });
       spawnSync(gitBin(), ["config", "user.name", "Anvil Test"], { cwd: dir, windowsHide: true });
       const c = await gitDispatch("commit", { cwd: dir, message: "first" });

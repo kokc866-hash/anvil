@@ -57,16 +57,37 @@ const SYM: { re: RegExp; kind: IdxKind }[] = [
   { re: /(?:^|\n)(?:pub\s+)?(?:struct|enum|trait)\s+([A-Za-z_]\w*)/g, kind: "type" },
 ];
 
+export function sourceLines(src: string): { lines: string[]; starts: number[] } {
+  const lines = src.split("\n");
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  return { lines, starts };
+}
+
+export function lineAtOffset(starts: number[], offset: number): number {
+  let lo = 0, hi = starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (starts[mid] <= offset) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.max(1, lo);
+}
+
 function parseSymbols(src: string): IdxSym[] {
   const out: IdxSym[] = [];
   const seen = new Set<string>();
-  const lines = src.split("\n");
+  const { lines, starts } = sourceLines(src);
   for (const { re, kind } of SYM) {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(src))) {
       const name = m[1];
-      const line = src.slice(0, m.index + 1).split("\n").length;
+      const line = lineAtOffset(starts, m.index + 1);
       const key = `${name}:${line}`;
       if (seen.has(key)) continue;
       seen.add(key);

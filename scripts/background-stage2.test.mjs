@@ -42,10 +42,16 @@ test('stage 2 owns file writes, deduplicates actions, checks conflicts and cance
     assert.equal(host.state.lastRun.stage.id,runId,'duplicate native request never launches again');
     writeFileSync(join(project,'main.js'),'USER CHANGE');
     op(3,{kind:'write',path:'main.js',content:'SHOULD NOT LAND'}); await until(()=>!host.operation);
-    assert.equal(host.state.status,'failed'); assert.match(host.state.error,/inzwischen geändert/);
+    assert.equal(host.state.status,'running');
+    const conflict=sends.find(m=>m.type==='operation-result'&&m.id===3)?.result;
+    assert.equal(conflict.ok,false);assert.match(conflict.error,/inzwischen geändert/);assert.equal(conflict.fileConflict.path,'main.js');
     assert.equal(readFileSync(join(project,'main.js'),'utf8'),'USER CHANGE');
     assert.equal(host.state.drafts['main.js'].after,'SHOULD NOT LAND');
     assert.equal(host.state.drafts['main.js'].applied,false);
+    op(4,{kind:'write',path:'independent.txt',content:'continued after conflict'});await until(()=>!host.operation);
+    assert.equal(readFileSync(join(project,'independent.txt'),'utf8'),'continued after conflict');
+    host.stop();
+    await host.waitForCleanup();
     host.dismiss(host.state.id);
     await host.waitForCleanup();
     const marker=join(dir,'pid.txt');

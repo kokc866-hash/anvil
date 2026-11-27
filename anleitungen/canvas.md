@@ -109,7 +109,27 @@ Eine eigene Content-Security-Policy bleibt erhalten. Blockiert sie die für die 
 
 `run_file` wartet auf das geladene Dokument, Schriften, Bilder und die Bereitschaft der Engine. Jede Sitzung, Anfrage und Codeversion hat eine eigene Kennung. Antworten alter oder geschlossener Sitzungen werden verworfen.
 
-`play` sendet echte synthetische Tastaturereignisse an diese Ausgabe und wartet auf Bestätigung. Dadurch funktionieren auch gewöhnliche `keydown`-Handler. Browserfunktionen, die physische Eingaben oder eine echte Nutzeraktivierung voraussetzen, bleiben an diese Browseranforderung gebunden. Stop bricht eine Tastenfolge ab und gibt gehaltene Tasten frei.
+`play` bedient die geöffnete HTML-Ausgabe mit Tastatur, Maus und ausdrücklich angegebenem Text. Es steuert weder den Desktop noch ein Engine-Fenster. Im Hintergrund erfolgt die Eingabe über Chromium; die Browserausgabe verwendet synthetische DOM-Ereignisse. Browserfunktionen, die eine echte Nutzeraktivierung verlangen, bleiben im Browsermodus eingeschränkt.
+
+`keys` sendet eine Folge von Tasten, zum Beispiel `{"keys":["Space","s","u","r","Delete"]}`. Auch Tab, Enter, Escape, Backspace, Home/End, PageUp/PageDown und Pfeiltasten sind verfügbar. Die Aktionen `left`, `right`, `up`, `down`, `ok`, `fire` und `start` verwenden die eingestellte Belegung. `Space` ist immer die Leertaste.
+
+Für gezielte Bedienung verwendet der Agent `actions`. `run_file` und `see_run` liefern dafür die tatsächlichen CSS-Selektoren, Feldwerte und Elementpositionen. Ein Selektor muss genau ein sichtbares, bedienbares Ziel treffen. Koordinaten sind CSS-Pixel ab der linken oberen Ecke der Vorschau, keine Desktopkoordinaten.
+
+```json
+{"actions":[
+  {"type":"click","selector":"#start"},
+  {"type":"assert","selector":"#status","text":"Läuft","timeout_ms":1000},
+  {"type":"key","selector":"#name","key":"a","modifiers":["Control"]},
+  {"type":"type","selector":"#name","text":"Testauftrag"},
+  {"type":"assert","selector":"#name","value":"Testauftrag"}
+]}
+```
+
+Weitere Aktionen sind `move`, `drag` mit `to_selector` oder `to_x`/`to_y`, `scroll` mit `delta_x`/`delta_y` und `wait` mit `ms`. Positives `delta_y` scrollt nach unten. Klicks unterstützen links, rechts, Mitte und mit `count:2` den Doppelklick. Eine `assert`-Prüfung kann Text, Feldwert, Sichtbarkeit, Auswahlzustand (`checked`) oder Elementanzahl (`count`) vergleichen. Der Textvergleich ist exakt und entfernt nur äußere Leerzeichen.
+
+Eine Folge umfasst höchstens 32 Aktionen, einzelne Halte- oder Wartezeiten höchstens 1000 ms, insgesamt höchstens 10 Sekunden ohne die begrenzten Erwartungsprüfungen. Der erste Fehler hält die Folge an; bereits ausgeführte Eingaben werden nicht wiederholt. Stop gibt gehaltene Tasten und Maustasten frei. Falsche Erwartungen bleiben fehlgeschlagene Tests. Die Zwischenablage des Rechners und Betriebssystem-Dateiauswahldialoge sind nicht Teil von `play`.
+
+Der Agent muss den erwarteten Zustand tatsächlich prüfen. Eine zugestellte Taste, ein Klick oder eine Aufnahme bestätigt nicht automatisch die gesamte Anwendung. Für Programmlogik bleiben passende Testdateien und die vorhandenen Testbefehle erforderlich.
 
 `see_run` nimmt die geöffnete Ausgabe auf. Die Desktop-Version erfasst den sichtbaren Bereich einschließlich HTML-Bedienelementen und mehrerer Canvas-Flächen. Im Browser wird die Oberfläche für eine Aufnahme gerastert; nicht freigegebene externe Ressourcen und Browserbeschränkungen werden als Aufnahmefehler gemeldet. Ein Aufnahmefehler ist von einem Programmfehler unterscheidbar.
 

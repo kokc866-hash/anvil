@@ -6,6 +6,12 @@
 
 HTML, JavaScript und TypeScript werden in der geöffneten Vorschau oder im Ausgabefenster ausgeführt. Jede Ausführung startet das Dokument neu und wartet, bis es bereit ist. Der Agent steuert dieselbe Ausgabe; Startfehler werden als Fehler gemeldet. **Stoppen** beendet auch selbst geschriebene JavaScript-Schleifen. Mehr zu API, Projektdateien und Bildaufnahmen findest du in der [Canvas-Anleitung](canvas.md).
 
+Eine geladene Oberfläche bestätigt noch keine funktionierende Bedienung. Nach einer Änderung an Steuerung oder Interaktionen soll der Agent passende Eingaben ausführen und deren Wirkung beobachten. Der Abschluss unterscheidet deshalb zwischen Programmstart, geladener Oberfläche, beobachteter Eingabe und tatsächlichen Funktionstests. Ein erfolgreicher Start einer ungenutzten JavaScript-Moduldatei bestätigt keine HTML-Anwendung.
+
+Bleibt ein reproduzierbarer Fehler beim unveränderten Dateistand bestehen, verwendet der Agent dieses Ergebnis, statt dasselbe Programm unmittelbar erneut zu starten. Besteht derselbe Fehler nach einer Korrektur weiter, untersucht er die Implementierung oder Schnittstelle vor dem nächsten Patch. Eine bewusst erwartete Fehlerreaktion wird berichtet; ein reiner Prüfauftrag erlaubt keine ungefragte Reparatur.
+
+Für gezielte JavaScript-Funktionstests steht dem Agenten `node --test tests/beispiel.test.cjs` zur Verfügung. Angegeben werden müssen vorhandene relative `.js`-, `.mjs`- oder `.cjs`-Dateien aus dem Projekt. Freie Node-Optionen und Loader sind dabei nicht erlaubt. Der Test verwendet den übergebenen Dateistand; spätere Änderungen im Editor gelten dadurch nicht als geprüft. Ein erfolgreicher Testlauf bestätigt die ausgeführten Prüfungen, nicht automatisch alle Funktionen des Projekts.
+
 ## Native Ausgabe
 
 In der Desktop-Anwendung werden die Dateien lokal ausgeführter Programme neben `Anvil.exe` im Ordner `runs` abgelegt. Jede Ausführung erhält einen eigenen Ordner mit folgenden Inhalten:

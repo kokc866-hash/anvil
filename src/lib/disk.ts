@@ -1,7 +1,7 @@
-import { fileBytes, sameBytes } from "../../scripts/file-content.mjs";
-import { isSourcePath, skipDirName, skipPath, keepDotName, keepBareFile } from "./ws-skip";
+import { fileContent, fileBytes, sameBytes } from "../../scripts/file-content.mjs";
+import { isImportedPluginPath, isProjectRuleDirectory, isProjectRulePath, isSourcePath, skipDirName, skipPath, keepDotName, keepBareFile } from "./ws-skip";
 import { bytesToDataUrl } from "./archive";
-import { isRefPath } from "./ref";
+import { isRefPath, isSecretPath } from "./ref";
 import { useIde } from "@/store/ide";
 
 const MAX = 1_500_000;
@@ -340,10 +340,14 @@ async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc:
   const out: Record<string, string> = {};
   if (prefix) dirs.push(prefix);
   for await (const [child, handle] of dir.entries() as AsyncIterable<[string, FileSystemHandle]>) {
-    if (child.startsWith(".") && !keepDotName(child)) continue;
-    if (skipDirName(child)) continue;
     const path = prefix ? `${prefix}/${child}` : child;
-    if (skipPath(path)) {
+    const imported = isImportedPluginPath(path);
+    const projectRule = handle.kind === "directory" ? isProjectRuleDirectory(path) : isProjectRulePath(path);
+    if (imported && isSecretPath(path)) { acc.skipped += 1; continue; }
+    if (!imported && /(?:^|\/)\.cursor(?:\/|$)/i.test(path) && !projectRule) continue;
+    if (!imported && child.startsWith(".") && !keepDotName(child) && !projectRule) continue;
+    if (!imported && skipDirName(child)) continue;
+    if (!imported && skipPath(path)) {
       if (handle.kind === "directory") continue;
       acc.skipped += 1;
       continue;
@@ -357,6 +361,13 @@ async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc:
       const imgMime = isRefPath(path) ? IMG_MIME[ext] : undefined;
       if (acc.n >= MAX_FILES || acc.bytes + file.size > MAX_TOTAL) {
         acc.skipped += 1;
+        continue;
+      }
+      if (imported) {
+        if (file.size > 16 * 1024 * 1024) { acc.skipped += 1; continue; }
+        out[path] = fileContent(new Uint8Array(await file.arrayBuffer()));
+        acc.n += 1;
+        acc.bytes += file.size;
         continue;
       }
       if (imgMime) {
@@ -381,13 +392,15 @@ async function readFolder(dir: DirHandle, prefix = "", dirs: string[] = [], acc:
         file.size > 0 &&
         file.type &&
         !file.type.startsWith("text") &&
+        !/\.(FCStd\d*|FCBak)$/i.test(child) &&
         !TEXT_OK.test(child) &&
+        !projectRule &&
         !keepBareFile(child)
       ) {
         acc.skipped += 1;
         continue;
       }
-      out[path] = await file.text();
+      out[path] = fileContent(new Uint8Array(await file.arrayBuffer()));
       acc.n += 1;
       acc.bytes += file.size;
     }
@@ -401,7 +414,9 @@ export async function readDiskFiles(paths: string[], target = diskWorkspaceHandl
     try {
       const loc = await dirFor(path, false, target); if (!loc) continue;
       const file = await (await loc.dir.getFileHandle(loc.name)).getFile();
-      if (file.size <= MAX) files[path] = await file.text();
+      if (isImportedPluginPath(path)) {
+        if (!isSecretPath(path) && file.size <= 16 * 1024 * 1024) files[path] = fileContent(new Uint8Array(await file.arrayBuffer()));
+      } else if (file.size <= MAX) files[path] = fileContent(new Uint8Array(await file.arrayBuffer()));
     } catch (e) { if ((e as DOMException).name === "NotFoundError") files[path] = null; else throw e; }
   }
   return files;

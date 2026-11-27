@@ -35,7 +35,9 @@ export function EditorPane() {
   const draft = useLivePreview((s) => s.draft);
   const draftStreaming = useLivePreview((s) => s.streaming);
   const [draftOpen, setDraftOpen] = useState(false);
-  useEffect(() => { setDraftOpen(Boolean(draft && draftStreaming)); }, [draft?.path, draftStreaming]);
+  const draftPath = draft?.path;
+  const draftPresent = Boolean(draft);
+  useEffect(() => { setDraftOpen(draftPresent && draftStreaming); }, [draftPath, draftPresent, draftStreaming]);
   const t = useT();
   const kNew = useKbd("newFile");
   const kAgent = useKbd("agent");
@@ -65,6 +67,11 @@ export function EditorPane() {
   const [find, setFind] = useState<{ q: string; i: number; repl?: string } | null>(null);
   const [sym, setSym] = useState("");
   const [symOpen, setSymOpen] = useState(false);
+  const symbols = useMemo(() => symOpen && activePath ? listSymbols(activeSrc, activePath) : [], [symOpen, activeSrc, activePath]);
+  const filteredSymbols = useMemo(() => {
+    const needle = sym.toLowerCase();
+    return needle ? symbols.filter((s) => s.text.toLowerCase().includes(needle)) : symbols;
+  }, [symbols, sym]);
   const [goto, setGoto] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(true);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; path: string } | null>(null);
@@ -88,6 +95,7 @@ export function EditorPane() {
   const debug = useIde((s) => s.debug);
   const liveGen = useRef(0);
   const currentDiff = pending.find((d) => d.path === activePath);
+  const hasActivePath = Boolean(activePath);
 
   async function askClose(path: string) { await import("@/lib/save").then((s) => s.closeTabs([path])); }
   async function askCloseOthers(keep: string) { await import("@/lib/save").then((s) => s.closeTabs(useIde.getState().openPaths.filter((p) => p !== keep))); }
@@ -108,7 +116,7 @@ export function EditorPane() {
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [Boolean(activePath)]);
+  }, [hasActivePath]);
 
   const shownTabs = useMemo(
     () => pickVisibleTabs(openPaths, activePath, tabFit),
@@ -155,7 +163,8 @@ export function EditorPane() {
     function onEsc() {
       setFind(null);
       setGoto(null);
-      (inlineTicket.current++, setInline(null));
+      inlineTicket.current++;
+      setInline(null);
       setSymOpen(false);
     }
     function onReplace() {
@@ -238,7 +247,12 @@ export function EditorPane() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRun, activePath, activeSrc, agentBusy]);
 
-  useEffect(() => { inlineTicket.current++; setInline(null); return () => { inlineTicket.current++; }; }, [activePath, epoch]);
+  useEffect(() => {
+    const ticket = inlineTicket;
+    ticket.current++;
+    setInline(null);
+    return () => { ticket.current++; };
+  }, [activePath, epoch]);
 
   async function applyInline() {
     if (!inline || !activePath || !inline.prompt.trim()) return;
@@ -275,7 +289,8 @@ export function EditorPane() {
       if (ticket !== inlineTicket.current) return;
       const cur = snap.content ?? "";
       if (!applyDocument(snap, cur.slice(0, inline.start) + next + cur.slice(inline.end))) { useIde.getState().setNotice("Die Datei wurde inzwischen geändert. Der Änderungsvorschlag wurde deshalb nicht übernommen."); }
-      (inlineTicket.current++, setInline(null));
+      inlineTicket.current++;
+      setInline(null);
     } catch (err) {
       if (ticket !== inlineTicket.current) return;
       setInline({
@@ -343,26 +358,7 @@ export function EditorPane() {
           <Button
             variant="primary"
             className="h-8 px-3 text-xs"
-            onClick={() => {
-              void import("@/lib/disk").then(async (d) => {
-                if (!d.diskSupported()) {
-                  useIde.getState().setNotice("Die Ordnerauswahl ist in Chrome, Edge und der Anvil-Desktop-App verfügbar.");
-                  return;
-                }
-                try {
-                  const pack = await d.pickFolder();
-                  const st = useIde.getState();
-                  st.applyFiles(pack.files, pack.dirs);
-                  st.setDiskName(d.diskFolderName());
-                  const first = Object.keys(pack.files).sort()[0];
-                  if (first) st.openFile(first);
-                  const n = Object.keys(pack.files).length;
-                  st.setNotice(pack.skipped ? `${n} Dateien, ${pack.skipped} übersprungen` : `${n} Dateien geladen`);
-                } catch (err) {
-                  useIde.getState().setNotice(err instanceof Error ? err.message : "Der Ordner konnte nicht geöffnet werden.");
-                }
-              });
-            }}
+            onClick={() => window.dispatchEvent(new Event("anvil-open-disk"))}
           >
             Ordner öffnen
           </Button>
@@ -584,18 +580,18 @@ export function EditorPane() {
               else setPreviewOpen(!previewOpen);
             }}
             aria-label={t("preview")}
-            title={t("preview")}
+            tip={t(runPopout ? "editorPreviewDock" : previewOpen ? "editorPreviewClose" : "editorPreviewOpen")}
           >
             <Eye className="size-3.5" />
           </Button>
-          <Button variant="primary" className={cn("h-8 px-2", compact && "w-8 p-0")} disabled={!runnable || running} onClick={() => void run()} title={t("execute")} kbd={kRun}>
+          <Button variant="primary" className={cn("h-8 px-2", compact && "w-8 p-0")} disabled={!runnable || running} onClick={() => void run()} aria-label={t("execute")} tip={t("editorRun")} kbd={kRun}>
             <Play className="size-3.5" />
             {compact ? null : running && !debug.active ? t("busy") : t("run")}
           </Button>
           <Button
             className="h-8 w-8 p-0"
-            title={t("runWindow")}
-            aria-label="Ausgabefenster"
+            tip={t(/\.html?$/i.test(activePath || "") ? "editorRunHtmlWindow" : "editorRunWindow")}
+            aria-label={t("runWindow")}
             kbd={kRunWin}
             onClick={() => {
               if (/\.html?$/i.test(activePath || "")) openRunWindow();
@@ -607,7 +603,8 @@ export function EditorPane() {
           <Button
             className="h-8 w-8 p-0"
             disabled={!canDebug(activePath) || running}
-            title={t("debug")}
+            aria-label={t("debug")}
+            tip={t("editorDebug")}
             kbd={kDbg}
             onClick={() => {
               const hasBp = Object.values(useIde.getState().breakpoints).some((a) => a.length);
@@ -619,13 +616,13 @@ export function EditorPane() {
           </Button>
           {debug.active ? (
             <>
-              <Button className="h-8 w-8 p-0" disabled={!debug.paused} onClick={() => debugContinue()} title="Weiter" kbd={kDbg}>
+              <Button className="h-8 w-8 p-0" disabled={!debug.paused} onClick={() => debugContinue()} tip={t("editorDebugContinue")} kbd={kDbg}>
                 <Play className="size-3.5" />
               </Button>
-              <Button className="h-8 w-8 p-0" disabled={!debug.paused} onClick={() => debugStep()} title="Schritt" kbd={kStep}>
+              <Button className="h-8 w-8 p-0" disabled={!debug.paused} onClick={() => debugStep()} tip={t("editorDebugStep")} kbd={kStep}>
                 <StepForward className="size-3.5" />
               </Button>
-              <Button className="h-8 w-8 p-0" variant="danger" onClick={() => debugStop()} title="Stoppen" kbd={kDbgStop}>
+              <Button className="h-8 w-8 p-0" variant="danger" onClick={() => debugStop()} tip={t("editorDebugStop")} kbd={kDbgStop}>
                 <Square className="size-3.5" />
               </Button>
             </>
@@ -633,7 +630,8 @@ export function EditorPane() {
           <div className="relative">
             <Button
               className="h-8 w-8 p-0"
-              title="Mehr"
+              aria-label={t("editorMoreLabel")}
+              tip={t("editorMore")}
               aria-expanded={moreOpen}
               onClick={(e) => {
                 moreBtn.current = e.currentTarget;
@@ -733,18 +731,14 @@ export function EditorPane() {
             onKeyDown={(e) => {
               if (e.key === "Escape") setSymOpen(false);
               if (e.key === "Enter") {
-                const hits = listSymbols(activeSrc, activePath).filter((s) =>
-                  s.text.toLowerCase().includes(sym.toLowerCase()),
-                );
-                if (hits[0]) {
-                  gotoFile(hits[0].path, hits[0].line, false);
+                if (filteredSymbols[0]) {
+                  gotoFile(filteredSymbols[0].path, filteredSymbols[0].line, false);
                   setSymOpen(false);
                 }
               }
             }}
           />
-          {listSymbols(activeSrc, activePath)
-            .filter((s) => !sym || s.text.toLowerCase().includes(sym.toLowerCase()))
+          {filteredSymbols
             .slice(0, 20)
             .map((s) => (
               <button
@@ -786,7 +780,8 @@ export function EditorPane() {
       ) : null}
       {inline ? (
         <form
-          className="flex gap-2 border-b border-border bg-surface px-2 py-2"
+          aria-label={t("inlineEdit")}
+          className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-2 py-2"
           onSubmit={(e) => {
             e.preventDefault();
             void applyInline();
@@ -796,19 +791,20 @@ export function EditorPane() {
             autoFocus
             value={inline.prompt}
             disabled={inline.busy}
-            placeholder="Änderung beschreiben…"
-            className="h-9 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
+            aria-label={t("describeChange")}
+            placeholder={t("describeChange")}
+            className="h-9 min-w-[min(100%,12rem)] flex-[1_1_13rem] rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
             onChange={(e) => setInline({ ...inline, prompt: e.target.value })}
             onKeyDown={(e) => {
-              if (e.key === "Escape") (inlineTicket.current++, setInline(null));
+              if (e.key === "Escape") { inlineTicket.current++; setInline(null); }
             }}
           />
-          <Button type="submit" variant="primary" className="h-9" disabled={inline.busy || !inline.prompt.trim()}>
-            {inline.busy ? "…" : "Edit"}
-          </Button>
-          <Button type="button" className="h-9" onClick={() => (inlineTicket.current++, setInline(null))}>
-            Abbrechen
-          </Button>
+          <div className="ml-auto flex flex-wrap gap-1">
+            <Button type="button" className="h-9" onClick={() => (inlineTicket.current++, setInline(null))}>{t("cancel")}</Button>
+            <Button type="submit" variant="primary" className="h-9" disabled={inline.busy || !inline.prompt.trim()}>
+              {inline.busy ? "…" : t("applyInlineEdit")}
+            </Button>
+          </div>
         </form>
       ) : null}
       {liveDraft}

@@ -7,6 +7,8 @@ import { brainReady, useBrain } from "./store";
 import { pushLane } from "./lane";
 import { brainJobAllowed, captureBrainCommit, captureBrainScope, onBrainScopeReset } from "./scope";
 import { helperDiffContext, type HelperDiff } from "./diff-context";
+import { agentTaskPolicy } from "../agent-task-policy";
+import { initialAgentPlan, applySetPlan, planFromAsk } from "../plan";
 
 const job = brainJobAllowed;
 
@@ -486,7 +488,7 @@ export async function brainSecretWarn(text: string): Promise<string> {
     const raw = await brainGenerate({
       messages: [
         { role: "system", content: brainSystem("One warning line or NO. Do not repeat values.") },
-        { role: "user", content: `Treffer: ${hits.length}\n${text.slice(0, 400).replace(/[A-Za-z0-9_\-]{12,}/g, "…")}` },
+        { role: "user", content: `Treffer: ${hits.length}\n${text.slice(0, 400).replace(/[A-Za-z0-9_-]{12,}/g, "…")}` },
       ],
       maxTokens: 28,
       temperature: 0,
@@ -571,7 +573,11 @@ export async function brainStopNote(steps: { name: string; detail?: string; stat
 }
 
 export async function brainPlanText(ask: string): Promise<string[]> {
-  const fallback = ["Verstehen", "Ändern", "Ausführen", "Prüfen"];
+  const fallback = initialAgentPlan(ask, undefined, "auto", useIde.getState().locale).map(step => step.text);
+  if (!agentTaskPolicy(ask).allowChanges || planFromAsk(ask)) {
+    useBrain.getState().logJob("planText", "heur", 0);
+    return fallback;
+  }
   if (!job("planText") || !brainReady() || ask.trim().length < 12) {
     useBrain.getState().logJob("planText", "heur", 0);
     return fallback;
@@ -579,7 +585,7 @@ export async function brainPlanText(ask: string): Promise<string[]> {
   try {
     const raw = await brainGenerate({
       messages: [
-        { role: "system", content: brainSystem("JSON {\"steps\":[\"…\"]} 3–5 short steps, German, no numbers.") },
+        { role: "system", content: brainSystem("JSON {\"steps\":[\"…\"]} 3–5 short task-specific feature/action steps, German, no numbers. Name what the user requested; never return generic understand/edit/run/check phases.") },
         { role: "user", content: ask.slice(0, 400) },
       ],
       maxTokens: 70,
@@ -590,7 +596,7 @@ export async function brainPlanText(ask: string): Promise<string[]> {
     });
     const j = extractJson(raw) as { steps?: string[] } | null;
     const steps = (j?.steps ?? []).map((s) => s.trim()).filter((s) => s.length > 1 && s.length < 42);
-    return steps.length >= 3 ? steps.slice(0, 6) : fallback;
+    return steps.length >= 3 && applySetPlan(fallback.map(text => ({ text, status: "todo" as const })), steps, false) ? steps.slice(0, 6) : fallback;
   } catch {
     return fallback;
   }

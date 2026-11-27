@@ -12,11 +12,13 @@ test("memory stays scoped, durable and controllable", async t => {
   const m = await server.ssrLoadModule("/src/lib/learn.ts");
   const { EMPTY_JOURNAL, sessionFileText } = await server.ssrLoadModule("/src/lib/session.ts");
   const { useLearn } = m;
+  const { librarySeeds } = await server.ssrLoadModule("/src/lib/skill-library.ts");
   const writes = [], deletes = [];
   console.warn = (...args) => { if (!String(args[0]).startsWith("[zustand persist middleware]")) warn(...args); };
-  useIde.setState({ writeFile: (p, text) => writes.push({ p, text }), deleteFile: p => deletes.push(p) });
+  useIde.setState({ writeFile: (p, text) => { writes.push({ p, text }); useIde.setState(state => ({ files: { ...state.files, [p]: text } })); },
+    deleteFile: p => { deletes.push(p); useIde.setState(state => ({ files: Object.fromEntries(Object.entries(state.files).filter(([file]) => file !== p)) })); } });
   const reset = () => {
-    useLearn.setState({ on: true, prefs: { ...m.LEARN_DEFAULTS }, facts: [], skills: [], negs: [], forgotten: [], forgottenFacts: [], activeSkills: [], events: [], eventCount: 0 });
+    useLearn.setState({ on: true, prefs: { ...m.LEARN_DEFAULTS }, facts: [], skills: librarySeeds(), negs: [], forgotten: [], forgottenFacts: [], activeSkills: [], events: [], eventCount: 0 });
     useIde.setState({ workspaceCwd: "C:/A", githubRepo: "", memoryWorkspace: "v2:path:c:/a", workspaceMemoryId: "fixture-local", workspaceSessions: {}, chat: [], sessionJournal: { ...EMPTY_JOURNAL }, sessionTokens: { prompt: 0, completion: 0 }, files: {}, dirty: {}, pendingDiffs: [] });
     writes.length = deletes.length = 0;
   };
@@ -42,7 +44,8 @@ test("memory stays scoped, durable and controllable", async t => {
     useIde.getState().setWorkspaceCwd("D:/B"); useIde.getState().applyFiles({});
     await flush();
     assert.equal(useIde.getState().sessionJournal.goal, "");
-    assert.deepEqual(useLearn.getState().skills, []);
+    assert.deepEqual(useLearn.getState().skills.filter(skill => !skill.builtin), []);
+    assert.ok(useLearn.getState().skills.some(skill => skill.builtin), 'the bundled library stays independent of project imports');
   });
   await t.test("reload hydrates an empty journal and forgetting cancels queued file imports", async () => {
     reset();
@@ -51,7 +54,8 @@ test("memory stays scoped, durable and controllable", async t => {
     useIde.getState().applyFiles({ ".anvil/skills/old.md": "Alte Anweisung aus A." });
     useLearn.getState().clear();
     await flush();
-    assert.deepEqual(useLearn.getState().skills, []);
+    assert.deepEqual(useLearn.getState().skills.filter(skill => !skill.builtin), []);
+    assert.ok(useLearn.getState().skills.some(skill => skill.builtin), 'clearing personal memory preserves bundled skills');
   });
   await t.test("learning cadence continues after the log reaches its cap", () => {
     reset();
@@ -79,10 +83,10 @@ test("memory stays scoped, durable and controllable", async t => {
     assert.deepEqual(m.matchSkills("Blumen zeichnen"), []);
     const b = useLearn.getState().writeSkill({ name: "build", when: "Rust build", body: "Rust aus Projekt B bauen.", scope: "project" });
     assert.notEqual(a.id, b.id);
-    assert.equal(useLearn.getState().skills.length, 2);
+    assert.equal(useLearn.getState().skills.filter(skill => !skill.builtin).length, 2);
     assert.match((await m.agentLearn("run", { name: "build" })).body, /Projekt B/);
     useLearn.getState().forgetSkill(b.id);
-    assert.deepEqual(useLearn.getState().skills.map(s => s.id), [a.id]);
+    assert.deepEqual(useLearn.getState().skills.filter(skill => !skill.builtin).map(s => s.id), [a.id]);
     assert.ok(!deletes.includes(`.anvil/skills/${a.id}.md`));
   });
   await t.test("forgetting suppresses rediscovery and preserves more than 48 facts", () => {
@@ -102,9 +106,19 @@ test("memory stays scoped, durable and controllable", async t => {
     useLearn.getState().setPref("skillBodies", false);
     assert.ok((await m.agentLearn("run", { name: "test" })).error);
     useLearn.getState().setPref("inject", false);
-    assert.equal(m.learnPrompt(), "");
-    assert.ok((await m.agentLearn("list", {})).error);
-    assert.deepEqual(await m.agentLearn("state", {}), { on: true, inject: false });
+    assert.doesNotMatch(m.learnPrompt(), /Private Vorliebe/);
+    assert.match(m.learnPrompt(), /Skills/);
+    const listing = await m.agentLearn("list", {});
+    assert.deepEqual(listing.person, []);
+    assert.deepEqual(listing.project, []);
+    assert.deepEqual(listing.negatives, []);
+    assert.ok(listing.skills.some(skill => skill.name === 'test'), 'skill listing remains available independently of personal memory');
+    const status = await m.agentLearn("state", {});
+    assert.equal(status.on, true);
+    assert.equal(status.inject, false);
+    assert.equal(status.skillsEnabled, true);
+    useLearn.getState().setPref("skills", false);
+    assert.deepEqual((await m.agentLearn("skills", {})), {error: "Skills aus"});
   });
   await t.test("legacy project facts stay intact but inactive until explicitly assigned", () => {
     reset(); const f = useLearn.getState().addFact("project", "Alte Projektregel");
@@ -117,11 +131,12 @@ test("memory stays scoped, durable and controllable", async t => {
     reset();
     m.hydrateLearnFromFiles({ ".anvil/skills/build.md": "Erste ausführliche Anweisung" });
     m.hydrateLearnFromFiles({ ".anvil/skills/build.md": "Geänderte ausführliche Anweisung" });
-    assert.equal(useLearn.getState().skills.length, 1);
-    assert.match(useLearn.getState().skills[0].body, /Geänderte/);
+    const projectSkills = useLearn.getState().skills.filter(skill => !skill.builtin);
+    assert.equal(projectSkills.length, 1);
+    assert.match(projectSkills[0].body, /Geänderte/);
     await open("D:/B");
     m.hydrateLearnFromFiles({ ".anvil/skills/build.md": "Projekt B ausführliche Anweisung" });
-    assert.equal(useLearn.getState().skills.length, 2);
+    assert.equal(useLearn.getState().skills.filter(skill => !skill.builtin).length, 2);
   });
   await t.test("journal writes go through one captured write and clear preserves session context", async () => {
     reset(); useIde.getState().setSessionJournal({ ...EMPTY_JOURNAL, goal: "Aktueller Auftrag" });

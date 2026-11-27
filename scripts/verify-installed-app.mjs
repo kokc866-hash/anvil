@@ -5,14 +5,14 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { _electron } from 'playwright';
 import { verifyBackgroundPackage } from './background-package-check.mjs';
+import { verifyPackageFingerprint, verifyInstallerIdentity } from './verify-package-fingerprint.mjs';
 
 const [installer, executable = 'Anvil.exe'] = process.argv.slice(2);
 assert.equal(process.platform, 'win32');
 assert.ok(installer && path.isAbsolute(installer), 'Absolute installer path required');
 assert.ok(process.env.CI === 'true' || executable === 'AnvilInstallerQA.exe', 'Local tests may only install the distinct QA product');
 if (process.env.CI !== 'true') {
-  const buildConfig = await readFile(path.join(path.dirname(installer), 'builder-effective-config.yaml'), 'utf8');
-  assert.match(buildConfig, /^appId: ['"]?app\.anvil\.installerqa['"]?\s*$/m, 'QA package must have a separate Windows registration identity');
+  await verifyInstallerIdentity(path.dirname(installer), executable);
   assert.match(path.basename(installer), /AnvilInstallerQA/);
 }
 const root = path.resolve('artifacts/installer-acceptance'); await mkdir(root, { recursive: true });
@@ -64,7 +64,10 @@ async function launch() {
 async function close() { await app.close(); app = null; page = null; }
 try {
   assert.equal(await command(installer, ['/S', `/D=${target}`]), 0, 'Fresh install');
+  const manifest = await verifyPackageFingerprint(path.join(target, 'resources', 'app'));
   await launch(); result.checks.push('fresh installed UI, own data directory, external Node absent from PATH');
+  assert.equal(await app.evaluate(() => process.versions.electron), manifest.runtime, 'Installed package uses the declared Electron runtime');
+  result.checks.push(`fresh package fingerprint and Electron ${manifest.runtime}`);
   result.checks.push(await verifyBackgroundPackage(page,fixture));
   await page.evaluate(({ project, before, after }) => {
     const store = window.__anvilIde;

@@ -35,7 +35,7 @@ export function renderMarkdown(src: string): string {
       code.push(line);
       continue;
     }
-    const list = line.match(/^[\-*] (.+)$/);
+    const list = line.match(/^[-*] (.+)$/);
     if (list) {
       if (!inList) {
         out.push("<ul>");

@@ -10,7 +10,7 @@ export function startServiceAutoconnect() {
   const attempts = new Map<string, number>();
   const jobs = new Map<string, { key: string; controller: AbortController }>();
   let stopped = false;
-  const eligible = (s: McpServer) => s.enabled && isMcpService(s) && s.auth === "oauth";
+  const eligible = (s: McpServer) => s.enabled && isMcpService(s) && (s.auth === "oauth" || s.auth === "bearer");
   const current = (s: McpServer) => useIde.getState().mcpServers.find(
     (next) => next.id === s.id && eligible(next) && serviceConnectionKey(next) === serviceConnectionKey(s),
   );

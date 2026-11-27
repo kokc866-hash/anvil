@@ -1,21 +1,9 @@
 import type { LspHit } from "./lsp";
-
-const OPEN_MAX = 1_000_000;
-const CLOSED_MAX = 200_000;
+import { hoverCode } from "./hover-markdown.ts";
+import { tsRoots } from "./compiler-files.ts";
 
 function hit(path: string, line: number, col: number, message: string, source: string, severity: LspHit["severity"] = "error"): LspHit {
   return { path, line: Math.max(1, line), col: Math.max(1, col), message: message.slice(0, 240), source, severity };
-}
-
-function tsRoots(files: Record<string, string>, open: string[] = []): string[] {
-  const all = Object.keys(files).filter((p) => /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(p) && !p.includes("node_modules") && !p.includes("anvil-lib"));
-  const prefer = open.filter((p) => all.includes(p));
-  const rest = all.filter((p) => !prefer.includes(p));
-  const ok = (p: string) => {
-    const n = files[p]?.length ?? 0;
-    return n > 0 && n < (prefer.includes(p) ? OPEN_MAX : CLOSED_MAX);
-  };
-  return [...prefer, ...rest].filter(ok).slice(0, 64);
 }
 
 type TsMod = typeof import("typescript");
@@ -194,7 +182,7 @@ export function tsQuickInfoSync(path: string, offset: number): string | null {
     const info = bundle.ls.getQuickInfoAtPosition(path, offset);
     const sig = info ? bundle.ts.displayPartsToString(info.displayParts || []) : "";
     const doc = info ? bundle.ts.displayPartsToString(info.documentation || []) : "";
-    if (sig) return `**${sig}** · tsc${doc ? `\n\n${doc}` : ""}`;
+    if (sig) return `${hoverCode(sig, "typescript")}\n\nTypeScript${doc ? `\n\n${doc}` : ""}`;
     const prog = bundle.ls.getProgram();
     const sf = prog?.getSourceFile(path);
     if (!sf || !prog) return null;
@@ -208,7 +196,7 @@ export function tsQuickInfoSync(path: string, offset: number): string | null {
     sf.forEachChild(visit);
     const t = prog.getTypeChecker().typeToString(prog.getTypeChecker().getTypeAtLocation(node));
     if (!t || t === "any" || t === "error") return null;
-    return `**${t}** · tsc`;
+    return `${hoverCode(t, "typescript")}\n\nTypeScript`;
   } catch {
     return null;
   }

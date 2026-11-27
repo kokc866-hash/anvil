@@ -28,14 +28,14 @@ import { projectSettingsWrites } from "@/lib/project-settings";
 import type { AfterWrite } from "@/lib/harness";
 import { normalizePlanWho, type PlanWho } from "@/lib/plan";
 
-import { providerOf, type LlmProvider } from "@/lib/providers";
+import { modelsForConnection, providerOf, type LlmProvider } from "@/lib/providers";
 
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 
 import { capLabel, getCap, resetCap } from "@/lib/model-caps";
 
-import { cliKindFor, probeCli, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
+import { cliKindFor, probeCli, listCliModels, cliModelsHint, loginCli, cliStatusText, CLI_PROVIDERS, type CliKind } from "@/lib/cli-client";
 import { ProviderPick } from "../provider-pick";
 import { ConnectionSummary } from "../connection-summary";
 import { connectionProbeSummary } from "@/lib/connection-capabilities";
@@ -93,6 +93,7 @@ export function AgentSection({ q }: { q: string }) {
   const [profileName, setProfileName] = useState("");
   const [subMsg, setSubMsg] = useState("");
   const spec = providerOf(llmProvider);
+  const modelCatalog = modelsForConnection(llmProvider, llmAuthMode);
   const aboKind = cliKindFor(llmProvider, llmAuthMode);
   const aboOn = Boolean(aboKind);
   const thinkModes = thinkingModes(llmProvider, llmModel, aboKind);
@@ -123,9 +124,14 @@ export function AgentSection({ q }: { q: string }) {
     try {
       if (kind) {
         const status = await probeCli(kind, controller.signal);
-        if (current()) {
-          setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
-          setModels([]);
+        if (!current()) return;
+        setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
+        setModels([]);
+        if (status.authenticated !== false) {
+          const ids = await listCliModels(kind, controller.signal);
+          if (!current()) return;
+          setModels(ids);
+          if (kind === "codex" && ids[0] && !snapshot.llmModel && !useIde.getState().llmModel) setLlmModel(ids[0]);
         }
         return;
       }
@@ -193,6 +199,7 @@ export function AgentSection({ q }: { q: string }) {
       if (current()) {
         setSubMsg(cliStatusText(status));
         setProbe(connectionProbeSummary("cli", status, useIde.getState().locale));
+        if (status.authenticated !== false) await probeLocal(true);
       }
     } catch (err) {
       if (current()) setSubMsg(err instanceof Error ? err.message : "CLI-Anmeldung fehlgeschlagen.");
@@ -214,6 +221,7 @@ export function AgentSection({ q }: { q: string }) {
           status={subMsg}
           loading={subBusy}
           onChange={(id, via) => {
+            if (id === llmProvider && via === llmAuthMode) return;
             loginController.current?.abort();
             setSubBusy(false);
             setLlmProvider(id, via);
@@ -239,6 +247,9 @@ export function AgentSection({ q }: { q: string }) {
         <p className="pb-2 text-xs text-muted text-pretty">
           {aboKind ? `Nutzt die installierte ${aboKind} CLI und deren Abo-Anmeldung.` : spec.hint}
         </p>
+        {!aboOn && spec.setupUrl ? (
+          <a className="mb-2 inline-block text-xs text-link underline" href={spec.setupUrl} target="_blank" rel="noopener noreferrer">Einrichtung beim Anbieter</a>
+        ) : null}
         {spec.needsUrl && !aboOn ? (
           <Field
             label={spec.id === "azure" ? "Resource-URL" : "API-URL"}
@@ -252,12 +263,15 @@ export function AgentSection({ q }: { q: string }) {
             <Field label="Deployment" value={llmModel} onChange={setLlmModel} placeholder={spec.model || "Deployment"} />
           ) : (
             <ModelPick
-              catalog={spec.models}
+              catalog={modelCatalog}
               live={models}
               value={llmModel}
               onChange={setLlmModel}
               placeholder={spec.model || "Modell-ID"}
               loading={modelsBusy}
+              hint={aboKind ? cliModelsHint(aboKind, models.length, modelsBusy, useIde.getState().locale) : undefined}
+              prefer={aboKind === "codex" ? models : aboKind ? modelCatalog : undefined}
+              sourceLabel={aboKind ? "CLI" : undefined}
             />
           )
         ) : null}
@@ -275,7 +289,7 @@ export function AgentSection({ q }: { q: string }) {
         {spec.id !== "grok" ? (
           <div className="flex items-center gap-2 py-1">
             <Button className="h-8" disabled={modelsBusy || subBusy} onClick={() => void probeLocal()}>
-              {aboOn ? "CLI-Status laden" : "Modellliste laden"}
+              Modellliste aktualisieren
             </Button>
             {probe ? <span className="text-xs text-muted">{probe}</span> : null}
           </div>
@@ -473,7 +487,7 @@ export function AgentSection({ q }: { q: string }) {
         </Vis>
       ) : null}
       <Vis q={q} label="Retry Versuche Abbruch lokal Hintergrund Test Hintergrundbetrieb">
-        <Row label="Hintergrundbetrieb (Test)" hint="Agentenaufträge mit lokalen API- und CLI-Modellen laufen unabhängig vom Editorfenster. Dateien, Compiler, HTML-Vorschau, Engine-Aktionen und freigegebene Dienste bleiben nutzbar. Bildanhänge benötigen ein Modell mit Bildverständnis. Wenn du Anvil beendest, wird der Auftrag gestoppt.">
+        <Row label="Hintergrundbetrieb (Test)" hint="Agentenaufträge mit lokalen APIs, Qwen AI, DeepSeek und CLI-Modellen laufen unabhängig vom Editorfenster. Dateien, Compiler, HTML-Vorschau, Engine-Aktionen und freigegebene Dienste bleiben nutzbar. Bildanhänge benötigen ein Modell mit Bildverständnis. Wenn du Anvil beendest, wird der Auftrag gestoppt.">
           <Toggle on={backgroundAgent} onChange={(backgroundAgent) => useIde.setState({ backgroundAgent })} />
         </Row>
         {backgroundAgent && <Row label="Direkt im Projekt speichern" hint="Speichert Dateiänderungen bereits während des Auftrags im gewählten Projektordner. Vorherige Inhalte werden gesichert. Bei Konflikten hält der Auftrag an. Ist diese Option ausgeschaltet, kannst du die Entwürfe anschließend prüfen.">
@@ -931,18 +945,18 @@ function ToolModeRow({ provider, model, baseUrl }: { provider: string; model: st
   const key = toolTargetKey(provider, model, baseUrl || providerOf(provider).baseUrl);
   const mode = toolCompatibility(modes[key]);
   const hints = de ? {
-    standard: "Verwendet die bisherige Auswahl an Werkzeugen. Bei einer Aktualisierung bleibt dieser Modus aktiv.",
-    compact: "Stellt bis zu 8 passende Werkzeuge bereit. Weitere kann der Agent gezielt nachladen. Bei eindeutigem Stillstand versucht Anvil einmal, die Aufrufe als Text zu übermitteln.",
-    text: "Beschreibt bis zu 8 Werkzeuge im Text. Das Modell antwortet mit einem vollständigen JSON-Aufruf statt mit einem nativen Funktionsaufruf.",
+    standard: "Startet mit grundlegenden und zum Auftrag passenden Werkzeugen. Weitere Werkzeuge, MCP-Schemata und Skills lädt der Agent bei Bedarf nach.",
+    compact: "Stellt bis zu 10 Werkzeuge mit verkürzten Beschreibungen bereit, einschließlich Suche, To-do und Rückfragen. Weitere werden bei Bedarf nachgeladen. Bei eindeutigem Stillstand versucht Anvil einmal die Textübermittlung.",
+    text: "Beschreibt bis zu 10 Werkzeuge im Text, einschließlich Suche, To-do und Rückfragen. Das Modell antwortet mit einem vollständigen JSON-Aufruf. Weitere Fähigkeiten bleiben nachladbar.",
   } : {
-    standard: "Existing tool selection. Updates keep this mode active.",
-    compact: "Up to 8 relevant tools; select more as needed. One text fallback for this task on a clear stall.",
-    text: "Up to 8 tools as text. One complete JSON call per answer; no native function calls.",
+    standard: "Starts with core and task-relevant tools. The agent loads other tools, MCP schemas and skills as needed.",
+    compact: "Up to 10 tools with shorter descriptions, including discovery, checklist and questions. Load more as needed. One text fallback on a clear stall.",
+    text: "Up to 10 tools as text, including discovery, checklist and questions. One complete JSON call per answer; other capabilities remain loadable.",
   };
   return <div className="py-3" role="group" aria-label={de ? "Werkzeugkompatibilität" : "Tool compatibility"}>
     <p className="mb-2 text-sm text-fg">{de ? "Werkzeugkompatibilität" : "Tool compatibility"}</p>
     <div className="flex flex-wrap gap-1">
-      {(["standard", "compact", "text"] as ToolCompatibility[]).map((value, i) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className={`rounded-md border border-border px-3 py-2 text-xs ${mode === value ? "bg-hover text-fg" : "bg-bg text-muted"}`}>{(de ? ["Bisherig", "Kompakt", "Text"] : ["Existing", "Compact", "Text"])[i]}</button>)}
+      {(["standard", "compact", "text"] as ToolCompatibility[]).map((value, i) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className={`rounded-md border border-border px-3 py-2 text-xs ${mode === value ? "bg-hover text-fg" : "bg-bg text-muted"}`}>{(de?["Standard", "Kompakt", "Text"]:["Standard", "Compact", "Text"])[i]}</button>)}
     </div>
     <p className="mt-2 text-xs text-muted">{hints[mode]} {de ? "Die Einstellung gilt ab dem nächsten Auftrag für dieses Modell an dieser Serveradresse. Der gewählte Denkaufwand bleibt unverändert." : "Applies to this model at this server address, starting with the next task. Keeps your thinking setting."}</p>
   </div>;

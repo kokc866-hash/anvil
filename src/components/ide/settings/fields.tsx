@@ -14,13 +14,13 @@ export function Vis({ q, label, children }: { q: string; label: string; children
 export function Row({ label, hint, children, compact = false }: { label: string; hint?: string; children: ReactNode; compact?: boolean }) {
   const id = useId();
   return (
-    <div className={cn("flex items-start justify-between gap-4", compact ? "py-1.5" : "py-3")}>
+    <div className={cn("settings-row", compact ? "py-1.5" : "py-3")}>
       <div className="min-w-0">
         <p id={id} className="text-sm text-fg">{label}</p>
         {hint ? <p id={`${id}-hint`} className="mt-0.5 text-xs text-muted text-pretty">{hint}</p> : null}
       </div>
       <Description.Provider value={{ label: id, hint: hint ? `${id}-hint` : undefined }}>
-        <div className="shrink-0">{children}</div>
+        <div className="settings-control">{children}</div>
       </Description.Provider>
     </div>
   );
@@ -45,7 +45,7 @@ export function Seg<T extends string>({
           aria-pressed={value === o.id}
           onClick={() => onChange(o.id)}
           className={cn(
-            "h-8 rounded-sm px-2.5 text-xs font-medium",
+            "min-h-8 max-w-full rounded-sm px-2.5 py-1 text-sm leading-snug font-medium",
             value === o.id ? "bg-hover text-fg" : "text-muted hover:text-fg",
           )}
         >
@@ -71,13 +71,13 @@ export function Field({
 }) {
   return (
     <label className="block py-2">
-      <span className="text-xs text-muted">{label}</span>
+      <span className="text-sm text-muted">{label}</span>
       <input
         type={type}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 h-9 w-full rounded-md border border-border bg-bg px-2 font-mono text-xs text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
+        className="mt-1 h-9 w-full rounded-md border border-border bg-bg px-2 font-mono text-sm text-fg outline-none placeholder:text-subtle focus:ring-2 focus:ring-ring"
       />
     </label>
   );

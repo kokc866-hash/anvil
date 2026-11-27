@@ -64,13 +64,19 @@ try {
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["check.ts"]), "export const value = 42;");
   await page.waitForFunction(() => !window.__anvilIde.getState().compileProblems.some((p) => p.path === "check.ts"));
   await mkdir(screenshots, { recursive: true });
-  await page.screenshot({ path: join(screenshots, "anvil-editor-production.png") });
+  await page.getByRole("button", { name: "Ausgabefenster", exact: true }).focus();
+  await page.getByRole("tooltip").filter({ hasText: "Aktuelle Datei ausführen und Ausgabe anzeigen" }).waitFor();
+  await page.screenshot({ path: join(screenshots, "anvil-editor-production.png"), animations: "disabled" });
+  await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("navigation", { name: "Arbeitsbereich" }).waitFor();
   await page.getByRole("navigation", { name: "Arbeitsbereich" }).getByRole("button", { name: "Dateien", exact: true }).click();
   await page.getByRole("button", { name: "Editor", exact: true }).click();
   await page.waitForFunction(() => window.editor()?.getValue() === "export const value = 42;");
-  await page.screenshot({ path: join(screenshots, "anvil-editor-production-mobile.png") });
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await page.getByRole("button", { name: "Ausgabefenster", exact: true }).focus();
+  await page.getByRole("tooltip").filter({ hasText: "Aktuelle Datei ausführen und Ausgabe anzeigen" }).waitFor();
+  await page.screenshot({ path: join(screenshots, "anvil-editor-production-mobile.png"), animations: "disabled" });
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ productionEditor: true, localFormat: true, compilerWorker: true, workspaceUndoIsolated: true, uncaughtErrors: errors }));
 } catch (error) { console.error(error, log); process.exitCode = 1; }

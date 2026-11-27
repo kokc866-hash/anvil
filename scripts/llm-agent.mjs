@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import { isIP } from "node:net";
+import { isQwenCloudHost } from "../electron/qwen-hosts.mjs";
 
 export const LLM_HEADERS = ["content-type", "accept", "authorization", "x-api-key", "api-key", "anthropic-version", "anthropic-beta", "openai-beta", "openai-organization", "openai-project", "x-goog-api-key", "http-referer", "x-title"];
 export function llmHeaders(raw) {
@@ -74,7 +75,7 @@ export function isCloudLlmHost(host) {
   const h = String(host || "")
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
-  if (CLOUD_LLM.has(h)) return true;
+  if (CLOUD_LLM.has(h) || isQwenCloudHost(h)) return true;
   if (h.endsWith(".openai.azure.com") || h.endsWith(".googleapis.com")) return true;
   return false;
 }
@@ -159,9 +160,11 @@ export function pipeQuiet(src, dest) {
   }
   swallow(src);
   swallow(dest);
-  src.on("error", () => {
+  src.on("error", (error) => {
     try {
-      if (!dest.writableEnded) dest.end();
+      // Ending normally would turn a reset into a successful EOF and allow a
+      // partial model answer to look complete to the renderer.
+      if (!dest.writableEnded) dest.destroy(error);
     } catch {
       /* */
     }

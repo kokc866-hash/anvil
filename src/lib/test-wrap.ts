@@ -6,6 +6,18 @@ export function hasRealJsRunner(src: string): boolean {
   return /\bfrom\s+['"]node:test['"]/.test(src) || /\brequire\s*\(\s*['"]node:test['"]/.test(src);
 }
 
+/** Use the real Node file-test entry semantics, including require.main guards.
+ * The existing owned-process runner controls the entire child process tree. */
+export function nodeTestInput(files: Record<string, string>, path: string): { entry: string; files: Record<string, string> } {
+  if (!Object.hasOwn(files, path)) throw new Error(`Testdatei fehlt: ${path}`);
+  let index = 0, entry = "__anvil_node_test_0.mjs";
+  while (Object.hasOwn(files, entry)) entry = `__anvil_node_test_${++index}.mjs`;
+  // Only Node's private parent-test marker is removed. Electron-as-Node and
+  // application environment variables must reach this independent test CLI.
+  const source = `import { spawn } from 'node:child_process';\nimport { fileURLToPath } from 'node:url';\nconst env={...process.env};delete env.NODE_TEST_CONTEXT;\nconst child=spawn(process.execPath,['--test',${JSON.stringify(path)}],{cwd:fileURLToPath(new URL('.',import.meta.url)),stdio:['ignore','pipe','pipe'],env,windowsHide:true});\nchild.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);\nchild.once('error',error=>{console.error(error.message);process.exitCode=1;});\nchild.once('exit',(code,signal)=>{if(signal)console.error('Node test process ended with signal '+signal);process.exitCode=!signal&&typeof code==='number'?code:1;});\n`;
+  return { entry, files: { ...files, [entry]: source } };
+}
+
 export function wrapPy(path: string, src: string, only?: string): string {
   if (hasRealPyRunner(src)) return src;
   const p = JSON.stringify(path);

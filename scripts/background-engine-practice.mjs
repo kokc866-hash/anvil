@@ -29,9 +29,9 @@ for(const engine of ['unity','unreal']){
   assert.equal(result.running,true,result.stderr);
   const started=Date.now();let ready=false,proof='';
   while(Date.now()-started<180000){
-   if(engine==='unity'){try{const log=readFileSync(join(project,'Logs','Editor.log'),'utf8');if(log.includes('Application.AssetDatabase Initial Refresh End')&&log.includes('Assembly-CSharp-Editor.dll')){proof='Editor initialized and C# editor script compiled';ready=true;break;}}catch{}}
+   if(engine==='unity'){try{const log=readFileSync(join(project,'Logs','Editor.log'),'utf8');if(log.includes('Application.AssetDatabase Initial Refresh End')&&log.includes('Assembly-CSharp-Editor.dll')){proof='Editor initialized and C# editor script compiled';ready=true;break;}}catch{ /* The editor may not have created its log yet; retry until the deadline. */ }}
    if(engine==='unreal'){
-    try{const log=readFileSync(join(project,'Saved','Logs','AnvilProbe.log'),'utf8');if(/Engine is initialized|Total Blueprint Compile Time|Editor is initialized/.test(log)){proof=log.split('\n').filter(s=>/Engine is initialized|Total Blueprint Compile Time|Editor is initialized/.test(s)).join('\n');ready=true;break;}}catch{}
+    try{const log=readFileSync(join(project,'Saved','Logs','AnvilProbe.log'),'utf8');if(/Engine is initialized|Total Blueprint Compile Time|Editor is initialized/.test(log)){proof=log.split('\n').filter(s=>/Engine is initialized|Total Blueprint Compile Time|Editor is initialized/.test(s)).join('\n');ready=true;break;}}catch{ /* The editor may not have created its log yet; retry until the deadline. */ }
    }
    if(!manager.jobs.size)break;
    await new Promise(r=>setTimeout(r,1000));

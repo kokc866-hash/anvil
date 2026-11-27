@@ -1,5 +1,7 @@
 import { McpHost, mcpConfig } from "./mcp-host.mjs";
 import { completeCli } from "./cli-runner.mjs";
+import { ToolRejection } from "./tool-rejection.mjs";
+import { workspaceResultDestination } from '../companion/git.mjs';
 
 const contract = () => import("../agent-build/service-contract.mjs");
 const identity = (s) =>
@@ -27,6 +29,7 @@ export class AgentConnections {
     this.cli = cli;
     this.servers = [];
     this.catalog = new Map();
+    this.catalogAt = new Map(); this.resourceCatalog = new Map();
   }
   begin(request) {
     this.surface = request.surface;
@@ -47,6 +50,7 @@ export class AgentConnections {
       throw new Error("Ungültige Dienstauswahl.");
     this.model = request.model;
     this.catalog.clear();
+    this.catalogAt.clear(); this.resourceCatalog.clear();
   }
   samePermissions(services, surface) {
     if (this.surface && JSON.stringify(surface) !== JSON.stringify(this.surface)) return false;
@@ -56,7 +60,7 @@ export class AgentConnections {
       return live && identity(mcpConfig(live)) === identity(s);
     });
   }
-  async execute(op, { signal, emit }) {
+  async execute(op, { signal, emit, workspaceRoot }) {
     if (op.kind === "cli") {
       if (!this.model.cliKind) throw new Error("Keine CLI für diesen Auftrag gewählt.");
       return this.cli(
@@ -79,7 +83,7 @@ export class AgentConnections {
       throw new Error("Dienst fehlt oder Name ist mehrdeutig. Dienst-ID aus mcp_list verwenden.");
     const permitted = (s, method, params) => policy.assertConnectionRequest(s, method, params);
     const load = async (s) => {
-      if (this.catalog.has(s.id)) return this.catalog.get(s.id);
+      if (this.catalog.has(s.id)&&Date.now()-(this.catalogAt.get(s.id)||0)<60000) return this.catalog.get(s.id);
       permitted(s, "tools/list");
       const tools = [];
       let catalogBytes = 0;
@@ -108,6 +112,7 @@ export class AgentConnections {
       }
       if (cursor) throw new Error("Dienstkatalog überschreitet die Seitengrenze.");
       this.catalog.set(s.id, tools);
+      this.catalogAt.set(s.id,Date.now());
       return tools;
     };
     if (op.action === "list") {
@@ -117,7 +122,8 @@ export class AgentConnections {
         resourceTemplates = [];
       for (const s of selected) {
         try {
-          if (!op.args?.cursor) this.catalog.delete(s.id);
+          if(op.args?.refresh===true){this.catalog.delete(s.id);this.resourceCatalog.delete(s.id);}
+          if (!op.args?.cursor&&!op.args?.catalogSearch) this.catalog.delete(s.id);
           rows.push(...(await load(s)));
           servers.push({ id: s.id, name: s.name, ready: true });
         } catch (error) {
@@ -135,6 +141,9 @@ export class AgentConnections {
         } catch {
           continue;
         }
+        const cached=this.resourceCatalog.get(s.id);
+        if(op.args?.catalogSearch&&cached&&Date.now()-cached.at<60000){resources.push(...cached.resources);resourceTemplates.push(...cached.templates);continue;}
+        const resourceStart=resources.length,templateStart=resourceTemplates.length;
         for (const [method, key, target] of [
           ["resources/list", "resources", resources],
           ["resources/templates/list", "resourceTemplates", resourceTemplates],
@@ -168,6 +177,16 @@ export class AgentConnections {
               servers.find((row) => row.id === s.id).resourceError = String(error.message || error);
           }
         }
+        this.resourceCatalog.set(s.id,{at:Date.now(),resources:resources.slice(resourceStart),templates:resourceTemplates.slice(templateStart)});
+      }
+      if(op.args?.catalogSearch){
+        const catalogRows=[...rows.map(tool=>({tool})),...resources.map(resource=>({resource})),...resourceTemplates.map(template=>({template}))];
+        const page=policy.capabilityPage(catalogRows,{query:String(op.args.query||''),limit:Number(op.args.limit)||6,cursor:op.args.cursor},row=>{
+          const value=row.tool||row.resource||row.template;
+          return {id:`${row.tool?'tool':row.resource?'resource':'template'}:${value.serverId}:${value.name||value.uri||value.uriTemplate}`,name:value.name||value.uri||value.uriTemplate,group:value.server,description:value.description};
+        });
+        return {tools:page.items.flatMap(row=>row.tool?[row.tool]:[]),resources:page.items.flatMap(row=>row.resource?[row.resource]:[]),resourceTemplates:page.items.flatMap(row=>row.template?[row.template]:[]),servers,total:page.total,nextCursor:page.nextCursor,
+          hint:'Use exact serverId/name and inputSchema. Search is read-only. Continue nextCursor with the same query/server.'};
       }
       const options = op.args || {},
         q = String(options.query || "").toLowerCase();
@@ -205,14 +224,31 @@ export class AgentConnections {
     permitted(s, "tools/call", { name: op.name });
     const tool = (await load(s)).find((t) => t.name === op.name);
     if (!tool) throw new Error("Werkzeug nicht im freigegebenen Katalog.");
-    const args = policy.mcpArguments(tool.inputSchema, op.args, s.context);
+    let args;
+    try {
+      const root = workspaceRoot && policy.localMcpFiles(s) ? workspaceRoot() : undefined;
+      args = await policy.workspaceMcpArguments(op.name, tool.inputSchema, op.args, s.context, undefined,
+        root ? (value, directory) => {
+          signal.throwIfAborted();
+          return workspaceResultDestination(root, value, directory);
+        } : undefined);
+      if (root) workspaceRoot();
+    } catch (error) {
+      throw new ToolRejection(error instanceof Error ? error.message : String(error), {
+        guidance: "Der Aufruf wurde vor der Ausführung abgewiesen. Rufe die Werkzeugbeschreibung mit mcp_list ab und übergib die Pflichtfelder in arguments beim nächsten mcp_call.",
+        suggestedTools: ["mcp_list", "mcp_call"],
+      });
+    }
+    signal.throwIfAborted();
     // No retry on ambiguous transport failure: the remote effect may already exist.
     return policy.unwrapMcp(
       await this.mcp.request(s, "tools/call", { name: op.name, arguments: args }, { signal }),
+      op.name,
     );
   }
   close() {
     this.catalog.clear();
+    this.catalogAt.clear();this.resourceCatalog.clear();
     return this.mcp.stop();
   }
 }

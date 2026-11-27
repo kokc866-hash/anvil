@@ -184,12 +184,10 @@ test("template echo is not a tool and stops the loop", () => {
   assert.equal(looksLikeNoTools(dump), false);
 });
 
-test("decodes bare u003c includes from the model", () => {
+test("does not guess another encoding from bare u003c source text", () => {
   const src = "#include u003ciostreamu003e\nint n = sizeof(int) u003e= 4;\nstd::cout u003cu003c n;\n";
   const out = decodeWriteEscapes(src);
-  assert.match(out, /#include <iostream>/);
-  assert.match(out, /sizeof\(int\) >= 4/);
-  assert.match(out, /cout << n/);
+  assert.equal(out, src);
 });
 
 test("keeps JS XSS unicode escapes", () => {
@@ -197,10 +195,10 @@ test("keeps JS XSS unicode escapes", () => {
   assert.equal(decodeWriteEscapes(js), js);
 });
 
-test("parseToolArgs decodes write content", () => {
+test("parseToolArgs preserves literal source after the JSON transport is decoded", () => {
   const r = parseToolArgs('{"path":"main.cpp","content":"#include u003ciostreamu003e\\nint main(){}"}');
   assert.equal(r.truncated, false);
-  assert.match(String(r.args.content), /#include <iostream>/);
+  assert.equal(r.args.content, "#include u003ciostreamu003e\nint main(){}");
 });
 
 test("nudge echo is not incomplete work", () => {

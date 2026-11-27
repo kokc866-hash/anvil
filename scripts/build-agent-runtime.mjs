@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import ts from 'typescript';
 export async function buildAgentRuntime(outDir = 'agent-build') {
   for (const name of ['worker', 'service-contract', 'preview-runtime', 'debug-trace']) {
-  const result = await build({ configFile: false, publicDir: false, logLevel: 'silent', resolve: { alias: { '@': resolve('src') } }, ssr:{noExternal:['prettier']},
+  const result = await build({ configFile: false, publicDir: false, logLevel: 'silent', resolve: { alias: { '@': resolve('src') } }, ssr:{noExternal:['prettier','js-yaml']},
     build: { ssr: `src/agent-runtime/${name}.ts`, outDir, write: false, emptyOutDir: false, minify: false,
       rollupOptions: { output: { entryFileNames: `${name}.mjs`, chunkFileNames: '[name]-[hash].mjs' } } } });
   const chunks = (Array.isArray(result) ? result : [result]).flatMap(item => item.output);
@@ -14,7 +14,7 @@ export async function buildAgentRuntime(outDir = 'agent-build') {
   // Vite's final transform can remove imports after Rolldown's metadata was made.
   const ast = ts.createSourceFile('worker.mjs', entry.code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   function check(node) {
-    const allowed = name === 'worker' ? ['zustand'] : name === 'service-contract' ? ['ajv', 'ajv/dist/2020.js', 'ajv/dist/2019.js', 'ajv-formats'] : [];
+    const allowed = name === 'worker' ? ['zustand', 'undici', 'node:tls'] : name === 'service-contract' ? ['ajv', 'ajv/dist/2020.js', 'ajv/dist/2019.js', 'ajv-formats'] : [];
     if ((ts.isImportDeclaration(node) && !allowed.includes(node.moduleSpecifier.text)) ||
         (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)) throw new Error(`Agent runtime depends on an unbundled import (${node.getText(ast).slice(0,240)}). Refactor the boundary before packaging.`);
     ts.forEachChild(node, check);

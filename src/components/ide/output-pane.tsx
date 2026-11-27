@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { PanelBottom, PanelRight, SquareArrowOutUpRight, X } from "lucide-react";
+import { CircleHelp, Eraser, ListCollapse, MessageSquareShare, PanelBottom, PanelRight, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyBtn } from "@/components/ui/copy-btn";
-import { mergeTests, testsPrompt, discoverTests } from "@/lib/test-parse";
+import { mergeTests, testsPrompt, discoverTests, summarizeTests } from "@/lib/test-parse";
 import { problemsPrompt } from "@/lib/lsp";
 import { runReplCommand } from "@/lib/run-repl";
 import { runAllTests } from "@/lib/run-tests";
@@ -78,10 +78,18 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
   }, [logs.length]);
   const last = logs[logs.length - 1];
   const tests = mergeTests(discoverTests(files), Object.values(testResults));
+  const testCounts = summarizeTests(tests);
   const problems = [
     ...lspProblems.map((p) => ({ path: p.path, line: p.line, text: p.message, source: p.source, severity: p.severity })),
     ...pluginProblems.map((p) => ({ ...p, severity: "error" as const })),
   ];
+  const tabs = [
+    ["out", t("console")],
+    ["dbg", t("debug") + (debug.paused ? " ⏸" : debug.active ? " ●" : "")],
+    ["prob", t("problems") + (problems.length ? ` ${problems.length}` : "")],
+    ["test", t("tests") + (testCounts.total ? ` ${testCounts.passed}/${testCounts.total}` : "")],
+    ["term", "Terminal"],
+  ] as const;
 
   async function runRepl() {
     const code = repl.trim();
@@ -99,140 +107,131 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
   }
 
   return (
-    <div data-copy-scope className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="bar-scroll flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-        <button
-          type="button"
-          className={cn("h-7 shrink-0 whitespace-nowrap px-2 text-xs", tab === "out" ? "text-fg" : "text-muted")}
-          onClick={() => setTab("out")}
-        >
-          {t("console")}
-        </button>
-        <button
-          type="button"
-          className={cn("h-7 shrink-0 whitespace-nowrap px-2 text-xs", tab === "dbg" ? "text-fg" : "text-muted")}
-          onClick={() => setTab("dbg")}
-        >
-          {t("debug")}{debug.paused ? " ⏸" : debug.active ? " ●" : ""}
-        </button>
-        <button
-          type="button"
-          className={cn("h-7 shrink-0 whitespace-nowrap px-2 text-xs", tab === "prob" ? "text-fg" : "text-muted")}
-          onClick={() => setTab("prob")}
-        >
-          {t("problems")}{problems.length ? ` ${problems.length}` : ""}
-        </button>
-        <button
-          type="button"
-          className={cn("h-7 shrink-0 whitespace-nowrap px-2 text-xs", tab === "test" ? "text-fg" : "text-muted")}
-          onClick={() => setTab("test")}
-        >
-          {t("tests")}{tests.length ? ` ${tests.filter((x) => x.ok).length}/${tests.length}` : ""}
-        </button>
-        <button
-          type="button"
-          className={cn("h-7 shrink-0 whitespace-nowrap px-2 text-xs", tab === "term" ? "text-fg" : "text-muted")}
-          onClick={() => setTab("term")}
-        >
-          Terminal
-        </button>
-        <span className="min-w-0 flex-1 px-2">
-          <HelperPrompts where="output" />
-        </span>
-        {last?.stage?.kind === "window" ? (
-          <span className="shrink-0 text-[10px] text-ok">Ausführung · Fenster</span>
-        ) : last?.stage?.kind === "log" ? (
-          <span className="shrink-0 text-[10px] text-muted">Ausführung · Protokoll</span>
-        ) : last?.html || last?.stage?.kind === "html" ? (
-          <span className="shrink-0 text-[10px] text-muted">Ausführung · HTML</span>
-        ) : null}
-        {popout ? null : (
-          <>
+    <div data-copy-scope className="output-pane flex h-full min-h-0 flex-col bg-surface">
+      <div className="flex min-w-0 shrink-0 items-start gap-1 border-b border-border px-2 py-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1">
+            {tabs.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={tab === id}
+                className={cn("h-7 shrink-0 whitespace-nowrap px-2 text-xs", tab === id ? "text-fg" : "text-muted")}
+                onClick={() => setTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="min-w-0 empty:hidden">
+            <HelperPrompts where="output" />
+          </div>
+          {last?.stage?.kind === "window" ? (
+            <span className="text-[10px] text-ok">Ausführung · Fenster</span>
+          ) : last?.stage?.kind === "log" ? (
+            <span className="text-[10px] text-muted">Ausführung · Protokoll</span>
+          ) : last?.html || last?.stage?.kind === "html" ? (
+            <span className="text-[10px] text-muted">Ausführung · HTML</span>
+          ) : null}
+          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-1 gap-y-0.5">
+            {!popout && (
+              <>
+                <Button
+                  variant="quiet"
+                  className="h-7 w-7 p-0"
+                  title={t("dockBottom")}
+                  aria-label={t("dockBottom")}
+                  onClick={() => setOutputDock("bottom")}
+                >
+                  <PanelBottom className={cn("size-3.5", outputDock === "bottom" ? "text-fg" : "text-muted")} />
+                </Button>
+                <Button
+                  variant="quiet"
+                  className="h-7 w-7 p-0"
+                  title={t("dockSide")}
+                  aria-label={t("dockSide")}
+                  onClick={() => setOutputDock("side")}
+                >
+                  <PanelRight className={cn("size-3.5", outputDock === "side" ? "text-fg" : "text-muted")} />
+                </Button>
+                <Button
+                  variant="quiet"
+                  className="h-7 w-7 p-0"
+                  title={t("ownWindow")}
+                  aria-label={t("ownWindow")}
+                  onClick={() => openOutputWindow()}
+                >
+                  <SquareArrowOutUpRight className="size-3.5" />
+                </Button>
+              </>
+            )}
             <Button
               variant="quiet"
-              className="h-7 w-7 p-0"
-              title={t("dockBottom")}
-              aria-label={t("dockBottom")}
-              onClick={() => setOutputDock("bottom")}
+              className="output-text-action h-7 px-2 text-xs"
+              title={t("clearConsole")}
+              onClick={clearOutput}
             >
-              <PanelBottom className={cn("size-3.5", outputDock === "bottom" ? "text-fg" : "text-muted")} />
+              <Eraser aria-hidden="true" className="output-action-icon size-3.5" />
+              <span className="output-action-label">{t("clear")}</span>
+            </Button>
+            <CopyBtn
+              tip={t("copyOut")}
+              getText={() => {
+                const last = newest[0];
+                return last ? [last.stdout, last.stderr].filter(Boolean).join("\n") : "";
+              }}
+            />
+            <Button
+              variant="quiet"
+              className="output-text-action h-7 px-2 text-xs"
+              title={t("explainLast")}
+              onClick={() => {
+                const last = [...output].reverse().find((r) => !r.ok);
+                if (!last) return;
+                setTab("out");
+                setExplain("…");
+                void import("@/lib/brain")
+                  .then((b) => b.brainExplainError(last.stderr || last.stdout, last.label))
+                  .then((s) => setExplain(s || t("noOut")))
+                  .catch((e) => setExplain(e instanceof Error ? e.message : "Fehler"));
+              }}
+            >
+              <CircleHelp aria-hidden="true" className="output-action-icon size-3.5" />
+              <span className="output-action-label">{t("explain")}</span>
             </Button>
             <Button
               variant="quiet"
-              className="h-7 w-7 p-0"
-              title={t("dockSide")}
-              aria-label={t("dockSide")}
-              onClick={() => setOutputDock("side")}
+              className="output-text-action h-7 px-2 text-xs"
+              title={t("logTrim")}
+              onClick={() => {
+                const last = [...output].reverse().find((r) => !r.ok) ?? output.at(-1);
+                if (!last) return;
+                setTab("out");
+                setTrim("…");
+                void import("@/lib/brain")
+                  .then((b) => b.brainLogTrim(last.stderr || last.stdout))
+                  .then((s) => setTrim(s || t("noOut")))
+                  .catch((e) => setTrim(e instanceof Error ? e.message : "Fehler"));
+              }}
             >
-              <PanelRight className={cn("size-3.5", outputDock === "side" ? "text-fg" : "text-muted")} />
+              <ListCollapse aria-hidden="true" className="output-action-icon size-3.5" />
+              <span className="output-action-label">{t("logTrim")}</span>
             </Button>
             <Button
               variant="quiet"
-              className="h-7 w-7 p-0"
-              title={t("ownWindow")}
-              aria-label={t("ownWindow")}
-              onClick={() => openOutputWindow()}
+              className="output-text-action h-7 px-2 text-xs"
+              title={t("agentRun")}
+              onClick={() => void import("@/lib/fix-agent").then((m) => m.askRun())}
             >
-              <SquareArrowOutUpRight className="size-3.5" />
+              <MessageSquareShare aria-hidden="true" className="output-action-icon size-3.5" />
+              <span className="output-action-label">{t("agentRun")}</span>
             </Button>
-          </>
-        )}
-        <Button variant="quiet" className="h-7 px-2 text-xs" title={t("clearConsole")} onClick={clearOutput}>
-          {t("clear")}
-        </Button>
-        <CopyBtn
-          tip={t("copyOut")}
-          getText={() => {
-            const last = newest[0];
-            return last ? [last.stdout, last.stderr].filter(Boolean).join("\n") : "";
-          }}
-        />
-        <Button
-          variant="quiet"
-          className="h-7 px-2 text-xs"
-          title={t("explainLast")}
-          onClick={() => {
-            const last = [...output].reverse().find((r) => !r.ok);
-            if (!last) return;
-            setTab("out");
-            setExplain("…");
-            void import("@/lib/brain")
-              .then((b) => b.brainExplainError(last.stderr || last.stdout, last.label))
-              .then((s) => setExplain(s || t("noOut")))
-              .catch((e) => setExplain(e instanceof Error ? e.message : "Fehler"));
-          }}
-        >
-          {t("explain")}
-        </Button>
-        <Button
-          variant="quiet"
-          className="h-7 px-2 text-xs"
-          title={t("logTrim")}
-          onClick={() => {
-            const last = [...output].reverse().find((r) => !r.ok) ?? output.at(-1);
-            if (!last) return;
-            setTab("out");
-            setTrim("…");
-            void import("@/lib/brain")
-              .then((b) => b.brainLogTrim(last.stderr || last.stdout))
-              .then((s) => setTrim(s || t("noOut")))
-              .catch((e) => setTrim(e instanceof Error ? e.message : "Fehler"));
-          }}
-        >
-          {t("logTrim")}
-        </Button>
-        <Button
-          variant="quiet"
-          className="h-7 px-2 text-xs"
-          title={t("agentRun")}
-          onClick={() => void import("@/lib/fix-agent").then((m) => m.askRun())}
-        >
-          {t("agentRun")}
-        </Button>
+          </div>
+        </div>
         <Button
           variant="quiet"
           className="h-7 w-7 p-0"
-          aria-label="Ausgabe schließen"
+          aria-label={t("closeOutput")}
           onClick={() => {
             if (popout) {
               closeOutputWindow();
@@ -285,13 +284,14 @@ export function OutputPane({ popout = false }: { popout?: boolean }) {
                 <button
                   key={`${row.path}:${row.name}:${i}`}
                   type="button"
+                  disabled={!row.path}
                   className={cn(
                     "mb-1 block w-full text-left hover:underline",
                     row.skip ? "text-subtle" : row.ok ? "text-ok" : "text-danger",
                   )}
                   onClick={() => gotoFile(row.path, row.line)}
                 >
-                  {row.skip ? "○" : row.ok ? "ok" : "fail"} {row.name} · {row.path}:{row.line}
+                  {row.skip ? "○" : row.ok ? "ok" : "fail"} {row.name}{row.path ? ` · ${row.path}:${row.line}` : ""}
                 </button>
               ))}
             </>

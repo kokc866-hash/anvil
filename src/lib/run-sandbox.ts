@@ -49,6 +49,6 @@ export function runJsSandboxed(code: string, ms = 8000): Promise<{ stdout: strin
     parent.postMessage({anvilRun:1,err:String(e&&e.stack||e),logs:logs},"*");
   }
 })();
-<\/script>`;
+</script>`;
   });
 }

@@ -42,8 +42,9 @@ test('skill write, patch, run, outcome share durable state and safe file mirrors
  const first=f.host.state.skills[0];assert.match(files[r.workspaceWrites[0].path],/scope: project/);
  r=await f.call('patch',{name:first.id,body:'1. Read tests.\n2. Run the Python suite.'},{files});assert.equal(r.ok,true);apply(r);
  r=await f.call('run',{name:first.id},{files});assert.match(r.body,/Read tests/);assert.equal(f.host.state.skills[0].uses,1);
- await f.call('outcome',{kind:'fail'},{files});await f.call('outcome',{kind:'fail'},{files});assert.match(f.host.state.skills[0].body,/Letzte Nutzung/);assert.equal(f.host.state.skills[0].fails,2);
- const fresh=new AgentKnowledge({storagePath:f.storagePath});fresh.begin({...f.request,knowledgeResumeFrom:'job-one'},'resumed');await fresh.execute({action:'outcome',args:{kind:'ok'}},{operationId:'resume:outcome',files});assert.equal(fresh.state.skills[0].wins,1);assert.doesNotMatch(fresh.state.skills[0].body,/Letzte Nutzung/);
+ const appliedBody=f.host.state.skills[0].body;
+ await f.call('outcome',{kind:'fail'},{files});await f.call('outcome',{kind:'fail'},{files});assert.equal(f.host.state.skills[0].body,appliedBody);assert.equal(f.host.state.skills[0].feedback.length,2);assert.equal(f.host.state.skills[0].score,.6);
+ const fresh=new AgentKnowledge({storagePath:f.storagePath});fresh.begin({...f.request,knowledgeResumeFrom:'job-one'},'resumed');const outcome=await fresh.execute({action:'outcome',args:{kind:'ok'}},{operationId:'resume:outcome',files});assert.equal(fresh.state.skills[0].feedback.length,3);assert.equal(fresh.state.skills[0].feedback.at(-1).jobId,'resumed');assert.equal(outcome.verified,false);assert.equal(fresh.state.skills[0].body,appliedBody);
 });
 test('concurrent frontend edit and explicit deletion cannot be overwritten or resurrected',async t=>{
  const skill={id:'one',name:'old-skill',when:'test verify',body:'Original instructions.',kind:'guide',scope:'project',ws:workspace,uses:0,score:.6,wins:0,fails:0};
@@ -52,6 +53,31 @@ test('concurrent frontend edit and explicit deletion cannot be overwritten or re
  assert.equal(mergeKnowledgeEvent({...state,skills:[]},event).conflict,true);
  const created={...event,before:null,beforeVersion:null};assert.equal(mergeKnowledgeEvent({...state,skills:[],forgotten:[knowledgeSkillKey(skill)]},created).conflict,true);
  assert.equal(mergeKnowledgeEvent({...state,skills:[skill]},event).conflict,false);
+});
+
+test('agent skill reports survive restart without changing instructions or hiding a low-score skill',async t=>{
+ const s={id:'feedback-guide',name:'feedback-guide',when:'verify an export',body:'Read actual dimensions and compare the expected result.',scope:'project',kind:'guide',ws:workspace,score:.1};
+ const f=fixture(t,{skills:[s]});await f.call('run',{name:s.id});
+ for(let n=0;n<3;n++)assert.equal((await f.call('outcome',{kind:'fail'})).verified,false);
+ assert.equal(f.host.state.skills[0].body,s.body);assert.equal(f.host.state.skills[0].score,s.score);
+ assert.equal((await f.call('skills')).length,1);assert.equal(f.host.state.skills[0].feedback.length,3);
+ const fresh=new AgentKnowledge({storagePath:f.storagePath});fresh.begin({...f.request,knowledgeResumeFrom:'job-one'},'resume-feedback');
+ const outcome=await fresh.execute({action:'outcome',args:{kind:'ok'}},{operationId:'resume-feedback:ok'});
+ assert.equal(outcome.reported,true);assert.equal(fresh.state.skills[0].feedback.at(-1).jobId,'resume-feedback');
+ const oldVersion=fresh.state.skills[0].feedback.at(-1).version;
+ await fresh.execute({action:'run',args:{name:s.id}},{operationId:'resume-feedback:run'});
+ const patched=await fresh.execute({action:'patch',args:{name:s.id,body:'A newer instruction not yet applied.'}},{operationId:'resume-feedback:patch'});
+ const appliedFiles=Object.fromEntries(patched.workspaceWrites.map(write=>[write.path,write.content]));
+ const stale=await fresh.execute({action:'outcome',args:{kind:'ok'}},{operationId:'resume-feedback:stale',files:appliedFiles});
+ assert.match(stale.error,/geändert/);assert.equal(fresh.state.skills[0].feedback.at(-1).version,oldVersion);
+});
+
+test('explicit user skill storage never writes project files and deleted file-backed guides cannot be read',async t=>{
+ const f=fixture(t);const global=await f.call('write',{name:'general-guide',when:'verify current data',body:'Read the explicitly selected input.',scope:'user'});
+ assert.deepEqual(global.workspaceWrites||[],[]);assert.equal(global.skill.storage,'user-profile');assert.equal(f.host.state.skills[0].file,undefined);
+ const file='.anvil/skills/file-guide/SKILL.md',guide={id:'file-guide',name:'file-guide',when:'check artificial data',body:'Read the artificial file.',scope:'project',ws:workspace,file};
+ const deleted=fixture(t,{skills:[guide]});assert.deepEqual(await deleted.call('skills'),[]);assert.ok((await deleted.call('read',{name:guide.id})).error);
+ assert.equal((await deleted.call('read',{name:guide.id},{files:{[file]:'Present instructions.'}})).body,guide.body);
 });
 test('workspace skill file changes are collision checked before journal commit',async t=>{
  const skill={id:'one',name:'old-skill',when:'test verify',body:'Original instructions.',kind:'guide',scope:'project',ws:workspace,file:'.anvil/skills/one.md'};
@@ -77,4 +103,36 @@ test('explicit skill write can reinstall a previously forgotten name without ign
  const r=await f.call('write',{name:'restored-skill',when:'test verify',body:'Run tests and inspect their result.'});
  const state={facts:[],skills:[],forgotten:[forgotten],forgottenFacts:[]};
  const merged=mergeKnowledgeEvent(state,r.knowledgeEvents[0]);assert.equal(merged.conflict,false);assert.equal(merged.state.forgotten.length,0);
+});
+
+test('instruction skills work independently while personal and project memory stays inaccessible', async t => {
+ const skill={id:'anvil-test',name:'anvil-test',description:'Verify an artificial project',when:'test project',body:'Read the test and verify its real result.',builtin:true,scope:'user',resources:['references/check.md'],resourceContents:{'references/check.md':'Check the actual exit code.'}};
+ const f=fixture(t,{memoryEnabled:false,memories:[{id:'private',text:'Personal fixture secret',scope:'user'}],skills:[skill]});
+ assert.deepEqual((await f.call('list')).person,[]);
+ assert.match((await f.call('add',{text:'Must not be stored'})).error,/aus/);
+ const read=await f.call('read',{name:skill.id});assert.equal(read.body,skill.body);assert.equal(read.resourceContents,undefined);
+ assert.equal((await f.call('read',{name:skill.id,resource:'references/check.md'})).content,'Check the actual exit code.');
+ assert.ok((await f.call('read',{name:skill.id,resource:'../private.txt'})).error);
+ assert.equal((await f.call('run',{name:skill.id})).skill,skill.name);
+ assert.ok((await f.call('patch',{name:skill.id,body:'Replace trusted instructions'})).error);
+ assert.equal(f.host.state.skills[0].body,skill.body);
+});
+
+test('disabled skills and reference-body permissions apply before a recorded operation can replay', async t => {
+ const skill={id:'anvil-disabled',name:'anvil-disabled',body:'Read the artificial file and check it.',scope:'user',builtin:true};
+ const f=fixture(t,{skills:[skill]});await f.call('run',{name:skill.id},{operationId:'skill-once'});
+ f.host.begin({...f.request,knowledge:{...f.request.knowledge,disabledSkills:[skill.id]}},'job-one');
+ assert.ok((await f.call('read',{name:skill.id})).error);
+ assert.ok((await f.host.execute({action:'run',args:{name:skill.id}},{operationId:'skill-once'})).error);
+ const bodies=fixture(t,{skillBodies:false,skills:[{...skill,resourceContents:{'ref.md':'hidden reference'}}]});
+ assert.ok((await bodies.call('read',{name:skill.id,resource:'ref.md'})).error);
+});
+
+test('a disabled built-in skill omitted from the visible snapshot cannot be recreated by name', async t => {
+ const f=fixture(t,{skills:[],disabledSkills:['anvil-godot']});
+ for(const action of ['read','run','write','patch']) {
+  assert.match((await f.call(action,{name:'anvil-godot',body:'Replacement instructions'})).error,/ausgeschaltet/);
+ }
+ assert.deepEqual(f.host.state.skills,[]);
+ assert.deepEqual(f.host.events(),[]);
 });

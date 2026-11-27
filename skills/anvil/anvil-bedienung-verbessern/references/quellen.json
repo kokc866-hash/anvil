@@ -1,0 +1,21 @@
+{
+  "adaptedFor": "Anvil",
+  "date": "2026-10-29",
+  "runtimeAcceptance": "unverified",
+  "upstreamCodeExecuted": false,
+  "sources": [
+    {
+      "repo": "pbakaus/impeccable",
+      "commit": "5e745ace7e151feb2a93d360d0281fe39448b857",
+      "path": ".agents/skills/impeccable/SKILL.md",
+      "license": "Apache-2.0",
+      "url": "https://github.com/pbakaus/impeccable/blob/5e745ace7e151feb2a93d360d0281fe39448b857/.agents/skills/impeccable/SKILL.md"
+    }
+  ],
+  "changes": [
+    "German Anvil-specific adaptation",
+    "No upstream runtime/installer/hooks",
+    "Existing permissions and project scope preserved",
+    "References loaded on demand"
+  ]
+}

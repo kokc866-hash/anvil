@@ -1,5 +1,6 @@
 /** Subscription inference is owned by the installed CLI, including login and refresh. */
 import { spawn } from "node:child_process";
+import { stripAnsiCsi } from "./text-controls.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
@@ -9,6 +10,7 @@ import { THINKING_MODES, claudeAdaptive, effectiveThinking } from "./thinking-su
 import { validateCliImages, writeCliImages, claudeInput } from "./cli-images.mjs";
 import { createCliStream } from "./cli-stream.mjs";
 import { completeCodexServer } from "./cli-codex-server.mjs";
+import { resolveWindowsCodex } from "./windows-codex.mjs";
 
 export const CLI_KINDS = ["codex", "claude", "copilot"];
 const PACKAGES = {
@@ -37,7 +39,7 @@ export function cliEnvironment(base = process.env) {
   return env;
 }
 
-export function findCli(kind, env = process.env, platform = process.platform) {
+function cliOnPath(kind, env, platform) {
   if (!CLI_KINDS.includes(kind)) throw new Error("Unbekannte CLI.");
   const dirs = [
     ...String(env.PATH || env.Path || "").split(delimiter),
@@ -46,6 +48,8 @@ export function findCli(kind, env = process.env, platform = process.platform) {
     "/usr/local/bin",
   ];
   if (env.APPDATA) dirs.push(join(env.APPDATA, "npm"));
+  if (kind === "codex" && platform === "win32" && env.LOCALAPPDATA)
+    dirs.push(join(env.LOCALAPPDATA, "Programs", "OpenAI", "Codex", "bin"));
   for (const dir of dirs.filter(Boolean)) {
     const bin = resolve(dir, kind + (platform === "win32" ? ".exe" : ""));
     if (existsSync(bin)) return { file: bin, args: [] };
@@ -69,24 +73,69 @@ export function findCli(kind, env = process.env, platform = process.platform) {
       /* Not this installation. */
     }
   }
-  throw new Error(`${kind} CLI nicht gefunden. CLI installieren und Anvil neu starten.`);
+  return null;
 }
 
-export function stopProcess(child) {
-  if (!child.pid) return;
+function requireCommand(kind, command) {
+  if (!command) throw new Error(`${kind} CLI nicht gefunden. CLI installieren und Anvil neu starten.`);
+  return command;
+}
+
+export function findCli(kind, env = process.env, platform = process.platform) {
+  return requireCommand(kind, cliOnPath(kind, env, platform));
+}
+
+export async function resolveCli(kind, { signal, env = process.env, refresh = false } = {}) {
+  if (kind !== "codex" || process.platform !== "win32") return findCli(kind, env);
+  const primary = cliOnPath(kind, env, process.platform);
+  return requireCommand(kind, await resolveWindowsCodex(primary, { signal, env: cliEnvironment(env), run: runProcess, refresh }));
+}
+
+function processExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForProcessExit(child, timeoutMs = 500) {
+  if (processExited(child)) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); child.removeListener('exit', done); resolve(processExited(child)); };
+    const timer = setTimeout(done, timeoutMs);
+    child.once('exit', done);
+    if (processExited(child)) done();
+  });
+}
+
+/** A refused tree kill must not masquerade as confirmed cancellation or wait forever. */
+export async function stopProcess(child) {
+  if (!child.pid) return { treeConfirmed: false, directStopped: false, reason: 'Prozesskennung fehlt.' };
+  if (processExited(child)) return { treeConfirmed: false, directStopped: true, reason: 'Hauptprozess bereits beendet; Nachkommen sind unbestätigt.' };
+  let treeConfirmed = false, reason = '';
   if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
+    const result = await new Promise(resolve => {
+      let ended = false, killer;
+      const done = (confirmed, detail) => { if (ended) return; ended = true; clearTimeout(timer); resolve({ confirmed, detail }); };
+      const timer = setTimeout(() => {
+        done(false, 'taskkill-Zeitlimit erreicht.');
+        try { killer?.kill('SIGKILL'); } catch { /* The bounded fallback still runs. */ }
+        killer?.unref?.();
+      }, 1000);
+      try {
+        killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", shell: false });
+        killer.once('error', error => done(false, `taskkill konnte nicht gestartet werden (${error.code || 'Fehler'}).`));
+        killer.once('close', code => done(code === 0, code === 0 ? '' : `taskkill meldet Exitcode ${code}.`));
+      } catch (error) { done(false, `taskkill konnte nicht gestartet werden (${error.code || 'Fehler'}).`); }
     });
-    killer.on("error", () => child.kill());
+    treeConfirmed = result.confirmed; reason = result.detail;
   } else {
     try {
       process.kill(-child.pid, "SIGKILL");
-    } catch {
-      child.kill("SIGKILL");
-    }
+      treeConfirmed = true;
+    } catch { reason = 'Prozessgruppe konnte nicht beendet werden.'; }
   }
+  if (!treeConfirmed && !processExited(child)) try { child.kill('SIGKILL'); } catch { /* Exit remains explicitly unconfirmed below. */ }
+  const directStopped = await waitForProcessExit(child);
+  if (!directStopped) { treeConfirmed = false; reason = [reason, 'Hauptprozess-Abbruch wurde nicht bestätigt.'].filter(Boolean).join(' '); }
+  return { treeConfirmed, directStopped, reason };
 }
 
 /** No shell, bounded output, cancellation also terminates descendants. */
@@ -110,20 +159,38 @@ export function runProcess(
     let stdout = "",
       stderr = "",
       bytes = 0,
-      failure;
-    const stop = (message) => {
-      failure ??= new Error(message);
-      stopProcess(child);
-    };
-    const abort = () => stop("CLI abgebrochen.");
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) abort();
-    const timer =
-      timeoutMs > 0 ? setTimeout(() => stop("CLI-Zeitlimit erreicht."), timeoutMs) : null;
+      failure, stopping, settled = false;
+    let timer = null;
     const clean = () => {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
     };
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true; clean();
+      if (error) reject(error); else resolveRun(result);
+    };
+    const stop = (message) => {
+      failure ??= new Error(message);
+      if (stopping) return;
+      stopping = stopProcess(child).then(termination => {
+        failure.termination = termination;
+        if (!termination.treeConfirmed) {
+          failure.code = 'CLI_STOP_UNCONFIRMED';
+          failure.message += ` Prozessbaum-Abbruch nicht bestätigt; Nachkommen können noch laufen. ${termination.reason}`;
+        }
+        // Descendants may hold inherited pipe handles after the direct child exits.
+        // Close only this owner's streams; report uncertainty instead of waiting on them forever.
+        child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+        if (!termination.directStopped) child.unref();
+        finish(failure);
+      });
+    };
+    const abort = () => stop("CLI abgebrochen.");
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    timer =
+      timeoutMs > 0 ? setTimeout(() => stop("CLI-Zeitlimit erreicht."), timeoutMs) : null;
     for (const [stream, name] of [
       [child.stdout, "stdout"],
       [child.stderr, "stderr"],
@@ -141,9 +208,7 @@ export function runProcess(
       failure = err;
     });
     child.on("close", (code) => {
-      clean();
-      if (failure) reject(failure);
-      else resolveRun({ code, stdout, stderr });
+      if (!stopping) finish(failure, { code, stdout, stderr });
     });
     child.stdin.on("error", (err) => {
       if (err.code !== "EPIPE") stop(err.message);
@@ -153,21 +218,21 @@ export function runProcess(
 }
 
 export function safeCliText(text) {
-  return String(text)
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+  return stripAnsiCsi(String(text))
     .replace(
       /\b(?:sk-[\w-]+|gh[opusr]_[\w]+|github_pat_[\w]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g,
       "[redacted]",
     );
 }
 
-export async function probeCli(kind, signal) {
-  const command = findCli(kind);
-  const version = await runProcess(command, ["--version"], { signal, timeoutMs: 10000 });
-  if (version.code !== 0)
-    throw new Error(
-      safeCliText(version.stderr || version.stdout || `${kind} startet nicht.`).slice(-1200),
-    );
+async function commandStatus(kind, command, signal) {
+  let version = command.version;
+  if (!version) {
+    const result = await runProcess(command, ["--version"], { signal, timeoutMs: 10000 });
+    if (result.code !== 0)
+      throw new Error(safeCliText(result.stderr || result.stdout || `${kind} startet nicht.`).slice(-1200));
+    version = safeCliText(result.stdout || result.stderr).trim().slice(0, 160);
+  }
   let authenticated = null;
   if (kind !== "copilot") {
     const args = kind === "codex" ? ["login", "status"] : ["auth", "status"];
@@ -194,14 +259,16 @@ export async function probeCli(kind, signal) {
     kind,
     installed: true,
     authenticated,
-    version: safeCliText(version.stdout || version.stderr)
-      .trim()
-      .slice(0, 160),
+    version,
   };
 }
 
+export async function probeCli(kind, signal) {
+  return commandStatus(kind, await resolveCli(kind, { signal }), signal);
+}
+
 export async function loginCli(kind, { signal, onOutput } = {}) {
-  const command = findCli(kind);
+  const command = await resolveCli(kind, { signal, refresh: true });
   const r = await runProcess(command, LOGIN_ARGS[kind], {
     signal,
     timeoutMs: 180000,
@@ -211,7 +278,7 @@ export async function loginCli(kind, { signal, onOutput } = {}) {
     throw new Error(
       safeCliText(r.stderr || r.stdout || "CLI-Anmeldung fehlgeschlagen.").slice(-1600),
     );
-  return probeCli(kind, signal);
+  return commandStatus(kind, command, signal);
 }
 
 export const CHOICE_SCHEMA = {
@@ -234,7 +301,7 @@ export const CHOICE_SCHEMA = {
 
 export function completionArgs(kind, model, dir, thinking = "auto", images = []) {
   if (!CLI_KINDS.includes(kind)) throw new Error("Unbekannte CLI.");
-  if (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+\-]{0,199}$/.test(model))
+  if (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,199}$/.test(model))
     throw new Error("Ungültige CLI-Modell-ID.");
   if (!THINKING_MODES.includes(thinking)) throw new Error("Ungültige Thinking-Stufe.");
   const mode = effectiveThinking("", model, thinking, kind);
@@ -362,18 +429,19 @@ export async function completeCli(
   // Validate all options before probing or spawning any CLI.
   completionArgs(kind, model, ".", thinking);
   const attachments = validateCliImages(images);
-  const status = await probeCli(kind, signal);
+  const command = await resolveCli(kind, { signal });
+  const status = await commandStatus(kind, command, signal);
   if (status.authenticated === false)
     throw new Error(`${kind}: Abo-Anmeldung fehlt. Einstellungen → Abo → Anmelden.`);
   const dir = await mkdtemp(join(os.tmpdir(), "anvil-cli-"));
   try {
     const imagePaths = kind === "claude" ? [] : await writeCliImages(attachments, dir);
-    if (kind === "codex") return await completeCodexServer(findCli(kind), {
+    if (kind === "codex") return await completeCodexServer(command, {
       model, prompt, imagePaths, effort: effectiveThinking("", model, thinking, kind), schema: CHOICE_SCHEMA, cwd: dir,
     }, { env: completionEnvironment(kind, model, thinking), signal, timeoutMs, onActivity, onText });
     const stream = createCliStream(kind, onText);
     await writeFile(join(dir, "schema.json"), JSON.stringify(CHOICE_SCHEMA), { mode: 0o600 });
-    const r = await runProcess(findCli(kind), completionArgs(kind, model, dir, thinking, imagePaths), {
+    const r = await runProcess(command, completionArgs(kind, model, dir, thinking, imagePaths), {
       env: completionEnvironment(kind, model, thinking),
       cwd: dir,
       input: kind === "claude" ? claudeInput(prompt, attachments) : prompt,

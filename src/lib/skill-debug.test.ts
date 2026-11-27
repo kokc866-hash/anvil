@@ -12,8 +12,8 @@ test("skill-creator body is valid", () => {
   assert.equal(r.ok, true, r.issues.join("; "));
 });
 
-test("empty prose skill fails debug", () => {
-  const r = debugSkill({ name: "x", when: "hi", body: "einfach machen" });
+test("missing skill fields fail format validation", () => {
+  const r = debugSkill({ name: "", when: "", body: "" });
   assert.equal(r.ok, false);
   assert.ok(r.issues.length >= 2);
 });

@@ -9,12 +9,18 @@ describe("system prompt", () => {
   it("has no tool-template placeholders", () => {
     assert.equal(/<tool_call>|<function-name>|args-json-object/i.test(body), false);
   });
-  it("leads with tools-not-prose and stays short", () => {
+  it("keeps planning, file safety and proof requirements within a bounded prompt", () => {
     assert.match(body, /tools/i);
     assert.match(body, /set_plan/);
     assert.match(body, /ask_user/);
     assert.doesNotMatch(body, /Du bist/);
-    assert.ok(body.length > 400 && body.length < 2800, String(body.length));
+    assert.match(body, /read_file/);
+    assert.match(body, /Compile then Run/);
+    assert.match(body, /Successful execution alone does not prove/);
+    assert.match(body, /(?:confirmed|proof|evidence|verified)/i);
+    // The original 2.8k limit predates run, verification and knowledge contracts.
+    // Keep a 5.2k ceiling (roughly 1.3k tokens at characters/4) so growth is reviewed.
+    assert.ok(body.length > 400 && body.length < 5200, String(body.length));
   });
 });
 

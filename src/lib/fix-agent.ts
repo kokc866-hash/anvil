@@ -124,22 +124,46 @@ export function askRun(path?: string): boolean {
   );
 }
 
-export function askGit(): boolean {
+export async function askGit(paths?: string[]): Promise<boolean> {
   const st = useIde.getState();
-  const dirty = Object.keys(st.dirty).filter(Boolean);
-  if (!dirty.length) {
-    st.setNotice(t("agentGitClean"));
+  const project = st.workspaceCwd || st.memoryWorkspace, epoch = st.workspaceEpoch;
+  try {
+    let changed = paths ?? Object.keys(st.dirty).filter(path => st.dirty[path]);
+    if (!paths && st.workspaceCwd) {
+      const { companionGit } = await import('./companion');
+      const status = await companionGit('status', { cwd: st.workspaceCwd }, st.companionUrl || undefined);
+      if (!status.ok) throw Error(status.error || 'Git-Dateistand konnte nicht gelesen werden.');
+      changed = [...new Set([...changed, ...(status.files || []).map(file => file.path)])];
+    }
+    const dirty = [...new Set(changed)].filter(path => typeof path === 'string' && !isSecretPath(path));
+    if (!dirty.length) {
+      const current = useIde.getState();
+      if (current.workspaceEpoch === epoch && (current.workspaceCwd || current.memoryWorkspace) === project)
+        current.setNotice(changed.length ? 'Die geänderten Dateien sind von der Prüfung ausgeschlossen.' : t("agentGitClean"));
+      return false;
+    }
+    const [{ createReviewRequest, buildReviewPrompt }, { beginTaskReview }] = await Promise.all([
+      import('./task-review'), import('./task-review-store'),
+    ]);
+    const knownEdits = dirty.every(path => Object.hasOwn(st.editBases, path));
+    const checkpoint = [...st.checkpoints].reverse().find(item => item.workspace === project && !item.archiveMissing && Object.keys(item.files).length);
+    // A missing entry in a partial edit baseline is not proof of a newly added file.
+    const baselineFiles = knownEdits ? Object.fromEntries(dirty.filter(path => st.editBases[path] !== null).map(path => [path, st.editBases[path]!])) : checkpoint?.files;
+    const request = await createReviewRequest({ project, files: st.files, paths: dirty, baselineFiles,
+      basisLabel: knownEdits ? 'Ausgangsinhalte der offenen Änderungen' : checkpoint ? `Sicherungspunkt: ${checkpoint.label}` : 'Aktueller Inhalt · Vergleichsbasis fehlt' });
+    const current = useIde.getState();
+    if (current.workspaceEpoch !== epoch || (current.workspaceCwd || current.memoryWorkspace) !== project || current.files !== st.files)
+      throw Error('Projekt oder Dateien inzwischen geändert. Prüfung erneut starten.');
+    if (!request.files.length) { current.setNotice('Für diese Prüfung liegen keine Änderungen vor.'); return false; }
+    beginTaskReview(request);
+    current.pushAgent(buildReviewPrompt(request), false, 'ask');
+    return true;
+  } catch (error) {
+    const current = useIde.getState();
+    if (current.workspaceEpoch === epoch && (current.workspaceCwd || current.memoryWorkspace) === project)
+      current.setNotice(error instanceof Error ? error.message : 'Prüfung konnte nicht gestartet werden.');
     return false;
   }
-  const snap = st.commits.at(-1)?.snap ?? {};
-  const blocks = dirty.slice(0, 8).map((p) => {
-    if (isSecretPath(p)) return `${p} (gesperrt)`;
-    const before = (snap[p] ?? "").split("\n");
-    const after = (st.files[p] ?? "").split("\n");
-    const hint = before.length === after.length ? `${after.length} Zeilen` : `${before.length} → ${after.length} Zeilen`;
-    return `${p} (${hint})\n${snippet(p).slice(0, 1200)}`;
-  });
-  return send(`Arbeitsbaum hat ${dirty.length} geänderte Dateien. Review, dann commit-tauglich machen (format_file). Kein Push ohne Auftrag.\n\n${blocks.join("\n\n")}`);
 }
 
 export async function fixHere(path?: string, line?: number): Promise<boolean> {

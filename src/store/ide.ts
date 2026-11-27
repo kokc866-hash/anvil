@@ -37,6 +37,7 @@ import { rejectHunk as rejectHunkLines } from "@/lib/diff";
 import { parseRunTrace } from "@/lib/parse-run";
 import type { AfterWrite } from "@/lib/harness";
 import { normalizePlanWho, type PlanWho } from "@/lib/plan";
+import { withPlanStatus } from "@/lib/plan-status";
 import { abortReason, stopAgent } from "@/lib/abort";
 import { dropCoveredHeuristics, dropStaleRun, localLintHits, LSP_BUCKET } from "@/lib/problems";
 import { isToolTemplateEcho } from "@/lib/agent-parse";
@@ -331,11 +332,14 @@ export const useIde = create<IdeState>()(
       breakpoints: {},
       debug: EMPTY_DEBUG,
       notice: "",
+      persistenceWarning: "",
       undo: {},
       dirs: [],
       collapsed: [],
       diskName: "",
       workspaceCwd: "",
+      workspaceNative: false,
+      workspaceEmpty: false,
       setupDone: false,
       backupName: "",
       storageMode: "browser",
@@ -822,15 +826,15 @@ export const useIde = create<IdeState>()(
         if (n < 0) n = chat.length - 1;
         const last = chat[n];
         if (last?.role !== "assistant" || !last.plan) return;
-        const plan = last.plan.map((s, k) => (k === i ? { ...s, status } : s));
+        const plan = last.plan.map((s, k) => (k === i ? withPlanStatus(s, status, "user") : s));
         chat[n] = { ...last, plan };
         set({ chat });
       },
-      pushAgent: (text, steal, mode) => {
+      pushAgent: (text, steal, mode, reply) => {
         const t = text.trim();
         if (!t) return;
         const fix = mode === undefined && /^(behebe diese probleme|intern-fehler beheben)/i.test(t);
-        const request = { text: t, mode: mode ?? (fix ? "agent" as const : get().agentMode) };
+        const request = { text: t, mode: mode ?? (fix ? "agent" as const : get().agentMode), ...(reply ? {reply} : {}) };
         if (steal && get().agentBusy) {
           set({
             agentQueue: [...get().agentQueue, request],
@@ -1205,7 +1209,7 @@ export const useIde = create<IdeState>()(
         const prev = get();
         noteDiskContents(next);
         const { openPaths, activePath, collapsed } = prev;
-        let files = { ...next };
+        const files = { ...next };
         const keepDirty = Boolean(opts?.keepDirty);
         const portable = !prev.workspaceCwd && Boolean(diskWorkspaceHandle());
         const storedId = next[".anvil/memory-id"]?.trim();
@@ -1372,14 +1376,30 @@ export const useIde = create<IdeState>()(
         set({ chat: [...chat, { id: nid(), role: "assistant", content: reply, tools }] });
       },
       setDiskName: (diskName) => set({ diskName }),
-      setWorkspaceCwd: (value) => {
+      startEmptyWorkspaceSession: () => {
+        const previous = get();
+        const archiveKey = `${previous.memoryWorkspace}:previous:${nid()}`;
+        resetLiveChat();
+        previous.applyFiles({}, [], { keepDirty: true });
+        set({
+          workspaceEmpty: true,
+          workspaceSessions: previous.chat.length || !isJournalEmpty(previous.sessionJournal)
+            ? { ...previous.workspaceSessions, [archiveKey]: memorySession(previous) } : previous.workspaceSessions,
+          chat: [], sessionJournal: EMPTY_JOURNAL,
+          lastRequestTokens: null, sessionTokens: { prompt: 0, completion: 0, estimated: false },
+          agentJob: null, agentInbox: null, pendingAsk: null, agentStartedAt: 0,
+          output: [],
+        });
+      },
+      setWorkspaceCwd: (value, native = false) => {
         const workspaceCwd = value.trim();
-        const switched = get().workspaceCwd !== workspaceCwd;
+        const workspaceNative = Boolean(workspaceCwd && native);
+        const switched = get().workspaceCwd !== workspaceCwd || get().workspaceNative !== workspaceNative;
         // Clear the browser destination synchronously before publishing a native
         // target, including Git/ZIP paths that do not use openOsWorkspace.
         if (workspaceCwd) void clearLocation("workspace");
-        set({ workspaceCwd, workspaceEpoch: get().workspaceEpoch + (switched ? 1 : 0),
-          ...(switched ? { testResults: {}, testsRunning: false, output: [] } : {}),
+        set({ workspaceCwd, workspaceNative, workspaceEpoch: get().workspaceEpoch + (switched ? 1 : 0),
+          ...(switched ? { workspaceEmpty: false, testResults: {}, testsRunning: false, output: [] } : {}),
           ...(workspaceCwd ? { diskName: workspaceCwd.replace(/\\/g, "/").split("/").pop() || workspaceCwd } : {}),
         });
       },
@@ -1510,7 +1530,7 @@ export const useIde = create<IdeState>()(
         set({
           workspaceMemoryId, memoryWorkspace: `v2:local:${workspaceMemoryId}`,
           workspaceSessions: { ...prev.workspaceSessions, [prev.memoryWorkspace]: memorySession(prev) },
-          workspaceCwd: "", githubRepo: "", diskName: "",
+          workspaceCwd: "", workspaceNative: false, workspaceEmpty: false, githubRepo: "", diskName: "",
           files: { ...SEED_FILES },
           workspaceEpoch: get().workspaceEpoch + 1,
           editBases: {},
@@ -1646,6 +1666,8 @@ export const useIde = create<IdeState>()(
               .filter(([, session]) => session && Array.isArray(session.chat))
               .map(([key, session]) => [key, { ...session, chat: boundChatImages(session.chat) }])) : {},
           workspaceCwd: typeof p.workspaceCwd === "string" ? p.workspaceCwd : "",
+          workspaceNative: typeof p.workspaceCwd === "string" && Boolean(p.workspaceCwd.trim()) && p.workspaceNative === true,
+          workspaceEmpty: p.workspaceEmpty === true,
         };
       },
       partialize: partializeIde,

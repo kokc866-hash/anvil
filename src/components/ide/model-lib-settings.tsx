@@ -63,8 +63,9 @@ export function ModelLibSection({ q = "" }: { q?: string }) {
   }
 
   useEffect(() => {
+    const generation = refreshGeneration;
     if (!q) void refresh().catch((err) => setNote(err instanceof Error ? err.message : "Modelle konnten nicht gelesen werden"));
-    return () => { refreshGeneration.current++; };
+    return () => { generation.current++; };
   }, [loadedId, cacheEpoch, q]);
 
   const usedPct = lastQuota.quota ? Math.min(100, Math.round((lastQuota.used / lastQuota.quota) * 100)) : 0;

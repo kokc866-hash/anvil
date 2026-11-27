@@ -38,11 +38,13 @@ export function publicHttpUrl(raw: string): URL {
 export async function fetchPublic(raw: string, init?: RequestInit): Promise<Response> {
   let url = publicHttpUrl(raw);
   for (let i = 0; i < 5; i++) {
+    init?.signal?.throwIfAborted();
     const res = await fetch(url.toString(), {
       ...init,
       redirect: "manual",
       signal: init?.signal ?? AbortSignal.timeout(12000),
     });
+    init?.signal?.throwIfAborted();
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
       if (!loc) return res;

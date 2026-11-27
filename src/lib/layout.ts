@@ -79,7 +79,7 @@ export function fitIdeLayout(o: {
 }
 
 function shrinkRow(budget: number, base: LayoutFit): LayoutFit {
-  let { sideW, trailW, agentW } = base;
+  const { sideW, trailW, agentW } = base;
   if (used(sideW, trailW, agentW) <= budget) return { ...base, sideW, trailW, agentW };
   const extra = used(sideW, trailW, agentW) - budget;
   const room =

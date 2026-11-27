@@ -4,6 +4,9 @@ import {
   contentSig,
   formatBytes,
   isSourcePath,
+  isImportedPluginPath,
+  isProjectRuleDirectory,
+  isProjectRulePath,
   keepBareFile,
   keepDotName,
   overlayDiskTree,
@@ -13,6 +16,23 @@ import {
 } from "./ws-skip.ts";
 
 describe("ws-skip", () => {
+  it("recognizes Cursor rule sources without opening unrelated hidden trees", () => {
+    for (const path of [".cursorrules", ".cursor/rules/typescript.mdc", "app/.cursor/rules/ui/components.mdc", ".CuRsOr/RuLeS/case.MDC"]) assert.equal(isSourcePath(path), true, path);
+    assert.equal(isSourcePath("unrelated.mdc"), false);
+    assert.equal(keepDotName(".cursor"), false, "directory exceptions must depend on the full rule path");
+    assert.equal(keepDotName(".foreign"), false);
+    assert.equal(isProjectRuleDirectory("app/.cursor/rules/group"), true);
+    for (const path of [".cursor/mcp.json", ".cursor/hooks/run.js", ".cursor/rules/README.md", "app/.cursorrules", "../.cursor/rules/evil.mdc", ".cursor/rules/../evil.mdc", "C:/.cursor/rules/a.mdc", ".cursor//rules/a.mdc", "secrets/.cursor/rules/a.mdc"]) assert.equal(isProjectRulePath(path), false, path);
+    for (const path of [".cursor/hooks", ".cursor/commands", ".cursor/credentials", ".foreign"]) assert.equal(isProjectRuleDirectory(path), false, path);
+  });
+  it("recognizes only reserved imported package paths without widening source filters", () => {
+    assert.equal(isImportedPluginPath(".anvil/skills/package-photo/assets/logo.png"), true);
+    assert.equal(isImportedPluginPath(".anvil/skills/package-photo/.codex-plugin/plugin.json"), true);
+    assert.equal(isImportedPluginPath(".anvil/plugin-imports/photo.json"), true);
+    for (const p of ["src/.anvil/skills/package-photo/icon.png", ".anvil/skills/package-/x", ".anvil/skills/package-x/../../outside.png", ".anvil/skills/package-x//x", ".anvil/skills/other/icon.png", ".anvil/plugin-imports/arbitrary.txt"])
+      assert.equal(isImportedPluginPath(p), false, p);
+    assert.equal(skipPath(".anvil/skills/package-photo/assets/logo.png"), true);
+  });
   it("drops vendor dirs and lockfiles", () => {
     assert.equal(skipDirName("node_modules"), true);
     assert.equal(skipDirName("src"), false);

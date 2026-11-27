@@ -1,0 +1,822 @@
+[
+  {
+    "id": "anvil-projekt-verstehen",
+    "title": "Projekt verstehen",
+    "titleEn": "Understand a project",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "projekt verstehen",
+      "erkläre das projekt",
+      "projektübersicht",
+      "projektaufbau",
+      "architektur erklären",
+      "understand project",
+      "project overview"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": true,
+    "version": "1.1.0",
+    "tools": [
+      "read_file",
+      "grep",
+      "list_files"
+    ]
+  },
+  {
+    "id": "anvil-code-aendern",
+    "title": "Code gezielt ändern",
+    "titleEn": "Make focused code changes",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "funktion",
+      "implementieren",
+      "implementiere",
+      "erstelle",
+      "erstellen",
+      "baue",
+      "optimiere",
+      "optimieren",
+      "ergänze",
+      "create",
+      "build",
+      "optimize",
+      "ändern",
+      "ändere",
+      "erweitern",
+      "erweitere",
+      "refactoring",
+      "code",
+      "feature",
+      "implement"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.1.0",
+    "tools": [
+      "edit_file",
+      "write_file",
+      "format_file",
+      "run_file"
+    ]
+  },
+  {
+    "id": "anvil-fehler-beheben",
+    "title": "Fehler nachvollziehen und beheben",
+    "titleEn": "Diagnose and fix a bug",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "fehler",
+      "absturz",
+      "reparieren",
+      "repariere",
+      "debug",
+      "bug",
+      "exception",
+      "hängt",
+      "diagnose"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "debug_start",
+      "read_tool_output",
+      "shell",
+      "run_file"
+    ]
+  },
+  {
+    "id": "anvil-aenderungen-pruefen",
+    "title": "Änderungen prüfen",
+    "titleEn": "Review changes",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "review",
+      "prüfen",
+      "prüfe",
+      "bewerten",
+      "diff",
+      "änderungen",
+      "risiko",
+      "code-review",
+      "inspect"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": true,
+    "version": "1.2.0",
+    "tools": [
+      "git_status",
+      "read_file",
+      "grep",
+      "review_read_baseline"
+    ]
+  },
+  {
+    "id": "anvil-tests",
+    "title": "Tests entwickeln und ausführen",
+    "titleEn": "Develop and run tests",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "test",
+      "tests",
+      "regression",
+      "unittest",
+      "pytest",
+      "npm test",
+      "coverage",
+      "absichern"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      },
+      {
+        "kind": "execution",
+        "label": "Passende Laufzeit und Ausführung freigegeben",
+        "labelEn": "Matching runtime and execution enabled"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "shell",
+      "run_file",
+      "read_tool_output"
+    ]
+  },
+  {
+    "id": "anvil-web",
+    "title": "Weboberflächen entwickeln",
+    "titleEn": "Develop web interfaces",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "web",
+      "html",
+      "css",
+      "javascript",
+      "react",
+      "oberfläche",
+      "formular",
+      "frontend",
+      "website"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "run_file",
+      "see_run",
+      "play",
+      "open_preview"
+    ]
+  },
+  {
+    "id": "anvil-git",
+    "title": "Mit Git arbeiten",
+    "titleEn": "Work with Git",
+    "category": "versioning",
+    "categoryLabel": "Versionsverwaltung",
+    "categoryLabelEn": "Version control",
+    "keywords": [
+      "git",
+      "commit",
+      "committe",
+      "branch",
+      "versionsverwaltung",
+      "status",
+      "push",
+      "clone",
+      "sicherung"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Gespeicherter Projektordner mit Git-Anbindung",
+        "labelEn": "Saved project folder with Git connection",
+        "match": "saved"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.1.0",
+    "tools": [
+      "git_status",
+      "shell"
+    ]
+  },
+  {
+    "id": "anvil-github",
+    "title": "GitHub gezielt nutzen",
+    "titleEn": "Use GitHub deliberately",
+    "category": "versioning",
+    "categoryLabel": "Versionsverwaltung",
+    "categoryLabelEn": "Version control",
+    "keywords": [
+      "github",
+      "repository",
+      "repositories",
+      "issue",
+      "pull request",
+      "release",
+      "remote",
+      "repo"
+    ],
+    "requirements": [
+      {
+        "kind": "service",
+        "label": "GitHub-Verbindung und passende Werkzeuge freigegeben",
+        "labelEn": "GitHub connection and matching tools enabled",
+        "match": "github"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.1.0",
+    "tools": [
+      "mcp_list",
+      "mcp_call",
+      "mcp_read_output"
+    ]
+  },
+  {
+    "id": "anvil-godot",
+    "title": "Mit Godot arbeiten",
+    "titleEn": "Work with Godot",
+    "category": "engines",
+    "categoryLabel": "Spiele-Engines",
+    "categoryLabelEn": "Game engines",
+    "keywords": [
+      "godot",
+      "gdscript",
+      "tscn",
+      "tres",
+      "project.godot",
+      "godot-szene",
+      "godot-scene"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Gespeicherter Projektordner in Anvil geöffnet",
+        "labelEn": "Saved project folder open in Anvil",
+        "match": "saved"
+      },
+      {
+        "kind": "engine",
+        "match": "godot",
+        "label": "Passende Godot-Version im Companion verfügbar",
+        "labelEn": "Matching Godot version available in Companion"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "engine_detect",
+      "engine_status",
+      "engine_run",
+      "mcp_list"
+    ]
+  },
+  {
+    "id": "anvil-unity",
+    "title": "Mit Unity arbeiten",
+    "titleEn": "Work with Unity",
+    "category": "engines",
+    "categoryLabel": "Spiele-Engines",
+    "categoryLabelEn": "Game engines",
+    "keywords": [
+      "unity",
+      "monobehaviour",
+      "prefab",
+      "playmode",
+      "editmode",
+      "unity-test",
+      "unity-szene"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Gespeicherter Projektordner in Anvil geöffnet",
+        "labelEn": "Saved project folder open in Anvil",
+        "match": "saved"
+      },
+      {
+        "kind": "engine",
+        "match": "unity",
+        "label": "Passender Unity-Editor und Projektpakete verfügbar",
+        "labelEn": "Matching Unity Editor and project packages available"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "engine_detect",
+      "engine_status",
+      "engine_run",
+      "mcp_list"
+    ]
+  },
+  {
+    "id": "anvil-unreal",
+    "title": "Mit Unreal Engine arbeiten",
+    "titleEn": "Work with Unreal Engine",
+    "category": "engines",
+    "categoryLabel": "Spiele-Engines",
+    "categoryLabelEn": "Game engines",
+    "keywords": [
+      "unreal",
+      "blueprint",
+      "uasset",
+      "umap",
+      "uproject",
+      "unrealengine",
+      "play-in-editor"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Gespeicherter Projektordner in Anvil geöffnet",
+        "labelEn": "Saved project folder open in Anvil",
+        "match": "saved"
+      },
+      {
+        "kind": "engine",
+        "match": "unreal",
+        "label": "Passender Unreal-Editor verfügbar",
+        "labelEn": "Matching Unreal Editor available"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.1.0",
+    "tools": [
+      "engine_detect",
+      "engine_status",
+      "engine_run",
+      "mcp_list"
+    ]
+  },
+  {
+    "id": "anvil-blender",
+    "title": "Mit Blender modellieren",
+    "titleEn": "Model with Blender",
+    "category": "design",
+    "categoryLabel": "3D und Konstruktion",
+    "categoryLabelEn": "3D and CAD",
+    "keywords": [
+      "blender",
+      "bpy",
+      "blend",
+      "blender-szene",
+      "blender-modell",
+      "blender-export"
+    ],
+    "requirements": [
+      {
+        "kind": "service",
+        "match": "blender",
+        "label": "Blender mit erreichbarem Addon und freigegebener MCP-Verbindung",
+        "labelEn": "Blender with reachable addon and enabled MCP connection"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.1.0",
+    "tools": [
+      "mcp_list",
+      "mcp_call",
+      "mcp_read_output"
+    ]
+  },
+  {
+    "id": "anvil-openscad",
+    "title": "Bauteile mit OpenSCAD entwickeln",
+    "titleEn": "Develop parts with OpenSCAD",
+    "category": "design",
+    "categoryLabel": "3D und Konstruktion",
+    "categoryLabelEn": "3D and CAD",
+    "keywords": [
+      "openscad",
+      "scad",
+      "openscad-mcp",
+      "openscad-bauteil",
+      "scad-modul"
+    ],
+    "requirements": [
+      {
+        "kind": "service",
+        "match": "openscad",
+        "label": "OpenSCAD und freigegebene MCP-Verbindung verfügbar",
+        "labelEn": "OpenSCAD and enabled MCP connection available"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.1.0",
+    "tools": [
+      "mcp_list",
+      "mcp_call",
+      "mcp_read_output"
+    ]
+  },
+  {
+    "id": "anvil-freecad",
+    "title": "Parametrisch mit FreeCAD konstruieren",
+    "titleEn": "Create parametric models with FreeCAD",
+    "category": "design",
+    "categoryLabel": "3D und Konstruktion",
+    "categoryLabelEn": "3D and CAD",
+    "keywords": [
+      "freecad",
+      "fcstd",
+      "partdesign",
+      "freecad-mcp",
+      "freecad-skizze",
+      "freecad-bauteil"
+    ],
+    "requirements": [
+      {
+        "kind": "service",
+        "match": "freecad",
+        "label": "FreeCAD mit erreichbarem Addon und freigegebener MCP-Verbindung",
+        "labelEn": "FreeCAD with reachable addon and enabled MCP connection"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "mcp_list",
+      "mcp_call",
+      "mcp_read_output"
+    ]
+  },
+  {
+    "id": "anvil-dienste",
+    "title": "Mit verbundenen Diensten arbeiten",
+    "titleEn": "Work with connected services",
+    "category": "services",
+    "categoryLabel": "Dienste",
+    "categoryLabelEn": "Services",
+    "keywords": [
+      "dienst",
+      "dienste",
+      "mcp",
+      "notion",
+      "linear",
+      "neon",
+      "integration",
+      "werkzeuge",
+      "connector"
+    ],
+    "requirements": [
+      {
+        "kind": "service",
+        "label": "Passende Verbindung und benötigte Werkzeuge freigegeben",
+        "labelEn": "Matching connection and required tools enabled"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "mcp_list",
+      "mcp_call",
+      "mcp_read_output",
+      "mcp_read_resource"
+    ]
+  },
+  {
+    "id": "anvil-skill-erstellen",
+    "title": "Eigene Skills entwickeln",
+    "titleEn": "Develop custom skills",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "skill",
+      "skills",
+      "arbeitsweise",
+      "workflow",
+      "anleitung",
+      "wiederverwendbar",
+      "skill.md"
+    ],
+    "requirements": [],
+    "readOnly": false,
+    "version": "1.2.0",
+    "tools": [
+      "skill_list",
+      "skill_read",
+      "skill_debug",
+      "skill_write"
+    ]
+  },
+  {
+    "id": "anvil-auftrag-fortsetzen",
+    "title": "Aufträge gezielt fortsetzen",
+    "titleEn": "Resume a task reliably",
+    "keywords": [
+      "fortsetzen",
+      "weiterarbeiten",
+      "wiederaufnahme",
+      "nach abbruch",
+      "angehaltenen auftrag",
+      "resume task",
+      "continue task"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "read_file",
+      "git_status",
+      "read_tool_output",
+      "set_plan"
+    ]
+  },
+  {
+    "id": "anvil-anwendung-pruefen",
+    "title": "Anwendungen passend prüfen",
+    "titleEn": "Verify an application",
+    "keywords": [
+      "anwendung prüfen",
+      "anwendung testen",
+      "funktion prüfen",
+      "funktionstest",
+      "funktionstests",
+      "bedienung prüfen",
+      "einstieg prüfen",
+      "browser testen",
+      "test application",
+      "verify application",
+      "end-to-end"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      },
+      {
+        "kind": "execution",
+        "label": "Passende Laufzeit und Ausführung freigegeben",
+        "labelEn": "Matching runtime and execution enabled"
+      }
+    ],
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "run_file",
+      "see_run",
+      "play",
+      "shell"
+    ]
+  },
+  {
+    "id": "anvil-assets-uebertragen",
+    "title": "Assets ins Zielprojekt übertragen",
+    "titleEn": "Transfer assets into a target project",
+    "keywords": [
+      "asset übertragen",
+      "assets übertragen",
+      "asset-transfer",
+      "asset pipeline",
+      "asset-pipeline",
+      "in die engine",
+      "engine import",
+      "modell importieren",
+      "export und import",
+      "blender nach godot",
+      "cad nach blender"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "engine_detect",
+      "engine_status",
+      "mcp_list",
+      "mcp_call"
+    ]
+  },
+  {
+    "id": "anvil-abhaengigkeiten-pflegen",
+    "title": "Abhängigkeiten und Sicherheitsupdates pflegen",
+    "titleEn": "Maintain dependencies and security updates",
+    "keywords": [
+      "abhängigkeiten aktualisieren",
+      "abhängigkeiten prüfen",
+      "sicherheitsupdates",
+      "sicherheitslücke",
+      "dependency update",
+      "dependency audit",
+      "security update",
+      "pakete aktualisieren",
+      "bibliotheken aktualisieren",
+      "lockfile aktualisieren"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      },
+      {
+        "kind": "execution",
+        "label": "Passende Laufzeit und Ausführung freigegeben",
+        "labelEn": "Matching runtime and execution enabled"
+      }
+    ],
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "shell",
+      "read_file",
+      "grep"
+    ]
+  },
+  {
+    "id": "anvil-eigenschaftstests",
+    "title": "Eigenschaften mit generierten Daten prüfen",
+    "titleEn": "Verify properties with generated data",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "eigenschaftstest",
+      "eigenschaftstests",
+      "eigenschaftsbasiert",
+      "property-based",
+      "property based",
+      "property testing",
+      "fast-check",
+      "hypothesis",
+      "proptest",
+      "fuzzing",
+      "roundtrip",
+      "round-trip",
+      "invarianten",
+      "invariant"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      },
+      {
+        "kind": "execution",
+        "label": "Passende Laufzeit und Ausführung freigegeben",
+        "labelEn": "Matching runtime and execution enabled"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "shell",
+      "run_file",
+      "read_tool_output"
+    ]
+  },
+  {
+    "id": "anvil-react",
+    "title": "React gezielt verbessern",
+    "titleEn": "Improve React deliberately",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "react",
+      "tsx",
+      "zustand",
+      "rerender",
+      "re-render",
+      "rendering",
+      "react-profiler",
+      "react performance",
+      "react-komponente",
+      "component composition",
+      "useeffect",
+      "usememo"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "read_file",
+      "grep",
+      "shell",
+      "see_run"
+    ]
+  },
+  {
+    "id": "anvil-bedienung-verbessern",
+    "title": "Bedienung und Texte verbessern",
+    "titleEn": "Improve usability and wording",
+    "category": "development",
+    "categoryLabel": "Entwicklung",
+    "categoryLabelEn": "Development",
+    "keywords": [
+      "bedienung",
+      "verständlichkeit",
+      "beschriftung",
+      "beschriftungen",
+      "tooltip",
+      "tooltips",
+      "tooltipp",
+      "tooltipps",
+      "fokus",
+      "tastaturbedienung",
+      "barrierefreiheit",
+      "usability",
+      "accessibility",
+      "ui audit",
+      "ui-audit",
+      "formularfehler",
+      "fehlertexte"
+    ],
+    "requirements": [
+      {
+        "kind": "project",
+        "label": "Projekt in Anvil geöffnet",
+        "labelEn": "Project open in Anvil"
+      }
+    ],
+    "readOnly": false,
+    "version": "1.0.0",
+    "tools": [
+      "run_file",
+      "see_run",
+      "play",
+      "open_preview"
+    ]
+  }
+]

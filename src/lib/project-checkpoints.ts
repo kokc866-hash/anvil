@@ -3,6 +3,7 @@ import { captureDiskTarget, flushDiskSync, noteDiskFile, cancelSyncWrite } from 
 import { checkpointRestorePlan } from "./restore-plan";
 import { flushPersistence } from "./persist-storage";
 import { omitSecrets } from "./ref";
+import type { AgentRun } from "./agent-run";
 
 export type ProjectCheckpointPlan = { files: { path: string; action: "restore" | "delete"; bytes: number }[]; mkdir: string[]; rmdir: string[]; conflicts: string[]; excluded: string[] };
 type Capture = { files: number; bytes: number; excluded: string[] };
@@ -19,6 +20,7 @@ function sameProject(disk: NonNullable<Checkpoint["disk"]>) {
 function localProject() {
   const target = captureDiskTarget();
   if (!target.cwd || target.handle || !native()?.projectCheckpoint) return false;
+  if (target.local) return true;
   try { const u = new URL(target.base || "http://127.0.0.1:7845"); return ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname) && u.port === "7845"; }
   catch { return false; }
 }
@@ -30,9 +32,11 @@ export function projectEditorRestorePlan(ck: Checkpoint, files = useIde.getState
 }
 
 /** Save existing edits before the agent can change either loaded files or assets on disk. */
-export async function beginProjectCheckpoint(id: string): Promise<void> {
+export async function beginProjectCheckpoint(id: string, run?: AgentRun): Promise<void> {
+  run?.assertCurrent();
   if (!localProject()) return;
   while (roundLease && roundLease.id !== id) await roundLease.done;
+  run?.assertCurrent();
   let release!: () => void;
   const done = new Promise<void>((resolve) => { release = resolve; });
   roundLease = { id, done, release };
@@ -41,10 +45,13 @@ export async function beginProjectCheckpoint(id: string): Promise<void> {
   useIde.setState((s) => ({ checkpoints: s.checkpoints.map((c) => c.id === id ? { ...c, disk } : c) }));
   try {
     const { saveNow } = await import("./save");
+    run?.assertCurrent();
     if (!await saveNow({ all: true, format: false })) throw new Error(useIde.getState().notice || "Projekt vor der Runde nicht vollständig gespeichert.");
     if (!sameProject(disk)) throw new Error("Projekt während der Sicherung gewechselt.");
+    run?.assertCurrent();
     const saved = useIde.getState();
     const result = await native()!.projectCheckpoint({ action: "before", root: disk.root, id: disk.id }) as Capture;
+    run?.assertCurrent();
     if (!sameProject(disk)) throw new Error("Projekt während der Sicherung gewechselt.");
     if (saved.files !== useIde.getState().files) throw new Error("Dateien während der Sicherung im Editor geändert. Auftrag erneut senden.");
     useIde.setState((s) => ({ checkpoints: s.checkpoints.map((c) => c.id === id ? { ...c, files: omitSecrets(saved.files), dirs: [...saved.dirs] } : c) }));
@@ -58,31 +65,34 @@ export async function beginProjectCheckpoint(id: string): Promise<void> {
 }
 
 /** Seal only the original project's completed round; a missing end state never authorizes reversal. */
-export async function sealProjectCheckpoint(id: string): Promise<void> {
+export async function sealProjectCheckpoint(id: string, run?: AgentRun): Promise<void> {
   const ck = useIde.getState().checkpoints.find((c) => c.id === id);
   const disk = ck?.disk;
-  if (ck) useIde.setState((s) => ({ checkpoints: s.checkpoints.map((c) => c.id === id ? { ...c, externalCalls: s.mcpLog.filter((e) => e.at >= ck.at).map(({ server, name, ok }) => ({ server, name, ok })) } : c) }));
+  if (ck && (!run || run.current())) useIde.setState((s) => ({ checkpoints: s.checkpoints.map((c) => c.id === id ? { ...c, externalCalls: s.mcpLog.filter((e) => e.at >= ck.at).map(({ server, name, ok }) => ({ server, name, ok })) } : c) }));
   if (!disk || disk.status !== "before") {
     if (roundLease?.id === id) { roundLease.release(); roundLease = undefined; }
     return;
   }
   try {
+    run?.assertCurrent();
     if (!sameProject(disk)) throw new Error("Projekt gewechselt; kein sicherer Endstand der Runde.");
     await flushDiskSync();
+    run?.assertCurrent();
     if (!sameProject(disk)) throw new Error("Projekt gewechselt; kein sicherer Endstand der Runde.");
     const end = useIde.getState();
     const result = await native()!.projectCheckpoint({ action: "after", root: disk.root, id: disk.id }) as Capture;
+    run?.assertCurrent();
     if (!sameProject(disk) || end.files !== useIde.getState().files) throw new Error("Projekt während der abschließenden Sicherung geändert; Endstand nicht eindeutig.");
     useIde.setState((s) => ({ checkpoints: s.checkpoints.map((c) => c.id === id ? { ...c, endFiles: omitSecrets(end.files), endDirs: [...end.dirs] } : c) }));
     update(id, { status: "sealed", excluded: [...new Set([...(disk.excluded ?? []), ...result.excluded])] });
   } catch (error) {
     update(id, { status: "error", error: String(error) });
-    useIde.getState().setNotice(`Projektsicherung unvollständig: ${error instanceof Error ? error.message : error}`);
+    if (!run || run.current()) useIde.getState().setNotice(`Projektsicherung unvollständig: ${error instanceof Error ? error.message : error}`);
   }
   try { await flushPersistence(); }
   catch (error) {
     update(id, { status: "error", error: `Sicherungsstatus nicht gespeichert: ${String(error)}` });
-    useIde.getState().setNotice("Sicherungsstatus konnte nicht gespeichert werden. Die Runde ist beendet; Rücknahme ist noch nicht freigegeben.");
+    if (!run || run.current()) useIde.getState().setNotice("Sicherungsstatus konnte nicht gespeichert werden. Die Runde ist beendet; Rücknahme ist noch nicht freigegeben.");
   }
   finally { if (roundLease?.id === id) { roundLease.release(); roundLease = undefined; } }
 }

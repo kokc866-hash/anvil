@@ -66,3 +66,11 @@ test("cloud yes, ollama no", () => {
 test("remember rejects junk", () => {
   assert.equal(rememberContext("x", 12, "api"), null);
 });
+
+test("Qwen context comes from the queried model_info, including future model IDs", () => {
+  ingestModelRow({ model: "qwen-future-context-fixture", model_info: { context_window: 262144, max_output_tokens: 8192 } });
+  assert.equal(lookupKnown("qwen-future-context-fixture")?.n, 262144);
+  assert.equal(lookupKnown("qwen-future-context-fixture")?.source, "api");
+  ingestModelRow({ id: "qwen-future-context-fixture", model_info: { context_window: 524288 } });
+  assert.equal(lookupKnown("qwen-future-context-fixture")?.n, 524288, "A refresh replaces previous metadata.");
+});

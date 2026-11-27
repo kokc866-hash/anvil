@@ -26,11 +26,11 @@ Abschließend wurde auch das normale Profil sauber neu gestartet: Tageswerk, Cha
 
 **Ergebnis:** Eine neue Anwendung wurde vollständig durch Anvils Agenten gebaut, anschließend durch echte Bedienung geprüft, anhand eines gefundenen Mangels verbessert und nach Neustart weiterbearbeitet. Der Kernablauf funktioniert. Der wichtigste neu belegte Anvil-Fehler betrifft zusätzlich eingeblendete Standarddateien nach dem Neustart und deren Konflikte beim Speichern einer Rundenrücknahme.
 
-**Fertige Anwendung:** `I:\Anvil\data\Anvil-Praxistest-Aufgabenplaner\index.html`. Anvil und das Run-Fenster bleiben mit diesem Projekt geöffnet. Das vorherige Ollama-Profil wurde zum Schluss wieder ausgewählt.
+**Fertige Anwendung:** `Anvil-Praxistest-Aufgabenplaner/index.html`. Anvil und das Run-Fenster bleiben mit diesem Projekt geöffnet. Das vorherige Ollama-Profil wurde zum Schluss wieder ausgewählt.
 
 ## Vorgehen
 
-Die normale Windows-App wird über ihre Oberfläche bedient. Ein neuer leerer Ordner wurde im echten Windows-Ordnerdialog unter `I:\Anvil\data\Anvil-Praxistest-Aufgabenplaner` erstellt und in Anvil geöffnet. Kein vorbereiteter Anwendungscode und kein Ersatz für den Ordnerdialog. Der Auftrag wurde in Anvils Chat eingegeben; ausgewählt blieb das vorhandene lokale Modell `qwen3.8:27b-mtp-q8_0` über Ollama, Thinking Low.
+Die normale Windows-App wird über ihre Oberfläche bedient. Ein neuer leerer Ordner wurde im echten Windows-Ordnerdialog unter `Anvil-Praxistest-Aufgabenplaner` erstellt und in Anvil geöffnet. Kein vorbereiteter Anwendungscode und kein Ersatz für den Ordnerdialog. Der Auftrag wurde in Anvils Chat eingegeben; ausgewählt blieb das vorhandene lokale Modell `qwen3.8:27b-mtp-q8_0` über Ollama, Thinking Low.
 
 Auftrag: Ein deutscher Aufgabenplaner als einzelne `index.html`, ohne externe Bibliotheken, mit Anlegen, Erledigen/Wiederöffnen, Bearbeiten/Speichern/Abbrechen, Löschen, Statusfiltern, Zählern und lokaler Speicherung. Die Anwendung wird durch Anvils Agenten geschrieben. Die anschließende Prüfung ist unabhängig von dessen Erfolgsmeldung.
 

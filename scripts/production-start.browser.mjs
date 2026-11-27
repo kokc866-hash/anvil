@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { _electron } from "playwright";
@@ -11,7 +11,7 @@ const port = socket.address().port; await new Promise(r => socket.close(r));
 const url = `http://127.0.0.1:${port}/`;
 const env = { ...process.env, ANVIL_DESKTOP_MODE: "production", ANVIL_PORT: String(port), ANVIL_QA_USER_DATA: profile, ANVIL_HOME: path.join(profile, "packages") };
 delete env.ELECTRON_RUN_AS_NODE;
-let app, watcher;
+let app;
 const timeout = setTimeout(() => { app?.process()?.kill(); process.exitCode = 1; }, 90000);
 try {
   // No prestarted server: production main must start its own bundled UI.
@@ -39,21 +39,11 @@ try {
   assert(state.visible>100); assert.equal(state.vite,false); assert.equal(state.reactTracks,0);
   assert.deepEqual(errors,[]);
   assert.match(await readFile(path.join(profile,"anvil-desktop.log"),"utf8"),/desktop-mode production/);
-  for(let i=0;i<120;i++) {
-    const runs=await readdir(path.join(profile,"waechter")).catch(()=>[]);
-    watcher=runs[0]&&path.join(profile,"waechter",runs[0]);
-    const summary=watcher&&await readFile(path.join(watcher,"summary.json"),"utf8").then(JSON.parse).catch(()=>null);
-    if(summary?.samples>0&&!summary.ended)break;
-    await new Promise(r=>setTimeout(r,250));
-  }
-  const summary=JSON.parse(await readFile(path.join(watcher,"summary.json"),"utf8"));
-  assert(summary.samples>0&&!summary.ended);
-  assert.equal(JSON.parse(await readFile(path.join(watcher,"config.json"),"utf8")).mode,"production");
+  await assert.rejects(stat(path.join(profile,"waechter")), { code: "ENOENT" });
   await page.screenshot({path:path.join(output,"production.png")});
-  await writeFile(path.join(output,"result.json"),JSON.stringify({ok:true,...state,watcherRunning:true},null,2));
+  await writeFile(path.join(output,"result.json"),JSON.stringify({ok:true,...state},null,2));
   console.log("PRODUCTION_START_WITHOUT_VITE_OR_REACT_TRACKS_OK");
 } finally {
   clearTimeout(timeout);
   if(app) await app.evaluate(({app})=>app.exit(0)).catch(()=>{});
-  if(watcher) await writeFile(path.join(watcher,"stop"),"QA complete");
 }

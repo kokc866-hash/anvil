@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { EnginePathsSetup } from "./engine-paths";
+import { LanguageUpdates } from "./language-updates";
 import { Button } from "@/components/ui/button";
 import { CopyMini } from "@/components/ui/copy-btn";
 import {
@@ -367,6 +368,8 @@ export function CompanionSetup({ compact, probeOnMount = true, revealConnection 
       ) : ping?.toolHome ? (
         <p className="mt-1 font-mono text-[10px] text-subtle">{ping.toolHome}</p>
       ) : null}
+
+      <LanguageUpdates base={url || DEFAULT_COMPANION} probeOnMount={probeOnMount} homeKey={ping?.toolHome || ""} />
 
       <p className="mt-2 text-sm text-fg">{t("compBins")}</p>
       <p className="mt-0.5 text-xs text-muted">{t("compBinsH")}</p>

@@ -160,14 +160,17 @@ export function rememberContext(model: string, n: number, source: CtxSource): Ct
 }
 
 export function ingestModelRow(row: Record<string, unknown>): void {
-  const id = String(row.id ?? row.name ?? "");
+  const id = String(row.id ?? row.model ?? row.name ?? "");
   if (!id) return;
   const arch = row.architecture as { n_ctx?: unknown } | undefined;
+  const info = row.model_info as { context_window?: unknown; max_input_tokens?: unknown } | undefined;
   const n =
     num(row.context_length) ||
     num(row.context_window) ||
+    num(info?.context_window) ||
     num(row.max_model_len) ||
     num(row.max_input_tokens) ||
+    num(info?.max_input_tokens) ||
     num((row.limit as { context?: unknown } | undefined)?.context) ||
     num((row.meta as { n_ctx_train?: unknown } | undefined)?.n_ctx_train) ||
     num(arch?.n_ctx);

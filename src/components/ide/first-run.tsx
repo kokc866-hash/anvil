@@ -9,12 +9,12 @@ import { FIRST_SUCCESS_HTML, firstSuccessPath, firstSuccessPrompt } from "@/lib/
 import { runFromEditor } from "@/lib/editor-run";
 import { ModelPick } from "./model-pick";
 import { listModels } from "@/lib/agent-client";
-import { PROVIDER_GROUPS, providerOf, type ProviderId } from "@/lib/providers";
+import { modelsForConnection, PROVIDER_GROUPS, providerOf, type ProviderId } from "@/lib/providers";
 import { useIde } from "@/store/ide";
 import { useT } from "@/lib/i18n";
 import { AnvilMark } from "./anvil-mark";
 import { ANVIL_VERSION } from "@/lib/version";
-import { cliKindFor, probeCli } from "@/lib/cli-client";
+import { cliKindFor, probeCli, listCliModels, cliModelsHint } from "@/lib/cli-client";
 
 type Ping = "idle" | "ok" | "bad" | "unknown";
 
@@ -44,6 +44,7 @@ export function FirstRun() {
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const spec = providerOf(provider);
+  const modelCatalog = modelsForConnection(provider, authMode);
   const groups = PROVIDER_GROUPS.filter((g) => g.ids.some((id) => id !== "brain"));
   const groupLabel = (id: (typeof PROVIDER_GROUPS)[number]["id"]) =>
     t({ local: "setupLocal", cloud: "setupCloud", builtin: "setupBuiltin", other: "tabOther" }[id]);
@@ -84,6 +85,13 @@ export function FirstRun() {
     try {
       if (cli) {
         const status = await probeCli(cli, controller.signal);
+        if (!current()) return;
+        if (status.authenticated !== false) {
+          const ids = await listCliModels(cli, controller.signal);
+          if (!current()) return;
+          setModels(ids);
+          if (cli === "codex" && ids[0] && !snapshot.llmModel && !useIde.getState().llmModel) setLlmModel(ids[0]);
+        }
         if (current()) { setProbe(status.installed === false || status.authenticated === false ? "bad" : status.authenticated === true ? "ok" : "unknown"); setProbeMsg(connectionProbeSummary("cli", status, locale)); }
         return;
       }
@@ -193,10 +201,6 @@ export function FirstRun() {
                   onClick={() => {
                     const next = g.ids.find((id) => id !== "brain") ?? g.ids[0];
                     if (next) setLlmProvider(next);
-                    setProbe("idle");
-                    setModels([]);
-                    setProbeMsg("");
-                    setProbeDetails("");
                   }}
                 >
                   {groupLabel(g.id)}
@@ -206,13 +210,7 @@ export function FirstRun() {
             <select
               value={provider}
               className="mt-2 h-9 w-full rounded-md border border-border bg-bg px-2 text-sm text-fg outline-none"
-              onChange={(e) => {
-                setLlmProvider(e.target.value as ProviderId);
-                setProbe("idle");
-                setModels([]);
-                setProbeMsg("");
-                setProbeDetails("");
-              }}
+              onChange={(e) => setLlmProvider(e.target.value as ProviderId)}
             >
               {groups.map((g) => (
                 <optgroup key={g.id} label={groupLabel(g.id)}>
@@ -225,6 +223,7 @@ export function FirstRun() {
               ))}
             </select>
             <p className="mt-1 text-[11px] text-subtle">{spec.hint}</p>
+            {spec.setupUrl ? <a className="mt-1 inline-block text-[11px] text-link underline" href={spec.setupUrl} target="_blank" rel="noopener noreferrer">Einrichtung beim Anbieter</a> : null}
             {spec.needsUrl ? (
               <label className="mt-2 block">
                 <span className="text-[11px] text-muted">{t("setupUrl")}</span>
@@ -248,12 +247,15 @@ export function FirstRun() {
             ) : null}
             <ConnectionSummary />
             <ModelPick
-              catalog={spec.models}
+              catalog={modelCatalog}
               live={models}
               value={model}
               onChange={setLlmModel}
               placeholder={spec.model || t("setupModelName")}
               loading={probe === "idle" && Boolean(probeMsg)}
+              hint={cli ? cliModelsHint(cli, models.length, probe === "idle" && Boolean(probeMsg), locale) : undefined}
+              prefer={cli === "codex" ? models : cli ? modelCatalog : undefined}
+              sourceLabel={cli ? "CLI" : undefined}
             />
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Button className="h-7 px-2 text-[11px]" onClick={() => void checkModel()}>

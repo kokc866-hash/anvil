@@ -17,7 +17,7 @@ assert.ok(minutes>=1&&minutes<=480,'Bounded test window required');
 const output=path.resolve('artifacts/background-soak');await mkdir(output,{recursive:true});
 const fixture=await mkdtemp(path.join(output,'profile-'));
 const sock=createServer();await new Promise(r=>sock.listen(0,'127.0.0.1',r));const port=sock.address().port;await new Promise(r=>sock.close(r));
-const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_QA_USER_DATA:fixture,ANVIL_HOME:path.join(fixture,'packages'),ANVIL_PORT:String(port),ANVIL_WATCHDOG:'0'};delete env.ELECTRON_RUN_AS_NODE;
+const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_QA_USER_DATA:fixture,ANVIL_HOME:path.join(fixture,'packages'),ANVIL_PORT:String(port)};delete env.ELECTRON_RUN_AS_NODE;
 const result={fixture,model,minutes,started:new Date().toISOString(),jobs:[],samples:0,reloads:[],pageErrors:[],failure:null};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function bounded(promise,ms,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>timer=setTimeout(()=>reject(Error(label+' timed out')),ms))]);}finally{clearTimeout(timer);}}

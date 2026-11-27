@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { AGENT_TOOLS, AGENT_TOOL_NAMES } from "./agent-tools.ts";
 import { ToolSession, isToolStall, parseTextTool, toolTargetKey, validateToolCall } from "./tool-compat.ts";
 import { prepareTextTools } from "./tool-fallback.ts";
+import { keepAgentTool } from "./agent-select.ts";
 import { harvestTools } from "./agent-parse.ts";
 import { toolCallFingerprint } from "./tool-call-fingerprint.ts";
 import { getCap, setCap, resetCap, capLabel, classifyLlmError } from "./model-caps.ts";
@@ -48,7 +49,7 @@ test("native and text validate required, types, enums and complete JSON equally"
 test("compact selection includes MCP/Run immediately, remains bounded and allows explicit discovery", () => {
   const session = new ToolSession("compact", "MCP finden und Run compile prüfen");
   const first = session.tools(AGENT_TOOLS).map((t) => t.function.name);
-  assert.ok(first.length <= 8);
+  assert.ok(first.length <= 10);
   for (const name of ["mcp_list", "mcp_call", "run_file", "see_run", "ask_user", "select_tools"]) assert.ok(first.includes(name), name);
   assert.ok(session.select(["missing_tool"]).error);
   session.select(["debug_start", "play", "engine_run"]);
@@ -60,15 +61,29 @@ test("compact selection includes MCP/Run immediately, remains bounded and allows
   assert.ok(session.tools(reads).every((t) => reads.includes(t) || reads.some((r) => r.function.name === t.function.name)));
 });
 
-test("standard keeps exactly its existing catalog and never opts into stall fallback", () => {
-  const tools = AGENT_TOOLS.filter((t) => t.function.name !== "select_tools");
+test("standard selects a small native catalog and never opts into text stall fallback", () => {
+  const tools = AGENT_TOOLS;
   const session = new ToolSession("standard", "Schreibe Datei");
-  assert.equal(session.tools(tools), tools);
+  const selected=session.tools(tools);
+  assert.ok(selected.length<tools.length);assert.ok(selected.every(tool=>tools.includes(tool)));assert.ok(selected.some(tool=>tool.function.name==='select_tools'));
   assert.equal(session.tryTextFallback(), false);
   const compact = new ToolSession("compact", "Schreibe Datei");
   assert.equal(compact.tryTextFallback(), true);
   assert.equal(compact.tryTextFallback(), false);
   assert.equal(new ToolSession("text", "Schreibe Datei").tryTextFallback(), false);
+});
+
+test("local export checks expose verify_file in read-only native and text catalogs", () => {
+  const readOnly = AGENT_TOOLS.filter(tool => keepAgentTool(tool.function.name, { observeOnly: true }));
+  const args = { path: "Ergebnis/Stadtpark/Ansicht.png", width: 1920, height: 1080 };
+  for (const mode of ["standard", "compact", "text"] as const) {
+    const session = new ToolSession(mode, "Prüfe die exportierte Ansicht.png.");
+    const names = session.tools(readOnly).map(tool => tool.function.name);
+    assert.ok(names.includes("verify_file"));
+    assert.ok(!names.includes("write_file"));
+    assert.equal(validateToolCall({ id: "verify-1", type: "function", function: { name: "verify_file", arguments: JSON.stringify(args) } }, names).error, undefined);
+    assert.equal(parseTextTool(JSON.stringify({ name: "verify_file", arguments: args }), names).calls.length, 1);
+  }
 });
 
 test("project rules do not crowd out tools needed by the actual chat task", () => {
@@ -77,7 +92,7 @@ test("project rules do not crowd out tools needed by the actual chat task", () =
   const names = session.tools(AGENT_TOOLS).map((t) => t.function.name);
   assert.ok(names.includes("read_file")); assert.ok(names.includes("grep"));
   assert.ok(!names.includes("engine_run")); assert.ok(!names.includes("mcp_call"));
-  assert.ok(names.length <= 8);
+  assert.ok(names.length <= 10);
 });
 
 test("normal answers, questions and completed work cannot trigger a stall fallback", () => {

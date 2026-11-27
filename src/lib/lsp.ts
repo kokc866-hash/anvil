@@ -1,5 +1,6 @@
-import { getIndex, lookupSymbol, rebuildIndex, resolveImport } from "./ws-index.ts";
+import { getIndex, lineAtOffset, lookupSymbol, rebuildIndex, resolveImport, sourceLines } from "./ws-index.ts";
 import { skipPath } from "./ws-skip.ts";
+import { hoverCode } from "./hover-markdown.ts";
 
 export type LspSeverity = "error" | "warning" | "info";
 
@@ -15,7 +16,7 @@ export type LspHit = {
 export type LspDef = { path: string; line: number; text: string };
 
 export { lintWorkspace } from "./lsp-lint.ts";
-import { lintWorkspace, DEF_RE } from "./lsp-lint.ts";
+import { DEF_RE } from "./lsp-lint.ts";
 
 export function findDefinition(files: Record<string, string>, name: string, fromPath?: string): LspDef[] {
   const n = name.trim();
@@ -39,13 +40,15 @@ export function findDefinition(files: Record<string, string>, name: string, from
   const order = fromPath ? [fromPath, ...Object.keys(files).filter((p) => p !== fromPath)] : Object.keys(files);
   for (const path of order) {
     const src = files[path] ?? "";
+    let locations: ReturnType<typeof sourceLines> | undefined;
     for (const re of DEF_RE) {
       re.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = re.exec(src))) {
         if (m[1] !== n) continue;
-        const line = src.slice(0, m.index + 1).split("\n").length;
-        const text = src.split("\n")[line - 1]?.trim() ?? n;
+        locations ??= sourceLines(src);
+        const line = lineAtOffset(locations.starts, m.index + 1);
+        const text = locations.lines[line - 1]?.trim() ?? n;
         hits.push({ path, line, text });
         if (hits.length >= 12) return hits;
       }
@@ -54,23 +57,48 @@ export function findDefinition(files: Record<string, string>, name: string, from
   return hits;
 }
 
+const symbolCache = new Map<string, { source: string; hits: LspDef[] }>();
+const SYMBOL_CACHE_CHARS = 4_000_000;
+let symbolCacheChars = 0;
+
 export function listSymbols(src: string, path: string): LspDef[] {
-  return parseFileLocal(path, src);
+  const cached = symbolCache.get(path);
+  if (cached?.source === src) {
+    symbolCache.delete(path);
+    symbolCache.set(path, cached);
+    return cached.hits;
+  }
+  if (cached) {
+    symbolCacheChars -= cached.source.length;
+    symbolCache.delete(path);
+  }
+  const hits = parseFileLocal(path, src);
+  if (src.length <= SYMBOL_CACHE_CHARS) {
+    symbolCache.set(path, { source: src, hits });
+    symbolCacheChars += src.length;
+    while (symbolCache.size > 32 || symbolCacheChars > SYMBOL_CACHE_CHARS) {
+      const oldest = symbolCache.keys().next().value!;
+      symbolCacheChars -= symbolCache.get(oldest)!.source.length;
+      symbolCache.delete(oldest);
+    }
+  }
+  return hits;
 }
 
 function parseFileLocal(path: string, src: string): LspDef[] {
   const hits: LspDef[] = [];
   const seen = new Set<string>();
+  const { lines, starts } = sourceLines(src);
   for (const re of DEF_RE) {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(src))) {
       const name = m[1];
-      const line = src.slice(0, m.index + 1).split("\n").length;
+      const line = lineAtOffset(starts, m.index + 1);
       const key = `${name}:${line}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      hits.push({ path, line, text: src.split("\n")[line - 1]?.trim() ?? name });
+      hits.push({ path, line, text: lines[line - 1]?.trim() ?? name });
     }
   }
   return hits.sort((a, b) => a.line - b.line);
@@ -101,14 +129,19 @@ export async function defsAt(
   return findDefinition(files, wordAt(files[path] ?? "", offset), path);
 }
 
-export function hoverFor(files: Record<string, string>, path: string, src: string, offset: number): string | null {
+export function hoverFor(files: Record<string, string>, path: string, src: string, offset: number, locale = "de"): string | null {
   const w = wordAt(src, offset);
   if (!w) return null;
   const defs = findDefinition(files, w, path);
-  if (!defs.length) return w.length > 1 ? `\`${w}\` · Näherung` : null;
+  // A repeated word without a definition adds no useful information.
+  if (!defs.length) return null;
   const d = defs[0];
-  const more = defs.length > 1 ? ` · ${defs.length} Treffer` : "";
-  return `**${w}** · Näherung — ${d.path}:${d.line}${more}\n\n\`${d.text}\``;
+  const en = locale === "en";
+  const more = defs.length > 1 ? (en ? ` ${defs.length} matching declarations; showing the first.` : ` ${defs.length} passende Deklarationen; angezeigt wird die erste.`) : "";
+  const note = en
+    ? "Found by symbol name. The reference and type have not been verified by a language service."
+    : "Über den Symbolnamen gefunden. Die Zuordnung und der Typ wurden nicht durch einen Sprachdienst geprüft.";
+  return `**${en ? "Possible declaration" : "Mögliche Deklaration"}**\n\n${hoverCode(`${d.path}:${d.line}`)}\n\n${hoverCode(d.text)}\n\n${note}${more}`;
 }
 
 export function renameSymbol(

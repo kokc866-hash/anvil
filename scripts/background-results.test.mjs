@@ -91,7 +91,7 @@ test('parked question persists without replay, accepts only its own answer and k
     f.send({type:'ready'});
     const start=f.sends.filter(m=>m.type==='start').at(-1);
     assert.match(start.request.messages.at(-1).content,/Wahl: B\) Rot/);
-    assert.ok(start.request.blockedMutations.includes('effect-before-question'));
+    assert.equal(start.request.blockedMutations,undefined,'A new resumed task does not inherit blanket effect locks');
     assert.equal(start.request.planLocked,true);assert.equal(f.host.state.resumedFrom,savedId);
     assert.throws(()=>f.host.resume(savedId,{...request,answer:{askId:ask.id,choiceId:'B'}}),/angehaltene/,'answer cannot replay active resume');
   }finally{await f.host.close();}
@@ -110,7 +110,7 @@ test('resume preserves current rules, selection and images without restoring too
     assert.ok(request.messages.every(m=>m.role!=='tool'&&!m.tool_calls&&!m.tool_call_id));
     assert.deepEqual(request.messages.at(-1).images,[image]);
     assert.equal(request.messages.filter(m=>m.images?.includes(image)).length,1);
-    assert.match(request.messages.at(-1).content,/Kontrollierte Wiederaufnahme/);
+    assert.match(request.messages.at(-1).content,/Setze den Auftrag fort/);
   }finally{await f.host.close();}
 });
 

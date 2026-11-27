@@ -49,6 +49,19 @@ test("renderer cancellation closes upstream streaming request", async (t) => {
   await res.body.getReader().read(); ctrl.abort();
   await Promise.race([closed, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("upstream still open")), 1500); timer.unref(); })]);
 });
+
+test('an interrupted foreground stream fails instead of reporting a clean partial answer', async t => {
+  let requests = 0;
+  const upstream = createServer((_req, res) => {
+    requests++; res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: partial\n\n');
+    setTimeout(() => res.destroy(), 40);
+  });
+  const target = await listen(upstream), pipe = createLlmPipeServer('interrupted-fixture'), base = await listen(pipe);
+  t.after(() => { pipe.closeAllConnections(); pipe.close(); upstream.closeAllConnections(); upstream.close(); });
+  const response = await fetch(`${base}/pipe`, { headers: { 'x-anvil-pipe': 'interrupted-fixture', 'x-anvil-target': target + '/v1/chat/completions' } });
+  await assert.rejects(response.text(), TypeError);
+  assert.equal(requests, 1);
+});
 test("Custom grants only the explicit endpoint; metadata stays blocked, VPN/private IPv6 work", () => {
   assert.equal(assertLlmTarget("https://inference.example/api/chat/completions", "https://inference.example/api").hostname, "inference.example");
   assert.throws(() => assertLlmTarget("https://inference.example/other", "https://inference.example/api"));

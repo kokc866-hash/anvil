@@ -49,7 +49,7 @@ const server=createServer(async(req,res)=>{
  res.end('data: [DONE]\n\n');
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_PORT:String(port),ANVIL_QA_USER_DATA:profile,ANVIL_HOME:path.join(profile,'packages'),ANVIL_WATCHDOG:'0'};
+const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_PORT:String(port),ANVIL_QA_USER_DATA:profile,ANVIL_HOME:path.join(profile,'packages')};
 delete env.ELECTRON_RUN_AS_NODE;delete env.ANVIL_GODOT_BIN;
 // Exercise the saved engine path used by the production IPC, not just an env override.
 await mkdir(path.join(profile,'packages','toolchains'),{recursive:true});
@@ -107,7 +107,7 @@ try{
  console.log('BACKGROUND_STAGE4_IMAGES_AND_ENGINES_OK');
 }finally{
  release?.();
- if(app){const deadline=setTimeout(()=>proc?.kill(),8000);try{await app.close();}catch{}clearTimeout(deadline);}
+ if(app){const deadline=setTimeout(()=>proc?.kill(),8000);try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(deadline);}
  server.closeAllConnections();await new Promise(r=>server.close(r));
  if(enginePid)assert.equal(alive(enginePid),false,'engine must not outlive test');
 }

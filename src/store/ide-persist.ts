@@ -125,6 +125,8 @@ export function partializeIde(s: IdeState) {
     collapsed: s.collapsed,
     diskName: s.diskName,
     workspaceCwd: s.workspaceCwd,
+    workspaceNative: s.workspaceNative,
+    workspaceEmpty: s.workspaceEmpty,
     setupDone: s.setupDone,
     backupName: s.backupName,
     storageMode: s.storageMode,

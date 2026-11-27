@@ -34,7 +34,7 @@ test("malformed manifests fail visibly, full instructions and metadata survive s
   const reread = parseSkillMd(exported)!;
   assert.equal(reread.body, parsed.body);
   assert.equal(reread.when, parsed.when);
-  assert.match(exported, /license: MIT\nmetadata:\n  author: Example\nallowed-tools: read_file/);
+  assert.match(exported, /license: MIT\nmetadata:\n {2}author: Example\nallowed-tools: read_file/);
 });
 
 test("offline ZIP encodes standard entries and binary files intact", () => {

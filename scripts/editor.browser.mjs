@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 const origin = 'http://127.0.0.1:8193';
 const reports = [];
 let server, browser;
 try {
-  server = await createServer({ server: { host: '127.0.0.1', port: 8193, strictPort: true }, cacheDir: 'node_modules/.vite-editor-tests', optimizeDeps: { include: ['react', 'react-dom/client', 'zustand', 'zustand/middleware', 'typescript', 'prettier/standalone', 'prettier/plugins/babel', 'prettier/plugins/estree', 'prettier/plugins/typescript', 'prettier/plugins/html', 'prettier/plugins/markdown', 'prettier/plugins/postcss', 'prettier/plugins/yaml'], noDiscovery: true } });
+  server = await createServer({ server: { host: '127.0.0.1', port: 8193, strictPort: true }, cacheDir: 'node_modules/.vite-editor-tests', optimizeDeps: { include: ['ajv-formats', 'ajv', 'ajv/dist/2019.js', 'ajv/dist/2020.js', 'react', 'react-dom/client', 'zustand', 'zustand/middleware', 'typescript', 'prettier/standalone', 'prettier/plugins/babel', 'prettier/plugins/estree', 'prettier/plugins/typescript', 'prettier/plugins/html', 'prettier/plugins/markdown', 'prettier/plugins/postcss', 'prettier/plugins/yaml'], noDiscovery: true } });
   await server.listen();
   browser = await chromium.launch({ executablePath: process.env.ANVIL_CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--no-zygote', '--disable-gpu', '--disable-features=LocalNetworkAccessChecks'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -179,6 +180,52 @@ try {
     await st.getState().rejectDiff('a.txt');
     return { content: st.getState().files['a.txt'], pending: st.getState().pendingDiffs.length, backup: st.getState().pendingDiffs[0]?.before, dirty: st.getState().dirty['a.txt'] };
   });
+  // Exercise the real toolbar and shared tooltip, with no model or program run.
+  await page.evaluate(async () => {
+    await import('/src/styles.css');
+    window.auditReset({ 'hint.html': '<h1>Tooltip fixture</h1>' });
+    window.__anvilIde.setState({ locale: 'de', running: false, runPopout: false });
+    const { EditorPane } = await import('/src/components/ide/editor-pane.tsx');
+    window.__auditRoot.render(window.__auditReact.createElement(EditorPane));
+  });
+  const previewButton = page.getByRole('button', { name: 'Vorschau', exact: true });
+  await previewButton.waitFor();
+  await previewButton.focus();
+  await page.getByRole('tooltip').filter({ hasText: 'Vorschau im Editor öffnen' }).waitFor();
+  await previewButton.click();
+  await page.getByRole('tooltip').waitFor({ state: 'detached' });
+  await previewButton.evaluate(el => el.blur());
+  await previewButton.focus();
+  await page.getByRole('tooltip').filter({ hasText: 'Vorschau im Editor schließen' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByRole('tooltip').waitFor({ state: 'detached' });
+  await page.evaluate(() => window.__anvilIde.setState({ runPopout: true }));
+  await previewButton.evaluate(el => el.blur());
+  await previewButton.focus();
+  await page.getByRole('tooltip').filter({ hasText: 'Vorschaufenster wieder in den Editor einbetten' }).waitFor();
+  await previewButton.evaluate(el => el.blur());
+  await page.evaluate(() => window.__anvilIde.setState({ runPopout: false, previewOpen: false }));
+  await mkdir('artifacts/editor-tooltips', { recursive: true });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const outputButton = page.getByRole('button', { name: 'Ausgabefenster', exact: true });
+    await outputButton.focus();
+    const tip = page.getByRole('tooltip').filter({ hasText: 'Aktuelle Datei ausführen und Vorschau in einem eigenen Fenster öffnen' });
+    await tip.waitFor();
+    assert.equal(await tip.evaluate(el => {
+      const r = el.getBoundingClientRect();
+      return r.left >= 7 && r.right <= innerWidth - 7 && el.scrollWidth <= el.clientWidth + 1;
+    }), true, 'The complete tooltip must fit the viewport');
+    await page.screenshot({ path: `artifacts/editor-tooltips/${width}.png`, animations: 'disabled' });
+    await page.keyboard.press('Escape');
+    await outputButton.evaluate(el => el.blur());
+  }
+  await page.evaluate(() => window.__anvilIde.setState({ locale: 'en' }));
+  await page.getByRole('button', { name: 'More', exact: true }).focus();
+  await page.getByRole('tooltip').filter({ hasText: 'Open more editor actions' }).waitFor();
+  await page.keyboard.press('Escape');
+  console.log('EDITOR_TOOLTIP_CONTENT_STATE_CLICK_ESCAPE_VIEWPORT_OK');
   const result = name => reports.find(r => r.name === name);
   assert.equal(result('goto_same_file').actual.lineNumber, 4);
   assert.deepEqual(result('command_event_cycle').counts, { 'anvil-replace': 1, 'anvil-symbols': 1 });
@@ -192,7 +239,7 @@ try {
   assert.deepEqual(result('format_after_tab_switch').files, { 'a.go': 'FORMATTED_A', 'b.go': 'ORIGINAL_B' });
   assert.equal(result('cached_model_remount').value, 'NEW_WHILE_HIDDEN');
   assert.equal(result('workspace_undo_isolation').stored, 'PROJECT_B');
-  assert.match(result('format_offline_and_css').css, /    color: red;/);
+  assert.match(result('format_offline_and_css').css, / {4}color: red;/);
   assert.equal(result('format_offline_and_css').unsupported, true);
   assert.deepEqual(result('compiler_worker').first.hits, []);
   assert.ok(result('compiler_worker').second.hits.some(h => h.path === 'after.ts'));

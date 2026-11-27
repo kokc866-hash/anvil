@@ -13,7 +13,7 @@ export async function runFromEditor(path = useIde.getState().activePath, options
     return;
   }
   if (active || st.running || st.agentBusy || !path) return;
-  let target = options.live ? path : selectRunTarget(Object.keys(st.files), path);
+  let target = options.live ? path : selectRunTarget(Object.keys(st.files), path, st.files);
   if (!target) { st.setNotice("Keine ausführbare Startdatei im Projekt gefunden."); return; }
   let complete!: () => void;
   completion = new Promise<void>((resolve) => { complete = resolve; });

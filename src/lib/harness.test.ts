@@ -21,7 +21,7 @@ import {
 describe("harness loop", () => {
   const o = { afterWrite: "run" as const, runLoop: true, graphLoop: true, loopTries: 3 };
   it("asks for run after write", () => {
-    let h = startHarness(o);
+    const h = startHarness(o);
     const w = afterTool(h, "write_file", { path: "src/a.py" }, o);
     assert.ok(w.inject);
   });
@@ -49,8 +49,8 @@ describe("harness loop", () => {
     assert.equal(Boolean(next.strict), false);
   });
   it("exhausting automatic repair attempts does not revoke other offered tools", () => {
-    let h = startHarness(o);
-    h.used.runs = h.budget.runs;
+    const h = startHarness(o);
+    h.used.patches = h.budget.patches;
     const w = afterTool(h, "run_file", { ok: false, stderr: "boom" }, o);
     assert.deepEqual(w.allow, []);
     assert.equal(Boolean(w.strict), false);

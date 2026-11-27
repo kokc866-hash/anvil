@@ -29,7 +29,7 @@ const server=createServer(async(req,res)=>{
  const value=call?{delta:{tool_calls:[{index:0,id:phase+n,function:call}]},finish_reason:'tool_calls'}:{delta:{content:'Nach vollständigem Neustart abgeschlossen.'},finish_reason:'stop'};
  res.end('data: '+JSON.stringify({choices:[value]})+'\n\ndata: [DONE]\n\n');
 });await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_QA_USER_DATA:profile,ANVIL_HOME:path.join(profile,'packages'),ANVIL_PORT:String(port),ANVIL_WATCHDOG:'0'};delete env.ELECTRON_RUN_AS_NODE;
+const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_QA_USER_DATA:profile,ANVIL_HOME:path.join(profile,'packages'),ANVIL_PORT:String(port)};delete env.ELECTRON_RUN_AS_NODE;
 let app,page;
 const until=async f=>{for(let i=0;i<300;i++){if(await f())return;await new Promise(r=>setTimeout(r,100));}throw Error('Stage 5 timed out');};
 async function launch(){app=await _electron.launch({args:[path.resolve('fixtures/electron-boot.mjs')],env,timeout:45000});await until(()=>{page=app.windows().find(p=>p.url()===`http://127.0.0.1:${port}/`);return page;});await page.waitForFunction(()=>window.__anvilIde?.persist.hasHydrated());}

@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ensureTs, tscWorkspace, tsDefinition, tsQuickInfo } from "./lsp-compile.ts";
+import { ensureTs, tscWorkspace, tsChecked, tsDefinition, tsQuickInfo } from "./lsp-compile.ts";
+import { hasTsSource, tsRoots } from "./compiler-files.ts";
 
 describe("lsp-compile", () => {
+  it("shares supported roots and open-file size limits with the lazy guard", () => {
+    const files = { "a.js": "export const n = 1;", "a.mts": "export const m = 2;", "main.py": "pass",
+      "node_modules/a.ts": "const n = 1;", "anvil-lib/a.ts": "const n = 1;", "large.ts": "x".repeat(200_000), "empty.ts": "" };
+    assert.deepEqual(tsRoots(files), ["a.js", "a.mts"]);
+    assert.deepEqual(tsRoots(files, ["large.ts", "a.js"]), ["large.ts", "a.js", "a.mts"]);
+    assert.equal(hasTsSource({ "large.ts": files["large.ts"] }), false);
+    assert.equal(hasTsSource({ "large.ts": files["large.ts"] }, ["large.ts"]), true);
+  });
   it("flags a typescript syntax error", async () => {
     const hits = await tscWorkspace({
       "src/a.ts": "export function hi(\n",
@@ -55,6 +64,7 @@ describe("lsp-compile", () => {
     assert.ok(hits.some((h) => h.path === "src/big.ts"));
     const closed = await tscWorkspace({ "src/big.ts": src }, []);
     assert.equal(closed.length, 0);
+    assert.deepEqual(tsChecked(), [], "an empty compiler scope releases previous language services");
   });
 });
 

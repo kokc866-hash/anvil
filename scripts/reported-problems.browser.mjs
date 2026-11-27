@@ -98,7 +98,7 @@ try {
   await page.evaluate(() => {
     const st = window.__anvilIde;
     const content = st.getState().files["snake/snake.ts"];
-    st.setState({ workspaceCwd: "I:\\AnvilTest\\tests", dirty: { "snake/snake.ts": true }, pendingDiffs: [{ path: "snake/snake.ts", before: "before", after: content, source: "round", existedBefore: true, backupVersion: 2 }] });
+    st.setState({ workspaceCwd: "I:\\Test-Workspace\\tests", dirty: { "snake/snake.ts": true }, pendingDiffs: [{ path: "snake/snake.ts", before: "before", after: content, source: "round", existedBefore: true, backupVersion: 2 }] });
     window.closeResult = undefined; window.fixtureClose().then((ok) => { window.closeResult = ok; });
   });
   await page.getByRole("dialog", { name: "Ungespeicherte Änderungen" }).getByRole("button", { name: "Speichern", exact: true }).click();

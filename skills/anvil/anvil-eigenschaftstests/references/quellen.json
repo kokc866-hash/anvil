@@ -1,0 +1,21 @@
+{
+  "adaptedFor": "Anvil",
+  "date": "2026-10-29",
+  "runtimeAcceptance": "unverified",
+  "upstreamCodeExecuted": false,
+  "sources": [
+    {
+      "repo": "trailofbits/skills",
+      "commit": "2be6433b39e009cd2b6fd3be1895f6b1faa5af9a",
+      "path": "plugins/property-based-testing/skills/property-based-testing/SKILL.md",
+      "license": "CC-BY-SA-4.0",
+      "url": "https://github.com/trailofbits/skills/blob/2be6433b39e009cd2b6fd3be1895f6b1faa5af9a/plugins/property-based-testing/skills/property-based-testing/SKILL.md"
+    }
+  ],
+  "changes": [
+    "German Anvil-specific adaptation",
+    "No upstream runtime/installer/hooks",
+    "Existing permissions and project scope preserved",
+    "References loaded on demand"
+  ]
+}

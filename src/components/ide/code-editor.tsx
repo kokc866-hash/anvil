@@ -3,6 +3,7 @@ import { formatDocument } from "@/lib/format";
 import type { LangId } from "@/lib/languages";
 import { defineAnvilThemes, editorChrome, loadMonaco, monacoLang, pruneModels, wireNav, type MonacoEditor, type MonacoNS } from "@/lib/monaco";
 import { applyModelText, markerEndCol, modelUriString } from "@/lib/monaco-models";
+import { observeMonacoTeardown } from "@/lib/monaco-lifecycle";
 import { defsAt, wordAt } from "@/lib/lsp";
 import { gotoFile } from "@/lib/goto";
 import { emitPlugin } from "@/lib/plugins/events";
@@ -531,6 +532,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       dead = true;
       window.clearTimeout(brainTimer);
       window.clearTimeout(hintTimer);
+      if (edRef.current) void observeMonacoTeardown(edRef.current);
       for (const s of subs) s.dispose();
       edRef.current?.dispose();
       edRef.current = null;
@@ -548,7 +550,10 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
       if (next === prev) return;
       prev = next;
       const monaco = monacoRef.current;
-      if (monaco) pruneModels(monaco, s.openPaths, s.workspaceEpoch);
+      if (monaco) {
+        if (edRef.current) void observeMonacoTeardown(edRef.current);
+        pruneModels(monaco, s.openPaths, s.workspaceEpoch);
+      }
       for (const p of viewsRef.current.keys()) if (!s.openPaths.includes(p)) viewsRef.current.delete(p);
     });
   }, []);
@@ -599,6 +604,7 @@ export function CodeEditor({ path, value, language, onChange, onRun, onInlineEdi
     if (!model) model = monaco.editor.createModel(valueRef.current, monacoLang(language), uri);
     else applyModelText(model as Parameters<typeof applyModelText>[0], valueRef.current);
     if (ed.getModel() !== model) {
+      void observeMonacoTeardown(ed);
       ed.setModel(model);
       setHints([]);
     }

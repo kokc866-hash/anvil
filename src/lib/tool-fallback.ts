@@ -33,6 +33,7 @@ export function shrinkTools<T extends ToolLike>(current: T[] | null | undefined)
 }
 
 import { patchResponses400 } from "./llm-options.ts";
+import { isPinnedRequest, USER_REQUEST_MARK } from "./compact.ts";
 
 export function stripPayload(payload: Record<string, unknown>, body = "") {
   if (/max_completion_tokens/i.test(body) && payload.max_tokens != null) {
@@ -53,13 +54,15 @@ export function stillHasTools(useTools: boolean, tools: unknown): boolean {
 
 const TEXT_TOOLS = "\nTool transport for this request (text mode):";
 /** Models without native function calling still receive the actual allowed tool contracts. */
-export function prepareTextTools(payload: Record<string, unknown>, tools: ToolLike[]): void {
+export function prepareTextTools(payload: Record<string, unknown>, tools: ToolLike[], options: { continuation?: boolean } = {}): void {
   delete payload.tools;
   delete payload.tool_choice;
   if (!tools.length || !Array.isArray(payload.messages)) return;
   const catalog = shrinkTools(tools) || tools;
   const instruction = `${TEXT_TOOLS}\nTo call a tool, the ENTIRE answer must be one JSON object (no prose, Markdown, XML, or thinking): {"name":"tool_name","arguments":{...}}. Anvil executes it and returns the real result. This text format replaces native function calls for this request. When finished or answering a question, reply normally without a tool object. Use only the listed tools; if select_tools is listed, use it to discover/select more tools. Skip flow steps whose tools are not listed. These tools are available; do not claim they are inactive. Do not invent results.\nAllowed tools and arguments:\n${JSON.stringify(catalog.map((t) => t.function))}`;
-  const messages = (payload.messages as Record<string, unknown>[]).map((m) => {
+  const original = payload.messages as Record<string, unknown>[];
+  const requests = options.continuation ? original.filter(isPinnedRequest) : [];
+  const messages = original.map((m) => {
     if (m.role === "tool") return { role: "user", content: `Tool result (${m.name || m.tool_call_id || "tool"}):\n${String(m.content || "")}` };
     if (m.role === "assistant" && Array.isArray(m.tool_calls)) return { role: "assistant", content: [m.content, ...m.tool_calls.map((c) => JSON.stringify({ name: c.function?.name, arguments: historyArgs(c.function?.arguments) }))].filter(Boolean).join("\n") };
     return { ...m };
@@ -67,6 +70,14 @@ export function prepareTextTools(payload: Record<string, unknown>, tools: ToolLi
   const system = messages.find((m) => m.role === "system" && typeof m.content === "string");
   if (system) system.content = String(system.content).split(TEXT_TOOLS)[0].replace("- While working: tool call only — no essay, no plan sentence, no tool XML/JSON in the text.", "- While working: use the text tool format specified below.") + instruction;
   else messages.unshift({ role: "system", content: instruction.trim() });
+  if (requests.length) {
+    // On an explicit gateway rejection keep the actual task at the newest
+    // boundary too. A backend may retain less history than the requested window.
+    // This repeats existing human instructions, never creates new authority.
+    const text = requests.map(message => typeof message.content === 'string' ? message.content
+      : Array.isArray(message.content) ? message.content.map(part => part && typeof part === 'object' && 'text' in part ? String(part.text) : '').join('\n') : '').join('\n\n');
+    messages.push({role:'user',content:USER_REQUEST_MARK+'Continuation of the same task. Use the confirmed tool results above; never replay completed actions. Preserve all original restrictions and corrections:\n'+text});
+  }
   payload.messages = messages;
 }
 

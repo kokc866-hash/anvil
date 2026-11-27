@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /** Copy Nitro `.output` to `ui-build` so electron-builder packs a non-dot folder. */
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyBuild } from './build-fingerprint.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, ".output");
 const dest = join(root, "ui-build");
 const entry = join(src, "server", "index.mjs");
 const WIRE_MARK = "x-anvil-target";
+await verifyBuild(resolve(root));
 
 if (!existsSync(entry)) {
   console.error("UI-Build fehlt. Zuerst: ANVIL_ELECTRON_BUILD=1 npm run build");
@@ -18,6 +20,8 @@ if (!['worker.mjs', 'service-contract.mjs', 'preview-runtime.mjs', 'debug-trace.
   console.error("Agent-Hintergrundprozess fehlt. Zuerst npm run build ausführen.");
   process.exit(1);
 }
+const outputRelative = relative(resolve(root), resolve(dest));
+if (!outputRelative || outputRelative.startsWith('..') || isAbsolute(outputRelative)) throw Error('Unsafe UI output path.');
 rmSync(dest, { recursive: true, force: true });
 cpSync(src, dest, { recursive: true });
 const monaco = join(dest, "public", "monaco", "vs", "loader.js");
@@ -48,4 +52,5 @@ if (!hasMark(dest, WIRE_MARK)) {
   console.error("UI-Build ohne Pipe-Wire (x-anvil-target). Bundle unvollständig — Release abbrechen.");
   process.exit(1);
 }
-console.log("ui-build bereit");
+await verifyBuild(resolve(root), true);
+console.log("ui-build bereit; Quellstand und Paketinhalt geprüft.");

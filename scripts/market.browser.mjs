@@ -25,7 +25,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const reply = query => ({ extensions: [{ namespace: 'QA', name: query, displayName: `Result ${query}`, description: 'Controlled market result' }] });
 try {
   for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break; } catch {}
+    try { if ((await fetch(`http://127.0.0.1:${port}/`)).ok) break; } catch { /* Retry while the production server is starting. */ }
     await pause(250);
   }
   app = await _electron.launch({ executablePath: path.join(root, 'node_modules/electron/dist/electron.exe'), args: [`--user-data-dir=${profile}`, path.join(root, 'fixtures/electron-boot.mjs')], env, timeout: 45000 });

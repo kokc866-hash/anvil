@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Anvil - Langzeittest
+title Anvil - Desktop-Test
 rem Avoid focusing an already running development instance instead of testing.
 powershell -NoProfile -NonInteractive -Command "$runtime=[IO.Path]::GetFullPath('node_modules\electron\dist\electron.exe'); if (Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $runtime }) { exit 1 }"
 if errorlevel 1 (
@@ -14,12 +14,9 @@ where node >nul 2>&1
 if errorlevel 1 goto missing
 if not exist "node_modules\electron\dist\electron.exe" goto missing
 set "ANVIL_ELECTRON_BUILD=1"
-call npm run build
-if errorlevel 1 goto failed
-node scripts\pack-ui.mjs
+call npm run build:desktop
 if errorlevel 1 goto failed
 set "ANVIL_DESKTOP_MODE=production"
-set "ANVIL_WATCHDOG=1"
 set "ELECTRON_RUN_AS_NODE="
 start "" /D "%~dp0" "%~dp0node_modules\electron\dist\electron.exe" .
 exit /b 0

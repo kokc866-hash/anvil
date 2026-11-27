@@ -1,4 +1,6 @@
 import { THINKING_MODES, claudeAdaptive, effectiveThinking, isLocalThinking, thinkingModes } from "../../electron/thinking-support.mjs";
+import { captureAgentFailure } from "../../electron/agent-failure.mjs";
+import { redactPatterns } from "./vault-redact.ts";
 export type { ThinkingMode } from "../../electron/thinking-support.mjs";
 import type { ThinkingMode } from "../../electron/thinking-support.mjs";
 
@@ -75,6 +77,20 @@ export function applyLlmOptions(
   const anthropic = rt.api === "anthropic" || rt.provider === "anthropic";
   const completion = !anthropic && needsCompletionTokens(rt.model, rt.provider);
 
+  if (["qwen", "deepseek"].includes(rt.provider) && Array.isArray(payload.messages)) {
+    // Streaming parsers use Anvil's `reasoning` field. These APIs require the
+    // original reasoning separately from visible content on subsequent tool turns.
+    payload.messages = (payload.messages as Record<string, unknown>[]).map(message => {
+      if (message.role !== "assistant") return message;
+      const { reasoning, ...wire } = message;
+      if (typeof wire.reasoning_content !== "string" && typeof reasoning === "string") wire.reasoning_content = reasoning;
+      // Earlier plain-text chat summaries (or replies from another provider)
+      // have no returned reasoning. DeepSeek still requires the field with tools.
+      if (rt.provider === "deepseek" && typeof wire.reasoning_content !== "string") wire.reasoning_content = "";
+      return wire;
+    });
+  }
+
   if (completion) {
     payload.max_completion_tokens = maxOut;
     delete payload.max_tokens;
@@ -99,7 +115,10 @@ export function applyLlmOptions(
       keep_alive: "30m",
     };
     if (think) {
-      delete payload.max_tokens;
+      // Ollama's native API reads options.num_predict. OpenAI-compatible local
+      // endpoints require a top-level limit, including while reasoning.
+      if (rt.provider === "ollama") delete payload.max_tokens;
+      else if (!completion) payload.max_tokens = predict;
       payload.think = rt.thinking === "auto" ? true : effort;
     } else {
       payload.think = false;
@@ -126,11 +145,18 @@ export function applyLlmOptions(
         enable_thinking: false,
       };
     }
+    if (rt.provider === "llamacpp") {
+      // Native llama.cpp names this field differently from legacy wrappers.
+      payload.reasoning_budget_tokens = Math.min(budget, predict);
+      delete payload.reasoning_budget;
+      // Local Low/Mid/High already controls the budget. Native effort names
+      // depend on the model's chat template, not merely on this API provider.
+    }
     delete payload.stream_options;
   }
 
   // Only opt in on known OpenAI-compatible services; legacy local servers may reject it.
-  if (payload.stream && !anthropic && ["openai", "azure", "xai", "grok", "openrouter", "groq", "deepseek"].includes(rt.provider)) {
+  if (payload.stream && !anthropic && ["openai", "azure", "xai", "grok", "openrouter", "groq", "deepseek", "qwen"].includes(rt.provider)) {
     payload.stream_options = { ...((payload.stream_options as object) || {}), include_usage: true };
   }
 
@@ -143,6 +169,18 @@ export function applyLlmOptions(
   const mode = effectiveThinking(provider, rt.model, rt.thinking);
   // Auto leaves effort to the model. Never send a made-up level to a provider.
   delete payload.reasoning_effort;
+  if (provider === "qwen") {
+    delete payload.thinking_budget;
+    delete payload.enable_thinking;
+    if (mode !== "auto") {
+      payload.enable_thinking = mode !== "off";
+      if (mode !== "off") {
+        if (/^qwen3\.8-/.test(rt.model)) payload.reasoning_effort = mode;
+        else payload.thinking_budget = budget;
+      }
+    }
+    return payload;
+  }
   if (anthropic && thinkingModes(provider, rt.model).length > 1) {
     if (mode === "off") {
       payload.thinking = { type: "disabled" };
@@ -170,6 +208,7 @@ export function applyLlmOptions(
       if (mode !== "off") payload.reasoning_effort = mode;
     } else payload.reasoning_effort = mode === "off" ? "none" : mode;
   }
+  if (provider === "deepseek" && (mode !== "off" && thinkingModes(provider, rt.model).length > 1 || /deepseek-reasoner/.test(rt.model))) delete payload.temperature;
   return payload;
 }
 
@@ -249,7 +288,18 @@ export function toResponsesInput(messages: Record<string, unknown>[]): { instruc
       if (t) input.push({ role: "assistant", content: t });
       continue;
     }
-    input.push({ role, content: textOf(m.content) });
+    const content = Array.isArray(m.content) ? m.content.map(part => {
+      if (typeof part === "string") return { type: role === "assistant" ? "output_text" : "input_text", text: part };
+      if (!part || typeof part !== "object") return { type: "input_text", text: String(part ?? "") };
+      const value = part as Record<string, unknown>;
+      if (value.type === "text") return { ...value, type: role === "assistant" ? "output_text" : "input_text" };
+      if (value.type === "image_url") {
+        const image = value.image_url as { url?: unknown; detail?: unknown } | undefined;
+        return { type: "input_image", image_url: String(image?.url ?? ""), ...(image?.detail ? { detail: image.detail } : {}) };
+      }
+      return value;
+    }) : textOf(m.content);
+    input.push({ role, content });
   }
   const instructions = inst.filter(Boolean).join("\n\n");
   if (!input.length) input.push({ role: "user", content: instructions || " " });
@@ -383,10 +433,23 @@ export function toolDetail(name: string, args: Record<string, unknown>, result?:
   if (name === "git_clone") return String(args.url ?? "");
   if (name === "run_file" || name === "format_file" || name === "open_preview") return String(args.path ?? "");
   if (name === "engine_run") return String(args.action ?? args.cmd ?? "run");
-  if (name === "mcp_call") return `${args.server ?? ""}.${args.name ?? ""}`;
+  if (name === "mcp_call") {
+    const target = `${args.server ?? ""}.${args.name ?? ""}`;
+    const reply = result as { error?: unknown; ok?: boolean; isError?: boolean; text?: unknown } | undefined;
+    const error = typeof reply?.error === "string" ? reply.error.trim() : "";
+    if (!error && !reply?.isError && reply?.ok !== false) return target;
+    const text = typeof reply?.text === "string" ? reply.text.trim() : "";
+    const failure = error || text || "Dienst meldet einen Fehler.";
+    const message = redactPatterns(captureAgentFailure(failure).error.message).text.trim().slice(0, 600);
+    return `${target} · ${message}`;
+  }
   if (name === "mcp_list") return "MCP";
   if (name === "engine_detect" || name === "engine_status") return "Engine";
-  if (name === "play") return Array.isArray(args.keys) ? (args.keys as string[]).join(" ") : String(args.keys ?? "play");
+  if (name === "play") {
+    const keys=Array.isArray(args.keys)?args.keys.join(' '):String(args.keys??'');
+    const actions=Array.isArray(args.actions)?args.actions.map(a=>a && typeof a==='object'?`${a.type}${a.selector?' '+String(a.selector).slice(0,80):''}`:'?').join(' · '):'';
+    return [keys,actions].filter(Boolean).join(' · ').slice(0,300)||'Vorschau bedienen';
+  }
   if (name === "see_run") return "Canvas";
   if (name === "ask_user") return String(args.prompt ?? args.question ?? "Nachfrage");
   if (name === "harness_write" || name === "harness_read") return String(args.name ?? args.afterWrite ?? ".anvil/harness.json");

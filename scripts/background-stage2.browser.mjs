@@ -41,7 +41,7 @@ const server=createServer(async(req,res)=>{
   res.end('data: [DONE]\n\n');
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_PORT:String(port),ANVIL_QA_USER_DATA:profile,ANVIL_HOME:path.join(profile,'packages'),ANVIL_WATCHDOG:'0'};delete env.ELECTRON_RUN_AS_NODE;
+const env={...process.env,ANVIL_DESKTOP_MODE:'production',ANVIL_PORT:String(port),ANVIL_QA_USER_DATA:profile,ANVIL_HOME:path.join(profile,'packages')};delete env.ELECTRON_RUN_AS_NODE;
 const until=async check=>{for(let n=0;n<200;n++){if(await check())return;await new Promise(r=>setTimeout(r,150));}throw new Error('Stage 2 QA timed out');};
 let app,proc;
 try{
@@ -114,9 +114,9 @@ try{
 }finally{
   release?.();
   if(app){
-    try{await app.evaluate(async({BrowserWindow})=>{const wc=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/'))?.webContents;if(wc&&!wc.isCrashed())await wc.executeJavaScript('window.anvilNative.agentJob("stop")');});}catch{}
+    try{await app.evaluate(async({BrowserWindow})=>{const wc=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/'))?.webContents;if(wc&&!wc.isCrashed())await wc.executeJavaScript('window.anvilNative.agentJob("stop")');});}catch{ /* A closed renderer may no longer accept the stop request. */ }
     const deadline=setTimeout(()=>proc?.kill(),8000);
-    try{await app.close();}catch{}clearTimeout(deadline);
+    try{await app.close();}catch{ /* The app may already be closed; the deadline handles a hung process. */ }clearTimeout(deadline);
   }
   server.closeAllConnections();await new Promise(r=>server.close(r));
 }

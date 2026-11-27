@@ -62,7 +62,7 @@ export function parseMcpBody(text: string): {
   return payloads.find((p) => p.result != null || p.error) ?? payloads.at(-1) ?? {};
 }
 
-export function unwrapMcp(result: unknown): unknown {
+export function unwrapMcp(result: unknown, toolName?: string): unknown {
   if (!result || typeof result !== "object") return result;
   const r = result as {
     content?: { type?: string; text?: string; data?: string; mimeType?: string; url?: string }[];
@@ -75,13 +75,24 @@ export function unwrapMcp(result: unknown): unknown {
     .filter((c) => c.type === "image" && (c.data || c.url))
     .map((c) => c.url || `data:${c.mimeType || "image/png"};base64,${c.data}`);
   const text = [...texts, ...(r.contents ?? []).map((c) => c.text).filter(Boolean)].join("\n");
+  // MCP for Blender returns a string even if executing the Python raised an
+  // exception. FastMCP wraps the same string in content and structuredContent.
+  // Blender prefixes successful script output, so an error quoted there is data.
+  const structured = r.structuredContent as { result?: unknown } | null | undefined;
+  const singleText = r.content?.length === 1 && r.content[0]?.type === "text"
+    ? r.content[0].text
+    : undefined;
+  const toolText = typeof structured?.result === "string" ? structured.result : singleText;
+  const blenderFailed = toolName === "execute_blender_code" && typeof toolText === "string" &&
+    (toolText.startsWith("Error executing code:") || toolText.startsWith("Rejected by safe mode - "));
   // Preserve the protocol envelope. The model adapter may page it, but must not
   // discard structured results merely because the server also supplied text.
   return {
     ...r,
-    text,
+    text: blenderFailed ? toolText : text,
     ...(images.length ? { image: images[0], images } : {}),
-    isError: Boolean(r.isError),
+    ...(blenderFailed ? { ok: false } : {}),
+    isError: Boolean(r.isError) || blenderFailed,
   };
 }
 

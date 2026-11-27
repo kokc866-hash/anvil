@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { isLanHost, lanAlts } from "./lan-url.ts";
 
 test("lanAlts maps 127.168 to 192.168", () => {
-  const a = lanAlts("http://127.168.178.41:11434/v1");
-  assert.equal(a[0], "http://127.168.178.41:11434/v1");
-  assert.equal(a[1], "http://192.168.178.41:11434/v1");
+  const a = lanAlts("http://127.168.56.40:11434/v1");
+  assert.equal(a[0], "http://127.168.56.40:11434/v1");
+  assert.equal(a[1], "http://192.168.56.40:11434/v1");
 });
 
 test("isLanHost", () => {
-  assert.equal(isLanHost("192.168.178.41"), true);
+  assert.equal(isLanHost("192.168.56.40"), true);
   assert.equal(isLanHost("127.0.0.1"), true);
   assert.equal(isLanHost("localhost"), true);
   assert.equal(isLanHost("10.0.0.2"), true);

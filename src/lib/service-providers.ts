@@ -10,6 +10,7 @@ export type ServiceProvider = {
   source: string;
   note?: string;
   setupRequired?: string;
+  auth?: "oauth" | "bearer";
 };
 
 // Official endpoints researched 2026-09-12. Availability is not an account test.

@@ -1,6 +1,6 @@
 # Editor: Bearbeiten, Speichern und Wiederherstellen
 
-Stand: 13. September 2026, Release 1.3.29. Die unten beschriebenen erweiterten Projektsicherungspunkte gehören zu diesem Stand.
+Stand: 4. Oktober 2026, lokaler Quellcode 1.3.35. Die erweiterten Projektsicherungspunkte wurden mit 1.3.29 eingeführt. Die aktuelle [Optimierung und Abnahme](optimierungen-2026-10.md) beschreibt zusätzlich den getrennten Sicherungsspeicher, die schnellere Symbolsuche und den bedarfsabhängig geladenen Compiler.
 
 ## Dateien und Vorschläge
 

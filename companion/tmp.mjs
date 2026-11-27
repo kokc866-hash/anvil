@@ -1,26 +1,24 @@
-/** Anvil-Temp unter os.tmpdir(): anvil-run-*, anvil-fmt-*, … nicht ewig liegen lassen. */
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+/** Temporary work may be shared by multiple Anvil profiles and processes. */
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const RUN = ["anvil-run-", "anvil-fmt-", "anvil-lint-", "anvil-dbg-"];
+const kinds = new Set(["run", "fmt", "lint", "dbg", "tc"]);
+const ownedName = /^anvil-owned-(run|fmt|lint|dbg|tc)-p([1-9]\d*)-[a-zA-Z0-9]{6}$/;
 
-export function isAnvilTempName(name, { toolchain = false } = {}) {
-  const n = String(name || "");
-  if (RUN.some((p) => n.startsWith(p))) return true;
-  return toolchain && n.startsWith("anvil-tc-");
+export function makeAnvilTemp(kind, root = os.tmpdir()) {
+  if (!kinds.has(kind)) throw new Error("Unknown Anvil temporary directory kind");
+  // The previous sweeper only recognizes older prefixes.
+  return mkdtempSync(path.join(path.resolve(root), `anvil-owned-${kind}-p${process.pid}-`));
 }
 
-/** NSIS/portable leftover: %TEMP%\nsn408A.tmp */
-export function isNsisTmpName(name) {
-  return /^ns[no][0-9A-Fa-f]+\.tmp$/i.test(String(name || ""));
-}
-
-export function nsisTmpIsAnvil(dir) {
+function ownerExited(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
   try {
-    return existsSync(path.join(dir, "app", "Anvil.exe"));
-  } catch {
+    process.kill(pid, 0);
     return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
   }
 }
 
@@ -45,9 +43,8 @@ export function rmSoon(dir, tries = 8, waitMs = 8000) {
 }
 
 export function sweepAnvilTemp(opts = {}) {
-  const root = opts.root || os.tmpdir();
+  const root = path.resolve(opts.root || os.tmpdir());
   const maxAgeMs = opts.maxAgeMs ?? 15 * 60 * 1000;
-  const keep = Math.max(0, Number(opts.keep) || 0);
   const toolchain = Boolean(opts.toolchain);
   const toolchainAge = opts.toolchainAgeMs ?? 24 * 60 * 60 * 1000;
   let ents = [];
@@ -57,35 +54,21 @@ export function sweepAnvilTemp(opts = {}) {
     return 0;
   }
   const now = Date.now();
-  const hits = [];
+  let removed = 0;
   for (const e of ents) {
     if (!e.isDirectory()) continue;
+    // An old-format directory or an NSIS extraction may still be in use.
+    const match = ownedName.exec(e.name);
+    if (!match) continue;
+    const [, kind, pid] = match;
+    if ((kind === "tc" && !toolchain) || !ownerExited(Number(pid))) continue;
     const full = path.join(root, e.name);
-    const tc = e.name.startsWith("anvil-tc-");
-    const nsis = isNsisTmpName(e.name) && nsisTmpIsAnvil(full);
-    if (tc && !toolchain) continue;
-    if (!nsis && !isAnvilTempName(e.name, { toolchain: tc })) continue;
-    let mtime = now;
     try {
-      mtime = statSync(full).mtimeMs;
+      const limit = kind === "tc" ? toolchainAge : maxAgeMs;
+      if (now - statSync(full).mtimeMs >= limit && rmDir(full)) removed += 1;
     } catch {
-      continue;
+      /* Another process may have already cleaned up this directory. */
     }
-    hits.push({ full, age: now - mtime, tc, nsis });
-  }
-  hits.sort((a, b) => a.age - b.age);
-  let removed = 0;
-  let kept = 0;
-  for (const h of hits) {
-    const limit = h.tc ? toolchainAge : h.nsis ? Math.max(maxAgeMs, 10 * 60 * 1000) : maxAgeMs;
-    const stale = h.age >= limit;
-    const overflow = !h.tc && !h.nsis && kept >= keep;
-    if (!stale && !overflow) {
-      if (!h.tc && !h.nsis) kept += 1;
-      continue;
-    }
-    if (rmDir(h.full)) removed += 1;
-    else rmSoon(h.full);
   }
   return removed;
 }

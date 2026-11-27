@@ -21,10 +21,11 @@ export function InteractionChecks() {
   const runningRef = useRef("");
   const native = interactionNative();
   const busy = Boolean(running || preparing);
+  const scenarioSource = files[INTERACTION_CHECKS_PATH];
   const parsed = useMemo(() => {
-    try { return { scenarios: parseInteractionScenarios(files[INTERACTION_CHECKS_PATH]), error: "" }; }
+    try { return { scenarios: parseInteractionScenarios(scenarioSource), error: "" }; }
     catch (error) { return { scenarios: [] as InteractionScenario[], error: String((error as Error).message) }; }
-  }, [files[INTERACTION_CHECKS_PATH]]);
+  }, [scenarioSource]);
   const entries = useMemo(() => Object.keys(files).filter(path => /\.html?$/i.test(path) && !path.startsWith(".anvil/")), [files]);
   const saved = parsed.scenarios.find(scenario => scenario.id === selected);
   useEffect(() => { if (saved) setDraft(structuredClone(saved)); }, [saved]);

@@ -80,6 +80,8 @@ test("same code is reused for observation, while Run creates a new session and r
       /ersetzt/,
     );
     assert.equal(f.sent.filter((d) => d.op === "keys").length, 0);
+    for(const op of ['target','input','assert','input-up'] as const) await assert.rejects(owner.command(op,{expectedSession:a.session}),/ersetzt/);
+    assert.equal(f.sent.filter(d=>['target','input','assert','input-up'].includes(String(d.op))).length,0);
     await owner.command("stop");
     assert.match(f.el.srcdoc, /Die Ausführung wurde gestoppt/);
     assert.equal((await owner.load(html)).state, "stopped");
@@ -133,8 +135,7 @@ test("abort during startup terminates the document and rejects the original load
 });
 test("native snapshot is discarded if its document changes during capture", async () => {
   const f = fixture();
-  let owner: ReturnType<typeof registerCanvasFrame>;
-  owner = registerCanvasFrame(f.el, {
+  const owner = registerCanvasFrame(f.el, {
     scope: "test",
     capture: async () => {
       await owner.load(html + "new", true);

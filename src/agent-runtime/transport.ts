@@ -1,11 +1,14 @@
 import { applyLlmOptions, type ThinkingMode } from "../lib/llm-options";
 import { localChatUrl, sanitizeLocalPayload, wrapOllamaResponse } from "../lib/local-wire";
-import { prepChatPayload, fitMessages, isContextError, isVramError, shrinkLocalCtx } from "../lib/compact";
+import { prepChatPayload, isContextError, isVramError, shrinkLocalCtx, isHistoryMemoryError, compactRejectedHistory, HISTORY_MEMORY_RETRIES, isImageCountRejection, reduceRejectedImages, IMAGE_COUNT_RETRIES } from "../lib/compact";
 import { chatUsage, withRequestTokens, type RequestTokens } from "../lib/token-usage";
 import type { LlmChoice } from "../lib/agent-core";
-import { prepareTextTools, shrinkTools } from "../lib/tool-fallback";
+import { prepareTextTools } from "../lib/tool-fallback";
 import type { ToolSession, ToolCompatibility } from "../lib/tool-compat";
 import { applyCapToPayload, classifyLlmError, type ModelCap } from "../lib/model-caps";
+import { withModelFailureContext, isRecoverableModelFailure } from "../../electron/agent-failure.mjs";
+import { modelFetch } from "../../electron/model-http.mjs";
+import { ReasoningChannel, repetitionFailure } from "../lib/reasoning-guard";
 
 export type RuntimeModel = {
   provider: string; baseUrl: string; model: string; apiKey: string;
@@ -16,6 +19,9 @@ export type RuntimeModel = {
   vision?: boolean;
   cliKind?: import('../lib/cli-protocol').CliKind;
 };
+
+// Each background job owns its model settings object. Never persist a trial cap to user settings.
+const acceptedImageLimits = new WeakMap<RuntimeModel, number>();
 
 /** No renderer, proxy server or global UI store owns this request. */
 export async function completeRuntime(model: RuntimeModel, messages: Record<string, unknown>[], tools: Parameters<ToolSession['record']>[0],
@@ -37,28 +43,60 @@ export async function completeRuntime(model: RuntimeModel, messages: Record<stri
   // One deadline covers all attempts, response reads and backoff. A retry never resets it.
   const requestSignal = model.hardStopMin > 0 ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Math.floor(model.hardStopMin * 60000)))]) : signal;
   const url = localChatUrl(model.provider, model.baseUrl);
+  let memoryRecoveries = 0;
+  let imageRecoveries = 0;
+  let imageLimit = acceptedImageLimits.get(model);
   for (let attempt = 1; attempt <= attempts; attempt++) {
     requestSignal.throwIfAborted();
-    prepChatPayload(payload, context);
+    prepChatPayload(payload, context, imageLimit);
     onRequest?.(withRequestTokens<LlmChoice>({}, payload, context).requestTokens!);
     let response: Response;
+    const streamController = new AbortController();
     try {
-      response = await fetch(url, {
+      response = await modelFetch(url, {
         method: "POST", headers: { "Content-Type": "application/json", Accept: payload.stream ? "text/event-stream, application/json" : "application/json",
           ...(model.apiKey ? { Authorization: `Bearer ${model.apiKey}` } : {}) },
-        body: JSON.stringify(sanitizeLocalPayload(model.provider, payload)), signal: requestSignal, redirect: "error",
+        body: JSON.stringify(sanitizeLocalPayload(model.provider, payload)), signal: AbortSignal.any([requestSignal, streamController.signal]), redirect: "error",
       });
     } catch (error) {
       requestSignal.throwIfAborted();
       // Only failures before response headers are retryable. Never replay a partial answer.
-      if (attempt >= attempts || !(error instanceof TypeError) || !/fetch failed|network|failed to fetch/i.test(error.message)) throw error;
+      if (attempt >= attempts || !(error instanceof TypeError) || !isRecoverableModelFailure(error)) throw withModelFailureContext(error, { phase: "connect", attempt });
       await backoff(attempt, requestSignal);
       continue;
     }
     if (!response.ok) {
-      const body = await boundedText(response, 64 * 1024);
+      const body = await boundedText(response, 64 * 1024).catch(error => { throw withModelFailureContext(error, { phase: "http-body", attempt, status: response.status }); });
+      const repetition = repetitionFailure(body);
+      if (repetition) throw withModelFailureContext(repetition, { phase: "response", attempt, status: response.status });
       const error = new Error(`Modellanfrage fehlgeschlagen (HTTP ${response.status}): ${body.slice(0, 500) || response.statusText}`);
+      withModelFailureContext(error, { phase: "response", attempt, status: response.status });
       requestSignal.throwIfAborted();
+      if (isImageCountRejection(response.status, body)) {
+        if (attempt < attempts && imageRecoveries < IMAGE_COUNT_RETRIES) {
+          const reducedLimit = reduceRejectedImages(payload);
+          if (reducedLimit !== undefined) {
+            imageLimit = reducedLimit;
+            imageRecoveries += 1;
+            continue;
+          }
+        }
+        throw error;
+      }
+      if ([400, 413, 422].includes(response.status) && isHistoryMemoryError(body)) {
+        if (attempt < attempts && memoryRecoveries < HISTORY_MEMORY_RETRIES && compactRejectedHistory(payload)) {
+          memoryRecoveries += 1;
+          continue;
+        }
+        throw error;
+      }
+      if (isContextError(body)) {
+        if (attempt < attempts && memoryRecoveries < HISTORY_MEMORY_RETRIES && compactRejectedHistory(payload, { preserveOutput: true })) {
+          memoryRecoveries += 1;
+          continue;
+        }
+        throw error;
+      }
       if (attempt >= attempts) throw error;
       if (isVramError(body) && context > 4096) {
         context = shrinkLocalCtx(context);
@@ -66,23 +104,16 @@ export async function completeRuntime(model: RuntimeModel, messages: Record<stri
         model.context = context;
         continue;
       }
-      if (isContextError(body)) {
-        const opts = payload.options as Record<string, unknown> | undefined;
-        for (const key of ["max_tokens", "max_completion_tokens"]) if (typeof payload[key] === "number") payload[key] = Math.max(256, Math.floor(Number(payload[key]) / 2));
-        if (typeof opts?.num_predict === "number") opts.num_predict = Math.max(256, Math.floor(opts.num_predict / 2));
-        payload.messages = fitMessages(payload.messages as Record<string, unknown>[], Math.max(512, Math.floor(context * Math.max(0.15, 0.45 - attempt * 0.08))));
-        if (Array.isArray(payload.tools)) payload.tools = shrinkTools(payload.tools);
-        continue;
-      }
-      if (response.status === 400 || response.status === 422) {
+      const rejectedContinuation = /no user query found in messages/i.test(body);
+      if (response.status === 400 || response.status === 422 || rejectedContinuation && tools.length && cap.tools !== "text" && messages.some(m => m.role === "tool")) {
         const before = JSON.stringify(payload);
         const learned = classifyLlmError(response.status, body);
         if (learned) {
           cap = { ...cap, ...learned, at: Date.now() };
-          if (cap.tools === "text" && tools.length) prepareTextTools(payload, tools);
+          if (cap.tools === "text" && tools.length) prepareTextTools(payload, tools, { continuation: rejectedContinuation });
           applyCapToPayload(payload, cap, tools.length > 0);
           if (cap.noThinkWithTools && tools.length) {
-            delete payload.enable_thinking; delete payload.reasoning_budget; delete payload.chat_template_kwargs;
+            delete payload.enable_thinking; delete payload.reasoning_budget; delete payload.reasoning_budget_tokens; delete payload.chat_template_kwargs;
             if (cap.tools !== "off" && cap.tools !== "text") disableLocalThinking(payload, model.provider);
           }
           // Some endpoints reject tool_choice itself, including "auto".
@@ -94,15 +125,24 @@ export async function completeRuntime(model: RuntimeModel, messages: Record<stri
         removeRejectedOption(payload, body);
         if (JSON.stringify(payload) !== before) continue;
       }
+      // A deterministic rejected message shape is not a temporary server outage.
+      if (rejectedContinuation) throw error;
       if (![408, 425, 429, 500, 502, 503, 504].includes(response.status)) throw error;
       await backoff(attempt, requestSignal);
       continue;
     }
     // Once headers arrive the response is consumed exactly once, even if it is empty or truncated.
-    const res = wrapOllamaResponse(url, response);
-    const choice = res.headers.get("content-type")?.includes("application/json")
-      ? await readJson(res, delta) : await readStream(res, delta);
-    return withRequestTokens(choice, payload, context);
+    let phase: "response" | "stream" = "stream";
+    try {
+      const res = wrapOllamaResponse(url, response);
+      const json = res.headers.get("content-type")?.includes("application/json");
+      phase = json ? "response" : "stream";
+      const choice = json ? await readJson(res, delta) : await readStream(res, delta, error => streamController.abort(error));
+      if (imageRecoveries && imageLimit !== undefined) acceptedImageLimits.set(model, imageLimit);
+      return withRequestTokens(choice, payload, context);
+    } catch (error) {
+      throw withModelFailureContext(error, { phase, attempt, status: response.status });
+    }
   }
   throw new Error("Modellanfrage nach allen Versuchen fehlgeschlagen.");
 }
@@ -119,7 +159,7 @@ async function backoff(attempt: number, signal: AbortSignal) {
 // Drop only an explicitly rejected optional field. Unknown 400s must remain visible.
 function removeRejectedOption(payload: Record<string, unknown>, body: string) {
   if (!/unknown|unexpected|unsupported|not support|not allowed|unrecognized/i.test(body)) return;
-  for (const key of ["think", "enable_thinking", "reasoning_budget", "chat_template_kwargs", "reasoning_effort", "temperature", "keep_alive", "stream_options", "n_ctx"]) {
+  for (const key of ["think", "enable_thinking", "reasoning_budget", "reasoning_budget_tokens", "chat_template_kwargs", "reasoning_effort", "temperature", "keep_alive", "stream_options", "n_ctx"]) {
     if (new RegExp(`\\b${key}\\b`, "i").test(body)) {
       delete payload[key];
       const options = payload.options as Record<string, unknown> | undefined;
@@ -134,7 +174,8 @@ function disableLocalThinking(payload: Record<string, unknown>, provider: string
   payload.think = false;
   if (provider !== "ollama") {
     payload.enable_thinking = false;
-    payload.reasoning_budget = 0;
+    if (provider === "llamacpp") payload.reasoning_budget_tokens = 0;
+    else payload.reasoning_budget = 0;
     payload.chat_template_kwargs = { enable_thinking: false };
   }
 }
@@ -156,20 +197,25 @@ async function boundedText(response: Response, limit: number): Promise<string> {
 
 async function readJson(res: Response, delta: (text: string, kind?: "text" | "think") => void): Promise<LlmChoice> {
   const value = JSON.parse(await boundedText(res, 64 * 1024 * 1024));
-  if (value.error) throw new Error("Der Modellserver meldet einen Fehler in der Antwort.");
+  if (value.error) throw repetitionFailure(value) || new Error("Der Modellserver meldet einen Fehler in der Antwort.");
   const item = value.choices?.[0], message = item?.message;
   if (!message || typeof message !== "object") throw new Error("Modellantwort ohne Nachricht.");
-  const choice: LlmChoice = { ...message, reasoning: message.reasoning_content ?? message.reasoning, finish_reason: item.finish_reason, usage: chatUsage(value.usage) };
-  if (!choice.content && !choice.tool_calls?.length) throw new Error("Modell hat keine Antwort geliefert.");
-  if (choice.reasoning) delta(choice.reasoning, "think");
-  if (choice.content) delta(choice.content, "text");
+  const choice: LlmChoice = { ...message, content: "", reasoning: "", finish_reason: item.finish_reason, usage: chatUsage(value.usage) };
+  const channel = new ReasoningChannel(text => { choice.content += text; delta(text, "text"); }, text => { choice.reasoning = (choice.reasoning || "") + text; delta(text, "think"); });
+  const thought = message.reasoning_content ?? message.reasoning ?? message.thinking;
+  if (typeof thought === "string") channel.thought(thought);
+  if (typeof message.content === "string") channel.content(message.content);
+  channel.finish();
+  if (channel.inThinking && !choice.tool_calls?.length && !["incomplete", "content_filter"].includes(choice.finish_reason || "")) choice.finish_reason = "length";
+  validateCompletion(choice);
   return choice;
 }
 
-async function readStream(res: Response, delta: (text: string, kind?: "text" | "think") => void): Promise<LlmChoice> {
+async function readStream(res: Response, delta: (text: string, kind?: "text" | "think") => void, abortStream: (error: Error) => void): Promise<LlmChoice> {
   if (!res.body) throw new Error("Modellantwort ohne Inhalt.");
   const reader = res.body.getReader(), decoder = new TextDecoder();
   const choice: LlmChoice = { content: "", reasoning: "" };
+  const channel = new ReasoningChannel(text => { choice.content += text; delta(text, "text"); }, text => { choice.reasoning = (choice.reasoning || "") + text; delta(text, "think"); });
   const calls = new Map<number, { id: string; type: "function"; function: { name: string; arguments: string } }>();
   let buffer = "", done = false, bytes = 0;
   try {
@@ -186,14 +232,16 @@ async function readStream(res: Response, delta: (text: string, kind?: "text" | "
         if (value === "[DONE]") { done = true; break; }
         if (!value) continue;
         const event = JSON.parse(value);
-        if (event.error) throw new Error("Der Modellserver meldet einen Fehler im Antwortstrom.");
+        if (event.error || event.type === "error") throw repetitionFailure(event.error ?? event) || new Error("Der Modellserver meldet einen Fehler im Antwortstrom.");
         if (event.usage) choice.usage = chatUsage(event.usage);
         const item = event.choices?.[0], d = item?.delta;
         if (item?.finish_reason) choice.finish_reason = item.finish_reason;
         if (!d) continue;
-        if (typeof d.content === "string") { choice.content += d.content; delta(d.content, "text"); }
-        const thought = d.reasoning_content ?? d.reasoning;
-        if (typeof thought === "string") { choice.reasoning = ((choice.reasoning || "") + thought).slice(-1_000_000); delta(thought, "think"); }
+        const thought = d.reasoning_content ?? d.reasoning ?? d.thinking;
+        // The total stream is bounded above. Never silently truncate reasoning
+        // needed by the provider on the next tool turn.
+        if (typeof thought === "string") channel.thought(thought);
+        if (typeof d.content === "string") channel.content(d.content);
         for (const call of d.tool_calls || []) {
           const index = Number(call.index || 0);
           if (!Number.isInteger(index) || index < 0 || index > 64) throw new Error("Ungültiger Werkzeugaufruf.");
@@ -210,8 +258,25 @@ async function readStream(res: Response, delta: (text: string, kind?: "text" | "
         done = true;
       }
     }
+    channel.finish();
+  } catch (error) {
+    if (repetitionFailure(error)) abortStream(error as Error);
+    throw error;
   } finally { await reader.cancel().catch(() => undefined); }
   if (calls.size) choice.tool_calls = [...calls.values()].map((call) => ({ ...call, id: call.id || crypto.randomUUID() }));
-  if (!choice.content && !choice.tool_calls?.length) throw new Error("Modell hat keine Antwort geliefert.");
+  if (channel.inThinking && !calls.size && !["incomplete", "content_filter"].includes(choice.finish_reason || "")) choice.finish_reason = "length";
+  validateCompletion(choice);
   return choice;
+}
+
+function validateCompletion(choice: LlmChoice) {
+  if (choice.tool_calls?.length && ["length", "incomplete", "content_filter"].includes(choice.finish_reason || "")) {
+    throw new Error("Modellantwort unvollständig: Werkzeugaufrufe wurden nicht ausgeführt.");
+  }
+  // A reasoning model can exhaust its output budget before its visible answer.
+  // Preserve that real completion for the loop's bounded continuation instead
+  // of turning it into a fictitious empty response or restarting the task.
+  if (!choice.content && !choice.tool_calls?.length && !(choice.reasoning && choice.finish_reason === "length")) {
+    throw new Error(choice.reasoning ? "Modell hat nach dem Denken keine Antwort geliefert." : "Modell hat keine Antwort geliefert.");
+  }
 }

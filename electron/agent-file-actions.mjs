@@ -1,8 +1,9 @@
 import { existsSync,lstatSync,readdirSync,readFileSync,writeFileSync,mkdirSync,renameSync,unlinkSync,rmdirSync } from 'node:fs';
 import { join,dirname,resolve,relative,isAbsolute } from 'node:path';
+import { hasAsciiControl } from './text-controls.mjs';
 import { fileBytes,sameBytes } from '../scripts/file-content.mjs';
 
-export const safePath=p=>typeof p==='string'&&p.length>0&&p.length<512&&!/[\\:\x00-\x1f]/.test(p)&&!p.split('/').some(x=>!x||['.','..','__proto__','constructor','prototype'].includes(x))&&!/(^|\/)(?:\.git|\.env(?:\..*)?|secrets?)(\/|$)/i.test(p);
+export const safePath=p=>typeof p==='string'&&p.length>0&&p.length<512&&!/[\\:]/.test(p)&&!hasAsciiControl(p)&&!p.split('/').some(x=>!x||['.','..','__proto__','constructor','prototype'].includes(x))&&!/(^|\/)(?:\.git|\.env(?:\..*)?|secrets?)(\/|$)/i.test(p);
 export function diskPath(root,p){
   if(!safePath(p))throw Error('Ungültiger Projektpfad.');
   const full=resolve(root,p),rel=relative(resolve(root),full);
@@ -12,6 +13,10 @@ export function diskPath(root,p){
 }
 export const diskMatches=(root,p,value)=>{const full=diskPath(root,p);return !existsSync(full)?value===null:value!==null&&lstatSync(full).isFile()&&sameBytes(readFileSync(full),fileBytes(value));};
 const child=(p,dir)=>p===dir||p.startsWith(dir+'/');
+// Only raised during preflight, before any source or destination is changed.
+export class FileActionConflict extends Error {
+  constructor(path,message){super(message);this.name='FileActionConflict';this.path=path;}
+}
 export function planFileAction(files,dirs,op){
   const changes={},create=[],remove=[];
   const assign=(p,after)=>{if(!safePath(p))throw Error('Ungültiger Projektpfad.');changes[p]={before:files[p]??null,after};if(after!==null){const parts=p.split('/');while(parts.length>1){parts.pop();const parent=parts.join('/');if(!dirs.includes(parent))create.push(parent);}}};
@@ -36,17 +41,18 @@ export function planFileAction(files,dirs,op){
 /** Durable before-images and complete preflight before any mutation. Never recursive deletion. */
 export function applyFileChanges(root,plan,backupPath,{recover=false}={}){
   const entries=Object.entries(plan.changes),create=plan.create||[],remove=plan.remove||[];
-  for(const [p,c]of entries)if(!diskMatches(root,p,c.before)&&!(recover&&diskMatches(root,p,c.after)))throw Error(`Datei inzwischen geändert: ${p}. Keine Übernahme.`);
+  for(const [p,c]of entries)if(!diskMatches(root,p,c.before)&&!(recover&&diskMatches(root,p,c.after)))throw new FileActionConflict(p,`Datei inzwischen geändert: ${p}. Keine Übernahme.`);
   const removing=new Set(entries.filter(([,c])=>c.after===null).map(([p])=>p));
   for(const p of [...create,...remove])diskPath(root,p);
   for(const p of remove){
     const full=diskPath(root,p);if(!existsSync(full))continue;
     for(const item of readdirSync(full,{withFileTypes:true})){
       const name=p+'/'+item.name;
-      if(item.isSymbolicLink()||(!item.isDirectory()&&!removing.has(name))||(item.isDirectory()&&!remove.includes(name)))throw Error(`Ordner enthält weitere Dateien: ${p}. Neu laden.`);
+      if(item.isSymbolicLink())throw Error(`Ordner enthält eine Verknüpfung: ${p}. Keine Übernahme.`);
+      if((!item.isDirectory()&&!removing.has(name))||(item.isDirectory()&&!remove.includes(name)))throw new FileActionConflict(item.isDirectory()?undefined:name,`Ordner enthält weitere Dateien: ${p}. Eigene Dateien bleiben erhalten; andere Dateien können weiter bearbeitet werden.`);
     }
   }
-  for(const p of create){const full=diskPath(root,p);if(existsSync(full)&&!lstatSync(full).isDirectory())throw Error(`Ordnerpfad belegt: ${p}`);}
+  for(const p of create){const full=diskPath(root,p);if(existsSync(full)&&!lstatSync(full).isDirectory())throw new FileActionConflict(p,`Ordnerpfad belegt: ${p}`);}
   mkdirSync(dirname(backupPath),{recursive:true});
   if(!existsSync(backupPath))writeFileSync(backupPath,JSON.stringify({project:root,...plan}),{flag:'wx',mode:0o600});
   for(const p of [...create].sort((a,b)=>a.length-b.length))mkdirSync(diskPath(root,p),{recursive:true});

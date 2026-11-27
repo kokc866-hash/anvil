@@ -1,31 +1,8 @@
 import { AGENT_TOOL_NAMES } from "./agent-tools.ts";
 export function decodeWriteEscapes(s: string): string {
-  if (!s) return s;
-  let t = s;
-  const lt = "\u003c";
-  const gt = "\u003e";
-  const amp = "&";
-  if (t.includes(amp + "lt;") || t.includes(amp + "gt;") || t.includes(amp + "#")) {
-    t = t.replaceAll(amp + "lt;", lt).replaceAll(amp + "gt;", gt).replaceAll(amp + "quot;", '"');
-    t = t.replace(/&#x([0-9a-fA-F]+);/gi, (_, h) => fromCode(h, 16));
-    t = t.replace(/&#(\d+);/g, (_, d) => fromCode(d, 10));
-    t = t.replaceAll(amp + "amp;", amp);
-  }
-  // Models XML-escape < > as u003c/u003e (backslash dropped). JS XSS "\\u003c" stays.
-  if (/u003c/i.test(t) && /u003e/i.test(t) && !/\\u003[ce]/i.test(t)) {
-    t = t.replace(/u003c/gi, lt).replace(/u003e/gi, gt);
-  }
-  return t;
-}
-
-function fromCode(raw: string, base: number): string {
-  const n = parseInt(raw, base);
-  if (!Number.isFinite(n) || n < 0 || n > 0x10ffff) return "";
-  try {
-    return String.fromCodePoint(n);
-  } catch {
-    return "";
-  }
+  // Compatibility export: source is literal after its transport is parsed.
+  // Entities and u003c/u003e can be intentional code/data, not another encoding.
+  return s;
 }
 
 export function isNudgeEcho(text: string): boolean {
@@ -56,7 +33,7 @@ export function extractFileBlocks(text: string): { path: string; content: string
       meta.match(/(?:^|[\s:])([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)\s*$/)?.[1] ||
       (/^[A-Za-z0-9_./-]+\.[A-Za-z0-9]+$/.test(meta) ? meta : "");
     if (!path || path.includes("..")) continue;
-    out.push({ path: path.replace(/^\/+/, ""), content: decodeWriteEscapes(body) });
+    out.push({ path: path.replace(/^\/+/, ""), content: body });
   }
   return out;
 }
@@ -93,7 +70,7 @@ export function looksStoppedEarly(choice: {
   tool_calls?: unknown[];
 }): boolean {
   if (choice.tool_calls && choice.tool_calls.length) return false;
-  if (choice.finish_reason === "length") return true;
+  if (choice.finish_reason === "length" || choice.finish_reason === "incomplete") return true;
   const text = (choice.content || "").trim();
   if (!text) return Boolean(choice.reasoning);
   if (text.length < 24) return false;
@@ -114,7 +91,7 @@ export function askPickedNone(ask: string): boolean {
   return /^Antwort auf:/i.test(ask) && /\b(nichts|nothing|kein (patch|änder)|nur stil)/i.test(ask);
 }
 
-export function jobOpen(opts: { ask: string; used: string[]; text?: string }): boolean {
+export function jobOpen(opts: { ask: string; used: string[]; text?: string; executionVerified?: boolean }): boolean {
   // ChatPane prepends references and attached files. Those may contain words
   // such as "Dateien"/"schreiben" without the user asking us to change anything.
   const marker = "\n\nAuftrag:\n";
@@ -123,7 +100,7 @@ export function jobOpen(opts: { ask: string; used: string[]; text?: string }): b
   if (askPickedNone(ask)) return false;
   if (/^Antwort auf:/i.test(ask) && /wahl:\s*[b-e]\)/i.test(ask)) return true;
   const wrote = opts.used.some((n) => /write_file|append_file|edit_file/.test(n));
-  const ran = opts.used.some((n) => /run_file|engine_run/.test(n));
+  const ran = opts.executionVerified ?? opts.used.some((n) => /run_file|engine_run/.test(n));
   if (wrote && !ran) return true;
   if (opts.text && looksIncomplete(opts.text)) return true;
   const askBody = ask.replace(/^Antwort auf:[^\n]*\n?/i, "");
@@ -313,20 +290,11 @@ export function unescapeJsonFrag(s: string): string {
   return out;
 }
 
-function decodeArgStrings(args: Record<string, unknown>): Record<string, unknown> {
-  const keys = ["content", "old_string", "new_string"];
-  const next = { ...args };
-  for (const k of keys) {
-    if (typeof next[k] === "string") next[k] = decodeWriteEscapes(next[k] as string);
-  }
-  return next;
-}
-
 export function parseToolArgs(raw: string): { args: Record<string, unknown>; truncated: boolean } {
   const s = (raw || "").trim() || "{}";
   try {
     const args = JSON.parse(s) as Record<string, unknown>;
-    return { args: args && typeof args === "object" ? decodeArgStrings(args) : {}, truncated: false };
+    return { args: args && typeof args === "object" ? args : {}, truncated: false };
   } catch {
     /* incomplete JSON from a long write */
   }

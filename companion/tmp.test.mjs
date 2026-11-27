@@ -1,66 +1,66 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { isAnvilTempName, sweepAnvilTemp } from "./tmp.mjs";
+import { makeAnvilTemp, sweepAnvilTemp } from "./tmp.mjs";
 
-describe("anvil temp sweep", () => {
-  it("names only anvil prefixes", () => {
-    assert.equal(isAnvilTempName("anvil-run-abc"), true);
-    assert.equal(isAnvilTempName("anvil-fmt-x"), true);
-    assert.equal(isAnvilTempName("anvil-tc-zig"), false);
-    assert.equal(isAnvilTempName("anvil-tc-zig", { toolchain: true }), true);
-    assert.equal(isAnvilTempName("chrome-abc"), false);
+function fixture(t) {
+  const tempRoot = path.resolve(os.tmpdir());
+  const root = mkdtempSync(path.join(tempRoot, "anvil-sweep-"));
+  assert.equal(path.dirname(root), tempRoot);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+
+function age(directory, hours) {
+  const timestamp = new Date(Date.now() - hours * 60 * 60 * 1000);
+  utimesSync(directory, timestamp, timestamp);
+}
+
+describe("Anvil temporary directory ownership", () => {
+  it("allocates unique directories outside the legacy sweep prefixes", t => {
+    const root = fixture(t);
+    const first = makeAnvilTemp("tc", root);
+    const second = makeAnvilTemp("tc", root);
+    assert.notEqual(first, second);
+    assert.equal(path.dirname(first), root);
+    assert.match(path.basename(first), new RegExp(`^anvil-owned-tc-p${process.pid}-[a-zA-Z0-9]{6}$`));
   });
 
-  it("deletes leftover run dirs", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "anvil-sweep-"));
-    try {
-      const a = path.join(root, "anvil-run-old");
-      const other = path.join(root, "not-ours");
-      mkdirSync(a);
-      mkdirSync(other);
-      writeFileSync(path.join(a, "out.exe"), "x");
-      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
-      utimesSync(a, old, old);
-      assert.equal(sweepAnvilTemp({ root, keep: 1, maxAgeMs: 30 * 60 * 1000 }), 1);
-      assert.equal(existsSync(a), false);
-      assert.equal(existsSync(other), true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+  it("keeps concurrent work from a live owner even when directories are old", t => {
+    const root = fixture(t);
+    const work = [makeAnvilTemp("dbg", root), makeAnvilTemp("fmt", root), makeAnvilTemp("lint", root), makeAnvilTemp("tc", root)];
+    for (const directory of work) {
+      writeFileSync(path.join(directory, "live.txt"), "active");
+      age(directory, 30);
     }
+    assert.equal(sweepAnvilTemp({ root, maxAgeMs: 0, toolchain: true, toolchainAgeMs: 0 }), 0);
+    for (const directory of work) assert.equal(existsSync(path.join(directory, "live.txt")), true);
   });
 
-  it("keep 0 wipes all run dirs", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "anvil-sweep-"));
-    try {
-      mkdirSync(path.join(root, "anvil-run-1"));
-      mkdirSync(path.join(root, "anvil-fmt-2"));
-      mkdirSync(path.join(root, "keep-me"));
-      const n = sweepAnvilTemp({ root, keep: 0, maxAgeMs: 0 });
-      assert.equal(n, 2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("drops portable NSIS leftover with Anvil.exe", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "anvil-sweep-"));
-    try {
-      const junk = path.join(root, "nsn408A.tmp");
-      mkdirSync(path.join(junk, "app"), { recursive: true });
-      writeFileSync(path.join(junk, "app", "Anvil.exe"), "x");
-      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
-      utimesSync(junk, old, old);
-      const other = path.join(root, "nsn1111.tmp");
-      mkdirSync(other);
-      writeFileSync(path.join(other, "WinShell.dll"), "x");
-      assert.equal(sweepAnvilTemp({ root, keep: 0, maxAgeMs: 0 }), 1);
-      assert.equal(existsSync(junk), false);
-      assert.equal(existsSync(other), true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+  it("cleans expired work from exited owners and preserves recent or unowned directories", t => {
+    const root = fixture(t);
+    const child = spawnSync(process.execPath, ["-e", ""], { windowsHide: true });
+    assert.ifError(child.error);
+    assert.equal(child.status, 0);
+    assert.ok(child.pid);
+    const orphan = path.join(root, `anvil-owned-lint-p${child.pid}-Older1`);
+    const fresh = path.join(root, `anvil-owned-dbg-p${child.pid}-Fresh1`);
+    const toolchain = path.join(root, `anvil-owned-tc-p${child.pid}-Older2`);
+    const legacy = path.join(root, "anvil-dbg-legacy");
+    const nsis = path.join(root, "nsn408A.tmp");
+    const unrelated = path.join(root, "not-ours");
+    for (const directory of [orphan, fresh, toolchain, legacy, nsis, unrelated]) mkdirSync(directory);
+    mkdirSync(path.join(nsis, "app"));
+    writeFileSync(path.join(nsis, "app", "Anvil.exe"), "portable fixture");
+    for (const directory of [orphan, toolchain, legacy, nsis, unrelated]) age(directory, 30);
+    assert.equal(sweepAnvilTemp({ root }), 1);
+    assert.equal(existsSync(orphan), false);
+    assert.equal(existsSync(toolchain), true);
+    assert.equal(sweepAnvilTemp({ root, toolchain: true }), 1);
+    assert.equal(existsSync(toolchain), false);
+    for (const directory of [fresh, legacy, nsis, unrelated]) assert.equal(existsSync(directory), true);
   });
 });

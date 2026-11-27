@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
   pathsWrite: (name, text) => ipcRenderer.invoke("paths-write", name, text),
   pathsRead: (name) => ipcRenderer.invoke("paths-read", name),
   workspacePick: () => ipcRenderer.invoke("workspace-pick"),
+  workspaceDisk: (request) => ipcRenderer.invoke("workspace-disk", request),
   accountLoad: (kind) => ipcRenderer.invoke("account-load", kind),
   accountLogin: (kind) => ipcRenderer.invoke("account-login", kind),
   mcpRequest: (request) => ipcRenderer.invoke("mcp-request", request),
@@ -89,6 +90,7 @@ contextBridge.exposeInMainWorld("anvilNative", {
     return () => ipcRenderer.removeListener("mcp-event", wrap);
   },
   cliProbe: (request) => ipcRenderer.invoke("cli-probe", request),
+  cliModels: (request) => ipcRenderer.invoke("cli-models", request),
   cliLogin: (request) => ipcRenderer.invoke("cli-login", request),
   cliRun: (request) => ipcRenderer.invoke("cli-run", request),
   projectCheckpoint: (request) => ipcRenderer.invoke("project-checkpoint", request),

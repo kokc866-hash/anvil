@@ -1,4 +1,5 @@
 import type { LlmChoice } from "./agent-core";
+import { limitModelImages } from "./compact.ts";
 
 export type CliKind = "codex" | "claude" | "copilot";
 export const CLI_PROVIDERS: { kind: CliKind; provider: string; cmd: string; label: string }[] = [
@@ -15,7 +16,7 @@ export function cliKindFor(provider: string, mode: "abo" | "key"): CliKind | nul
 /** Keep image bytes out of the text transcript; references retain their conversation position. */
 export function cliRequest(messages: Record<string, unknown>[], tools: unknown[]): { prompt: string; images: string[] } {
   const images: string[] = [];
-  messages = messages.map((message) => {
+  messages = limitModelImages(messages).map((message) => {
     if (!Array.isArray(message.content)) return message;
     return { ...message, content: message.content.map((part) => {
       if (part?.type !== "image_url" && part?.type !== "image") return part;
@@ -28,8 +29,8 @@ export function cliRequest(messages: Record<string, unknown>[], tools: unknown[]
       return { type: "text", text: `[Attached image ${index + 1}; image bytes supplied separately in that order.]` };
     }) };
   });
-  if (images.length > 8 || images.some(image => image.length > 7 * 1024 * 1024) || images.reduce((sum, image) => sum + image.length, 0) > 28 * 1024 * 1024)
-    throw new Error("CLI-Bilder zu groß: höchstens 8 Bilder, 5 MiB je Bild und 20 MiB insgesamt.");
+  if (images.some(image => image.length > 7 * 1024 * 1024) || images.reduce((sum, image) => sum + image.length, 0) > 28 * 1024 * 1024)
+    throw new Error("CLI-Bilder zu groß. Höchstens 5 MiB je Bild und 20 MiB insgesamt.");
   const prompt = [
     "You are the model transport for Anvil. Continue the supplied conversation as its assistant.",
     "The actual workspace and tools belong to Anvil. Do not use native CLI tools or inspect the local filesystem.",
@@ -45,7 +46,7 @@ export function cliPrompt(messages: Record<string, unknown>[], tools: unknown[])
   return cliRequest(messages, tools).prompt;
 }
 
-export function parseCliChoice(raw: string, allowed: string[]): LlmChoice {
+export function parseCliChoice(raw: string, allowed: string[], allowPausedPlanEnvelope = false): LlmChoice {
   const text = raw
     .trim()
     .replace(/^```(?:json)?\s*\n?/, "")
@@ -64,7 +65,8 @@ export function parseCliChoice(raw: string, allowed: string[]): LlmChoice {
   )
     throw new Error("Ungültige CLI-Antwort.");
   const tool_calls = j.tool_calls.map((t, i) => {
-    if (!t || typeof t.name !== "string" || !allowed.includes(t.name))
+    // Preserve one stale envelope for the core to reject. The offered contract stays unchanged.
+    if (!t || typeof t.name !== "string" || (!allowed.includes(t.name) && !(allowPausedPlanEnvelope && t.name === "set_plan")))
       throw new Error("CLI hat ein unbekanntes Werkzeug angefordert.");
     const args = t.arguments;
     if (typeof args !== "string" && (!args || typeof args !== "object" || Array.isArray(args)))

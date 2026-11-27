@@ -65,11 +65,11 @@ export function discoverTests(files: Record<string, string>): TestHit[] {
       const t = lines[i];
       const m =
         t.match(/^\s*(?:async\s+)?def\s+(test_[A-Za-z_]\w*)\s*\(/) ||
-        t.match(/^\s*(?:it|test|describe)\s*\(\s*['"`]([^'"`]+)['"`]/) ||
+        t.match(/^\s*(?:it|test)(?:\.(?:only|skip|todo))?\s*\(\s*['"`]([^'"`]+)['"`]/) ||
         t.match(/^\s*func\s+(Test[A-Za-z_]\w*)\s*\(/) ||
         t.match(/^\s*(?:pub(?:\s+\([^)]+\))?\s+)?(?:async\s+)?fn\s+(test_[A-Za-z_]\w*)\s*\(/) ||
         t.match(/^\s*(?:public\s+|protected\s+)?(?:static\s+)?void\s+(test[A-Za-z_]\w*)\s*\(/) ||
-        t.match(/^\s*(?:def|function)\s+(test_[A-Za-z_]\w*)\s*[\(=]/);
+        t.match(/^\s*(?:def|function)\s+(test_[A-Za-z_]\w*)\s*[(=]/);
       if (m) {
         out.push({ path, line: i + 1, name: (m[1] || t.trim()).slice(0, 80), ok: true, text: "", skip: true });
         found += 1;
@@ -97,6 +97,10 @@ export function discoverTests(files: Record<string, string>): TestHit[] {
 
 export function parseTests(stdout: string, stderr: string, files: Record<string, string>): TestHit[] {
   const blob = `${stdout}\n${stderr}`;
+  if (/^ℹ tests \d+\r?$/m.test(stdout) && /^ℹ suites \d+\r?$/m.test(stdout)) {
+    const nodeResults = parseNodeSpecTests(stdout, files);
+    if (nodeResults.length) return nodeResults;
+  }
   const hits: TestHit[] = [];
   const seen = new Set<string>();
 
@@ -191,6 +195,39 @@ export function parseTests(stdout: string, stderr: string, files: Record<string,
   return hits.slice(0, PARSE_CAP);
 }
 
+function parseNodeSpecTests(stdout: string, files: Record<string, string>): TestHit[] {
+  const discovered = discoverTests(files);
+  const candidates = Object.keys(files).filter(isTestFile);
+  const suites: { indentation: number; name: string }[] = [];
+  const results: TestHit[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line === "✖ failing tests:") break;
+    const suite = /^( *)▶ (.+)$/.exec(line);
+    if (suite) {
+      suites.push({ indentation: suite[1].length, name: suite[2] });
+      continue;
+    }
+    const row = /^( *)([✔✖﹣]) (.+) \(\d+(?:\.\d+)?(?:ns|µs|μs|us|ms|s)\)(?: (#.*))?$/u.exec(line);
+    if (!row) continue;
+    const [, indentation, status, fullName, annotation] = row;
+    const currentSuite = suites.at(-1);
+    if (currentSuite?.name === fullName && currentSuite.indentation === indentation.length) {
+      suites.pop();
+      continue;
+    }
+    const name = fullName.slice(0, 80);
+    const matches = discovered.filter((test) => test.name === name);
+    // Node omits paths here. A shared name must not mark another file's test
+    // as completed. Use a file only when the fixture or source identifies it.
+    const source = matches.length === 1 ? matches[0] : undefined;
+    const path = source?.path ?? (candidates.length === 1 ? candidates[0] : "");
+    const skip = status === "﹣" || Boolean(annotation);
+    results.push({ path, line: source?.line ?? lineOf(files[path], name), name, ok: status === "✔", skip, text: line.trim().slice(0, 220) });
+    if (results.length === PARSE_CAP) break;
+  }
+  return results;
+}
+
 function scopedFiles(files: Record<string, string>, blob: string): Record<string, string> {
   const keys = Object.keys(files);
   if (keys.length <= 1) return files;
@@ -209,13 +246,37 @@ export function mergeTests(discovered: TestHit[], results: TestHit[]): TestHit[]
     const prev = map.get(key);
     if (prev) map.set(key, { ...prev, ok: r.ok, text: r.text, skip: Boolean(r.skip), line: r.line || prev.line });
     else {
-      const sameFile = [...map.values()].find((p) => p.path === r.path && p.skip);
+      const sameFile = [...map.values()].find((p) => p.path === r.path && p.skip && p.line === 1 && p.name === p.path.split("/").at(-1));
       if (sameFile && results.filter((x) => x.path === r.path).length === 1) {
         map.set(`${sameFile.path}:${sameFile.name}`, { ...sameFile, ok: r.ok, text: r.text, skip: Boolean(r.skip) });
       } else map.set(key, { ...r, skip: Boolean(r.skip) });
     }
   }
   return [...map.values()];
+}
+
+export function summarizeTests(tests: TestHit[]): { passed: number; total: number } {
+  const byName = new Map<string, { located: number; locatedPasses: number; unlocated: number; unlocatedPasses: number }>();
+  for (const test of tests) {
+    const counts = byName.get(test.name) ?? { located: 0, locatedPasses: 0, unlocated: 0, unlocatedPasses: 0 };
+    const passed = Number(test.ok && !test.skip);
+    if (test.path) {
+      counts.located++;
+      counts.locatedPasses += passed;
+    } else {
+      counts.unlocated++;
+      counts.unlocatedPasses += passed;
+    }
+    byName.set(test.name, counts);
+  }
+  let passed = 0, total = 0;
+  for (const counts of byName.values()) {
+    // A result without a source location may overlap with a named test that
+    // was discovered or run individually. Count the evidence without assigning it.
+    passed += Math.max(counts.locatedPasses, counts.unlocatedPasses);
+    total += Math.max(counts.located, counts.unlocated);
+  }
+  return { passed, total };
 }
 
 export function testsPrompt(hits: TestHit[]): string {
@@ -297,10 +358,12 @@ export function remapTestMap(map: Record<string, TestHit>, from: string, to: str
 const TEST_HEAD =
   /^(?:npx\s+)?(?:npm(?:\s+run)?\s+test|vitest|jest|pytest|python3?\s+-m\s+pytest|go\s+test|cargo\s+test|dotnet\s+test|phpunit|rspec)\b/i;
 
-export type ParsedTestCmd = { paths: string[]; filter?: string };
+export type ParsedTestCmd = { paths: string[]; filter?: string; node?: true };
 
 export function parseTestCommand(command: string): ParsedTestCmd | null {
   const cmd = command.trim();
+  const node = parseNodeTestCommand(cmd);
+  if (node) return { paths: node.paths, node: true };
   if (!TEST_HEAD.test(cmd)) return null;
   const rest = cmd.replace(TEST_HEAD, "").trim();
   const paths: string[] = [];
@@ -331,8 +394,11 @@ export function parseTestCommand(command: string): ParsedTestCmd | null {
 
 export function isTestStepText(name: string, detail: string, status?: string): boolean {
   if (status === "err" || status === "run") return false;
+  if (/^(shell|tests)\b/i.test(name.trim()) && parseNodeTestCommand(detail.trim())) return true;
   const blob = `${name} ${detail}`;
   if (!/\b(pytest|npm test|npx vitest|vitest|jest|go test|cargo test|dotnet test|phpunit)\b/i.test(blob)) return false;
   return /^(shell|tests)\b/i.test(name.trim()) || /\b(pytest|npm test|go test|cargo test|dotnet test)\b/i.test(name);
 }
+
+import { parseNodeTestCommand } from "../../electron/node-test-command.mjs";
 

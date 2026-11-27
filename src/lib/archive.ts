@@ -1,98 +1,65 @@
 import { keepDotName } from "./ws-skip.ts";
 
-type Fflate = {
-  zipSync: (files: Record<string, Uint8Array>, opts?: { level: number }) => Uint8Array;
-  unzipSync: (data: Uint8Array) => Record<string, Uint8Array>;
-  strToU8: (s: string) => Uint8Array;
-  strFromU8: (u: Uint8Array) => string;
-};
+import { ARCHIVE_MAX_COMPRESSED, checkArchiveInput, decodeArchive, encodeArchive } from "./archive-codec.ts";
+export { ARCHIVE_MAX_COMPRESSED, ARCHIVE_MAX_EXPANDED, ARCHIVE_MAX_FILE, ARCHIVE_MAX_FILES, u8ToB64, bytesToDataUrl, extractPdfText } from "./archive-codec.ts";
 
-let mod: Fflate | null = null;
+export type ArchiveOptions = { signal?: AbortSignal; timeoutMs?: number };
+type ArchiveResult = { ok: boolean; bytes?: Uint8Array; files?: Record<string, string>; error?: string };
 
-async function fflate(): Promise<Fflate> {
-  if (!mod) {
-    mod = (await import(/* @vite-ignore */ "https://esm.sh/fflate@0.8.2")) as Fflate;
-  }
-  return mod;
+function timeout(options: ArchiveOptions): number {
+  const value = options.timeoutMs ?? 30_000;
+  if (!Number.isFinite(value) || value < 1 || value > 120_000) throw new Error("Ungültiges ZIP-Zeitlimit.");
+  return value;
 }
 
-const IMAGE_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  ico: "image/x-icon",
-  bmp: "image/bmp",
-};
-
-export function u8ToB64(u8: Uint8Array): string {
-  if (typeof Buffer !== "undefined") return Buffer.from(u8).toString("base64");
-  let s = "";
-  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]!);
-  return btoa(s);
+/** Termination bounds CPU work as well as waiting; abort never falls back to UI-thread work. */
+function workerTask(payload: { operation: "zip"; files: Record<string, string> } | { operation: "unzip"; buffer: ArrayBuffer }, options: ArchiveOptions): Promise<ArchiveResult> {
+  options.signal?.throwIfAborted();
+  const limit = timeout(options);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./archive-worker.ts", import.meta.url), { type: "module" });
+    let settled = false;
+    const finish = (result?: ArchiveResult, error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      worker.terminate();
+      if (error) reject(error); else resolve(result!);
+    };
+    const abort = () => finish(undefined, options.signal?.reason ?? new DOMException("ZIP abgebrochen", "AbortError"));
+    const timer = setTimeout(() => finish(undefined, new DOMException("ZIP-Zeitlimit überschritten", "TimeoutError")), limit);
+    worker.onmessage = event => {
+      const result = event.data as ArchiveResult;
+      if (!result.ok) finish(undefined, new Error(result.error || "ZIP-Verarbeitung fehlgeschlagen."));
+      else finish(result);
+    };
+    worker.onerror = event => finish(undefined, new Error(event.message || "ZIP-Worker konnte nicht geladen werden."));
+    worker.onmessageerror = () => finish(undefined, new Error("ZIP-Worker-Antwort ungültig."));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    try { worker.postMessage(payload, "buffer" in payload ? [payload.buffer] : []); }
+    catch (error) { finish(undefined, error); }
+  });
 }
 
-export function bytesToDataUrl(data: Uint8Array, mime: string): string {
-  return `data:${mime};base64,${u8ToB64(data)}`;
+export async function zipFiles(files: Record<string, string>, options: ArchiveOptions = {}): Promise<Blob> {
+  options.signal?.throwIfAborted();
+  timeout(options);
+  checkArchiveInput(files);
+  const bytes = typeof window !== "undefined" && typeof Worker !== "undefined"
+    ? (await workerTask({ operation: "zip", files }, options)).bytes!
+    : encodeArchive(files);
+  return new Blob([Uint8Array.from(bytes)], { type: "application/zip" });
 }
 
-/** Best-effort strings from uncompressed PDFs. Empty when the file is binary-only. */
-export function extractPdfText(buf: ArrayBuffer | Uint8Array): string {
-  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let raw = "";
-  for (let i = 0; i < bytes.length; i++) {
-    const c = bytes[i]!;
-    raw += c >= 32 && c < 127 ? String.fromCharCode(c) : "\n";
+export async function unzipFiles(buf: ArrayBuffer, options: ArchiveOptions = {}): Promise<Record<string, string>> {
+  options.signal?.throwIfAborted();
+  const limit = timeout(options);
+  if (buf.byteLength > ARCHIVE_MAX_COMPRESSED) throw new Error("ZIP: komprimiertes Archiv überschreitet 64 MiB.");
+  if (typeof window !== "undefined" && typeof Worker !== "undefined") {
+    return (await workerTask({ operation: "unzip", buffer: buf.slice(0) }, options)).files!;
   }
-  const bits: string[] = [];
-  const re = /\((?:\\.|[^\\)]){4,}\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw))) {
-    bits.push(m[0].slice(1, -1).replace(/\\n/g, "\n").replace(/\\(.)/g, "$1"));
-  }
-  return bits.join(" ").replace(/\s+/g, " ").trim().slice(0, 80_000);
-}
-
-export async function zipFiles(files: Record<string, string>): Promise<Blob> {
-  const { zipSync, strToU8 } = await fflate();
-  const input: Record<string, Uint8Array> = {};
-  for (const [path, content] of Object.entries(files)) {
-    const m = content.match(/^data:([^;,]+);base64,(.+)$/s);
-    if (m) {
-      const bin = typeof Buffer !== "undefined" ? Buffer.from(m[2], "base64") : Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
-      input[path] = bin instanceof Uint8Array ? bin : new Uint8Array(bin);
-      continue;
-    }
-    input[path] = strToU8(content);
-  }
-  const out = zipSync(input, { level: 1 });
-  const copy = new Uint8Array(out.byteLength);
-  copy.set(out);
-  return new Blob([copy], { type: "application/zip" });
-}
-
-export async function unzipFiles(buf: ArrayBuffer): Promise<Record<string, string>> {
-  const { unzipSync, strFromU8 } = await fflate();
-  const files = unzipSync(new Uint8Array(buf));
-  const out: Record<string, string> = {};
-  for (const [path, data] of Object.entries(files)) {
-    if (path.endsWith("/")) continue;
-    const rel = path.replace(/^\/+/, "");
-    const ext = (rel.split(".").pop() ?? "").toLowerCase();
-    const mime = IMAGE_MIME[ext];
-    if (mime) {
-      out[rel] = bytesToDataUrl(data, mime);
-      continue;
-    }
-    if (ext === "pdf") {
-      const text = extractPdfText(data);
-      if (text.trim()) out[rel.replace(/\.pdf$/i, ".md")] = text;
-      continue;
-    }
-    out[rel] = strFromU8(data);
-  }
-  return out;
+  return decodeArchive(buf, options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(limit)]) : AbortSignal.timeout(limit));
 }
 
 export function downloadBlob(blob: Blob, name: string) {
@@ -107,8 +74,8 @@ export function stripZipRoot(files: Record<string, string>): Record<string, stri
   const keys = Object.keys(files);
   if (!keys.length) return files;
   const root = keys[0].split("/")[0];
-  if (!keys.every((k) => k === root || k.startsWith(`${root}/`))) return files;
-  const out: Record<string, string> = {};
+  if (!keys.every((k) => k.startsWith(`${root}/`))) return files;
+  const out: Record<string, string> = Object.create(null);
   for (const [k, v] of Object.entries(files)) {
     const n = k.slice(root.length + 1);
     if (!n) continue;

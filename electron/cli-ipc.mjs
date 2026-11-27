@@ -1,5 +1,7 @@
 import { handleOnce } from "./ipc.mjs";
 import { CLI_KINDS, completeCli, loginCli, probeCli } from "./cli-runner.mjs";
+import { listCliModels } from "./cli-models.mjs";
+import { sharedAgentResourceGate } from './resource-gate.mjs';
 
 const active = new Map();
 
@@ -34,7 +36,9 @@ export function bindCliIpc(isTrusted) {
       lastBeat = Date.now();
       owner.send("cli-event", { id, text });
     };
+    let resourceLease;
     try {
+      if (action === 'run') resourceLease = sharedAgentResourceGate.acquire(`foreground:${owner.id}:renderer`, 'external');
       const options = {
         signal: controller.signal,
         onOutput: emit,
@@ -45,19 +49,23 @@ export function bindCliIpc(isTrusted) {
       const value =
         action === "run"
           ? await completeCli(request, options)
-          : action === "login"
-            ? await loginCli(kind, options)
-            : await probeCli(kind, controller.signal);
+          : action === "models"
+            ? await listCliModels(kind, options)
+            : action === "login"
+              ? await loginCli(kind, options)
+              : await probeCli(kind, controller.signal);
       return { ok: true, value };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "CLI fehlgeschlagen." };
     } finally {
+      if (resourceLease) sharedAgentResourceGate.release(resourceLease.leaseId, resourceLease.owner);
       active.delete(key);
       owner.off("destroyed", abort);
       owner.off("did-start-navigation", navigate);
     }
   }
   handleOnce("cli-probe", (e, r) => job(e, r, "probe"));
+  handleOnce("cli-models", (e, r) => job(e, r, "models"));
   handleOnce("cli-login", (e, r) => job(e, r, "login"));
   handleOnce("cli-run", (e, r) => job(e, r, "run"));
   handleOnce("cli-cancel", (e, id) => {

@@ -1,0 +1,28 @@
+{
+  "adaptedFor": "Anvil",
+  "date": "2026-10-29",
+  "runtimeAcceptance": "unverified",
+  "upstreamCodeExecuted": false,
+  "sources": [
+    {
+      "repo": "vercel-labs/agent-skills",
+      "commit": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62",
+      "path": "skills/react-best-practices/SKILL.md",
+      "license": "MIT",
+      "url": "https://github.com/vercel-labs/agent-skills/blob/1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62/skills/react-best-practices/SKILL.md"
+    },
+    {
+      "repo": "vercel-labs/agent-skills",
+      "commit": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62",
+      "path": "skills/composition-patterns/SKILL.md",
+      "license": "MIT",
+      "url": "https://github.com/vercel-labs/agent-skills/blob/1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62/skills/composition-patterns/SKILL.md"
+    }
+  ],
+  "changes": [
+    "German Anvil-specific adaptation",
+    "No upstream runtime/installer/hooks",
+    "Existing permissions and project scope preserved",
+    "References loaded on demand"
+  ]
+}

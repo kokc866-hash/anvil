@@ -3,13 +3,13 @@ import type { LlmChoice, ToolCall } from "./agent-core";
 import { asToolCall } from "./agent-core";
 import { agentBeat, agentGen, localSseStall, streamIdleMs } from "./abort";
 import { useIde } from "@/store/ide";
-import { isToolTemplateEcho } from "./agent-parse";
 import { applyLiveDraft, applyLiveText, finishLiveWrite } from "./live-write";
 import { applyResponsesEvent, choiceFromAcc, emptyResponsesAcc } from "./responses-parse";
+import { withModelFailureContext } from "../../electron/agent-failure.mjs";
+import { ReasoningChannel, ReasoningGuard, repetitionFailure } from "./reasoning-guard";
 
 const AFTER_FINISH_MS = 8_000;
 const AFTER_STOP_MS = 2_000;
-const THINK_OFF_IDLE_MS = 12_000;
 
 function thinkOff(): boolean {
   try {
@@ -35,6 +35,31 @@ export class StreamStallError extends Error {
   }
 }
 
+function streamFailure(error: unknown, res: Response): Error {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  withModelFailureContext(failure, { phase: "stream", attempt: 1, status: res.status });
+  return failure;
+}
+
+function serverError(value: unknown, fallback: string): string {
+  const message = typeof value === "string" ? value
+    : value && typeof value === "object" && "message" in value ? String(value.message ?? "") : "";
+  return message.trim().slice(0, 1000) || fallback;
+}
+
+function validateCalls(calls: ToolCall[], res: Response): void {
+  for (const call of calls) {
+    try {
+      const args = JSON.parse(call.function.arguments);
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("object required");
+    } catch {
+      throw streamFailure(new StreamStallError("Modellantwort unvollständig: Werkzeugargumente sind kein gültiges JSON-Objekt."), res);
+    }
+  }
+}
+
+const incomplete = (finish: string | undefined) => finish === "length" || finish === "incomplete" || finish === "content_filter";
+
 export async function readSseChat(
   res: Response,
   onDelta?: (text: string, kind?: "text" | "think") => void,
@@ -44,69 +69,25 @@ export async function readSseChat(
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  let eventName = "";
   let content = "";
   let reasoning = "";
   let usage: ReportedUsage | undefined;
   let sawDone = false;
   let finish = "";
-  let inThink = false;
-  let gotThink = false;
   let sawStop = false;
   let finishAt = 0;
-  let thinkAt = 0;
   let gotEvent = false;
   const tools = new Map<number, { id: string; name: string; args: string }>();
 
-  const pumpThink = (s: string) => {
-    if (!s) return;
-    gotThink = true;
-    if (!thinkAt) thinkAt = Date.now();
-    reasoning += s;
-    if (!thinkOff()) onDelta?.(s, "think");
-  };
-  const pumpText = (s: string) => {
-    if (!s) return;
+  const channel = new ReasoningChannel((s: string) => {
     content += s;
     onDelta?.(s, "text");
-  };
-
-  const takeContent = (raw: string) => {
-    if (thinkOff()) {
-      let piece = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
-      const open = piece.search(/<think>/i);
-      if (open >= 0) piece = piece.slice(0, open);
-      pumpText(piece);
-      return;
-    }
-    let piece = raw;
-    if (inThink) {
-      const end = piece.indexOf("</think>");
-      if (end < 0) {
-        pumpThink(piece);
-        return;
-      }
-      pumpThink(piece.slice(0, end));
-      piece = piece.slice(end + 8);
-      inThink = false;
-    }
-    while (piece) {
-      const start = piece.search(/<think>/i);
-      if (start < 0) {
-        pumpText(piece);
-        return;
-      }
-      if (start > 0) pumpText(piece.slice(0, start));
-      piece = piece.slice(start).replace(/^<think>/i, "");
-      const end = piece.search(/<\/think>/i);
-      if (end < 0) {
-        pumpThink(piece);
-        inThink = true;
-        return;
-      }
-      pumpThink(piece.slice(0, end));
-      piece = piece.slice(end).replace(/^<\/think>/i, "");
-    }
-  };
+  }, (s: string) => {
+    if (!s) return;
+    reasoning += s;
+    if (!thinkOff()) onDelta?.(s, "think");
+  });
 
   const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
     new Promise((resolve, reject) => {
@@ -143,20 +124,25 @@ export async function readSseChat(
     buf = lines.pop() ?? "";
     for (const line of lines) {
       const t = line.trim();
-      if (!t) continue;
+      if (!t) { eventName = ""; continue; }
+      if (t.startsWith("event:")) { eventName = t.slice(6).trim(); continue; }
       if (t.startsWith(":")) {
         agentBeat();
         continue;
       }
       if (!t.startsWith("data:")) continue;
       const data = t.slice(5).trim();
+      if (!data) continue;
       if (data === "[DONE]") {
         sawDone = true;
-        if (inThink && !tools.size) finish = finish || "length";
+        if (channel.inThinking && !tools.size) finish = finish || "length";
         continue;
       }
       try {
         const json = JSON.parse(data) as {
+          error?: unknown;
+          type?: string;
+          message?: unknown;
           usage?: { prompt_tokens?: number; completion_tokens?: number };
           choices?: {
             finish_reason?: string | null;
@@ -174,6 +160,8 @@ export async function readSseChat(
             };
           }[];
         };
+        if (json.error || json.type === "error" || eventName === "error")
+          throw repetitionFailure(json.error ?? json) || new StreamStallError(serverError(json.error ?? json.message, "Der Modellserver meldet einen Fehler im Antwortstrom."));
         if (json.usage) {
           const next = chatUsage(json.usage);
           if (next) usage = { ...usage, ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)) };
@@ -181,7 +169,7 @@ export async function readSseChat(
         const ch = json.choices?.[0];
         if (ch?.finish_reason) {
           const fr = ch.finish_reason;
-          if (fr === "tool_calls" || fr === "function_call" || fr === "length") {
+          if (fr === "tool_calls" || fr === "function_call" || fr === "length" || fr === "incomplete" || fr === "content_filter") {
             finish = fr;
             sawStop = true;
             finishAt ||= Date.now();
@@ -194,14 +182,10 @@ export async function readSseChat(
         }
         const delta = ch?.delta;
         const think = delta?.reasoning_content || delta?.reasoning || delta?.thinking;
-        if (think) pumpThink(think);
-        if (delta?.content) takeContent(delta.content);
+        if (think) channel.thought(think);
+        if (delta?.content) channel.content(delta.content);
         if (content && (content.includes("write_file") || content.includes("edit_file") || content.includes("append_file"))) {
           applyLiveText(content);
-        }
-        if (isToolTemplateEcho(content)) {
-          sawDone = true;
-          finish = finish || "stop";
         }
         if (think || delta?.content || delta?.tool_calls?.length || delta?.function_call || (delta && !delta.content)) agentBeat();
         if (delta?.function_call) {
@@ -225,22 +209,16 @@ export async function readSseChat(
         if (legacy?.name) {
           tools.set(0, { id: "legacy", name: legacy.name, args: legacy.arguments || "{}" });
         }
-      } catch {
-        /* ignore broken chunk */
+      } catch (error) {
+        if (error instanceof SyntaxError) throw new StreamStallError("Modellantwort unterbrochen: ungültiges oder unvollständiges JSON im Antwortstrom.");
+        throw error;
       }
     }
     if (sawDone || done) break;
-    if (
-      thinkOff() &&
-      thinkAt &&
-      !content &&
-      !tools.size &&
-      Date.now() - thinkAt > THINK_OFF_IDLE_MS
-    ) {
-      finish = finish || "stop";
-      break;
-    }
   }
+  channel.finish();
+  } catch (error) {
+    throw streamFailure(error, res);
   } finally {
     finishLiveWrite(generation);
     try {
@@ -254,12 +232,16 @@ export async function readSseChat(
       /* */
     }
   }
+  if (!sawDone && !sawStop) throw streamFailure(new StreamStallError("Modellantwort unterbrochen: Abschluss fehlt."), res);
   const tool_calls: ToolCall[] = [...tools.values()]
     .filter((t) => t.name)
     .map((t, i) => asToolCall(t.id || `call_${i}`, t.name, t.args || "{}"));
-  if (inThink && reasoning && !tools.size) finish = finish === "tool_calls" || finish === "function_call" ? finish : "length";
-  if (!content && !reasoning && !tool_calls.length && !sawDone) {
-    throw new StreamStallError("Leerer Stream — Modell hat abgebrochen (oft kalt oder Context zu groß).");
+  if (channel.inThinking && reasoning && !tools.size && !["incomplete", "content_filter"].includes(finish)) finish = finish === "tool_calls" || finish === "function_call" ? finish : "length";
+  if (incomplete(finish) && tool_calls.length)
+    throw streamFailure(new StreamStallError("Modellantwort unvollständig: Werkzeugaufrufe wurden nicht ausgeführt."), res);
+  validateCalls(tool_calls, res);
+  if (!content && !reasoning && !tool_calls.length) {
+    throw streamFailure(new StreamStallError("Leerer oder unvollständiger Stream — Modell hat keine ausführbare Antwort geliefert."), res);
   }
   return {
     role: "assistant",
@@ -280,7 +262,14 @@ export async function readSseResponses(
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  let eventName = "";
   const acc = emptyResponsesAcc();
+  const guard = new ReasoningGuard();
+  const guardedDelta = (text: string, kind?: "text" | "think") => {
+    if (kind === "think") guard.push(text);
+    else if (text.trim()) { guard.finish(); guard.clear(); }
+    onDelta?.(text, kind);
+  };
   let sawDone = false;
   let gotEvent = false;
 
@@ -319,13 +308,15 @@ export async function readSseResponses(
       buf = lines.pop() ?? "";
       for (const line of lines) {
         const t = line.trim();
-        if (!t) continue;
+        if (!t) { eventName = ""; continue; }
+        if (t.startsWith("event:")) { eventName = t.slice(6).trim(); continue; }
         if (t.startsWith(":")) {
           agentBeat();
           continue;
         }
         if (!t.startsWith("data:")) continue;
         const data = t.slice(5).trim();
+        if (!data) continue;
         if (data === "[DONE]") {
           sawDone = true;
           acc.done = true;
@@ -333,9 +324,14 @@ export async function readSseResponses(
         }
         try {
           const j = JSON.parse(data) as Record<string, unknown>;
+          if (!j.type && eventName) j.type = eventName;
           const beforeC = acc.content.length;
           const beforeR = acc.reasoning.length;
-          applyResponsesEvent(acc, j, onDelta);
+          if (j.type === "error" || j.type === "response.failed") {
+            const failure = repetitionFailure(j);
+            if (failure) throw failure;
+          }
+          applyResponsesEvent(acc, j, guardedDelta);
           agentBeat();
           if (acc.content.length > beforeC) applyLiveText(acc.content);
           if (acc.content.length > beforeC || acc.reasoning.length > beforeR || acc.tools.size) agentBeat();
@@ -343,12 +339,16 @@ export async function readSseResponses(
             if (tcall.name && tcall.args) applyLiveDraft(tcall.name, tcall.args);
           }
           if (acc.error) throw new Error(acc.error);
-        } catch (err) {
-          if (err instanceof Error && acc.error) throw err;
+        } catch (error) {
+          if (error instanceof SyntaxError) throw new StreamStallError("Modellantwort unterbrochen: ungültiges oder unvollständiges JSON im Antwortstrom.");
+          throw error;
         }
       }
       if (sawDone || acc.done || done) break;
     }
+    guard.finish();
+  } catch (error) {
+    throw streamFailure(error, res);
   } finally {
     finishLiveWrite(generation);
     try {
@@ -363,8 +363,12 @@ export async function readSseResponses(
     }
   }
   const choice = choiceFromAcc(acc);
-  if (!choice.content && !choice.reasoning && !choice.tool_calls?.length && !sawDone && !acc.done) {
-    throw new StreamStallError("Leerer Stream — Modell hat abgebrochen (oft kalt oder Context zu groß).");
+  if (!sawDone && !acc.done) throw streamFailure(new StreamStallError("Modellantwort unterbrochen: Abschluss fehlt."), res);
+  if (incomplete(choice.finish_reason) && choice.tool_calls?.length)
+    throw streamFailure(new StreamStallError("Modellantwort unvollständig: Werkzeugaufrufe wurden nicht ausgeführt."), res);
+  validateCalls(choice.tool_calls || [], res);
+  if (!choice.content && !choice.reasoning && !choice.tool_calls?.length) {
+    throw streamFailure(new StreamStallError("Leerer oder unvollständiger Stream — Modell hat keine ausführbare Antwort geliefert."), res);
   }
   return choice;
 }
@@ -378,16 +382,19 @@ export async function readSseAnthropic(
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  let eventName = "";
   let content = "";
   let reasoning = "";
   const tools = new Map<string, { id: string; name: string; args: string }>();
   let blockId = "";
   let blockKind = "";
   let sawStop = false;
+  let finish = "";
   const usageFields: Record<string, unknown> = {};
   let finished = false;
   let errMsg = "";
   let gotEvent = false;
+  const guard = new ReasoningGuard();
 
   const readChunk = (): Promise<{ value?: Uint8Array; done: boolean }> =>
     new Promise((resolve, reject) => {
@@ -424,7 +431,9 @@ export async function readSseAnthropic(
       buf = lines.pop() ?? "";
       for (const line of lines) {
         const t = line.trim();
-        if (!t || t.startsWith("event:") || t.startsWith(":")) {
+        if (!t) { eventName = ""; continue; }
+        if (t.startsWith("event:")) { eventName = t.slice(6).trim(); continue; }
+        if (t.startsWith(":")) {
           if (t.startsWith(":")) agentBeat();
           continue;
         }
@@ -438,10 +447,12 @@ export async function readSseAnthropic(
         try {
           j = JSON.parse(data) as Record<string, unknown>;
         } catch {
-          continue;
+          throw new StreamStallError("Modellantwort unterbrochen: ungültiges oder unvollständiges JSON im Antwortstrom.");
         }
-        const type = String(j.type ?? "");
+        const type = String(j.type ?? eventName);
         if (type === "error") {
+          const failure = repetitionFailure(j.error ?? j);
+          if (failure) throw failure;
           const e = j.error;
           errMsg =
             typeof e === "string"
@@ -478,6 +489,7 @@ export async function readSseAnthropic(
           if (dt === "text_delta" || blockKind === "text") {
             const s = String(delta.text ?? "");
             if (s) {
+              if (s.trim()) { guard.finish(); guard.clear(); }
               content += s;
               onDelta?.(s, "text");
               applyLiveText(content);
@@ -485,6 +497,7 @@ export async function readSseAnthropic(
           } else if (dt === "thinking_delta" || blockKind === "thinking") {
             const s = String(delta.thinking ?? delta.text ?? "");
             if (s) {
+              guard.push(s);
               reasoning += s;
               onDelta?.(s, "think");
             }
@@ -509,12 +522,19 @@ export async function readSseAnthropic(
             Object.assign(usageFields, usage);
           }
           const delta = (j.delta && typeof j.delta === "object" ? j.delta : {}) as { stop_reason?: string };
-          if (delta.stop_reason) sawStop = true;
+          if (delta.stop_reason) {
+            sawStop = true;
+            finish = delta.stop_reason === "max_tokens" ? "length" : delta.stop_reason === "tool_use" ? "tool_calls"
+              : delta.stop_reason === "end_turn" || delta.stop_reason === "stop_sequence" ? "stop" : delta.stop_reason;
+          }
         }
         if (type === "message_stop") { sawStop = true; finished = true; }
       }
       if (finished || errMsg || done) break;
     }
+    guard.finish();
+  } catch (error) {
+    throw streamFailure(error, res);
   } finally {
     finishLiveWrite(generation);
     try {
@@ -528,18 +548,23 @@ export async function readSseAnthropic(
       /* */
     }
   }
-  if (errMsg) throw new Error(errMsg);
+  if (errMsg) throw streamFailure(new StreamStallError(errMsg), res);
+  if (!sawStop) throw streamFailure(new StreamStallError("Modellantwort unterbrochen: Abschluss fehlt."), res);
   const tool_calls: ToolCall[] = [...tools.values()]
     .filter((t) => t.name)
     .map((t) => asToolCall(t.id, t.name, t.args || "{}"));
-  if (!content && !reasoning && !tool_calls.length && !sawStop) {
-    throw new StreamStallError("Leerer Stream — Modell hat abgebrochen (oft kalt oder Context zu groß).");
+  if (incomplete(finish) && tool_calls.length)
+    throw streamFailure(new StreamStallError("Modellantwort unvollständig: Werkzeugaufrufe wurden nicht ausgeführt."), res);
+  validateCalls(tool_calls, res);
+  if (!content && !reasoning && !tool_calls.length) {
+    throw streamFailure(new StreamStallError("Leerer oder unvollständiger Stream — Modell hat keine ausführbare Antwort geliefert."), res);
   }
   return {
     role: "assistant",
     content: content || null,
     reasoning: reasoning || undefined,
     tool_calls: tool_calls.length ? tool_calls : undefined,
+    finish_reason: finish || (tool_calls.length ? "tool_calls" : "stop"),
     usage: anthropicUsage(usageFields),
   };
 }

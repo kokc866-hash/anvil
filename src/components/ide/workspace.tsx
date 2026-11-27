@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityBar } from "./activity-bar";
 import { startBackgroundAgentMonitor } from "@/lib/background-agent";
+import { startLanguageUpdateMonitor } from "@/lib/language-updates";
 import { AgentSupportPane } from "./agent-support-pane";
 import { HelpGuide } from "./help-guide";
 import { useHelpTour } from "@/lib/help-guide";
 import { FileTree } from "./file-tree";
 import { EditorPane } from "./editor-pane";
-import { ChatPane } from "./chat-pane";
+import { ChatView } from "./chat-pane";
+import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { TrailPane } from "./trail-pane";
 import { OutputPane } from "./output-pane";
 import { SettingsPane } from "./settings-pane";
@@ -23,12 +25,16 @@ import { CommandPalette } from "./command-palette";
 import { HSplit, VSplit } from "./splitter";
 import { startDebug, debugStep, debugStop } from "@/lib/debug-engine";
 import { startIdeSync } from "@/lib/ide-sync";
+import { seedWorkspaceResultFiles, startWorkspaceResultMonitor } from "@/lib/workspace-results";
 import { startServiceAutoconnect } from "@/lib/service-autoconnect";
 import { reloadPlugins } from "@/lib/plugins";
 import { loadVscodeFromWorkspace } from "@/lib/plugins/vscode";
-import { pluginWatchPath, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
+import { pluginContentRevision, prunePluginIds, vsPackPluginId } from "@/lib/plugins/util";
 import { hasOsFiles, importDropped } from "@/lib/dnd";
-import { restoreLocations, loadSlotAll, hasLocation } from "@/lib/disk";
+import { diskFolderName, diskSupported, pickFolder, restoreLocations, loadSlotAll } from "@/lib/disk";
+import { canOpenOsWorkspace, openOsWorkspace } from "@/lib/workspace-open";
+import { workspaceDisk } from "@/lib/native-workspace";
+import { checkEmptyLocalWorkspace } from "@/lib/workspace-empty";
 import { focusOutputWindow, openOutputWindow } from "@/lib/output-window";
 import { openRunWindow } from "@/lib/run-window";
 import { DEMO_PATHS, withoutStaleSeedFiles } from "@/lib/seed-files";
@@ -39,7 +45,7 @@ import { stopAgent } from "@/lib/abort";
 import { gotoFile } from "@/lib/goto";
 import { saveNow, focusAgent } from "@/lib/save";
 import { useIde } from "@/store/ide";
-import { applyLang, t } from "@/lib/i18n";
+import { applyLang } from "@/lib/i18n";
 import { ANVIL_VERSION } from "@/lib/version";
 import { InternPane } from "./intern-pane";
 import { ConfirmHost } from "./confirm-host";
@@ -82,19 +88,33 @@ export function Workspace() {
   const setRunning = useIde((s) => s.setRunning);
   const pushOutput = useIde((s) => s.pushOutput);
   const notice = useIde((s) => s.notice);
+  const persistenceWarning = useIde((s) => s.persistenceWarning);
   const pluginDisabled = useIde((s) => s.pluginDisabled);
   const setNotice = useIde((s) => s.setNotice);
   const showStatusBar = useIde((s) => s.showStatusBar);
-  const autoSaveDisk = useIde((s) => s.autoSaveDisk);
   const boot = useIntern((s) => s.boot);
   const shellRef = useRef<HTMLDivElement>(null);
   const [inner, setInner] = useState(1280);
   const [compactPane, setCompactPane] = useState("editor");
-  const compact = inner < 640;
+  const compact = inner < 880;
+  const sharedDock = !compact && inner < 1440 && splitMode === "auto" && panels.trail && panels.agent;
+  const [dockPane, setDockPane] = useState<"agent" | "trail">("agent");
+  const composer = useChatComposerDraft();
+  const chatPane = <ChatView {...composer} />;
+  useEffect(() => useIde.subscribe((s, prev) => {
+    if (s.panels.trail && !prev.panels.trail) setDockPane("trail");
+    if (s.panels.agent && !prev.panels.agent) setDockPane("agent");
+  }), []);
+  const navigateDock = useCallback((pane: "agent" | "trail") => {
+    if (compact) setCompactPane(pane);
+    else if (sharedDock && dockPane !== pane) setDockPane(pane);
+    else useIde.getState().togglePanel(pane);
+  }, [compact, sharedDock, dockPane]);
   useEffect(() => {
     if (!compact) return;
     return useIde.subscribe((s, prev) => {
-      if (s.activePath !== prev.activePath && s.activePath) setCompactPane("editor");
+      if (s.harnessBoardOpen && !prev.harnessBoardOpen) setCompactPane("editor");
+      else if (s.activePath !== prev.activePath && s.activePath) setCompactPane(current => current === "files" ? "editor" : current);
       else if (s.sidebar !== prev.sidebar) setCompactPane(s.sidebar ? "files" : prev.sidebar === "workflows" ? "agent" : "editor");
       else if (s.panels.agent !== prev.panels.agent && s.panels.agent) setCompactPane("agent");
       else if (s.panels.trail !== prev.panels.trail && s.panels.trail) setCompactPane("trail");
@@ -104,6 +124,48 @@ export function Workspace() {
   const [starterOpen, setStarterOpen] = useState(false);
 
   useEffect(() => startServiceAutoconnect(), []);
+
+  useEffect(() => {
+    async function openFolder() {
+      try {
+        if (canOpenOsWorkspace()) {
+          const result = await openOsWorkspace();
+          if (!result.ok) {
+            if (result.error && result.error !== "Kein Ordner") setNotice(result.error);
+            return;
+          }
+          setNotice(result.skipped ? `${result.n ?? 0} Dateien, ${result.skipped} übersprungen` : `${result.n ?? 0} Dateien geladen`);
+          return;
+        }
+        if (!diskSupported()) {
+          setNotice("Zum Öffnen eines Ordners benötigst du Chrome, Edge oder die Anvil-Desktop-App.");
+          return;
+        }
+        const pack = await pickFolder();
+        const state = useIde.getState();
+        state.applyFiles(pack.files, pack.dirs);
+        state.setDiskName(diskFolderName());
+        const names = Object.keys(pack.files).sort();
+        if (names[0]) state.openFile(names[0]);
+        setNotice(pack.skipped ? `${names.length} Dateien, ${pack.skipped} übersprungen` : `${names.length} Dateien geladen`);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
+        setNotice(error instanceof Error ? error.message : "Der Ordner konnte nicht geöffnet werden.");
+      }
+    }
+    const onOpen = () => { void openFolder(); };
+    window.addEventListener("anvil-open-disk", onOpen);
+    return () => window.removeEventListener("anvil-open-disk", onOpen);
+  }, [setNotice]);
+
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ error: string }>).detail;
+      if (detail && typeof detail.error === "string") useIde.setState({ persistenceWarning: detail.error });
+    };
+    window.addEventListener("anvil-persistence", changed);
+    return () => window.removeEventListener("anvil-persistence", changed);
+  }, []);
 
   useEffect(() => {
     const refresh = () => { void import("@/lib/external-files").then((m) => m.refreshExternalFiles()); };
@@ -139,6 +201,8 @@ export function Workspace() {
     const done = useIde.persist.rehydrate();
     let stopSync: (() => void) | undefined;
     let stopBackground: (() => void) | undefined;
+    let stopLanguageUpdates: (() => void) | undefined;
+    let stopWorkspaceResults: (() => void) | undefined;
     let disposed = false;
     void Promise.resolve(done).then(() => {
       if (disposed) return;
@@ -205,23 +269,27 @@ export function Workspace() {
         const cwd = st.workspaceCwd?.trim();
         if (cwd) {
           try {
-            const { holdCompanion, releaseCompanion } = await import("@/lib/companion-life");
-            const { companionTree } = await import("@/lib/companion");
-            await holdCompanion();
-            const tree = await companionTree(cwd);
+            const tree = st.workspaceNative
+              ? await workspaceDisk({ action: "tree", root: cwd })
+              : await (async () => {
+                  const { withCompanion } = await import("@/lib/companion-life");
+                  const { companionTree } = await import("@/lib/companion");
+                  return withCompanion(() => companionTree(cwd, st.companionUrl || undefined), st.companionUrl, cwd);
+                })();
             if (tree.ok && tree.files && st.workspaceEpoch === useIde.getState().workspaceEpoch && cwd === useIde.getState().workspaceCwd) {
               const { overlayDiskTree } = await import("@/lib/ws-skip");
               const cur = useIde.getState();
               const merged = overlayDiskTree(tree.files, withoutStaleSeedFiles(cur.files, tree.files, cur.dirty), cur.dirty);
               st.applyFiles(merged, tree.dirs, { keepDirty: true });
+              seedWorkspaceResultFiles(Object.keys(tree.files), cur);
               void import("@/lib/disk-sync").then((d) => { if (cur.workspaceEpoch === useIde.getState().workspaceEpoch) d.noteDiskContents(tree.files!); });
               if (tree.skipped) st.setNotice(`${tree.n} Dateien, ${tree.skipped} übersprungen (Platten-Stand)`);
             }
-            if (!st.companionKeep) await releaseCompanion();
           } catch {
-            /* companion down — keep persisted cache */
+            /* Keep the persisted editor contents when the project is unavailable. */
           }
           await resumeRestore();
+          if (st.workspaceNative) await checkEmptyLocalWorkspace();
           void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
           return;
         }
@@ -241,11 +309,13 @@ export function Workspace() {
         void import("@/lib/learn").then((m) => m.hydrateLearnFromFiles(useIde.getState().files));
       });
       stopSync = startIdeSync();
+      stopWorkspaceResults = startWorkspaceResultMonitor();
       stopBackground = startBackgroundAgentMonitor();
+      stopLanguageUpdates = startLanguageUpdateMonitor();
       void import("@/lib/model-context").then((m) => m.applyCloudContext());
       void import("@/lib/app-update").then((u) => u.bootUpdateCheck());
     });
-    return () => { disposed = true; stopSync?.(); stopBackground?.(); };
+    return () => { disposed = true; stopSync?.(); stopBackground?.(); stopLanguageUpdates?.(); stopWorkspaceResults?.(); };
   }, []);
 
   useEffect(() => {
@@ -336,16 +406,10 @@ export function Workspace() {
   }, []);
 
   useEffect(() => {
-    const plugSig = (files: Record<string, string>) =>
-      Object.keys(files)
-        .filter((p) => pluginWatchPath(p))
-        .sort()
-        .map((p) => `${p}:${files[p]!.length}`)
-        .join("|");
     let last = "";
     const boot = () => {
       const st = useIde.getState();
-      const sig = `${plugSig(st.files)}#${st.pluginDisabled.join(",")}`;
+      const sig = JSON.stringify([st.workspaceEpoch, st.workspaceCwd, st.companionUrl, pluginContentRevision(st.files), st.pluginDisabled]);
       if (sig === last) return;
       last = sig;
       reloadPlugins(st.files);
@@ -358,7 +422,7 @@ export function Workspace() {
     };
     boot();
     return useIde.subscribe((s, prev) => {
-      if (s.files === prev.files && s.pluginDisabled === prev.pluginDisabled) return;
+      if (s.files === prev.files && s.pluginDisabled === prev.pluginDisabled && s.workspaceEpoch === prev.workspaceEpoch && s.workspaceCwd === prev.workspaceCwd && s.companionUrl === prev.companionUrl) return;
       boot();
     });
   }, [pluginDisabled]);
@@ -373,6 +437,7 @@ export function Workspace() {
     async function runActive() { await import("@/lib/editor-run").then((r) => r.runFromEditor()); }
     function onKey(e: KeyboardEvent) {
       if (useHelpTour.getState().step !== null || (e.key === "Escape" && document.querySelector("[data-help-card]"))) return;
+      if (e.key === "Escape" && (document.querySelector(".status-details:popover-open") || (e.target instanceof Element && e.target.closest('[role="menu"], [data-model-picker="open"]')))) return;
       if ((window as Window & { __anvilBindKey?: boolean }).__anvilBindKey) return;
       const st = useIde.getState();
       if (e.key === "Escape") {
@@ -451,7 +516,7 @@ export function Workspace() {
           st.setSidebar(st.sidebar === "files" ? null : "files");
           break;
         case "agent":
-          st.togglePanel("agent");
+          navigateDock("agent");
           break;
         case "git":
           st.setSidebar(st.sidebar === "git" ? null : "git");
@@ -479,7 +544,7 @@ export function Workspace() {
           st.togglePanel("output");
           break;
         case "trail":
-          st.togglePanel("trail");
+          navigateDock("trail");
           break;
         case "reopen":
           st.reopenTab();
@@ -618,11 +683,11 @@ export function Workspace() {
       window.removeEventListener("anvil-output-popout", onPopout);
       window.removeEventListener("anvil-run-popout", onRunPopout);
     };
-  }, [setPalette, setSettingsOpen, setRunning, pushOutput]);
+  }, [setPalette, setSettingsOpen, setRunning, pushOutput, navigateDock]);
 
   const showSide = Boolean(sidebar);
   const showOutput = panels.output && !outputPopout;
-  const trailOpen = panels.trail;
+  const trailOpen = panels.trail && !sharedDock;
   const agentOn = panels.agent;
 
   const fitArgs = {
@@ -720,22 +785,30 @@ export function Workspace() {
       }}
     >
       <FirstRun />
+      {persistenceWarning ? <div role="alert" data-testid="persistence-warning" className="flex shrink-0 items-start gap-2 border-b border-border bg-surface px-3 py-2 text-xs text-warn">
+        <span className="min-w-0 flex-1 break-words">{locale === "en" ? "Project backup is incomplete. " : "Projektsicherung unvollständig. "}{persistenceWarning}</span>
+        <button type="button" onClick={() => useIde.setState({ persistenceWarning: "" })} className="shrink-0 underline">{locale === "en" ? "Dismiss" : "Schließen"}</button>
+      </div> : null}
       {compact ? (
         <div className="flex min-h-0 flex-1">
-          <ActivityBar />
+          <ActivityBar compact onOpenSide={() => setCompactPane("files")} />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <nav aria-label="Arbeitsbereich" className="flex shrink-0 overflow-x-auto border-b border-border">
-              {[["files", "Dateien"], ["editor", "Editor"], ["agent", "Agent"], ["trail", "Spur"], ["output", "Ausgabe"]].map(([id, label]) => (
-                <button key={id} type="button" aria-pressed={compactPane === id} className={`min-h-11 shrink-0 px-2 text-xs ${compactPane === id ? "bg-hover text-fg" : "text-muted"}`} onClick={() => setCompactPane(id)}>{label}</button>
+            <nav aria-label={locale === "en" ? "Workspace" : "Arbeitsbereich"} className="flex shrink-0 overflow-x-auto border-b border-border">
+              {[["files", locale === "en" ? "Files" : "Dateien"], ["editor", "Editor"], ["agent", "Agent"], ["trail", locale === "en" ? "Trail" : "Spur"], ["output", locale === "en" ? "Output" : "Ausgabe"]].map(([id, label]) => (
+                <button key={id} type="button" data-help={["agent","trail","output"].includes(id) ? id : undefined} aria-pressed={compactPane === id && (id !== "files" || !sidebar || sidebar === "files")} className="min-h-10 min-w-0 flex-1 px-1 text-sm text-muted aria-pressed:bg-hover aria-pressed:text-fg" onClick={() => {
+                  if (id === "files") useIde.getState().setSidebar("files");
+                  setCompactPane(id);
+                }}>{label}</button>
               ))}
             </nav>
             <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-              {compactPane === "files" ? sideBody(sidebar || "files") : compactPane === "agent" ? <ChatPane /> : compactPane === "trail" ? <TrailPane /> : compactPane === "output" ? <OutputPane /> : harnessBoardOpen ? <HarnessBoard /> : <EditorPane />}
+              <div className="h-full" hidden={compactPane !== "agent"}>{chatPane}</div>
+              {compactPane === "files" ? sideBody(sidebar || "files") : compactPane === "agent" ? null : compactPane === "trail" ? <TrailPane /> : compactPane === "output" ? <OutputPane /> : harnessBoardOpen ? <HarnessBoard /> : <EditorPane />}
             </div>
           </div>
         </div>
       ) : <div key={boot} className="flex min-h-0 flex-1">
-        <ActivityBar />
+        <ActivityBar dock={sharedDock ? dockPane : undefined} selectDock={navigateDock} />
         {showSide && !overlaySide && sideW > 0 ? (
           <>
             <aside key={sidebar} className="ui-rail shrink-0 overflow-hidden border-r border-border" style={{ width: sideW }}>
@@ -747,7 +820,7 @@ export function Workspace() {
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex min-h-0 min-w-0 flex-1">
-              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+              <div data-testid="workspace-editor" className="min-h-0 min-w-0 flex-1 overflow-hidden">
                 {harnessBoardOpen ? <HarnessBoard /> : <EditorPane />}
               </div>
               {outputSide ? (
@@ -784,10 +857,10 @@ export function Workspace() {
                 <HSplit onDrag={(dy) => setAgentWidth(useIde.getState().agentWidth - dy)} />
                 <div
                   className="flex min-h-0 shrink-0 border-t border-border"
-                  style={{ height: Math.max(180, Math.min(420, agentWidth)) }}
+                  style={{ height: Math.max(180, Math.min(420, agentWidth)), maxHeight: outputBottom ? "34%" : "48%" }}
                 >
                   <div className="min-h-0 min-w-0 flex-1">
-                    <ChatPane />
+                    {chatPane}
                   </div>
                   {trailBelow && stackTrail.trailW > 0 ? (
                     <aside className="ui-pane relative z-0 isolate min-h-0 shrink-0 overflow-hidden border-l border-border" style={{ width: stackTrail.trailW }}>
@@ -800,7 +873,7 @@ export function Workspace() {
             {outputBottom ? (
               <>
                 <HSplit onDrag={(dy) => setOutputHeight(useIde.getState().outputHeight - dy)} />
-                <div className="min-h-0 shrink-0" style={{ height: outputHeight }}>
+                <div className="min-h-0 shrink-0" style={{ height: outputHeight, maxHeight: agentBelow ? "30%" : "48%" }}>
                   <OutputPane />
                 </div>
               </>
@@ -809,14 +882,20 @@ export function Workspace() {
           {agentBeside && agentW > 0 ? (
             <>
               <VSplit onBegin={syncShown} onDrag={(dx) => commitDrag("agent", -dx)} />
-              <aside className="ui-pane min-h-0 shrink-0 overflow-hidden" style={{ width: agentW }}>
-                <ChatPane />
+              <aside className="ui-pane flex min-h-0 shrink-0 flex-col overflow-hidden" style={{ width: agentW }}>
+                {sharedDock && <nav aria-label={locale === "en" ? "Task view" : "Auftragsansicht"} className="flex shrink-0 gap-1 border-b border-border bg-surface px-2">
+                  {(["agent","trail"] as const).map(id => <button key={id} type="button" aria-pressed={dockPane === id}
+                    className={`min-h-9 border-b-2 px-3 text-sm ${dockPane === id ? "border-accent font-semibold text-fg" : "border-transparent text-muted hover:text-fg"}`}
+                    onClick={() => setDockPane(id)}>{id === "agent" ? "Agent" : locale === "en" ? "Trail" : "Spur"}</button>)}
+                </nav>}
+                <div className="min-h-0 flex-1" hidden={sharedDock && dockPane === "trail"}>{chatPane}</div>
+                {sharedDock && dockPane === "trail" && <div className="min-h-0 flex-1"><TrailPane /></div>}
               </aside>
             </>
           ) : null}
         </div>
       </div>}
-      {showStatusBar ? <div className="shrink-0 overflow-x-auto whitespace-nowrap"><StatusBar /></div> : null}
+      {showStatusBar ? <div className="shrink-0 overflow-x-auto whitespace-nowrap"><StatusBar compact={compact} /></div> : null}
       {!compact && overlaySide ? (
         <>
           <button
@@ -839,7 +918,7 @@ export function Workspace() {
           className={`ui-pane absolute top-0 z-20 overflow-hidden border-l border-border bg-surface ${edge}`}
           style={{ right: ov.agentRight, width: ov.agentW }}
         >
-          <ChatPane />
+          {chatPane}
         </aside>
       ) : null}
       {!compact && overlayTrail && ov.trailW > 0 ? (
@@ -851,14 +930,14 @@ export function Workspace() {
         </aside>
       ) : null}
       {settingsOpen ? (
-        <div className="ui-overlay absolute inset-0 z-50 flex items-stretch justify-center bg-bg/70 p-0 sm:items-center sm:p-6">
+        <div className="ui-overlay absolute inset-0 z-50 flex items-stretch justify-center bg-bg/70 sm:items-center sm:p-3">
           <button
             type="button"
             className="absolute inset-0"
             aria-label="Einstellungen schließen"
             onClick={() => setSettingsOpen(false)}
           />
-          <div className="ui-sheet relative flex h-full w-full max-w-3xl flex-col overflow-hidden border border-border bg-surface shadow-lg sm:h-[min(40rem,90dvh)] sm:rounded-lg">
+          <div role="dialog" aria-modal="true" aria-labelledby="anvil-settings-title" className="ui-sheet relative flex h-full w-full max-w-[58rem] flex-col overflow-hidden border border-border bg-surface shadow-lg sm:h-[min(46rem,calc(100dvh-1.5rem))] sm:rounded-lg">
             <SettingsPane />
           </div>
         </div>

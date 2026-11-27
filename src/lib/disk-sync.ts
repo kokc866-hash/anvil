@@ -1,24 +1,25 @@
-import { companionDeleteFile, companionMoveFile, companionMkdir, companionWriteChecked, companionRestore } from "./companion";
-import { diskWorkspaceHandle, moveDiskPath, mkdirDisk, removeDiskPath, writeDiskFile, restoreDiskPlan } from "./disk";
+import { companionDeleteFile, companionMoveFile, companionMkdir, companionWriteChecked, companionRestore, companionReadFiles } from "./companion";
+import { diskWorkspaceHandle, moveDiskPath, mkdirDisk, removeDiskPath, writeDiskFile, restoreDiskPlan, readDiskFiles } from "./disk";
+import { workspaceDisk } from "./native-workspace";
 import type { RestorePlan, RestoreDiskPlan } from "./restore-plan";
 import { withCompanion } from "./companion-life";
 import { WriteQueue } from "./write-queue";
 import { useIde } from "@/store/ide";
 
-export type DiskTarget = { cwd: string; handle: FileSystemDirectoryHandle | null; base: string; epoch?: number };
+export type DiskTarget = { cwd: string; handle: FileSystemDirectoryHandle | null; base: string; epoch?: number; local?: boolean };
 const handles = new WeakMap<FileSystemDirectoryHandle, number>();
 let handleId = 0;
 let noticeAt = 0;
 
 export function captureDiskTarget(): DiskTarget {
   const state = useIde.getState();
-  return { cwd: state.workspaceCwd, handle: diskWorkspaceHandle(), base: state.companionUrl, epoch: state.workspaceEpoch };
+  return { cwd: state.workspaceCwd, handle: diskWorkspaceHandle(), base: state.companionUrl, epoch: state.workspaceEpoch, local: state.workspaceNative };
 }
 
 function targetKey(target: DiskTarget): string {
   if (target.handle && !handles.has(target.handle)) handles.set(target.handle, ++handleId);
   return (
-    JSON.stringify([target.base, target.cwd, target.handle ? handles.get(target.handle) : 0]) + "\t"
+    JSON.stringify([target.local ? null : target.base, target.cwd, target.handle ? handles.get(target.handle) : 0]) + "\t"
   );
 }
 
@@ -38,6 +39,12 @@ export function noteDiskContents(files: Record<string, string>, target = capture
   for (const key of knownDisk.keys()) if (key.startsWith(prefix)) knownDisk.delete(key);
   for (const [path, content] of Object.entries(files)) knownDisk.set(prefix + path, content);
 }
+
+export async function readDiskTargetFiles(paths: string[], target: DiskTarget): Promise<Record<string, string | null>> {
+  if (target.local) return (await workspaceDisk({ action: "read", root: target.cwd, paths: paths.slice(0, 64) })).files;
+  if (target.cwd) return companionReadFiles(paths, target.cwd, target.base || undefined);
+  return readDiskFiles(paths, target.handle);
+}
 export function prepareRestoreDisk(plan: RestorePlan, target = captureDiskTarget()): RestoreDiskPlan {
   const s = useIde.getState();
   return { mkdir: plan.mkdir, rmdir: plan.rmdir, files: plan.files.map((f) => {
@@ -51,7 +58,8 @@ export async function syncRestore(plan: RestoreDiskPlan, target = captureDiskTar
   let removedDirs = plan.rmdir;
   await queue.run(async () => {
     if (target.cwd && target.handle) throw new Error("Es sind zwei Speicherziele für das Projekt aktiv. Öffne den gewünschten Projektordner erneut.");
-    if (target.cwd) removedDirs = await withCompanion(() => companionRestore(plan, target.cwd, target.base || undefined), target.base, target.cwd);
+    if (target.local) removedDirs = (await workspaceDisk({ action: "restore", root: target.cwd, ...plan })).removedDirs;
+    else if (target.cwd) removedDirs = await withCompanion(() => companionRestore(plan, target.cwd, target.base || undefined), target.base, target.cwd);
     else if (target.handle) removedDirs = await restoreDiskPlan(plan, target.handle);
     for (const f of plan.files) noteDiskFile(f.path, f.after, target);
   });
@@ -64,7 +72,8 @@ async function write(path: string, content: string, target: DiskTarget, baseCont
   try {
     if (target.cwd && target.handle) throw new Error("Es sind zwei Speicherziele für das Projekt aktiv. Öffne den gewünschten Projektordner erneut.");
     const jobs: Promise<unknown>[] = [writeDiskFile(path, content, target.handle, expected)];
-    if (target.cwd)
+    if (target.local) jobs.push(workspaceDisk({ action: "write", root: target.cwd, path, content, expected }));
+    else if (target.cwd)
       jobs.push(
         withCompanion(
           () => companionWriteChecked(path, content, target.cwd, target.base || undefined, expected),
@@ -81,7 +90,7 @@ async function write(path: string, content: string, target: DiskTarget, baseCont
       const dirty = { ...s.dirty }, editBases = { ...s.editBases };
       if (s.files[path] === content) { delete dirty[path]; delete editBases[path]; }
       else if (path in s.files) editBases[path] = content;
-      useIde.setState({ dirty, editBases });
+      useIde.setState({ dirty, editBases, ...(target.local && s.workspaceEmpty ? { workspaceEmpty: false } : {}) });
     }
   } catch (error) {
     noteFail(path, error);
@@ -102,7 +111,8 @@ export async function syncMove(from: string, to: string, target = captureDiskTar
   await queue.run(async () => {
     // A workspace has one authoritative destination. Dual destinations require explicit migration.
     if (target.cwd && target.handle) throw new Error("Es sind zwei Speicherziele für das Projekt aktiv. Öffne den gewünschten Projektordner erneut.");
-    if (target.cwd) await withCompanion(() => companionMoveFile(from, to, target.cwd, target.base || undefined), target.base, target.cwd);
+    if (target.local) await workspaceDisk({ action: "move", root: target.cwd, from, to });
+    else if (target.cwd) await withCompanion(() => companionMoveFile(from, to, target.cwd, target.base || undefined), target.base, target.cwd);
     else if (target.handle) await moveDiskPath(from, to, target.handle);
     const prefix = targetKey(target);
     for (const [key, content] of [...knownDisk]) if (key === prefix + from || key.startsWith(prefix + from + "/")) {
@@ -140,7 +150,7 @@ export function syncRemove(path: string, target = captureDiskTarget()): Promise<
   return queue.run(async () => {
     const results = await Promise.allSettled([
       removeDiskPath(path, target.handle),
-      target.cwd
+      target.local ? workspaceDisk({ action: "remove", root: target.cwd, path }) : target.cwd
         ? withCompanion(
             () => companionDeleteFile(path, target.cwd, target.base || undefined),
             target.base, target.cwd,
@@ -164,7 +174,7 @@ export function syncMkdir(path: string, target = captureDiskTarget()): Promise<v
   return queue.run(async () => {
     const results = await Promise.allSettled([
       mkdirDisk(path, target.handle),
-      target.cwd
+      target.local ? workspaceDisk({ action: "mkdir", root: target.cwd, path }) : target.cwd
         ? withCompanion(
             () => companionMkdir(path, target.cwd, target.base || undefined),
             target.base, target.cwd,
@@ -177,6 +187,10 @@ export function syncMkdir(path: string, target = captureDiskTarget()): Promise<v
     if (failed?.status === "rejected") {
       noteFail(path, failed.reason);
       throw failed.reason;
+    }
+    const current = useIde.getState();
+    if (target.local && current.workspaceEpoch === target.epoch && current.workspaceCwd === target.cwd && current.workspaceEmpty) {
+      useIde.setState({ workspaceEmpty: false });
     }
   });
 }

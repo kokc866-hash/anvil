@@ -12,7 +12,7 @@ test('missing Ollama token counts retain an estimate instead of reporting exact 
 });
 
 test("only the Ollama provider switches to native chat, including custom ports/prefixes", () => {
-  assert.equal(localChatUrl("ollama", "http://192.168.178.41:11434/v1"), "http://192.168.178.41:11434/api/chat");
+  assert.equal(localChatUrl("ollama", "http://192.168.56.40:11434/v1"), "http://192.168.56.40:11434/api/chat");
   assert.equal(localChatUrl("ollama", "http://localhost:8010/ollama/v1"), "http://localhost:8010/ollama/api/chat");
   assert.equal(localChatUrl("ollama", "http://localhost:8010/api/chat"), "http://localhost:8010/api/chat");
   assert.equal(localChatUrl("custom", "http://localhost:11434/v1"), "http://localhost:11434/v1/chat/completions");

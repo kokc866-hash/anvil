@@ -1,0 +1,21 @@
+{
+  "adaptedFor": "Anvil",
+  "date": "2026-10-29",
+  "runtimeAcceptance": "unverified",
+  "upstreamCodeExecuted": false,
+  "sources": [
+    {
+      "repo": "github/awesome-copilot",
+      "commit": "b6483db44fb602654bca6a097185fcaddb305f97",
+      "path": "skills/freecad-scripts/SKILL.md",
+      "license": "MIT",
+      "url": "https://github.com/github/awesome-copilot/blob/b6483db44fb602654bca6a097185fcaddb305f97/skills/freecad-scripts/SKILL.md"
+    }
+  ],
+  "changes": [
+    "German Anvil-specific adaptation",
+    "No upstream runtime/installer/hooks",
+    "Existing permissions and project scope preserved",
+    "References loaded on demand"
+  ]
+}

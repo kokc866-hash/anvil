@@ -1,7 +1,8 @@
-import { app, dialog } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { handleOnce } from "./ipc.mjs";
+import { createNativeWorkspace } from "./native-workspace.mjs";
 
 export const PATH_KINDS = ["data", "helper", "logs", "packages"];
 
@@ -56,7 +57,15 @@ export function logFile() {
   return join(loadPaths().logs, "anvil-desktop.log");
 }
 
-export function bindPathsIpc() {
+export function bindPathsIpc(allowUrl, editor) {
+  const workspace = createNativeWorkspace(app.getPath("userData"));
+  function workspaceFrame(event) {
+    const frame = event.senderFrame;
+    if (!frame || frame !== event.sender.mainFrame || event.sender !== editor()?.webContents || !allowUrl(frame.url)) {
+      throw new Error("Projektordner sind nur im Anvil-Hauptfenster verfügbar.");
+    }
+    return frame;
+  }
   handleOnce("paths-get", () => loadPaths());
   handleOnce("paths-pick", async (_e, kind) => {
     const k = PATH_KINDS.includes(kind) ? kind : "data";
@@ -91,12 +100,23 @@ export function bindPathsIpc() {
     if (!existsSync(p)) return null;
     return readFileSync(p, "utf8");
   });
-  handleOnce("workspace-pick", async () => {
-    const r = await dialog.showOpenDialog({
-      title: "Workspace",
+  handleOnce("workspace-pick", async (event) => {
+    const frame = workspaceFrame(event);
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      title: "Projektordner auswählen",
       properties: ["openDirectory", "createDirectory"],
-    });
+    };
+    const r = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
     if (r.canceled || !r.filePaths[0]) return null;
-    return r.filePaths[0];
+    if (workspaceFrame(event) !== frame) return null;
+    return workspace.remember(r.filePaths[0]);
+  });
+  handleOnce("workspace-disk", (event, request) => {
+    workspaceFrame(event);
+    if (request?.action === "tree" || request?.action === "results") return workspace.runTree(request);
+    const result = workspace.run(request);
+    if (request?.action === "resultReveal" && result.ok) shell.showItemInFolder(result.path);
+    return result;
   });
 }

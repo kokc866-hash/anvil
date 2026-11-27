@@ -6,7 +6,7 @@ import {knowledgeVersion} from '../electron/agent-knowledge-state.mjs';
 
 const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('Knowledge hydration fixture timed out');};
 
-test('monitor defers native knowledge until durable hydration, requests a full snapshot and applies exactly once',async t=>{
+for(const status of ['running','done'])test(`monitor defers ${status} native knowledge until durable hydration, requests a full snapshot and applies exactly once`,async t=>{
  const values=new Map(),oldFetch=globalThis.fetch;
  globalThis.localStorage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)};
  globalThis.window=Object.assign(new EventTarget(),{localStorage,setTimeout,clearTimeout});
@@ -32,15 +32,20 @@ test('monitor defers native knowledge until durable hydration, requests a full s
  const created={...fact,id:'new-background',text:'New background preference'};
  const event={id:'knowledge:update',jobId:'hydration-job',project:'I:/hydration-qa',workspace:'v2:path:i:/hydration-qa',collection:'facts',recordId:fact.id,before:fact,beforeVersion:knowledgeVersion(fact),after:{...fact,hits:2},action:'add',at:2};
  const added={...event,id:'knowledge:create',recordId:created.id,before:null,beforeVersion:null,after:created};
- const state={id:'hydration-job',revision:7,project:'I:/hydration-qa',prompt:'Synthetic request',status:'running',startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,knowledgeEvents:[event,added]};
+ const state={id:'hydration-job',revision:7,project:'I:/hydration-qa',prompt:'Synthetic request',status,startedAt:1000,text:'',thinking:'',steps:[],plan:[],drafts:{},harness:'',error:'',dismissed:false,knowledgeEvents:[event,added]};
  let release;const persisted=[];
  useLearn.persist.setOptions({storage:{getItem:()=>new Promise(resolve=>{release=resolve;}),setItem:(_name,value)=>persisted.push(structuredClone(value)),removeItem:()=>{}}});
  const hydrating=useLearn.persist.rehydrate();await until(()=>release);assert.equal(useLearn.persist.hasHydrated(),false);
- const calls=[];let initialStatus=true;
+ const calls=[];let initialStatus=true,statusPaused=false,releaseStatus;
  window.anvilNative={agentJob:async(action,payload)=>{
   calls.push({action,payload});
-  if(action==='permissions')return {state}; // IPC permissions must supply uncursored full state.
-  if(action==='status'&&initialStatus){initialStatus=false;return {available:true,state};}
+  if(action==='jobs')return {jobs:[{jobId:'slot-hydration',id:state.id,project:state.project,busy:status==='running',services:[]}],selectedJobId:'slot-hydration'};
+  if(action==='permissions')return {state};
+  if(action==='status'){
+   if(initialStatus){initialStatus=false;return {available:true,state};}
+   if(!statusPaused&&payload?.revision===state.revision){statusPaused=true;return new Promise(resolve=>{releaseStatus=()=>resolve({unchanged:true});});}
+   return payload?.revision===state.revision?{unchanged:true}:{available:true,state};
+  }
   return {unchanged:true};
  }};
  bg.useBackgroundAgent.setState({available:true,job:null,error:''});stop=bg.startBackgroundAgentMonitor();
@@ -49,12 +54,20 @@ test('monitor defers native knowledge until durable hydration, requests a full s
  assert.deepEqual(useLearn.getState().backgroundKnowledgeEvents,[],'early events must remain replayable');
  assert.equal(calls.filter(call=>call.action==='permissions').length,0,'default permissions must not revoke a running task before hydration');
  assert.equal(persisted.length,0,'incoming native events must not overwrite durable storage before it has loaded');
+ await until(()=>calls.filter(call=>call.action==='status').length>=2);
+ assert.equal(calls.filter(call=>call.action==='status')[1].payload.revision,state.revision,'normal polling acknowledges the early snapshot while knowledge remains unhydrated');
  release({state:{on:true,prefs:{...LEARN_DEFAULTS},facts:[fact,other],skills:[],forgotten:[],forgottenFacts:[],backgroundKnowledgeEvents:[],events:[],eventCount:0},version:0});
- await hydrating;await until(()=>useLearn.getState().backgroundKnowledgeEvents.length===2);
+ await hydrating;releaseStatus();await until(()=>useLearn.getState().backgroundKnowledgeEvents.length===2);
+ await until(()=>calls.filter(call=>call.action==='status').slice(2).some(call=>call.payload.revision===undefined));
+ const full=calls.filter(call=>call.action==='status').slice(2).find(call=>call.payload.revision===undefined);
+ assert.deepEqual(full.payload,{jobId:'slot-hydration'},'durable hydration replays knowledge from a full status snapshot, even without an active job');
  assert.equal(useLearn.getState().facts.length,3);assert.equal(useLearn.getState().facts.find(item=>item.id===fact.id).hits,2);assert.deepEqual(useLearn.getState().facts.find(item=>item.id===other.id),other);
- const permissions=calls.find(call=>call.action==='permissions');assert.ok(permissions);assert.equal(permissions.payload.id,undefined);assert.equal(permissions.payload.revision,undefined,'hydration must not get an unchanged reply for the early snapshot revision');
+ const permissions=calls.find(call=>call.action==='permissions');
+ if(status==='running'){
+  assert.ok(permissions);assert.equal(permissions.payload.id,state.id);assert.equal(permissions.payload.jobId,'slot-hydration');assert.equal(permissions.payload.revision,undefined,'permissions remain uncursored and address the exact active job');
+ }else assert.equal(permissions,undefined,'a finished job needs no permission mutation to recover its durable events');
  useLearn.getState().setPref('person',false);
- await until(()=>calls.filter(call=>call.action==='permissions').length===2);
+ if(status==='running')await until(()=>calls.filter(call=>call.action==='permissions').length===2);
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(useLearn.getState().facts.length,3);assert.equal(useLearn.getState().facts.find(item=>item.id===fact.id).hits,2);
  assert.deepEqual(useLearn.getState().backgroundKnowledgeEvents,[event.id,added.id]);

@@ -15,20 +15,24 @@ export const cloneGithub = createServerFn({ method: "POST" })
   .middleware([sameOriginMiddleware])
   .validator((input: { url: string; token?: string }) => input)
   .handler(async ({ data }) => {
+    const { requestTransport } = await import("./request-abort.server");
+    const { signal, send } = requestTransport();
+    signal.throwIfAborted();
     const { owner, repo, branch } = parseRepo(data.url);
     const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
     if (data.token?.trim()) headers.Authorization = `Bearer ${data.token.trim()}`;
     let used = branch;
-    let res = await fetch(`https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${used}`, { headers });
+    let res = await send(`https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${used}`, { headers });
     if (!res.ok && used === "main") {
       used = "master";
-      res = await fetch(`https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${used}`, { headers });
+      res = await send(`https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${used}`, { headers });
     }
     if (!res.ok) {
       const t = await res.text();
       throw new Error(`GitHub ${res.status}: ${t.slice(0, 180)}`);
     }
     const buf = new Uint8Array(await res.arrayBuffer());
+    signal.throwIfAborted();
     if (buf.byteLength > 8_000_000) throw new Error("Repo zu groß (max 8 MB Zip).");
     let bin = "";
     for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
@@ -39,6 +43,9 @@ export const pushGithub = createServerFn({ method: "POST" })
   .middleware([sameOriginMiddleware])
   .validator((input: { repo: string; token: string; message: string; files: Record<string, string>; branch?: string }) => input)
   .handler(async ({ data }) => {
+    const { requestTransport } = await import("./request-abort.server");
+    const { signal, send } = requestTransport();
+    signal.throwIfAborted();
     const { owner, repo } = parseRepo(data.repo);
     const token = data.token.trim();
     if (!token) throw new Error("GitHub-Token fehlt.");
@@ -49,7 +56,7 @@ export const pushGithub = createServerFn({ method: "POST" })
     };
     const branch = data.branch || "main";
     const api = (path: string, init?: RequestInit) =>
-      fetch(`https://api.github.com/repos/${owner}/${repo}${path}`, { ...init, headers: { ...headers, ...(init?.headers as object) } });
+      send(`https://api.github.com/repos/${owner}/${repo}${path}`, { ...init, headers: { ...headers, ...(init?.headers as object) } });
 
     const refRes = await api(`/git/ref/heads/${branch}`);
     if (!refRes.ok) {
@@ -88,5 +95,6 @@ export const pushGithub = createServerFn({ method: "POST" })
       body: JSON.stringify({ sha: next.sha }),
     });
     if (!patch.ok) throw new Error(`Push: ${(await patch.text()).slice(0, 180)}`);
+    signal.throwIfAborted();
     return { ok: true as const, sha: next.sha, repo: `${owner}/${repo}` };
   });

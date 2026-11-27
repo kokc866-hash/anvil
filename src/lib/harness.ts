@@ -24,6 +24,9 @@ export type HarnessBudget = {
 
 export type HarnessState = {
   autoContinueRounds?: boolean;
+  /** Survives the bounded history: one correction may change several files. */
+  repairPending?: boolean;
+  repairBatchOpen?: boolean;
   phase: HarnessPhase;
   budget: HarnessBudget;
   used: HarnessBudget;
@@ -82,7 +85,7 @@ export function startHarness(opts: HarnessOpts): HarnessState {
       tools: opts.maxTools ?? 64,
       runs: opts.runLoop ? tries : 1,
       sees: opts.graphLoop ? clamp(opts.graphSees ?? 4, 0, 8) : 0,
-      patches: opts.runLoop ? tries : 0,
+      patches: opts.runLoop || opts.engineLoop || opts.testLoop ? tries : 0,
     },
     used: { ...EMPTY },
     history: [],
@@ -91,12 +94,16 @@ export function startHarness(opts: HarnessOpts): HarnessState {
 }
 
 export function kindOfTool(name: string, result?: Record<string, unknown>): ObsKind {
+  // A preflight rejection is still a tool use, but no program ran and no
+  // source repair is justified by it. Preserve the normal tool/round limits.
+  if (result?.rejected === true && result.definitelyNotExecuted === true) return 'other';
   if (name === "run_file") return "run";
   if (name === "shell") {
     const cmd = String(result?.command ?? result?.cmd ?? "");
     if (/\b(pytest|npm test|npx vitest|vitest|jest|bun test|go test|cargo test|dotnet test|phpunit|rspec)\b/i.test(cmd)) return "test";
     return "run";
   }
+  if (name === "engine_status" || name === "engine_detect") return "read";
   if (name.startsWith("engine_")) return "engine";
   if (name === "see_run") return "see";
   if (name === "play") return "play";
@@ -109,19 +116,30 @@ export function kindOfTool(name: string, result?: Record<string, unknown>): ObsK
 
 export function noteObs(state: HarnessState, obs: Observation): HarnessState {
   const used = { ...state.used, tools: state.used.tools + 1 };
-  if (obs.kind === "run" || obs.kind === "test") used.runs += 1;
+  if (obs.kind === "run" || obs.kind === "engine" || obs.kind === "test") used.runs += 1;
   if (obs.kind === "see" || obs.kind === "play") used.sees += 1;
-  if (countsAsPatch(state, obs)) used.patches += 1;
-  return { ...state, used, last: obs, history: [...state.history, obs].slice(-20) };
+  else if (obs.ok && obs.image) used.sees += 1;
+  const repair = correctionState(state);
+  if (obs.kind === "run" || obs.kind === "engine" || obs.kind === "test") {
+    repair.repairPending = !obs.ok;
+    repair.repairBatchOpen = false;
+  } else if (obs.ok && (obs.kind === "edit" || obs.kind === "write") && repair.repairPending && !repair.repairBatchOpen) {
+    used.patches += 1;
+    repair.repairBatchOpen = true;
+  }
+  return { ...state, ...repair, used, last: obs, history: [...state.history, obs].slice(-20) };
 }
 
-function countsAsPatch(state: HarnessState, obs: Observation): boolean {
-  if (obs.kind !== "edit" && obs.kind !== "write") return false;
+function correctionState(state: HarnessState): { repairPending: boolean; repairBatchOpen: boolean } {
+  if (state.repairPending !== undefined) return { repairPending: state.repairPending, repairBatchOpen: Boolean(state.repairBatchOpen) };
+  // Legacy snapshots do not contain these fields. Infer only from confirmed observations.
+  let changed = false;
   for (let i = state.history.length - 1; i >= 0; i--) {
     const h = state.history[i];
-    if (h.kind === "run" || h.kind === "engine" || h.kind === "test") return !h.ok;
+    if (h.kind === "run" || h.kind === "engine" || h.kind === "test") return { repairPending: !h.ok, repairBatchOpen: !h.ok && changed };
+    if (h.ok && (h.kind === "write" || h.kind === "edit")) changed = true;
   }
-  return Boolean(state.last && !state.last.ok && (state.last.kind === "run" || state.last.kind === "engine" || state.last.kind === "test"));
+  return { repairPending: false, repairBatchOpen: false };
 }
 
 export type HarnessTick = {
@@ -158,7 +176,6 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
   }
 
   const last = state.last;
-  const runsLeft = state.budget.runs - state.used.runs;
   const seesLeft = state.budget.sees - state.used.sees;
   const patchesLeft = state.budget.patches - state.used.patches;
 
@@ -168,11 +185,11 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
   }
 
   if (!last.ok && (last.kind === "run" || last.kind === "engine" || last.kind === "test")) {
-    if (!opts.runLoop && !opts.engineLoop) {
+    if (!opts.runLoop && !opts.engineLoop && !opts.testLoop) {
       const next = { ...state, phase: "act" as const, reason: "inspect run result" };
       return { state: next, allow: [], hint: "Check the result against the task: a nonzero exit may be an expected negative test. Continue with the offered tools; automatic repair is off.", stop: false };
     }
-    if (patchesLeft <= 0 || runsLeft <= 0) {
+    if (patchesLeft <= 0) {
       const next = { ...state, phase: "act" as const, reason: "automatic repair attempts used" };
       return { state: next, allow: [], hint: "Automatic repair attempts used. Inspect the result and continue remaining work with the offered tools. This does not revoke Shell, Git or file tools; respect their actual availability and permissions.", stop: false };
     }
@@ -180,12 +197,12 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
     return {
       state: next,
       allow: ["read_file", "edit_file", "write_file", "run_file", "engine_run", "grep", "mcp_call"],
-      hint: `Error. Patch + run_file/engine_run. ${Math.min(patchesLeft, runsLeft)} left.`,
+      hint: `Error. Patch + run_file/engine_run. ${patchesLeft} correction batches left.`,
       stop: false,
     };
   }
 
-  if (last.ok && last.graphical && last.kind !== "see" && last.kind !== "play" && seesLeft > 0) {
+  if (last.ok && last.graphical && !last.image && last.kind !== "see" && last.kind !== "play" && seesLeft > 0) {
     const next = { ...state, phase: "see" as const, reason: "look at preview" };
     return {
       state: next,
@@ -195,7 +212,7 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
     };
   }
 
-  if (last.kind === "write" || last.kind === "edit") {
+  if (last.ok && (last.kind === "write" || last.kind === "edit")) {
     if (skipRun(last.path)) {
       const next = { ...state, phase: "act" as const, reason: "continue" };
       return { state: next, allow: [], hint: "", stop: false };
@@ -219,7 +236,7 @@ export function stepHarness(state: HarnessState, opts: HarnessOpts): HarnessTick
         stop: false,
       };
     }
-    if (mode === "run" && opts.runLoop && runsLeft > 0) {
+    if (mode === "run" && opts.runLoop) {
       const next = { ...state, phase: "observe" as const, reason: "after write: run" };
       return {
         state: next,
@@ -262,7 +279,8 @@ export function harnessBar(state: HarnessState): string {
   const u = state.used;
   const bits = [`${PHASE[state.phase]}`];
   bits.push(state.autoContinueRounds ? `Runden ${u.rounds} · Auto` : `Runden ${u.rounds}/${b.rounds}`);
-  if (b.runs > 1 || u.runs > 0) bits.push(`Run ${u.runs}/${Math.max(b.runs, u.runs)}`);
+  if (u.runs > 0) bits.push(`Run ${u.runs}`);
+  if (b.patches > 0) bits.push(`Korrekturen ${u.patches}/${b.patches}`);
   if (b.sees > 0) bits.push(`See ${u.sees}/${b.sees}`);
   bits.push(state.autoContinueRounds ? `Tools ${u.tools}` : `Tools ${u.tools}/${b.tools}`);
   return bits.join(" · ");

@@ -22,5 +22,6 @@ attachments/
 dist-test/
 dist-win/
 ui-build/
+build-info.json
 runs/
 .vercel/

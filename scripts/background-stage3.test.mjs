@@ -96,6 +96,80 @@ test(
   },
 );
 
+test("MCP schema rejection keeps the same background job available for a corrected call", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "anvil-mcp-schema-"));
+  const service = { id: "blender-fixture", name: "Blender fixture", enabled: true, url: "http://127.0.0.1:1/mcp" };
+  const tool = {
+    name: "get_scene_info",
+    inputSchema: { type: "object", properties: { user_prompt: { type: "string" } }, required: ["user_prompt"] },
+  };
+  const requests = [];
+  const connections = new AgentConnections({
+    mcp: {
+      async request(_server, method, params) {
+        if (method === "tools/list") return { tools: [tool] };
+        assert.equal(method, "tools/call");
+        requests.push(params);
+        if (requests.length === 2) throw Error("MCP-Argumente: data must have required property 'user_prompt'");
+        return { content: [{ type: "text", text: "SAVED_SCENE" }] };
+      },
+      stop() {},
+    },
+  });
+  const child = new EventEmitter(), replies = [];
+  child.send = message => replies.push(message);
+  child.kill = () => {};
+  const host = new AgentJobHost({
+    runtime: new AgentProjectRuntime({ connections }),
+    snapshotPath: join(dir, "latest.json"),
+    launch: () => child,
+  });
+  let operationId = 0;
+  async function call(args) {
+    const id = ++operationId;
+    child.emit("message", { type: "operation", id, operation: {
+      kind: "mcp", action: "call", server: service.id, name: tool.name, args,
+    } });
+    await host.operation;
+    return replies.find(message => message.type === "operation-result" && message.id === id)?.result;
+  }
+  try {
+    host.start({
+      project: dir, execution: true, files: {}, services: [service], model: { model: "fixture" },
+      messages: [{ role: "user", content: "Inspect the saved scene." }],
+    });
+    child.emit("message", { type: "ready" });
+    const originalId = host.state.id;
+    const rejected = await call({});
+    assert.equal(host.state.status, "running", host.state.error);
+    assert.equal(rejected?.ok, false);
+    assert.equal(rejected.rejected, true);
+    assert.equal(rejected.definitelyNotExecuted, true);
+    assert.match(rejected.error, /user_prompt/);
+    assert.match(rejected.error, /mcp_list/);
+    assert.equal(host.state.lastService.ok, false);
+    assert.match(host.state.lastService.text, /user_prompt/);
+    assert.equal(requests.length, 0, "validation must reject before tools/call");
+    assert.deepEqual(host.state.mutationLedger, []);
+
+    const corrected = await call({ user_prompt: "Inspect the saved scene." });
+    assert.equal(corrected.text, "SAVED_SCENE");
+    assert.equal(host.state.id, originalId);
+    assert.equal(host.state.status, "running");
+    assert.equal(host.state.lastService.ok, true);
+    assert.deepEqual(requests, [{ name: tool.name, arguments: { user_prompt: "Inspect the saved scene." } }]);
+    assert.equal(host.state.mutationLedger.length, 1);
+
+    await call({ user_prompt: "A second valid request." });
+    assert.equal(host.state.status, "failed", "the same text from the transport is an uncertain outcome");
+    assert.match(host.state.error, /möglicherweise bereits ausgeführt/);
+    assert.equal(requests.length, 2);
+    assert.equal(host.state.mutationLedger.length, 2);
+  } finally {
+    await host.close();
+  }
+});
+
 test(
   "host persists uncertain service outcome, strips credentials, deduplicates and cancels owned service calls",
   { timeout: 30000 },

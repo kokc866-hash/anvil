@@ -1,5 +1,29 @@
+/** Reload uses a fresh renderer after a crash. Bound the wait for Chromium to finish. */
+function reloadRenderer(contents, timeout) {
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      clearTimeout(deadline);
+      contents.removeListener('did-finish-load', onLoad);
+      contents.removeListener('did-fail-load', onFail);
+      contents.removeListener('destroyed', onDestroyed);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onLoad = () => finish();
+    const onFail = (_event, code, description, _url, mainFrame) => {
+      if (mainFrame && code !== -3) finish(Object.assign(new Error(description), { code: 'renderer-reload-failed' }));
+    };
+    const onDestroyed = () => finish(Object.assign(new Error('Renderer window was closed'), { code: 'renderer-reload-closed' }));
+    const deadline = setTimeout(() => finish(Object.assign(new Error('Renderer reload timed out'), { code: 'renderer-reload-timeout' })), timeout);
+    contents.once('did-finish-load', onLoad);
+    contents.on('did-fail-load', onFail);
+    contents.once('destroyed', onDestroyed);
+    try { contents.reload(); } catch (error) { finish(error); }
+  });
+}
+
 /** Recovery runs in the main process, even when the editor renderer is gone. */
-export function bindRendererRecovery({ window, dialog, log, stopJobs, resetClose, restore, close, backgroundActive = () => false }) {
+export function bindRendererRecovery({ window, dialog, log, stopJobs, resetClose, close, backgroundActive = () => false, recoveryTimeout = 10000 }) {
   const contents = window.webContents;
   let handling = false;
   const gone = (_event, details) => {
@@ -31,7 +55,7 @@ export function bindRendererRecovery({ window, dialog, log, stopJobs, resetClose
               deadline = setTimeout(() => reject(Object.assign(new Error("Shutdown timed out"), { code: "shutdown-timeout" })), 10000);
             })]);
           } finally { clearTimeout(deadline); }
-          await restore(); log("renderer-restored", {});
+          await reloadRenderer(contents, recoveryTimeout); log("renderer-restored", {});
         }
         else close();
       } catch (error) {

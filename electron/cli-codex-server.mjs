@@ -87,7 +87,7 @@ export function completeCodexServer(command, { model, prompt, imagePaths = [], e
         finish(Error("Codex hat ein eigenes Werkzeug angefordert; Anvil hat die Ausführung verhindert."));
       } else if (message.id !== undefined) {
         const job = pending.get(message.id);
-        if (job) { pending.delete(message.id); clearTimeout(job.timer); message.error ? job.reject(Error(safeCliText(message.error.message || "Codex CLI fehlgeschlagen."))) : job.resolve(message.result); }
+        if (job) { pending.delete(message.id); clearTimeout(job.timer); if (message.error) job.reject(Error(safeCliText(message.error.message || "Codex CLI fehlgeschlagen."))); else job.resolve(message.result); }
       } else if (message.params?.threadId === threadId) {
         const p = message.params;
         if (message.method === "turn/started") turnId = p.turn?.id;

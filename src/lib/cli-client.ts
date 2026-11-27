@@ -14,6 +14,7 @@ type Reply = { ok: true; value: unknown } | { ok: false; error: string };
 type Request = { id: string; kind: CliKind; model?: string; prompt?: string; images?: string[]; timeoutMs?: number; thinking?: ThinkingMode };
 type Native = {
   cliProbe: (request: Request) => Promise<Reply>;
+  cliModels: (request: Request) => Promise<Reply>;
   cliLogin: (request: Request) => Promise<Reply>;
   cliRun: (request: Request) => Promise<Reply>;
   cliCancel: (id: string) => Promise<unknown>;
@@ -29,7 +30,7 @@ export function hasCliNative() {
 }
 
 async function invoke(
-  action: "cliProbe" | "cliLogin" | "cliRun",
+  action: "cliProbe" | "cliModels" | "cliLogin" | "cliRun",
   request: Omit<Request, "id">,
   signal?: AbortSignal,
   onOutput?: (text: string) => void,
@@ -64,6 +65,20 @@ async function invoke(
 export async function probeCli(kind: CliKind, signal?: AbortSignal): Promise<CliStatus> {
   return (await invoke("cliProbe", { kind }, signal)) as CliStatus;
 }
+export async function listCliModels(kind: CliKind, signal?: AbortSignal): Promise<string[]> {
+  return (await invoke("cliModels", { kind }, signal)) as string[];
+}
+export function cliModelsHint(kind: CliKind, count: number, loading = false, locale = "de"): string {
+  if (loading) return locale === "en" ? "Updating model catalog …" : "Modellkatalog wird aktualisiert …";
+  if (kind === "codex") {
+    if (!count) return locale === "en" ? "Refresh the Codex catalog or enter a model ID." : "Codex-Modellliste aktualisieren oder Modell-ID eingeben.";
+    return locale === "en" ? `${count} from Codex CLI · access depends on your subscription` : `${count} aus der Codex-CLI · der Zugriff hängt vom Abo ab`;
+  }
+  const label = { codex: "Codex CLI", claude: "Claude Code CLI", copilot: "Copilot CLI" }[kind];
+  return locale === "en"
+    ? `${count ? `${count} from ${label}` : "No CLI catalog loaded"} · additional suggestions · availability depends on your plan`
+    : `${count ? `${count} aus ${label}` : "Keine CLI-Liste geladen"} · weitere Katalogvorschläge · Verfügbarkeit hängt vom Abo ab`;
+}
 export async function loginCli(
   kind: CliKind,
   signal?: AbortSignal,
@@ -85,17 +100,20 @@ export async function completeViaCli(
   timeoutMs = 0,
   onDelta?: (text: string, kind?: "text" | "think") => void,
   thinking: ThinkingMode = "auto",
+  signal: AbortSignal = withAgentTimeout(0),
+  allowPausedPlanEnvelope = false,
 ): Promise<LlmChoice> {
   let streamed = "";
   const raw = await invoke(
     "cliRun",
     { kind, model, ...cliRequest(messages, tools), timeoutMs, thinking },
-    withAgentTimeout(0),
+    signal,
     (text) => { streamed += text; onDelta?.(text, "text"); },
   );
   const choice = parseCliChoice(
     String(raw),
     tools.map((t) => t.function.name),
+    allowPausedPlanEnvelope,
   );
   const content = choice.content || "";
   if (!content.startsWith(streamed)) throw new Error("CLI-Endantwort widerspricht der gestreamten Antwort. Bitte erneut versuchen.");

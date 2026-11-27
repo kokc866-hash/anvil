@@ -1,0 +1,22 @@
+{
+  "adaptedFor": "Anvil",
+  "date": "2026-10-29",
+  "runtimeAcceptance": "unverified",
+  "upstreamCodeExecuted": false,
+  "sources": [
+    {
+      "repo": "openai/plugins",
+      "commit": "0722921d5542fc593105c27bd52630babd8b8c2a",
+      "path": "plugins/notion/skills/notion-spec-to-implementation/SKILL.md",
+      "license": "MIT",
+      "url": "https://github.com/openai/plugins/blob/0722921d5542fc593105c27bd52630babd8b8c2a/plugins/notion/skills/notion-spec-to-implementation/SKILL.md"
+    }
+  ],
+  "changes": [
+    "German Anvil-specific adaptation",
+    "Existing MCP connection and current schemas",
+    "No Codex app or OAuth transfer",
+    "No upstream installer or executable payload",
+    "Progress requires actual evidence"
+  ]
+}

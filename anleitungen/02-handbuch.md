@@ -1,6 +1,6 @@
 # Anvil — Handbuch
 
-Dieses Handbuch erklärt die Fenster, Einstellungen und wichtigsten Arbeitsabläufe. [Kurzfassung](01-kurz.md) · [Abläufe](03-workflow.md). Stand: 13.09.2026, Release 1.3.29. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
+Dieses Handbuch erklärt die Fenster, Einstellungen und wichtigsten Arbeitsabläufe. [Kurzfassung](01-kurz.md) · [Abläufe](03-workflow.md). Stand: 04.10.2026, Quellcode 1.3.35. Neue lokale Funktionen sind erst nach einer separaten Paketabnahme Bestandteil einer Veröffentlichung. Einzelheiten zu den Funktionen stehen in den Fachanleitungen.
 
 ---
 
@@ -28,7 +28,7 @@ Das Hauptmodell plant die Arbeit und fordert Werkzeuge an. Anvil führt diese An
 
 ### Installer
 
-[Anvil 1.3.29](https://github.com/kokc866-hash/anvil/releases/tag/v1.3.29): **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; kein zusätzliches Node.js. Beide Pakete sind bewusst unsigniert. Vor einem Update Arbeit speichern und Anvil schließen. Die Daten liegen standardmäßig unter `data` neben der Anwendung; Details zu Updates und Datenerhalt stehen in der [Installationsanleitung](installation-abnahme.md).
+[Aktuelle Windows-Ausgabe](https://github.com/kokc866-hash/anvil/releases/latest): **Setup-EXE** installieren oder **portable ZIP** vollständig in einen beschreibbaren Ordner entpacken und `Anvil.exe` starten. Oberfläche und Laufzeit sind enthalten; kein zusätzliches Node.js. Beide Pakete sind bewusst unsigniert. Vor einem Update Arbeit speichern und Anvil schließen. Die Daten liegen standardmäßig unter `data` neben der Anwendung; Details zu Updates und Datenerhalt stehen in der [Installationsanleitung](installation-abnahme.md).
 
 ### Quellcode für die Entwicklung
 
@@ -126,7 +126,7 @@ Verfügbare Anordnungsvorlagen: IDE · Code + Agent · Schreiben · Ausführen.
 Drei Arten von Erweiterungen stehen zur Verfügung:
 
 - **Grundfunktionen** — etwa Formatierung, Codevorlagen, Codeprüfung, Web, ZIP, Debugger und Helfer. Wenn du eine Funktion deaktivierst, stehen ihre Befehle nicht mehr zur Verfügung.
-- **Projekt-Plugins** — Dateien unter `plugins/*.js` mit `activate(anvil)`. Ohne `// @trust` in den ersten acht Zeilen haben sie nur Lesezugriff. Mit `@trust` können sie zusätzlich schreiben, den Agenten verwenden und auf das Netzwerk zugreifen. Solche Plugins sind zunächst deaktiviert und müssen bewusst eingeschaltet werden.
+- **Projekt-Plugins** — Dateien unter `plugins/*.js` mit `activate(anvil)`. Alle ausführbaren JavaScript-Plugins sind zunächst ausgeschaltet. Vor der ersten Ausführung ist eine ausdrückliche Vertrauensfreigabe erforderlich: Ihr Code läuft mit den Rechten der Anvil-Oberfläche und kann deren native Brücke erreichen. `// @trust` erweitert lediglich die angebotenen Anvil-Helferfunktionen; ohne diese Markierung entsteht keine JavaScript-Sandbox. Die Freigabe gilt für Projekt, Inhalt und Helferrechte. Änderungen daran benötigen eine neue Freigabe; deaktivierte Plugins bleiben aus. Im Desktop-/Companion-Projekt bleibt die Freigabe erhalten, bei Browserordnern und ungespeicherten Projekten nur für die Sitzung.
 - **Marktplatz und VSIX** — Pakete aus Open VSX oder `.vsix`-Dateien. Anvil übernimmt Codevorlagen, Sprachdefinitionen, Kommentarregeln und Schlüsselwörter aus `tmLanguage`. Der Programmcode der VS Code-Erweiterung und ihre Sprachserver werden nicht ausgeführt. Pakete lassen sich deaktivieren und entfernen.
 
 Mit **Neues Plugin** erstellst du `plugins/mein-plugin.js`. Seine Befehle findest du in der Befehlspalette unter Strg+Umschalt+P.

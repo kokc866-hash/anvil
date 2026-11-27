@@ -7,6 +7,10 @@ export type RestoreDiskPlan = { files: (RestoreFile & { expected: string | null 
 /** Only undo changes owned by this completed round, never a later workspace snapshot. */
 export function checkpointRestorePlan(checkpoint: Checkpoint, files: Record<string, string>, dirs: string[]): RestorePlan {
   const plan: RestorePlan = { files: [], mkdir: [], rmdir: [], conflicts: [] };
+  if (checkpoint.archiveMissing) {
+    plan.conflicts.push("Die Dateiinhalte dieses Sicherungspunkts fehlen im Archiv. Keine Rücknahme ausgeführt.");
+    return plan;
+  }
   if (!checkpoint.endFiles || !checkpoint.endDirs) {
     plan.conflicts.push("Für diese alte Runde fehlt ein verlässlicher Endstand. Einzelne Änderungen im Diff prüfen.");
     return plan;

@@ -15,6 +15,8 @@ export type ToolPick = {
 const OBSERVE_NAMES = new Set([
   "list_files",
   "read_file",
+  "verify_file",
+  "read_tool_output",
   "grep",
   "memory_list",
   "harness_read",
@@ -35,6 +37,7 @@ const OBSERVE_NAMES = new Set([
 const ALWAYS_TOOLS = new Set([
   "list_files",
   "read_file",
+  "read_tool_output",
   "write_file",
   "append_file",
   "edit_file",
@@ -61,7 +64,7 @@ const ALWAYS_TOOLS = new Set([
 ]);
 
 export function keepAgentTool(name: string, opts: ToolPick = {}): boolean {
-  if (name === "select_tools") return Boolean(opts.compatibility);
+  if (name === "select_tools") return true;
   if (opts.observeOnly) return OBSERVE_NAMES.has(name);
   if (ALWAYS_TOOLS.has(name)) return true;
   if (name.startsWith("mcp_")) return Boolean(opts.mcp);

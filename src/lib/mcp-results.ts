@@ -1,7 +1,29 @@
+import { previewToolText } from "./tool-output.ts";
+
 type Stored = { server: string[]; json: string; bytes: number };
 const outputs = new Map<string, Stored>();
 const MAX_BYTES = 32 * 1024 * 1024;
 let bytes = 0;
+
+const STATUS_FIELDS = [
+  "ok", "success", "error", "status", "running", "pending", "queued",
+  "code", "exitCode", "exit_code", "expectedExitCode", "exitExpectationMatched", "signal",
+  "aborted", "timedOut", "interrupted", "cancelled", "canceled",
+] as const;
+
+function statusPreview(result: Record<string, unknown>): Record<string, unknown> {
+  const status: Record<string, unknown> = {};
+  for (const key of STATUS_FIELDS) {
+    if (!Object.hasOwn(result, key)) continue;
+    const value = result[key];
+    if (typeof value === "string") status[key] = previewToolText(value, 2000);
+    else {
+      const json = JSON.stringify(value);
+      status[key] = json && json.length > 2000 ? previewToolText(json, 2000) : value;
+    }
+  }
+  return status;
+}
 
 export function forgetMcpOutputs(server: string) {
   for (const [id, value] of outputs)
@@ -83,7 +105,8 @@ export function modelMcpResult(
   const result =
     text.length > 24000
       ? {
-          text: text.slice(0, 12000),
+          ...statusPreview(rec),
+          text: previewToolText(text, 12000),
           truncated: true,
           totalCharacters: text.length,
           hint: outputId

@@ -10,6 +10,16 @@ test("plan references preserve structured MCP results and readable run output", 
   assert.match(packToolEvidence("run_file", { ok: true, stdout: "Tests passed" }, "e8"), /^Plan evidence ID: e8[\s\S]*RUN OK[\s\S]*Tests passed/);
 });
 
+test('HTML run output exposes real selectors, values and CSS bounds to the model',()=>{
+  const observation={viewport:{width:1000,height:700},elements:[{selector:'#name',tag:'INPUT',value:'Seed',rect:{x:20,y:30,width:200,height:40}}]};
+  for(const result of [{ok:true,stdout:'Ready',stage:{kind:'html'},state:observation},{ok:true,stdout:'Ready',graphical:true,observation}]) {
+    const packed=packToolEvidence('run_file',result,'e2');
+    assert.match(packed,/RUN OK/);assert.match(packed,/HTML preview controls \(CSS pixels\):/);
+    const controls=JSON.parse(packed.split('HTML preview controls (CSS pixels):\n')[1]);assert.deepEqual(controls,observation);
+  }
+  assert.doesNotMatch(packToolContent('run_file',{ok:true,stdout:'Node output',stage:{kind:'log'}}),/HTML preview controls/);
+});
+
 test("small file reads in full", () => {
   const src = "a\nb\nc";
   const w = readWindow(src);
@@ -40,7 +50,7 @@ test("pack tells the model to continue, not rewrite", () => {
   });
   assert.match(packed, /start_line=2/);
   assert.doesNotMatch(packed, /abgeschnitten/);
-  assert.match(packed, /    1\|hello/);
+  assert.match(packed, / {4}1\|hello/);
 });
 
 test("small pack has no truncate note", () => {
@@ -72,4 +82,33 @@ test("run_file pack is the Compile/Run log", () => {
   assert.match(packed, /Compile/);
   assert.match(packed, /main\.cpp:1/);
   assert.doesNotMatch(packed, /^\{/);
+});
+
+test("model-facing run output distinguishes pending, cancelled, unknown and failed results", () => {
+  assert.match(packToolContent("run_file", { ok: true, running: true, stdout: "process started" }), /^RUN PENDING\b/);
+  assert.match(packToolContent("run_file", { isError: true, stdout: "runtime error" }), /^RUN FAIL\b/);
+  assert.match(packToolContent("run_file", { aborted: true, stdout: "cancelled" }), /^RUN CANCELLED\b/);
+  assert.match(packToolContent("run_file", { code: 7, stdout: "failed exit" }), /^RUN FAIL\b/);
+  assert.match(packToolContent("run_file", { stdout: "output without an outcome" }), /^RUN UNKNOWN\b/);
+  assert.match(packToolContent("run_file", { ok: true, code: 2, exitExpectationMatched: true }), /^RUN OK\b/);
+});
+
+test("a long run log retains its final failure and marks the omitted middle", () => {
+  const packed = packToolContent("run_file", { ok: false, stdout: "COMPILE_START\n" + "build log\n".repeat(6000), stderr: "FINAL_DIAGNOSTIC: missing symbol" });
+  assert.ok(packed.length <= 16000);
+  assert.match(packed, /COMPILE_START/);
+  assert.match(packed, /FINAL_DIAGNOSTIC/);
+  assert.match(packed, /omitted|gekürzt|truncated/);
+});
+
+test("large generic output remains valid JSON with outcome and end diagnostics", () => {
+  const packed = packToolContent("shell", { ok: false, code: 5, stdout: "BEGIN_LOG " + "body ".repeat(24000) + " FINAL_DIAGNOSTIC", error: "Build failed" });
+  const parsed = JSON.parse(packed);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, 5);
+  assert.equal(parsed.error, "Build failed");
+  assert.equal(parsed.truncated, true);
+  assert.match(parsed.text, /BEGIN_LOG/);
+  assert.match(parsed.text, /FINAL_DIAGNOSTIC/);
+  assert.ok(packed.length <= 80000);
 });

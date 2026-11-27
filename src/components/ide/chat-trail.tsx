@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { estimateTokens, formatTokens } from "@/lib/tokens";
@@ -21,6 +21,8 @@ import { formatElapsed, useElapsed } from "@/lib/elapsed";
 import { AgentPulse } from "./agent-pulse";
 import { finishedHarness } from "@/lib/chat-finalize";
 import { checkpointRestorePlan } from "@/lib/restore-plan";
+import { visibleAgentPlan } from "@/lib/plan";
+import { planCompletionTitle } from "@/lib/plan-status";
 import { requestCheckpointRestore } from "@/lib/restore-request";
 import { useBackgroundAgent, backgroundRunning, restoreBackgroundFiles, applyBackgroundDrafts } from '@/lib/background-agent';
 
@@ -56,11 +58,13 @@ export function ThinkBlock({
   const cap = () => Math.round(window.innerHeight * 0.8);
   const size = fill ? (height ?? 180) : h;
   const shown = opened ?? open;
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
 
-  function setOpenBoth(v: boolean) {
+  const setOpenBoth = useCallback((v: boolean) => {
     setOpen(v);
-    onOpen?.(v);
-  }
+    onOpenRef.current?.(v);
+  }, []);
 
   useEffect(() => {
     if (live && !pinned) setOpenBoth(true);
@@ -70,7 +74,7 @@ export function ThinkBlock({
       return () => window.clearTimeout(t);
     }
     wasLive.current = Boolean(live);
-  }, [live, pinned]);
+  }, [live, pinned, setOpenBoth]);
 
   useEffect(() => {
     if (shown && preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
@@ -479,16 +483,8 @@ function MiniDiff({ before, after,rows:storedRows }: { before: string; after: st
   );
 }
 
-export function AgentTodo({ plan: forced, msgId }: { plan?: PlanStep[]; msgId?: string } = {}) {
-  const plan = useIde((s) => {
-    if (msgId) return s.chat.find((m) => m.id === msgId)?.plan ?? forced;
-    if (forced) return forced;
-    for (let i = s.chat.length - 1; i >= 0; i--) {
-      const m = s.chat[i];
-      if (m.role === "assistant" && m.plan?.length) return m.plan;
-    }
-    return undefined;
-  });
+export function AgentTodo({ plan: forced, msgId, contained }: { plan?: PlanStep[]; msgId?: string; contained?: boolean } = {}) {
+  const plan = useIde((s) => visibleAgentPlan(s.chat, forced, msgId));
   const busy = useIde((s) => s.agentBusy);
   const [open, setOpen] = useState(true);
   const seen = useRef("");
@@ -506,10 +502,11 @@ export function AgentTodo({ plan: forced, msgId }: { plan?: PlanStep[]; msgId?: 
   const run = plan.find((s) => s.status === "run");
 
   return (
-    <div className="shrink-0 border-t border-border bg-surface">
+    <div className={cn("shrink-0 border-t border-border bg-surface", contained && "flex min-h-0 max-h-[35%] flex-col")}>
       <button
         type="button"
-        className="flex h-8 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:text-fg"
+        aria-expanded={open}
+        className="flex h-8 w-full shrink-0 items-center gap-2 px-3 text-left text-xs text-muted hover:text-fg"
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
@@ -521,7 +518,7 @@ export function AgentTodo({ plan: forced, msgId }: { plan?: PlanStep[]; msgId?: 
         {!open && !run && busy ? <span className="think-live">…</span> : null}
       </button>
       {open ? (
-        <div className="max-h-56 overflow-auto px-3 pb-2">
+        <div className={cn("max-h-56 overflow-auto px-3 pb-2", contained && "min-h-0")}>
           <PlanList steps={plan} msgId={msgId} />
         </div>
       ) : null}
@@ -529,7 +526,8 @@ export function AgentTodo({ plan: forced, msgId }: { plan?: PlanStep[]; msgId?: 
   );
 }
 
-function PlanList({ steps, msgId }: { steps: { text: string; status: "todo" | "run" | "ok" | "err" }[]; msgId?: string }) {
+function PlanList({ steps, msgId }: { steps: import("@/store/ide-types").PlanStep[]; msgId?: string }) {
+  const locale = useIde(s => s.locale);
   return (
     <ol className="space-y-0.5">
       {steps.map((s, i) => (
@@ -537,6 +535,7 @@ function PlanList({ steps, msgId }: { steps: { text: string; status: "todo" | "r
           <button
             type="button"
             className="flex w-full items-baseline gap-2 text-left text-[11px] leading-4 hover:bg-hover"
+            title={planCompletionTitle(s, locale)}
             onClick={() => {
               const next = s.status === "ok" || s.status === "err" ? "todo" : s.status === "run" ? "ok" : "ok";
               useIde.getState().updatePlanStep(i, next, msgId);
@@ -556,6 +555,7 @@ function PlanList({ steps, msgId }: { steps: { text: string; status: "todo" | "r
               {s.status === "ok" ? "☑" : s.status === "err" ? "✕" : s.status === "run" ? "…" : "☐"}
             </span>
             <span className={s.status === "ok" ? "text-muted line-through" : "text-fg"}>{s.text}</span>
+            {s.status === "ok" && s.completedBy === "user" && <span className="shrink-0 text-[10px] text-muted">{locale === "en" ? "manual" : "manuell"}</span>}
           </button>
         </li>
       ))}
@@ -572,6 +572,7 @@ function StepList({ steps }: { steps: AgentStep[] }) {
       {steps.map((s) => {
         const ms = s.status === "run" && s.at ? now : s.ms;
         const path = s.path || stepPath(s);
+        const failureStart = s.name === "mcp_call" && s.status === "err" ? s.detail.indexOf(" · ") : -1;
         return (
           <li key={s.id} className="flex min-w-0 items-start gap-2 font-mono text-[11px] leading-4">
             <span
@@ -583,7 +584,16 @@ function StepList({ steps }: { steps: AgentStep[] }) {
               {s.status === "err" ? "✕" : s.status === "run" ? "…" : "✓"}
             </span>
             <div className="min-w-0 flex-1 overflow-hidden">
-              <button
+              {failureStart >= 0 ? (
+                <details>
+                  <summary className="cursor-pointer break-words text-fg">
+                    {stepLabel(s.name, locale)} {s.detail.slice(0, failureStart)}
+                  </summary>
+                  <p className="mt-1 break-words whitespace-pre-wrap text-danger [overflow-wrap:anywhere]">
+                    {s.detail.slice(failureStart + 3)}
+                  </p>
+                </details>
+              ) : <button
                 type="button"
                 className="flex min-w-0 items-baseline gap-1.5 text-left"
                 onClick={() => {
@@ -601,7 +611,7 @@ function StepList({ steps }: { steps: AgentStep[] }) {
                     {formatElapsed(ms)}
                   </span>
                 ) : null}
-              </button>
+              </button>}
               {s.code ? <WriteBlock path={s.path} code={s.code} before={s.before} live={s.status === "run"} /> : null}
               {s.image ? <img src={s.image} alt="" className="mt-1 max-h-28 rounded-md border border-border" /> : null}
             </div>

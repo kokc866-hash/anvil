@@ -4,6 +4,14 @@ Verfügbar ab Anvil 1.3.20. Bestehende HTTP-Konfigurationen bleiben verwendbar. 
 
 ## Verbindung einrichten
 
+Der MCP-Bereich hat drei Ansichten:
+
+- **Verbindungen** zeigt eingerichtete Einträge mit Typ, Aktivierung und Katalogstatus. Dienste mit Anmeldung, der Anvil-Companion, lokale Programme und Server über Adresse stehen in getrennten Gruppen. Suche nach Name, Programm oder Adresse. Öffne einen Eintrag, um Einstellungen und Aktionen zu sehen; neue Server öffnen sich direkt zur Einrichtung.
+- **Werkzeuge** enthält die Werkzeugauswahl, Eingaben, Ressourcen und Ergebnisse. Mit **Werkzeuge von** beschränkst du die Liste auf eine Verbindung. Die Auswahl in dieser Ansicht ändert nicht die Arbeitsfläche des Agenten.
+- **Verlauf** zeigt protokollierte Werkzeugaufrufe samt zugehöriger Verbindung.
+
+**Zugriff des Agenten** enthält die Arbeitsflächen-Einstellung und den Modus **Brücke**. Unter **Verbindungsvorlagen** kannst du das GitHub-Lesepaket hinzufügen. Es ist eine vorbereitete Serververbindung; Anleitungen für Arbeitsabläufe findest du separat unter **Erweiterungen → Aufgabenpakete**.
+
 Füge im Bereich **MCP** einen Server hinzu, aktiviere ihn und wähle **Werkzeuge laden**. Die Statusanzeige nennt die Anzahl der geladenen Werkzeuge und Ressourcen. Ein geladener Katalog bestätigt noch keinen erfolgreichen Werkzeugaufruf.
 
 Für verwaltete OAuth-Verbindungen unter **Erweiterungen → Dienste** ist der Ablauf einfacher: Bereits angemeldete und aktive Dienste laden ihre Werkzeuge seit 1.3.26 nach einem Neustart automatisch. **Werkzeuge laden** bleibt für eine sofortige zusätzliche Prüfung verfügbar. Freigaben werden erhalten; neue Werkzeuge bleiben ausgeschaltet. Details: [Externe Dienste](dienste.md).
@@ -16,6 +24,10 @@ Für verwaltete OAuth-Verbindungen unter **Erweiterungen → Dienste** ist der A
 
 Programme für stdio müssen auf dem Rechner verfügbar sein. Einen Arbeitsordner für einen externen Server legst du ausdrücklich fest. Der lokale Anvil-Projektordner wird fremden Werkzeugen nicht automatisch als `cwd` übermittelt.
 
+HTTPS-Verbindungen verwenden unter Windows zusätzlich die dort bereits vertrauenswürdigen Zertifizierungsstellen. Das gilt auch für MCP im Hintergrundagenten. Vorhandene Standardzertifikate bleiben erhalten; Zertifikatskette und Servername werden weiterhin geprüft. Für private LAN-Server mit eigener Zertifizierungsstelle muss diese unter Windows bereits vertrauenswürdig eingerichtet sein. Eine Anmeldung ist davon unabhängig: Wenn der Server keine verlangt, bleibt das Bearer-Feld leer.
+
+Für eine lokale CAD-Verbindung gibt es eine eigene [FreeCAD-Einrichtungsanleitung](freecad.md) mit Addon-Installation, Anvil-Eingaben, automatischem Start und Funktionstest.
+
 OAuth-Zugangsdaten werden mit dem Betriebssystem-Schlüsselspeicher verschlüsselt und an Serveradresse, Client-ID und OAuth-Aussteller gebunden. Ein gesperrter Speicher wird als Fehler gemeldet und nicht überschrieben. **Abmelden** entfernt die lokal gespeicherten Zugangsdaten; eine gegebenenfalls zusätzliche serverseitige Widerrufsfunktion des Anbieters bleibt davon unabhängig. Bearer und stdio-Umgebung bleiben in Anvils Schlüsselspeicher, getrennt von den normalen Einstellungen. Nach einer URL-Änderung muss ein vorhandener Bearer für die neue Adresse erneut eingetragen werden.
 
 Der Companion-Token wird ausschließlich an den unter Companion konfigurierten `/mcp`-Endpunkt gesendet, auch im LAN. Andere lokale MCP-Server erhalten diesen Token nicht.
@@ -26,12 +38,13 @@ Der Companion-Token wird ausschließlich an den unter Companion konfigurierten `
 
 | Agentenwerkzeug | Aufgabe |
 |---|---|
+| `select_tools` | Passende Anvil-Werkzeuge, MCP-Schemata und Skills gezielt suchen und für die nächste Modellanfrage bereitstellen. Die Suche selbst führt keine Dienstaktion aus. |
 | `mcp_list` | Werkzeuge mit vollständigem Argumentschema sowie Ressourcen und Vorlagen finden. `server` und `query` grenzen die Suche ein; `cursor` und `limit` ermöglichen das Blättern durch den Katalog. |
 | `mcp_call` | Ein bestimmtes Werkzeug aufrufen: `server` enthält die Server-ID, `name` den Werkzeugnamen und `arguments` die Argumente als JSON-Objekt. |
 | `mcp_read_resource` | Ressourcen über Server-ID und URI lesen. Bei Vorlagen die Platzhalter durch konkrete Werte ersetzen. |
 | `mcp_read_output` | Bereits empfangene große Ergebnisse anhand ihrer `outputId` und `nextOffset` weiterlesen. Die ursprüngliche Aktion wird dabei nicht erneut ausgeführt. |
 
-Im kompakten oder textbasierten Werkzeugmodus stehen auf einer exklusiven MCP-Arbeitsfläche die MCP-Werkzeuge bereits in der ersten Runde bereit. Dafür ist kein besonderes Schlüsselwort in deinem Auftrag nötig. Der Standardmodus behält den vollständigen bisherigen Werkzeugumfang.
+Alle Werkzeugmodi beginnen mit einer begrenzten, zum Auftrag passenden Auswahl. Auf einer exklusiven MCP-Arbeitsfläche stehen die grundlegenden MCP-Werkzeuge bereits in der ersten Runde bereit. Der Agent kann weitere freigegebene Fähigkeiten über `select_tools` suchen und nachladen. Es erscheint kein zusätzliches Auswahlfenster. Details: [Werkzeuge und Anleitungen nach Bedarf](werkzeuge-nach-bedarf.md).
 
 Anvil prüft die Argumente gegen das vom Server gelieferte JSON-Schema. Kontextwerte werden nur in ausdrücklich deklarierte Felder eingesetzt; explizite Argumente haben Vorrang. Zahlen, Boolean-Werte und Objekte müssen zum Feldtyp passen. Ungültige Argumente führen zu einer Fehlermeldung vor dem externen Aufruf.
 

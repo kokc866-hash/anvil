@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { cliInvocation, extraLspDiagnostics, lspBin } from "./lsp.mjs";
 import { toolEnv, resolveBin } from "./toolchain.mjs";
-import { rmDir, rmSoon, sweepAnvilTemp } from "./tmp.mjs";
+import { makeAnvilTemp, rmDir, rmSoon } from "./tmp.mjs";
 
 export function which(bin) {
   const local = lspBin(bin);
@@ -154,8 +153,7 @@ function safeRel(p) {
   return n;
 }
 
-function writeSnap(files) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "anvil-lint-"));
+function writeSnap(dir, files) {
   let n = 0;
   for (const f of files) {
     const rel = safeRel(f.path);
@@ -168,7 +166,6 @@ function writeSnap(files) {
     n += 1;
     if (n >= 48) break;
   }
-  return dir;
 }
 
 function relFrom(dir, abs) {
@@ -180,14 +177,15 @@ export async function runLint({ files = [], timeoutMs = 40000, enabled = null, l
   if (!list.length) return { ok: true, diagnostics: [], tools: [] };
   const allow = Array.isArray(enabled) && enabled.length ? new Set(enabled) : null;
   const on = (id) => !allow || allow.has(id);
-  const dir = writeSnap(list);
   const tools = [];
   const diagnostics = [];
   const python = which("python3") || which("python") || which("py");
   const pyFiles = list.filter((f) => /\.py$/i.test(f.path)).map((f) => safeRel(f.path)).filter(Boolean);
   const tsFiles = list.filter((f) => /\.(ts|tsx|mts|cts)$/i.test(f.path)).map((f) => safeRel(f.path)).filter(Boolean);
 
+  const dir = makeAnvilTemp("lint");
   try {
+    writeSnap(dir, list);
     if (python && pyFiles.length) {
       const args = python.endsWith("py") || python.endsWith("py.exe")
         ? ["-3", "-m", "py_compile", ...pyFiles]
@@ -251,7 +249,6 @@ export async function runLint({ files = [], timeoutMs = 40000, enabled = null, l
     diagnostics.push(...extra.map((h) => ({ ...h, path: relFrom(dir, path.isAbsolute(h.path) ? h.path : path.join(dir, h.path)) || h.path })));
   } finally {
     if (!rmDir(dir)) rmSoon(dir);
-    sweepAnvilTemp({ keep: 0, maxAgeMs: 0 });
   }
 
   const seen = new Set();

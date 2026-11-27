@@ -1,4 +1,5 @@
 import { renderMarkdown } from "@/lib/markdown";
+import { agentMessageContent } from '@/lib/agent-output';
 import { memo, useMemo, type RefObject } from "react";
 import { useIde, type ChatMsg } from "@/store/ide";
 import { useT } from "@/lib/i18n";
@@ -29,7 +30,8 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
   const setDraft = useIde((s) => s.setAgentDraft);
   const writeFile = useIde((s) => s.writeFile);
   const busyMs = useElapsed(m.at, liveThink);
-  const blocks = useMemo(() => parseBlocks(m.content), [m.content]);
+  const content = agentMessageContent(m);
+  const blocks = useMemo(() => parseBlocks(content), [content]);
   const hollow =
     m.role === "assistant" &&
     !liveThink &&
@@ -86,7 +88,7 @@ const MessageRow = memo(function MessageRow({ m, liveThink, lastUser, lastAsst, 
           m.role === "user" ? "right-0" : "left-0",
         )}
       >
-        <CopyMini text={m.content} />
+        <CopyMini text={content} />
         {lastUser || lastAsst ? (
           <button
             type="button"

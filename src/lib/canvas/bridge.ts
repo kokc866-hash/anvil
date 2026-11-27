@@ -1,5 +1,6 @@
 import type { CanvasRuntime } from "./runtime";
 import type { CanvasInput } from "./input";
+import type { PreviewAutomation } from './automation';
 import type { CanvasBoot, CanvasOperation, CanvasReply, CanvasState } from "./protocol";
 
 /** Guest side. Never trusts a frame name, wildcard sender, or an old run's response. */
@@ -7,10 +8,94 @@ export function installCanvasBridge(
   win: Window & typeof globalThis,
   inputs: CanvasInput,
   runtime: CanvasRuntime,
+  automation?: PreviewAutomation,
 ) {
   const boot = (win as unknown as { __ANVIL_SESSION__?: CanvasBoot }).__ANVIL_SESSION__;
   const channel = "anvil-canvas-v2";
   const logs: string[] = [];
+  // load/DOMContentLoaded do not wait for top-level await in project modules.
+  // Track only the initial async work; never change timer delays or fetch results.
+  const nativeTimeout = win.setTimeout.bind(win);
+  const nativeClearTimeout = win.clearTimeout.bind(win);
+  const pendingTimers = new Set<number>();
+  let pendingFetches = 0, trackingInitialWork = true, visualRevision = 0, timerDepth = 0, repeatingTimer = false;
+  const initialTimeout = win.setTimeout;
+  const initialClearTimeout = win.clearTimeout;
+  const initialClearInterval = win.clearInterval;
+  const initialFetch = win.fetch;
+  const trackedTimeout: typeof win.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (!trackingInitialWork || typeof handler !== "function") return nativeTimeout(handler, delay, ...args);
+    // A future autosave/notification is not an initial render. Observe short
+    // startup work and at most two generations of a self-rescheduling loop.
+    const depth = timerDepth + 1;
+    if (Number(delay || 0) > 6000 || depth > 2) {
+      if (depth > 2) repeatingTimer = true;
+      return nativeTimeout(handler, delay, ...args);
+    }
+    let timer = 0;
+    timer = nativeTimeout(() => {
+      pendingTimers.delete(timer);
+      const previous = timerDepth;
+      timerDepth = depth;
+      try { handler.apply(win, args); } finally { timerDepth = previous; }
+    }, delay);
+    pendingTimers.add(timer);
+    return timer;
+  }) as typeof win.setTimeout;
+  const trackedClearTimeout: typeof win.clearTimeout = ((timer?: number) => {
+    if (typeof timer === "number") pendingTimers.delete(timer);
+    nativeClearTimeout(timer);
+  }) as typeof win.clearTimeout;
+  const trackedFetch: typeof win.fetch = (...args) => {
+    const promise = initialFetch.apply(win, args);
+    if (trackingInitialWork) {
+      pendingFetches++;
+      void promise.then(() => { pendingFetches--; }, () => { pendingFetches--; });
+    }
+    return promise;
+  };
+  win.setTimeout = trackedTimeout;
+  win.clearTimeout = trackedClearTimeout;
+  win.clearInterval = trackedClearTimeout;
+  win.fetch = trackedFetch;
+  function stopInitialTracking() {
+    trackingInitialWork = false;
+    pendingTimers.clear();
+    if (win.setTimeout === trackedTimeout) win.setTimeout = initialTimeout;
+    if (win.clearTimeout === trackedClearTimeout) win.clearTimeout = initialClearTimeout;
+    if (win.clearInterval === trackedClearTimeout) win.clearInterval = initialClearInterval;
+    if (win.fetch === trackedFetch) win.fetch = initialFetch;
+  }
+  const mutations = new win.MutationObserver(() => { visualRevision++; });
+  mutations.observe(win.document, { subtree: true, childList: true, characterData: true, attributes: true,
+    attributeFilter: ["class", "style", "src", "srcset", "href", "width", "height", "hidden", "value", "aria-busy"] });
+  const pause = (ms: number) => new Promise<void>(resolve => nativeTimeout(resolve, ms));
+  const captureState = () => ({ revision: visualRevision, width: win.innerWidth, height: win.innerHeight });
+  async function settleFrame() {
+    const start = Date.now();
+    let previous = "", stableSince = start;
+    while (Date.now() - start < 6000) {
+      if (disposed || stopped) throw new Error("Vorschau wurde während der Aufnahme beendet.");
+      if (failure) throw new Error(failure);
+      const images = Array.from(win.document.images);
+      if (images.some(image => image.complete && image.src && !image.naturalWidth)) throw new Error("Ein Vorschaubild konnte nicht geladen werden.");
+      const pending = trackingInitialWork && (pendingTimers.size > 0 || pendingFetches > 0)
+        || images.some(image => !image.complete) || win.document.fonts?.status === "loading"
+        || Boolean(win.document.querySelector('[aria-busy="true"]'));
+      const current = JSON.stringify(captureState());
+      if (current !== previous || pending) { previous = current; stableSince = Date.now(); }
+      if (!pending && Date.now() - stableSince >= 120) {
+        await new Promise<void>(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(() => resolve())));
+        if (JSON.stringify(captureState()) === current)
+          return { state: trackingInitialWork && repeatingTimer ? "live" as const : "settled" as const, waitedMs: Date.now() - start, ...captureState() };
+      }
+      // Continuous DOM animation is a valid live frame, never an endless wait.
+      if (!pending && Date.now() - start >= 1800)
+        return { state: "live" as const, waitedMs: Date.now() - start, ...captureState() };
+      await pause(30);
+    }
+    throw new Error("Die Vorschau wird noch vorbereitet. Keine verlässliche Aufnahme: ausstehende Initialisierung oder Ressourcen.");
+  }
   let outputSize: { width: number; height: number } | undefined;
   let failure = "",
     loaded = false,
@@ -185,6 +270,7 @@ export function installCanvasBridge(
       error: failure || current.error || undefined,
       logs: logs.slice(-24),
       outputSize,
+      observation: loaded && !disposed ? automation?.describe() : undefined,
     };
   }
   const pageLoaded = new Promise<void>((resolve) => {
@@ -213,9 +299,8 @@ export function installCanvasBridge(
         }),
       );
       await runtime.ready();
-      await new Promise<void>((resolve) =>
-        win.requestAnimationFrame(() => win.requestAnimationFrame(() => resolve())),
-      );
+      await settleFrame();
+      stopInitialTracking();
       loaded = true;
       // Measure once before the host resizes. Re-measuring a responsive page
       // after every resize would feed its viewport back into the window size.
@@ -252,12 +337,15 @@ export function installCanvasBridge(
       send({ op: "state", ...status() });
     })
     .catch((error) => {
+      stopInitialTracking();
       loaded = true;
       log("error", error instanceof Error ? error.message : String(error));
     });
-  async function snapshot() {
+  async function snapshot(attempt = 0): Promise<{ image: string; w: number; h: number; readiness?: Awaited<ReturnType<typeof settleFrame>> }> {
     await ready;
     await runtime.ready();
+    const readiness = await settleFrame();
+    const before = JSON.stringify(captureState());
     const w = Math.max(1, win.innerWidth),
       h = Math.max(1, win.innerHeight);
     const canvases = [...win.document.querySelectorAll("canvas")].filter(
@@ -376,15 +464,33 @@ export function installCanvasBridge(
     output.height = Math.round(h * scale);
     const ctx = output.getContext("2d");
     if (!ctx) throw new Error("Aufnahmekontext fehlt.");
+    // The browser paints a paper behind transparent HTML. Preserve that opaque
+    // backdrop in the PNG too, so black text cannot disappear in a dark viewer.
+    const rootStyle = win.getComputedStyle(win.document.documentElement);
+    const rootColor = rootStyle.backgroundColor;
+    const transparent = (color: string) => color === "transparent" || /rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(color);
+    const paper = transparent(rootColor) && rootStyle.backgroundImage === "none"
+      ? win.getComputedStyle(win.document.body).backgroundColor : rootColor;
+    ctx.fillStyle = paper;
+    ctx.fillRect(0, 0, 1, 1);
+    const opaque = ctx.getImageData(0, 0, 1, 1).data[3] === 255;
+    ctx.clearRect(0, 0, output.width, output.height);
+    ctx.fillStyle = opaque ? paper : "#ffffff";
+    ctx.fillRect(0, 0, output.width, output.height);
     ctx.drawImage(image, 0, 0, output.width, output.height);
+    if (readiness.state !== "live" && before !== JSON.stringify(captureState())) {
+      if (attempt < 2) return snapshot(attempt + 1);
+      throw new Error("Vorschau wurde während der Aufnahme verändert. Aufnahme erneut anfordern.");
+    }
     try {
-      return { image: output.toDataURL("image/png"), w, h };
+      return { image: output.toDataURL("image/png"), w, h, readiness };
     } catch {
       if (canvases.length === 1 && win.document.body.children.length === 1)
         return {
           image: canvases[0].toDataURL("image/png"),
           w: canvases[0].width,
           h: canvases[0].height,
+          readiness,
         };
       throw new Error("HTML-Aufnahme blockiert: externe Ressourcen benötigen CORS.");
     }
@@ -392,8 +498,11 @@ export function installCanvasBridge(
   function dispose() {
     if (disposed) return;
     disposed = true;
+    stopInitialTracking();
+    mutations.disconnect();
     runtime.dispose();
     inputs.dispose();
+    automation?.reset();
     off.splice(0).forEach((f) => f());
   }
   listen("message", ((event: MessageEvent) => {
@@ -408,11 +517,12 @@ export function installCanvasBridge(
     )
       return;
     const op = data.op as CanvasOperation;
-    if (!["ready", "shot", "keys", "keys-up", "pause", "stop", "dispose"].includes(op)) return;
+    if (!["ready", "capture-ready", "shot", "keys", "keys-up", "input", "input-up", "target", "assert", "pause", "stop", "dispose"].includes(op)) return;
     void (async () => {
       try {
         let extra = {};
         if (op === "ready") await ready;
+        else if (op === "capture-ready") { await ready; extra = { readiness: await settleFrame() }; }
         else if (op === "shot") extra = await snapshot();
         else if (op === "keys" || op === "keys-up") {
           if (
@@ -424,11 +534,18 @@ export function installCanvasBridge(
           if (op === "keys" && (failure || stopped || !loaded))
             throw new Error("Programm ist nicht für Eingaben bereit.");
           inputs.keys(data.keys, op === "keys");
+        } else if (op === 'input' || op === 'input-up' || op === 'target' || op === 'assert') {
+          if (!automation) throw new Error('Diese Vorschau bietet keine erweiterte Eingabesteuerung.');
+          if (op !== 'input-up' && (failure || stopped || !loaded)) throw new Error('Programm ist nicht für Eingaben bereit.');
+          if (op === 'assert') automation.assert(data.action);
+          else if (op === 'target') extra = {point:automation.target(data.target,data.scroll!==false)};
+          else automation.event(data.event);
         } else if (op === "pause") runtime.pause(data.paused !== false);
         else if (op === "stop") {
           stopped = true;
           runtime.stop();
           inputs.reset();
+          automation?.reset();
         } else dispose();
         send({ request: data.request, op, ...status(), ...extra });
       } catch (error) {
@@ -442,5 +559,12 @@ export function installCanvasBridge(
       }
     })();
   }) as EventListener);
+  const preview = Object.freeze({ ready: async () => {
+    await ready;
+    if (!status().ok) return status();
+    try { return { ...status(), readiness: await settleFrame() }; }
+    catch (error) { if (!status().ok) return status(); throw error; }
+  }, state: captureState, input: automation });
+  Object.defineProperty(win, "__ANVIL_PREVIEW__", { value: preview, configurable: false, writable: false });
   return { dispose, ready, status };
 }

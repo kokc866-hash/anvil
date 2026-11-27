@@ -91,7 +91,7 @@ export async function verifyAgentSnapshot(files, paths, { signal, tools = {}, ru
       const snapshot=[...sourceMap.values()];
       const manifest=join(folders.out,'syntax-input.json');writeFileSync(manifest,JSON.stringify({files:snapshot,roots:tsFiles.map(x=>x.path)}));
       const result=await execute(process.execPath,[parser,compiler,manifest],nodeEnv);
-      let report;try{report=JSON.parse(result.stdout);}catch{}
+      let report;try{report=JSON.parse(result.stdout);}catch{ /* Malformed output remains an incomplete check below. */ }
       if(result.ok&&Array.isArray(report?.hits)){
         const allowed=new Set(snapshot.map(x=>x.path));
         hits.push(...report.hits.filter(hit=>allowed.has(hit.path)&&['error','warning'].includes(hit.severity)));
