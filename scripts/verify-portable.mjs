@@ -14,12 +14,18 @@ assert.ok(process.env.CI === 'true' || executable === 'AnvilInstallerQA.exe', 'U
 const output = path.resolve('artifacts/portable-acceptance'); await mkdir(output, { recursive: true });
 const fixture = await mkdtemp(path.join(output, 'zip-'));
 const target = path.join(fixture, 'app');
-const quote = value => `'${value.replace(/'/g, "''")}'`;
-await new Promise((resolve, reject) => {
-  const script = `$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath ${quote(archive)} -DestinationPath ${quote(target)}`;
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: 'ignore' });
-  child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error(`ZIP extraction failed: ${code}`)));
-});
+async function extractPortableZip() {
+  await mkdir(target);
+  const tar = path.join(process.env.SystemRoot, 'System32', 'tar.exe');
+  await new Promise((resolve, reject) => {
+    const child = spawn(tar, ['-xf', archive, '-C', target], { windowsHide: true, stdio: ['ignore', 'ignore', 'inherit'] });
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ZIP extraction failed (Windows tar: ${signal ?? code})`));
+    });
+  });
+}
 async function freePort() { const s = createServer(); await new Promise(r => s.listen(0, '127.0.0.1', r)); const port = s.address().port; await new Promise(r => s.close(r)); return port; }
 const port = await freePort(), companion = await freePort();
 const env = { ...process.env, ANVIL_PORT: String(port), ANVIL_COMPANION_PORT: String(companion) };
@@ -37,6 +43,7 @@ async function launch() {
   assert.equal(path.resolve(await app.evaluate(({ app }) => app.getPath('userData'))), path.join(target, 'data'));
 }
 try {
+  await extractPortableZip();
   const manifest = await verifyPackageFingerprint(path.join(target, 'resources', 'app'));
   await launch(); result.checks.push('real ZIP extraction, portable launch without external Node, profile beside executable');
   assert.equal(await app.evaluate(() => process.versions.electron), manifest.runtime, 'Portable package uses the declared Electron runtime');
