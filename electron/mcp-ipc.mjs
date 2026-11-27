@@ -140,7 +140,8 @@ export function bindMcpIpc(isTrusted) {
     let resourceLease;
     try {
       const config = mcpConfig(request.server);
-      resourceLease = sharedAgentResourceGate.acquire(`foreground:${e.sender.id}:renderer`, 'external');
+      // Revocation must be able to cancel the job that currently owns the service.
+      if (request.method !== "oauth/logout") resourceLease = sharedAgentResourceGate.acquire(`foreground:${e.sender.id}:renderer`, 'external');
       state.jobs.set(id, { controller, server: config.id });
       let value;
       if (request.method === "bearer/logout") {

@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { _electron } from 'playwright';
+import { fixturePlanUpdates } from './fixtures/background-plan.mjs';
 await import('./pack-ui.mjs');
 const output=path.resolve('artifacts/background-stage2'); await mkdir(output,{recursive:true});
 const profile=await mkdtemp(path.join(output,'profile-')), project=path.join(profile,'project'); await mkdir(project);
@@ -31,8 +32,14 @@ const server=createServer(async(req,res)=>{
   if(n===2){name='edit_file';args={path:'main.cjs',old_string:'BEFORE',new_string:'NATIVE_CHECK_OK'};}
   if(n===3){name='run_file';args={path:'main.cjs'};}
   if(n===4){assert.ok(JSON.stringify(payload.messages).includes('NATIVE_CHECK_OK'));name='run_file';args={path:'index.html'};}
-  if(n===5){held=true;emit({delta:{reasoning_content:'Vorschau bleibt während der Wiederverbindung geöffnet.'}});await new Promise(r=>{release=r;});name='play';args={keys:['enter'],hold:40};}
+  if(n===5){held=true;emit({delta:{reasoning_content:'Vorschau bleibt während der Wiederverbindung geöffnet.'}});await new Promise(r=>{release=r;});name='play';args={actions:[{type:'key',key:'Enter',selector:'#add'},{type:'assert',selector:'#count',text:'2'}]};}
   if(n===6){name='see_run';}
+  if(n===7){name='set_plan';args={updates:fixturePlanUpdates(payload.messages,[
+    {callId:'stage2-1',kind:'read',reason:'main.cjs gelesen.'},
+    {callId:'stage2-2',kind:'edit',reason:'Die Ausgabe in main.cjs geändert.'},
+    {callId:'stage2-3',kind:'run',reason:'Die geänderte main.cjs tatsächlich ausgeführt.'},
+    {callId:'stage2-5',kind:'check',reason:'Enter gedrückt und den Zählerstand 2 bestätigt.'},
+  ])};}
   }
   if(phase==='error'&&n===1){name='run_file';args={path:'index.html'};}
   if(phase==='close'&&(n===1||n===2)){name='run_file';args={path:n===1?'index.html':'wait.cjs'};}
@@ -54,7 +61,7 @@ try{
     llmProvider:'custom',llmAuthMode:'key',llmBaseUrl:baseUrl,llmModel:'qa-local',llmApiKey:'',llmContext:32768,llmContextAuto:false,llmThinking:'auto',llmHardStopMin:0,autoRunAgent:false,runLoop:false,graphLoop:false}),{project,files,baseUrl:`http://127.0.0.1:${server.address().port}/v1`});
   const evalEditor=source=>app.evaluate(({BrowserWindow},{source,editorUrl})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()===editorUrl).webContents.executeJavaScript(source),{source,editorUrl});
   await until(async()=> (await evalEditor('window.anvilNative.agentJob("status")')).available);
-  await page.locator('textarea').last().fill('Lies main.cjs, ersetze BEFORE durch NATIVE_CHECK_OK, führe main.cjs aus und prüfe danach index.html.');await page.locator('textarea').last().press('Enter');
+  await page.locator('textarea').last().fill('Ändere main.cjs und prüfe das Projekt.\n1. Lies main.cjs.\n2. Ändere in main.cjs die Ausgabe von BEFORE auf NATIVE_CHECK_OK.\n3. Führe main.cjs aus.\n4. Prüfe in index.html mit play, dass Enter auf Erhöhen den Zähler auf 2 setzt.');await page.locator('textarea').last().press('Enter');
   await until(()=>existsSync(marker));
   const nativePid=Number(await readFile(marker,'utf8'));
   const running=(await evalEditor('window.anvilNative.agentJob("status")')).state;
@@ -78,12 +85,13 @@ try{
   await preview.locator('button').click();assert.equal(await preview.locator('#count').innerText(),'1');
   await preview.screenshot({path:path.join(output,'preview.png')});
   release();release=undefined;
-  await until(async()=> (await evalEditor('window.anvilNative.agentJob("status")')).state.status==='done');
+  await until(async()=> ['done','failed','stopped','interrupted'].includes((await evalEditor('window.anvilNative.agentJob("status")')).state.status));
   const done=(await evalEditor('window.anvilNative.agentJob("status")')).state;
-  assert.equal(done.id,running.id);assert.equal(rounds,7);assert.match(done.lastPreview.stdout,/2/);assert.equal(done.lastPreview.ok,true,done.lastPreview.stderr);
+  assert.equal(done.status,'done',done.error);
+  assert.equal(done.id,running.id);assert.equal(rounds,8);assert.match(done.lastPreview.stdout,/2/);assert.equal(done.lastPreview.ok,true,done.lastPreview.stderr);
   assert.equal(await preview.locator('#count').innerText(),'2','agent play really presses the focused button');
   await until(async()=>await evalEditor(`window.__anvilIde.getState().files['main.cjs']===${JSON.stringify(edited)}`));
-  await until(async()=>await evalEditor('document.body.innerText.includes("Auftrag beendet") && window.__anvilIde.getState().chat.at(-1)?.content.includes("Native Ausführung erfolgreich")'));
+  await until(async()=>await evalEditor('document.body.innerText.includes("Native Ausführung erfolgreich") && window.__anvilIde.getState().chat.at(-1)?.content.includes("Native Ausführung erfolgreich")'));
   await preview.screenshot({path:path.join(output,'preview.png')});
   const shot=await app.evaluate(async({BrowserWindow},editorUrl)=>(await BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()===editorUrl).webContents.capturePage()).toDataURL(),editorUrl);
   await writeFile(path.join(output,'editor.png'),Buffer.from(shot.split(',')[1],'base64'));
@@ -101,14 +109,14 @@ try{
   const stopMarker=path.join(profile,'stop.pid');
   const closeRequest={...errorRequest,files:{'index.html':'<h1>Close fixture</h1>','wait.cjs':`require('fs').writeFileSync(${JSON.stringify(stopMarker)},String(process.pid));setInterval(()=>{},1000);`},messages:[{role:'user',content:'Öffne index.html und starte wait.cjs.'}]};
   phase='close';phaseRound=0;
-  await evalEditor(`window.anvilNative.agentJob('start',${JSON.stringify(closeRequest)})`);
+  const closeJob = await evalEditor(`window.anvilNative.agentJob('start',${JSON.stringify(closeRequest)})`);
   await until(()=>existsSync(stopMarker));
   const stopPid=Number(await readFile(stopMarker,'utf8'));
   await evalEditor('window.__anvilIde.setState({dirty:{},pendingDiffs:[]})');
   await app.evaluate(({BrowserWindow},editorUrl)=>{BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()===editorUrl).close();},editorUrl);
   await until(()=>proc.exitCode!==null);
   assert.throws(()=>process.kill(stopPid,0));
-  assert.equal(JSON.parse(await readFile(path.join(profile,'agent-jobs','latest.json'),'utf8')).status,'stopped');
+  assert.equal(JSON.parse(await readFile(path.join(profile,'agent-jobs','jobs',closeJob.jobId,'latest.json'),'utf8')).status,'stopped');
   await writeFile(path.join(output,'result.json'),JSON.stringify({ok:true,rounds,checks:['actual utility loop','durable direct write','native run survives editor crash','no duplicate native execution','separate preview survives second crash','agent keyboard interaction','no editor preload','real console errors detected','editor reattaches','closing editor with preview stops native child and entire app']},null,2));
   console.log('BACKGROUND_STAGE2_NATIVE_AND_PREVIEW_RECOVERY_OK');
 }finally{

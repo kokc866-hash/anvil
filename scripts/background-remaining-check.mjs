@@ -47,7 +47,9 @@ export async function verifyBackgroundRemaining(page,fixture){
   await page.evaluate(({root,files})=>window.__anvilIde.setState({setupDone:true,autoUpdate:false,locale:'de',backgroundAgent:true,workspaceCwd:root,files,dirs:[],dirty:{},pendingDiffs:[],chat:[],agentQueue:[],autoSaveDisk:false,activePath:'debug.cjs',openPaths:['debug.cjs'],planWho:'agent',autoRunAgent:false}),{root,files});
   await page.waitForTimeout(900);
   const workspace='v2:path:'+root.replaceAll('\\','/').toLowerCase();
-  await page.evaluate(request=>window.anvilNative.agentJob('start',request),{project:root,files,execution:true,writeThrough:true,knowledge:{enabled:true,personEnabled:true,projectEnabled:true,skillsEnabled:true,skillBodies:true,pluginSkills:true,workspace,memories:[],skills:[],fileVersions:{},appliedEvents:[]},debug:{breakpoints:{},watches:[]},format:{tabSize:2,insertSpaces:true},messages:[{role:'user',content:'Prüfe die synthetischen Debug-, Wissens- und Formatierwerkzeuge. Nur Testdaten verwenden.'}],model:{provider:'custom',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'fixture',context:65536,thinking:'off',hardStopMin:1},maxRounds:30});
+  const toolHints=['debug_breakpoint','debug_eval','debug_watch','debug_continue','debug_stop','skill_write','skill_patch','skill_outcome'];
+  const plan=[{text:'Geprüfte Ergebnisse berichten',kind:'report',status:'todo'}];
+  await page.evaluate(request=>window.anvilNative.agentJob('start',request),{project:root,files,plan,toolHints,execution:true,writeThrough:true,knowledge:{enabled:true,personEnabled:true,projectEnabled:true,skillsEnabled:true,skillBodies:true,pluginSkills:true,workspace,memories:[],skills:[],fileVersions:{},appliedEvents:[]},debug:{breakpoints:{},watches:[]},format:{tabSize:2,insertSpaces:true},messages:[{role:'user',content:'Prüfe den Debugger, erstelle und lösche einen Testeintrag im Gedächtnis, erstelle und bearbeite qa-background-skill und formatiere format.go. Verwende nur synthetische Testdaten und berichte die geprüften Ergebnisse.'}],model:{provider:'custom',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,model:'fixture',context:65536,thinking:'off',hardStopMin:1},maxRounds:30});
   await until(()=>held,'paused worker');const before=await status();assert.equal(before.lastDebug.paused,true);assert.equal(before.lastDebug.locals.x,'1');
   await page.reload();await page.waitForFunction(()=>window.__anvilIde?.persist.hasHydrated());
   await until(async()=>await page.evaluate(()=>window.__anvilIde.getState().debug.paused),'debugger reconnect');
@@ -66,10 +68,17 @@ export async function verifyBackgroundRemaining(page,fixture){
    releaseTrace();releaseTrace=undefined;
   }
   await until(async()=>['done','failed','stopped'].includes((await status()).status),'job completion');
-  const state=await status();assert.equal(state.status,'done',state.error);assert.deepEqual(errors,[]);
+  const state=await status();
+  assert.equal(state.status,gofmt?'done':'failed',state.error);
+  if(!gofmt)assert.match(state.error,/Formatter verfügbar \(gofmt\)/);
+  assert.deepEqual(errors,[]);
   assert.equal(results.get('remaining-4')?.eval,'11');assert.equal(results.get('remaining-7')?.locals?.x,'3');assert.equal(results.get('remaining-7')?.watchValues?.['x * 2'],'6');
   for(let i=9;i<=16;i++)assert.equal(Boolean(results.get('remaining-'+i)?.error),false,JSON.stringify(results.get('remaining-'+i)));
-  assert.ok(factId);assert.ok(results.get('remaining-14')?.uses===1);assert.ok(results.get('remaining-14')?.wins===1);assert.deepEqual(results.get('remaining-16')?.project,[]);
+  const readback=results.get('remaining-14');
+  assert.ok(factId);assert.equal(readback?.uses,1);assert.equal(Object.hasOwn(readback,'feedback'),false);assert.deepEqual(results.get('remaining-16')?.project,[]);
+  const feedback=state.knowledgeEvents?.filter(event=>event.action==='outcome').flatMap(event=>event.after?.feedback||[]);
+  assert.equal(feedback?.length,1);
+  assert.equal(feedback[0].kind,'ok');assert.equal(feedback[0].source,'agent');assert.equal(feedback[0].jobId,state.id);
   const skillPath=Object.keys(state.drafts).find(p=>p.startsWith('.anvil/skills/'));assert.ok(skillPath,'skill file enters normal acknowledged drafts');
   assert.match(await readFile(path.join(root,skillPath),'utf8'),/Verify the synthetic result/);
   if(gofmt){assert.equal(results.get('remaining-17')?.ok,true,JSON.stringify(results.get('remaining-17')));assert.match(await readFile(path.join(root,'format.go'),'utf8'),/func formatFixture\(\) \{/);}
@@ -80,7 +89,7 @@ export async function verifyBackgroundRemaining(page,fixture){
    assert.equal(results.get('remaining-19')?.locals?.x,'1');
    assert.equal(results.get('remaining-20')?.eval,'1');
   }
-  await until(async()=>await page.evaluate(()=>JSON.parse(localStorage.getItem('anvil-learn')||'{}').state?.skills?.some(s=>s.name==='qa-background-skill'&&s.uses===1&&s.wins===1)),'renderer memory reconciliation');
+  await until(async()=>await page.evaluate(id=>JSON.parse(localStorage.getItem('anvil-learn')||'{}').state?.skills?.some(s=>s.name==='qa-background-skill'&&s.uses===1&&s.feedback?.some(entry=>entry.jobId===id&&entry.kind==='ok'&&entry.source==='agent')),state.id),'renderer memory reconciliation');
   await page.reload();await page.waitForFunction(()=>window.__anvilIde?.persist.hasHydrated());
   await page.waitForTimeout(650);assert.equal(requests,calls.length+1);
   await page.evaluate(id=>window.anvilNative.agentJob('restore',{id}),state.id);

@@ -163,7 +163,7 @@ try {
   await page
     .locator("textarea")
     .last()
-    .fill("Lade die freigegebenen Werkzeuge und rufe record mit text desktop auf.");
+    .fill("Schreibe desktop über den MCP-Dienst in den Prüfspeicher.\n1. MCP-Werkzeuge auflisten.\n2. Den MCP-Dienst mit record und text desktop aufrufen.");
   await page.locator("textarea").last().press("Enter");
   await until(() => f.state.calls.length === 1, "pending MCP call");
   const running = await status();
@@ -192,7 +192,9 @@ try {
     "editor recovery must not cancel background MCP",
   );
   f.release();
-  await until(async () => (await status()).status === "done", "service completion");
+  await until(async () => ["done", "failed", "stopped", "interrupted"].includes((await status()).status), "service completion");
+  const serviceCompletion = await status();
+  assert.equal(serviceCompletion.status, "done", serviceCompletion.error);
   assert.equal(f.state.calls.length, 1);
   assert.equal(f.state.badAuth, 0);
   assert.match((await status()).text, /SERVICE_DESKTOP_OK/);
@@ -213,7 +215,7 @@ try {
     writeThrough: false,
     services: [f.config],
     surface: { id: "anvil", mode: "bridge" },
-    messages: [{ role: "user", content: "Use the test service." }],
+    messages: [{ role: "user", content: "Write the test record through the MCP service." }],
     model: {
       provider: "custom",
       baseUrl: `http://127.0.0.1:${model.address().port}/v1`,

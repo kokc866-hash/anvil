@@ -69,13 +69,14 @@ try{
  await until(async()=>(await evaluate('window.anvilNative.agentJob("status")')).available);
  await page.locator('input[type=file][accept="image/*"]').setInputFiles({name:'probe.png',mimeType:'image/png',buffer:Buffer.from(image,'base64')});
  await page.getByRole('button',{name:'Bild 1 entfernen',exact:true}).waitFor();
- await page.locator('textarea').last().fill('Prüfe den Bildanhang und öffne die HTML-Vorschau.');await page.locator('textarea').last().press('Enter');
+ await page.locator('textarea').last().fill('Beschreibe den Bildanhang. Öffne index.html und beschreibe die gerenderte Vorschau.');await page.locator('textarea').last().press('Enter');
  await until(()=>held||issues.length);assert.deepEqual(issues,[]);
  const initial=await status();assert.equal(initial.images.length,1);
  await app.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:0});});
  const crash=()=>app.evaluate(({BrowserWindow},url)=>new Promise(r=>{const wc=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()===url).webContents;wc.once('did-finish-load',r);wc.forcefullyCrashRenderer();}),editorUrl);
  await crash();assert.equal((await status()).id,initial.id);assert.equal(round,2);
- release();release=undefined;await until(async()=>(await status()).status==='done');
+ release();release=undefined;await until(async()=>['done','failed','stopped','interrupted'].includes((await status()).status));
+ const completion=await status();assert.equal(completion.status,'done',completion.error);
  assert.deepEqual(issues,[]);
  await until(async()=>await evaluate('window.__anvilIde.getState().chat.some(m=>m.role==="user"&&m.images?.length===1)'));
  const preview=app.windows().find(w=>w.url().includes('/index.html'));assert.ok(preview);
