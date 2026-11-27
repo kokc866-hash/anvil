@@ -90,8 +90,10 @@ export async function verifyBackgroundRemaining(page,fixture){
    assert.equal(results.get('remaining-20')?.eval,'1');
   }
   await until(async()=>await page.evaluate(id=>JSON.parse(localStorage.getItem('anvil-learn')||'{}').state?.skills?.some(s=>s.name==='qa-background-skill'&&s.uses===1&&s.feedback?.some(entry=>entry.jobId===id&&entry.kind==='ok'&&entry.source==='agent')),state.id),'renderer memory reconciliation');
+  const finishedRequests=requests;
+  assert.equal(finishedRequests,calls.length+(gofmt?1:2),'a missing formatter permits one verification follow-up');
   await page.reload();await page.waitForFunction(()=>window.__anvilIde?.persist.hasHydrated());
-  await page.waitForTimeout(650);assert.equal(requests,calls.length+1);
+  await page.waitForTimeout(650);assert.equal(requests,finishedRequests,'reload must not repeat finished model requests');
   await page.evaluate(id=>window.anvilNative.agentJob('restore',{id}),state.id);
   assert.equal(await readFile(path.join(root,'format.go'),'utf8'),files['format.go']);
   await page.evaluate(id=>window.anvilNative.agentJob('dismiss',{id}),state.id);
