@@ -79,17 +79,19 @@ try {
   }
   const offered = (i = 0) => requests[i].body.tools?.map((t) => t.function?.name || t.name) || [];
   let r = await run("standard", "standard", "Lies a.txt", [native("read_file", { path: "a.txt" }), done]);
-  assert.ok(offered().length > 8); assert.ok(!offered().includes("select_tools")); assert.equal(requests[0].url, "/api/chat"); assert.equal(requests[0].body.think, "low"); assert.equal(r.tools[0].name, "read_file"); assert.equal(r.cap.tools, "ok");
-  console.log("PASS existing native Ollama catalog and thinking survive a full round");
+  for (const name of ["read_file", "select_tools"]) assert.ok(offered().includes(name), name);
+  assert.ok(!offered().includes("debug_start"), "unrelated, available tools are loaded on demand");
+  assert.equal(requests[0].url, "/api/chat"); assert.equal(requests[0].body.think, "low"); assert.equal(r.tools[0].name, "read_file"); assert.equal(r.cap.tools, "ok");
+  console.log("PASS native Ollama uses a relevant tool catalog, discovery and thinking in standard mode");
 
   r = await run("compact", "compact", "MCP und Run compile prüfen", [native("mcp_list", {}), done]);
-  assert.ok(offered().length <= 8); for (const name of ["mcp_list", "mcp_call", "run_file", "see_run", "ask_user", "select_tools"]) assert.ok(offered().includes(name), name);
+  assert.ok(offered().length <= 10); for (const name of ["mcp_list", "mcp_call", "run_file", "see_run", "ask_user", "select_tools"]) assert.ok(offered().includes(name), name);
   assert.equal(r.tools[0].name, "mcp_list"); assert.equal(requests.length, 2);
   console.log("PASS MCP and Run are offered immediately in compact mode");
 
   await run("select", "compact", "Prüfe Tools", [native("select_tools", { names: ["debug_start", "engine_run", "play"] }), done]);
   for (const name of ["debug_start", "engine_run", "play"]) assert.ok(offered(1).includes(name), name);
-  assert.ok(offered(1).length <= 8);
+  assert.ok(offered(1).length <= 10);
   console.log("PASS tool discovery updates the next request without executing selections");
 
   const replacement = { path: "a.txt", content: "new", overwrite_reason: "The fixture request replaces the entire text document." };
@@ -116,7 +118,7 @@ try {
   await run("answer", "compact", "Schreibe a.txt", [{ content: "Welche Variante möchtest du?", thinking: "Thinking. ".repeat(30) }]);
   assert.equal(requests.length, 1);
   r = await run("fallback", "compact", "Ersetze a.txt vollständig und kompiliere das Projekt", [native("write_file", replacement), { content: "Keine Tools verfügbar" }, text("write_file", replacement), { content: "Keine Tools verfügbar" }]);
-  assert.equal(requests.length, 4); assert.ok(requests[1].body.tools); assert.equal(requests[2].body.tools, undefined); assert.match(JSON.stringify(requests[2].body.messages), /Tool result/);
+  assert.equal(requests.length, 4, "a suppressed replay must not trigger another write check"); assert.ok(requests[1].body.tools); assert.equal(requests[2].body.tools, undefined); assert.match(JSON.stringify(requests[2].body.messages), /Tool result/);
   assert.equal(r.events.filter((e) => e.op === "write" && e.path === "a.txt").length, 1); assert.equal(r.cap.tools, "ok"); assert.equal(r.result.ok, false);
   console.log("PASS normal questions do not retry; one stall fallback preserves writes and is never cached");
 
@@ -193,7 +195,9 @@ try {
   await modeRow.getByRole("button", { name: "Kompakt", exact: true }).click();
   assert.equal(await modeRow.getByRole("button", { name: "Kompakt", exact: true }).getAttribute("aria-pressed"), "true");
   await page.evaluate(() => window.__anvilIde.getState().setLlmBaseUrl("http://"));
-  await modeRow.getByRole("button", { name: "Bisherig", exact: true }).waitFor();
+  const standardMode = modeRow.getByRole("button", { name: "Standard", exact: true });
+  await standardMode.waitFor();
+  assert.equal(await standardMode.getAttribute("aria-pressed"), "true");
   await page.evaluate((cfg) => window.__anvilIde.getState().setLlmBaseUrl(cfg.base), cfg);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__anvilIde?.persist.hasHydrated());

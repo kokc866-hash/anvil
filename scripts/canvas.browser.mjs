@@ -391,12 +391,10 @@ try {
     JSON.stringify({ ok: remote.ok, error: remote.error, state: remote.state }),
   );
   check("agent reaches the separate Run window", remote.ok);
-  const popupFrame = popup
-    .frames()
-    .find((f) => f !== popup.mainFrame() && f.url() === "about:srcdoc");
+  const popupBody = popup.locator('iframe[title="Vorschau"]').contentFrame().locator("body");
   check(
     "the visible popup received the confirmed key",
-    await popupFrame.evaluate(() => window.confirmed === 1 && window.events.includes("Enter")),
+    await popupBody.evaluate(() => window.confirmed === 1 && window.events.includes("Enter")),
   );
   await popup.close();
   await page.evaluate(() => window.__anvilIde.setState({ previewOpen: false, runPopout: false }));

@@ -1,7 +1,7 @@
 import type { PlanStep } from "@/store/ide";
 import { parseTestCommand } from "./test-parse.ts";
 import { toolResultFailed, toolResultPending } from "./agent-evidence.ts";
-import { agentTaskPolicy, steeredTaskPolicy } from "./agent-task-policy.ts";
+import { agentTaskPolicy, directReplyRequest, steeredTaskPolicy } from "./agent-task-policy.ts";
 import {taskCorrectionBody} from './task-correction.ts';
 import { automaticFileStep, isResponseOnlyStep, nativeFileActionMatches, planFileTargets, planOperationPaths, planRequiredKinds, planTargetMatches, workspaceFileOperation } from "./plan-targets.ts";
 import { MAX_PLAN_STEPS } from './plan-limits.ts';
@@ -204,7 +204,7 @@ export function initialAgentPlan(text: string, current?: PlanStep[], owner: Plan
   if (planFromAsk(text)) return guessPlan(text, locale);
   if (owner === "helper") return [];
   // A direct answer, explanation or image description needs no invented task.
-  if (!policy.allowChanges && /^(?:(?:bitte|please)\s+)?(?:(?:be)?antwort\w*|answer|respond|erklär\w*|beschreib\w*|explain\w*|describ\w*|was\s+siehst|what\s+(?:do|can)\s+you\s+see)\b/i.test(text.trim())) return [];
+  if (!policy.allowChanges && directReplyRequest(text)) return [];
   if (!policy.allowChanges && !policy.negativeTest && previewInteractionRequest(text)) return [
     { text: locale === 'en' ? 'Use play to test the requested controls and confirm their expected results' : 'Angeforderte Bedienaktionen mit play prüfen und ihre erwarteten Ergebnisse bestätigen', kind: 'check', status: 'todo' },
     { text: locale === 'en' ? 'Report tested actions, results and remaining limits' : 'Geprüfte Aktionen, Ergebnisse und offene Prüfpunkte berichten', kind: 'report', status: 'todo' },

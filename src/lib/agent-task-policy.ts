@@ -30,6 +30,11 @@ function requestText(prompt: string): string {
 
 const CHANGE_ACTION = /\b(?:fix|repair|correct|build|create|implement|generate|design|model|assemble|draw|make|construct|compose|write|append|save|store|persist|record|add|change|modify|edit|rewrite|refactor|extend|improve|optimize|optimise|update|remove|delete|rename|move|format|beheb(?:e|en)?|reparier(?:e|en)?|korrigier(?:e|en)?|bau(?:e|en)?|erstell(?:e|en)?|erzeug(?:e|en)?|entwerf(?:e|en)?|modellier(?:e|en)?|zeichn(?:e|en)?|konstruier(?:e|en)?|entwick(?:le|eln)|schreib(?:e|en)?|speicher(?:e|n)?|notier(?:e|en)?|protokollier(?:e|en)?|implementier(?:e|en)?|ergaenz(?:e|en)?|aender(?:e|n)?|veraender(?:e|n)?|bearbeit(?:e|en)?|erweiter(?:e|n)?|verbesser(?:e|n)?|optimier(?:e|en)?|aktualisier(?:e|en)?|entfern(?:e|en)?|loesch(?:e|en)?|benenn(?:e|en)?|verschieb(?:e|en)?|formatier(?:e|en)?)\b/g;
 const LOOK_AT = /\bschau(?:e)?\b[^.!?;\n]{0,160}\b(?:an|hin)\b|\blook at\b/;
+const DIRECT_REPLY = /^(?:(?:hi|hallo|hello|hey)[!,.\s]+)?(?:(?:bitte|please)\s+)?(?:(?:be)?antwort\w*|answer|respond|erklaer\w*|beschreib\w*|explain\w*|describ\w*|was\s+siehst|what\s+(?:do|can)\s+you\s+see|wer\s+bist\s+du|who\s+are\s+you)\b/;
+
+export function directReplyRequest(prompt: string): boolean {
+  return DIRECT_REPLY.test(requestText(prompt).trim());
+}
 
 function exportIntent(text: string) {
   return [...text.matchAll(/\b(?:export(?:ing)?|exportier(?:e|en)?)\b/g)].map(match => {
@@ -157,7 +162,7 @@ function classifyTaskPolicy(prompt: string, observeOnly = false) {
     /\bkeine?\s+(?:automatisch\w*\s+)?(?:reparatur\w*|fehlerbehebung\w*)\b/.test(permissionText);
   const repairsExcluded = noRepair || /\b(?:no\s+(?:automatic\s+)?(?:repairs?|fixes|corrections)|no need to\s+(?:repair|fix|correct))\b/.test(permissionText);
   const observationText = text.replace(/\bkein(?:e|en)?\s+(?:run|test(?:lauf)?|ausfuehrung)\s+(?:noetig|erforderlich|notwendig)\b|\bno\s+(?:run|test)\s+(?:needed|required|necessary)\b/g, " ");
-  const observation = exports.includes("reference") || LOOK_AT.test(observationText) || /\b(?:run|execute|test|inspect|review|read|analyse|analyze|diagnose|explain|describe|report|check|recheck|verify|observe|show|tell|summarize|answer|respond|(?:be)?antwort(?:e|en)?|lies|lese|lesen|beschreib(?:e|en)?|pruef(?:e|en)?|test(?:e|en)?|analysier(?:e|en)?|diagnostizier(?:e|en)?|erklaer(?:e|en)?|bericht(?:e|en)?|beobacht(?:e|en)?|ausfuehren|fuehr(?:e|en)?\b[^.;\n]{0,160}\baus|anschauen|finde heraus|schau(?:e)? nach)\b/.test(observationText);
+  const observation = exports.includes("reference") || DIRECT_REPLY.test(observationText.trim()) || LOOK_AT.test(observationText) || /\b(?:run|execute|test|inspect|review|read|analyse|analyze|diagnose|explain|describe|report|check|recheck|verify|observe|show|tell|summarize|answer|respond|(?:be)?antwort(?:e|en)?|lies|lese|lesen|beschreib(?:e|en)?|pruef(?:e|en)?|test(?:e|en)?|analysier(?:e|en)?|diagnostizier(?:e|en)?|erklaer(?:e|en)?|bericht(?:e|en)?|beobacht(?:e|en)?|ausfuehren|fuehr(?:e|en)?\b[^.;\n]{0,160}\baus|anschauen|finde heraus|schau(?:e)? nach)\b/.test(observationText);
   const correction=taskCorrectionBody(prompt);
   const unboundCorrection=correction!==undefined&&(!change||correctionStatesExpectation(correction));
   const allowChanges = !observeOnly && !noChanges && !unboundCorrection && (change || (!observation && !negativeTest && !repairsExcluded));

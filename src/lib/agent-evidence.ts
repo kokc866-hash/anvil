@@ -136,6 +136,8 @@ export class AgentEvidence {
     // execution result. It cannot replace either passing or failing run proof.
     if (/^(shell|play|write_file|edit_file|append_file|delete_file|rename|mkdir|format_file)$/.test(name) && result.rejected === true && result.definitelyNotExecuted === true) return;
     const failed = toolResultFailed(result);
+    // A suppressed replay delivers no new evidence and cannot invalidate a prior result.
+    if (!failed && result.ok === true && result.already_executed === true) return;
     const incomplete = toolResultPending(result) || Boolean(result.truncated || result.already_executed);
     if (!/^(run_file|engine_run|shell)$/.test(name)) {
       if (failed || incomplete) this.unconfirmedActions.add(name.slice(0, 80));

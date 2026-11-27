@@ -54,17 +54,22 @@ try {
   const learning = () => page.evaluate((key) => window.__anvilIde.getState().llmToolLearning[key], cfg.key);
   const settings = (open) => page.evaluate((open) => window.__anvilIde.getState().setSettingsOpen(open), open);
   const row = page.getByRole("group", { name: "Gelernte Werkzeugaufrufe", exact: true });
-  async function send(responses, task = "Lies README.md und erkläre den Inhalt kurz.") {
+  async function send(responses, task = "Erkläre README.md kurz.", expectedPlanReconciliations = 0) {
     await settings(false); replies = [...responses]; const start = requests.length;
     await page.evaluate(() => window.__anvilIde.setState({ chat: [], attached: [] }));
     await page.locator("#anvil-chat").fill(task); await page.locator("#anvil-chat").press("Enter");
     await page.waitForFunction(() => !window.__anvilIde.getState().agentBusy && window.__anvilIde.getState().chat.some((m) => m.role === "assistant" && m.content), undefined, { timeout: 20_000 });
     if (replies.length) console.error("Incomplete fixture", JSON.stringify(await page.evaluate(() => { const s = window.__anvilIde.getState(); return { log: JSON.parse(localStorage.getItem("anvil-applog") || "[]").slice(-10), model: s.llmModel, modes: s.llmToolModes, learning: s.llmToolLearning, chat: s.chat.map((m) => ({ role: m.role, content: m.content })) }; })), JSON.stringify(requests.slice(start).map((r) => ({ model: r.model, tools: r.tools?.length, messages: r.messages?.slice(-2) }))));
     assert.equal(replies.length, 0, "expected fixture replies consumed");
-    assert.equal(requests.length - start, responses.length, "no learning probes or retries");
+    const trace = requests.slice(start).map(body => body.messages?.slice(-2).map(m => ({ role: m.role, content: String(m.content ?? '').slice(0, 500) })));
+    assert.equal(requests.length - start, responses.length, `no learning probes or retries: ${JSON.stringify(trace)}`);
+    assert.equal(trace.filter(messages => messages?.at(-1)?.content.startsWith("Vor der Abschlussantwort die sichtbare To-do-Liste abgleichen")).length, expectedPlanReconciliations);
   }
   const read = { content: '{"tool":"read","file":"README.md"}' };
   const save = (text) => ({ content: JSON.stringify({ tool: "save", file: "learned.txt", text }) });
+  const savePlan = { content: JSON.stringify({ name: "set_plan", arguments: {
+    steps: ["learned.txt speichern", "Ergebnis berichten"], kinds: ["edit", "report"],
+  } }) };
   const done = { content: "Fertig. Die Fixture-Datei wurde gelesen." };
   for (let i = 1; i <= 2; i++) { await send([read, done]); assert.equal((await learning()).rules[0].successes, i); }
   assert.equal((await learning()).rules[0].status, "learned");
@@ -75,7 +80,8 @@ try {
   assert.equal((await learning()).rules[0].seen, 2);
   await settings(true);
   await row.getByRole("button", { name: "Beobachten", exact: true }).click();
-  await send([save("private-canary")], "Speichere learned.txt.");
+  const unsaved = { content: "Die Datei wurde nicht gespeichert." };
+  await send([save("private-canary"), unsaved, unsaved], "Speichere learned.txt.", 2);
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["learned.txt"]), undefined);
   assert.equal((await learning()).rules.find((r) => r.shape.name === "save").successes, 0);
   await settings(true);
@@ -88,7 +94,7 @@ try {
   const card = row.locator(`[data-tool-rule="${ruleId}"]`);
   await card.getByText("Bestätigung nötig", { exact: true }).waitFor();
   await card.getByRole("button", { name: "Zuordnung bestätigen", exact: true }).click();
-  await send([save("saved by the confirmed mapping"), done], "Speichere learned.txt.");
+  await send([savePlan, save("saved by the confirmed mapping"), { content: "Fertig. learned.txt wurde gespeichert." }], "Speichere learned.txt.");
   assert.equal(await page.evaluate(() => window.__anvilIde.getState().files["learned.txt"]), "saved by the confirmed mapping");
   assert.ok(!JSON.stringify(await learning()).includes("private-canary"));
   await page.reload({ waitUntil: "domcontentloaded" });

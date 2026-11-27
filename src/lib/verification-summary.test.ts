@@ -11,6 +11,21 @@ const files = {
 const render = { ok: true, stage: { kind: "html" }, state: { text: "Planner", elements: [] } };
 const nodeOutput = "# tests 28\n# suites 0\n# pass 28\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n";
 const browserOutput = "PASS - create task\nPASS - export\nPASS - import\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n";
+
+test("suppressing a transport replay preserves previously recorded tool evidence", () => {
+  const evidence = new AgentEvidence();
+  const args = { path: "a.txt" };
+  const replay = { ok: true, already_executed: true };
+  evidence.record("write_file", args, { ok: true });
+  const confirmed = evidence.snapshot();
+  evidence.record("write_file", args, replay);
+  assert.deepEqual(evidence.snapshot(), confirmed);
+  evidence.record("write_file", args, { ok: false, error: "source changed" });
+  evidence.record("write_file", args, replay);
+  assert.equal(evidence.status().state, "failed");
+  assert.match(evidence.status().detail, /source changed/);
+});
+
 function resumed() {
   const first = new AgentEvidence();
   first.setInputStamp("unchanged-v1");

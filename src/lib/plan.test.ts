@@ -45,6 +45,10 @@ describe("plan", () => {
     assert.ok(initialAgentPlan("Prüfe die Steuerung.", undefined, "agent").every(s => s.kind !== "edit"));
     assert.ok(initialAgentPlan("Prüfe und behebe den Fehler.", undefined, "agent").some(s => s.kind === "edit"));
     assert.deepEqual(initialAgentPlan("Beschreibe das angehängte Bild.", undefined, "agent"), []);
+    for (const prompt of ["was siehst du auf dem bild", "What do you see in the image?", "hi wer bist du"]) {
+      assert.deepEqual(initialAgentPlan(prompt, undefined, "agent"), [], prompt);
+    }
+    assert.ok(initialAgentPlan("Was siehst du auf dem Bild? Speichere die Beschreibung in notiz.txt.", undefined, "agent").some(step => step.kind === "edit"));
     for (const prompt of ["Antworte kurz, ohne Werkzeuge, ohne Änderungen und ohne Tests.", "Beantworte nur die Frage.", "Answer the question briefly.", "Please respond with a short summary."]) {
       assert.deepEqual(initialAgentPlan(prompt, undefined, "agent"), [], prompt);
     }
