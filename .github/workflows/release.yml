@@ -75,6 +75,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Download the pinned Electron runtime
+        run: node node_modules/electron/install.js
       - name: Signed release identity and support gate
         if: needs.metadata.outputs.signed == 'true'
         run: node scripts/verify-release-readiness.mjs
@@ -130,6 +132,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Download the pinned Electron runtime
+        run: node node_modules/electron/install.js
       - run: npm run test:connections
       - run: npm run test:engines
       - name: Electron storage, restart, CLI access and Canvas capture
