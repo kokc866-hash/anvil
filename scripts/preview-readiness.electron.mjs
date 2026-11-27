@@ -47,11 +47,15 @@ app.whenReady().then(async () => {
    assert.equal(await preview.window.webContents.executeJavaScript('document.images[0].naturalWidth'), 40);
    outcomes.push('initial fetch and dynamically added image complete before first capture');
 
-   preview.window.setSize(900, 640);
+   const targetViewport = { width: 880, height: 620 };
+   assert.notDeepEqual(fetched.state.viewport, targetViewport, 'the resize must change the viewport');
+   preview.window.setContentSize(targetViewport.width, targetViewport.height);
    const resized = await preview.see(true);
    assert.equal(resized.ok, true, resized.stderr);
    const resizedImage = nativeImage.createFromDataURL(resized.image).getSize();
-   assert.ok(resized.state.capture.width < 900 && resized.state.capture.width > 800);
+   assert.deepEqual(resized.state.viewport, targetViewport);
+   assert.equal(resized.state.capture.width, targetViewport.width);
+   assert.equal(resized.state.capture.height, targetViewport.height);
    assert.ok(Math.abs(resizedImage.height - resizedImage.width * resized.state.capture.height / resized.state.capture.width) <= 2, 'image aspect follows current viewport, including DPI scaling');
    outcomes.push('resize before capture yields matching DOM viewport and real image dimensions');
 

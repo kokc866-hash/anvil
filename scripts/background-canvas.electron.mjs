@@ -63,8 +63,10 @@ app.whenReady().then(async () => {
   outcomes.push('repeated bootstrap injects once and custom input replaces prior map');
 
   await preview.run('index.html',previewInputFiles,signal,true);
-  const clicked=await preview.play([],0,signal,[{type:'move',selector:'body'},{type:'click',selector:'#start'},{type:'assert',selector:'#status',text:'Running'}]);
+  // The visible midpoint of the body can hit the file picker on smaller viewports.
+  const clicked=await preview.play([],0,signal,[{type:'move',selector:'h1'},{type:'click',selector:'#start'},{type:'assert',selector:'#status',text:'Running'}]);
   assert.equal(clicked.ok,true,clicked.error);assert.equal(clicked.functionalChecks,true);assert.equal(clicked.input.assertions,1);
+  assert.equal(clicked.input.completed,3);
   assert.ok(clicked.state.elements.find(e=>e.selector==='#start' && e.rect.width>0));
   assert.equal(clicked.input.mode,'native-preview');
   assert.equal(await evaluate('Object.isFrozen(__ANVIL_PREVIEW__) && Object.isFrozen(__ANVIL_PREVIEW__.input)'),true);
